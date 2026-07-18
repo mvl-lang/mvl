@@ -69,7 +69,7 @@ all: check test assurance ## Full pipeline: check + test + assurance + coverage 
 	$(MVL) test $(DIR) --coverage
 	$(MVL) mcdc $(DIR) --verbose --masking
 
-test-61508: guard-mvl ## IEC 61508 assurance envelope: static proof + tests + coverage + MC/DC (Class C)
+test-61508: guard-mvl ## IEC 61508 assurance envelope: static proof + tests + coverage + MC/DC (SIL 2)
 	@echo "════════════════════════════════════════════════════════════════"
 	@echo "  IEC 61508 assurance envelope — grid_protection"
 	@echo "  SIL 2 (industrial functional safety) software: three independent axes"
@@ -87,11 +87,11 @@ test-61508: guard-mvl ## IEC 61508 assurance envelope: static proof + tests + co
 	@echo "── (4) MC/DC coverage (compound decisions, --masking) ─────────"
 	@$(MVL) mcdc $(DIR) --masking 2>&1 | grep -E "MC/DC coverage|PASS|FAIL" | tail -3
 	@echo ""
-	@echo "── Audit anchors (grep -n MCDC-DOSE- protection.mvl) ──────────────"
-	@grep -n "MCDC-DOSE-" $(DIR)protection.mvl | sed 's/^/  /' || echo "  (none)"
+	@echo "── Audit anchors (grep -n MCDC-GRID- protection.mvl) ──────────"
+	@grep -n "MCDC-GRID-" $(DIR)protection.mvl | sed 's/^/  /' || echo "  (none)"
 	@echo ""
 	@echo "════════════════════════════════════════════════════════════════"
-	@echo "  Three axes required for IEC 61508 Class C:"
+	@echo "  Three axes required for IEC 61508 SIL 2:"
 	@echo "    (1) static proof — universal, for all inputs"
 	@echo "    (2) unit tests   — value-level, specific inputs"
 	@echo "    (3) MC/DC        — coverage of compound decisions"
