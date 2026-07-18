@@ -1020,8 +1020,8 @@ fn corpus_bitwise_transpiles() {
     assert_contains(&rust, "!a");
     assert_contains(&rust, ".wrapping_shl(");
     assert_contains(&rust, ".wrapping_shr(");
-    // Byte to_int — cast to i64
-    assert_contains(&rust, " as i64)");
+    // Byte to_int — cast to i64 (no outer parens; </>  callers wrap via is_as_cast_method)
+    assert_contains(&rust, " as i64");
     // from_int — cast to u8
     assert_contains(&rust, " as u8)");
     // Byte functions use u8 types. The corpus file declares each Byte op as
@@ -1576,9 +1576,10 @@ fn method_shift_right_emits_wrapping_shr() {
 
 #[test]
 fn method_to_int_emits_cast() {
+    // No outer parens; `<`/`>` comparison callers wrap via is_as_cast_method (#1684).
     let src = "fn f(b: Byte) -> Int { b.to_int() }";
     let rust = transpile_src(src);
-    assert_contains(&rust, " as i64)");
+    assert_contains(&rust, " as i64");
 }
 
 #[test]

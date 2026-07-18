@@ -706,11 +706,7 @@ impl RustEmitter {
         // so no comparison that would trip the lint can reach codegen.
         // non_snake_case: module names are derived from file paths (e.g.
         // `_Users_foo_bar_config`) which may contain uppercase letters.
-        // `unused_parens` remains because `(expr as i64)` casts require outer
-        // parens to prevent Rust from parsing `as i64 < n` as generic `i64<n>`
-        // (#1684).  Unnecessary parens elsewhere (bitwise ops, for-loop, is_zero,
-        // shifts) have been removed (#1659 partial fix).
-        self.line("#![allow(dead_code, unused_parens, non_snake_case)]");
+        self.line("#![allow(dead_code, non_snake_case)]");
         self.blank();
 
         let prelude_has_extern = prelude_tirs

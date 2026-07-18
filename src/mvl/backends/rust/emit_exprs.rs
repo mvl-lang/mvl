@@ -547,7 +547,21 @@ impl RustEmitter {
                         // `emit_expr`) never requires them, and Binary-nested
                         // operands wrap only when their own precedence demands it.
                         let my_prec = binary_own_prec(*op);
-                        self.emit_operand_deref_cap(left, my_prec, false);
+
+                        // `<` and `>` are grammar-ambiguous with generic-argument
+                        // syntax when the operand ends with `as T` (#1684):
+                        //   `expr as i64 < n` → Rust misparses as `as i64<n>`.
+                        // Wrap the as-cast operand in explicit parens to force the
+                        // comparison reading.  `<=`, `>=`, `==`, `!=` use `<=`/`>=`
+                        // as single tokens and are unambiguous.
+                        let lt_gt = matches!(op, BinaryOp::Lt | BinaryOp::Gt);
+                        if lt_gt && is_as_cast_method(left) {
+                            self.push("(");
+                            self.emit_expr(left);
+                            self.push(")");
+                        } else {
+                            self.emit_operand_deref_cap(left, my_prec, false);
+                        }
                         self.push(" ");
                         self.push(emit_binary_op(*op));
                         self.push(" ");
@@ -555,6 +569,10 @@ impl RustEmitter {
                             // `&(rhs)` — borrow syntax; inner parens are literal,
                             // not the operator wrap.
                             self.push("&(");
+                            self.emit_expr(right);
+                            self.push(")");
+                        } else if lt_gt && is_as_cast_method(right) {
+                            self.push("(");
                             self.emit_expr(right);
                             self.push(")");
                         } else {
@@ -766,10 +784,10 @@ impl RustEmitter {
                         "mvl_runtime::stdlib::audit::emit_relabel_event({name:?}.to_string(), {from_lbl:?}.to_string(), {to_lbl:?}.to_string(), {tag:?}.to_string(), {loc:?}.to_string());"
                     ));
                     match kind {
-                        RelabelKind::Unwrap => self.push("(_mvl_rv).0.clone() }"),
-                        RelabelKind::Wrap(lbl) => self.push(&format!("{lbl}((_mvl_rv)) }}")),
+                        RelabelKind::Unwrap => self.push("_mvl_rv.0.clone() }"),
+                        RelabelKind::Wrap(lbl) => self.push(&format!("{lbl}(_mvl_rv) }}")),
                         RelabelKind::Transform(lbl) => {
-                            self.push(&format!("{lbl}((_mvl_rv).0.clone()) }}"))
+                            self.push(&format!("{lbl}(_mvl_rv.0.clone()) }}"))
                         }
                         RelabelKind::Unknown => unreachable!(
                             "relabel '{name}': unknown transition — blocked by checker (#990)"
@@ -783,14 +801,14 @@ impl RustEmitter {
                             self.push(").0.clone()");
                         }
                         RelabelKind::Wrap(lbl) => {
-                            self.push(&format!("{lbl}(("));
-                            self.emit_expr(inner);
-                            self.push("))");
+                            self.push(&format!("{lbl}("));
+                            self.emit_method_receiver(inner);
+                            self.push(")");
                         }
                         RelabelKind::Transform(lbl) => {
-                            self.push(&format!("{lbl}(("));
-                            self.emit_expr(inner);
-                            self.push(").0.clone())");
+                            self.push(&format!("{lbl}("));
+                            self.emit_method_receiver(inner);
+                            self.push(".0.clone())");
                         }
                         RelabelKind::Unknown => unreachable!(
                             "relabel '{name}': unknown transition — blocked by checker (#990)"
@@ -1196,6 +1214,22 @@ fn is_string_add_chain(expr: &TirExpr) -> bool {
         } => is_string_add_chain(left),
         _ => false,
     }
+}
+
+/// Returns `true` for method calls whose emitted Rust ends with `as T` at the
+/// top level (`len`, `to_int`, `to_float`).
+///
+/// Rust's grammar is ambiguous between `expr as T < n` (comparison) and
+/// `expr as T<n>` (generic-argument type).  When one of these methods is the
+/// left or right operand of a bare `<` or `>` comparison we must wrap it in
+/// explicit parentheses to force the comparison reading (#1684).
+fn is_as_cast_method(e: &TirExpr) -> bool {
+    matches!(
+        &e.kind,
+        TirExprKind::MethodCall { method, args, .. }
+            if args.is_empty()
+            && matches!(method.as_str(), "len" | "to_int" | "to_float")
+    )
 }
 
 fn emit_binary_op(op: BinaryOp) -> &'static str {
