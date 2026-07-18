@@ -306,9 +306,7 @@ pub fn run(path: &str, quiet: bool, verbose: bool, masking: bool, json: bool) {
             .unwrap_or(&bare_stem)
             .replace('-', "_");
         let mut instrument_this: HashSet<String> = HashSet::new();
-        if sibling_stems_set.contains(&bare_stem)
-            && instrumented_stems.insert(bare_stem.clone())
-        {
+        if sibling_stems_set.contains(&bare_stem) && instrumented_stems.insert(bare_stem.clone()) {
             instrument_this.insert(bare_stem.clone());
             // Include this sibling's static analysis in the exempt set.
             for d in &sibling_static_decisions {
