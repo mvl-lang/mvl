@@ -18,16 +18,11 @@
 //   server_send()     ! Net + Console — emits the response
 //   log_*()           ! Log         — structured operational events
 //
-// NOTE (issue #96): use imports below are module-system declarations.
-// Cross-module type resolution is not yet wired into the per-file checker;
-// each file currently stands alone. The use declarations document intent
-// and will be enforced once the module resolver is integrated.
-//
 // Assurance note: 1 extern block (trust boundary: config loading + server simulation).
 
 use std.log.{Logger, default_logger}
 
-// ── Type re-declarations (workaround: #96) ────────────────────────────────
+// ── Type declarations ─────────────────────────────────────────────────────
 
 type Port = Int where self > 0 && self <= 65535
 type Timeout = Int where self >= 0 && self <= 300
@@ -98,7 +93,7 @@ extern "rust" {
     fn server_send(status: Int, body: String) -> Unit ! Net + Console;
 }
 
-// ── Dispatch re-declarations (workaround: #96) ───────────────────────────
+// ── Dispatch bindings ─────────────────────────────────────────────────────
 
 extern "rust" {
     fn verify_request_auth(provided: Tainted[String]) -> Result[Unit, HandlerError];

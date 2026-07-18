@@ -2,24 +2,22 @@
 //
 // Tests the error type ADT structure without calling extern functions.
 // One assertion per test — matches MVL's block expression model.
-// Standalone: re-declares all types (cross-module resolution is Phase 2).
 
+use model::AuthError;
+use model::AppError;
 use std.ifc.{taint}
 
-// ── Local type re-declarations ─────────────────────────────────────────────
-// workaround: #96 — cross-module type resolution not yet wired into the
-// per-file checker; types are re-declared locally until the module resolver
-// is integrated.
-type AuthError = enum {
-    InvalidCredentials,
-    SessionExpired,
-    InvalidToken,
-}
-
-type AppError = enum {
-    AuthFailed,
-    UserNotFound,
-    MissingArg,
+// ── authenticate re-declaration ────────────────────────────────────────────
+// authenticate() in auth.mvl requires ! CryptoRandom and IFC-typed parameters.
+// We re-declare it here without ! CryptoRandom (preserving the IFC types so
+// calls from main.mvl's demo_auth stay type-correct) and exercise the same
+// 1-branch .map structure from a pure test.
+fn authenticate(
+    raw_username: Tainted[String],
+    raw_password: Tainted[String],
+    stored_hash: Secret[String],
+) -> Result[String, AuthError] {
+    Ok(()).map(|u: Unit| relabel trust(raw_username, "TEST"))
 }
 
 // ── AuthError variant tests ────────────────────────────────────────────────
@@ -82,19 +80,6 @@ test fn app_error_missing_arg() -> Unit {
         AppError::MissingArg => 3,
     };
     assert_eq(v, 3)
-}
-
-// ── authenticate re-declaration ────────────────────────────────────────────
-// authenticate() in auth.mvl requires ! CryptoRandom and IFC-typed parameters.
-// We re-declare it here without ! CryptoRandom (preserving the IFC types so
-// calls from main.mvl's demo_auth stay type-correct) and exercise the same
-// 1-branch .map structure from a pure test.
-fn authenticate(
-    raw_username: Tainted[String],
-    raw_password: Tainted[String],
-    stored_hash: Secret[String],
-) -> Result[String, AuthError] {
-    Ok(()).map(|u: Unit| relabel trust(raw_username, "TEST"))
 }
 
 test fn authenticate_ok_path_covered() -> Unit {

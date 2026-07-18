@@ -1,14 +1,10 @@
-// imports_test.mvl — Cross-module import validation (fix for #96)
+// imports_test.mvl — Cross-module import validation.
 //
 // Verifies that `*_test.mvl` files can import from pure-function sibling
 // modules (no type declarations, no extern blocks) without re-declaring
 // everything inline.  rle.mvl and mtf.mvl are canonical examples: they
-// contain only `pub fn` declarations, which the old test runner skipped.
-//
-// Before the fix: `mtf_encode` and `rle_encode` were unknown — the test
-//   runner only loaded sibling files that had extern or type declarations.
-// After the fix:  sibling files explicitly imported via `use` are loaded
-//   regardless of whether they have types/extern.
+// contain only `pub fn` declarations.  Sibling files explicitly imported
+// via `use` are loaded regardless of whether they have types/extern.
 
 use rle::rle_encode;
 use rle::rle_decode;

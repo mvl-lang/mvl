@@ -126,7 +126,5 @@ total fn main() -> Unit ! Log + CryptoRandom {
     demo_auth(logger)
 }
 // ── Internal unit tests ───────────────────────────────────────────────────
-// TODO(#96): inline tests that call cross-module functions (check_permission,
-// log_access, authenticate) cannot run until the module resolver propagates
-// sibling-module types into the test crate. These are covered exhaustively by
-// rbac_test.mvl and auth_test.mvl in the meantime.
+// Cross-module calls (check_permission, log_access, authenticate) are
+// covered exhaustively by rbac_test.mvl and auth_test.mvl.

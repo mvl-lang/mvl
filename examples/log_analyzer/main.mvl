@@ -9,11 +9,6 @@
 //   6. Phase 4: Option.map replaces manual None/Some match for level sanitization
 //   7. Phase 4: std.log for structured output replacing raw println
 //
-// NOTE (issue #96): use imports below are module-system declarations.
-// Cross-module type resolution is not yet wired into the per-file checker;
-// each file currently stands alone.  The use declarations document intent
-// and will be enforced once the module resolver is integrated.
-//
 // Usage:
 //   mvl run examples/log_analyzer/main.mvl -- --file logs.jsonl
 //   mvl run examples/log_analyzer/main.mvl -- --file logs.jsonl --level error

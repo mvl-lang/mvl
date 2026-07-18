@@ -3,29 +3,11 @@
 // Demonstrates:
 //   1. Req 3 (Totality): exhaustive match on all enum variants
 //
-// NOTE: types and functions re-declared locally because mvl test compiles
-// files in a flat namespace where cross-module imports are not available.
 // Assurance note: 0 extern blocks.
+use model::Resource;
+use model::Action;
+use model::Permission;
 use std.log.{Logger, default_logger}
-
-// ── Local type re-declarations (workaround: #96) ──────────────────────────
-type Resource = enum {
-    UserProfile,
-    AdminPanel,
-    Post,
-    AuditLog,
-}
-
-type Action = enum {
-    Read,
-    Write,
-    Delete,
-}
-
-type Permission = enum {
-    Allow,
-    Deny,
-}
 
 // ── Function re-declarations ───────────────────────────────────────────────
 total fn resource_name(resource: Resource) -> String {

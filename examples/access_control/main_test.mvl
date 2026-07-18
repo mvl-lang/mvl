@@ -7,44 +7,13 @@
 // ! Log / ! CryptoRandom and cannot be called from pure test functions.
 // They are re-declared here without effects — the body preserves the same
 // branch structure so coverage probes align with the originals.
-//
-// NOTE: type declarations below are workarounds for issue #96.
-// The SecurityConfig type comes from main.mvl's prelude; the effectful
-// function re-declarations use Role/Resource/Action/Permission from model.mvl.
 
+use model::Role;
+use model::Resource;
+use model::Action;
+use model::Permission;
+use model::AuthError;
 use std.log.{Logger, default_logger}
-
-// ── Type re-declarations (workaround: #96) ─────────────────────────────────
-type Role = enum {
-    Admin,
-    Moderator,
-    User,
-    Guest,
-}
-
-type Resource = enum {
-    UserProfile,
-    AdminPanel,
-    Post,
-    AuditLog,
-}
-
-type Action = enum {
-    Read,
-    Write,
-    Delete,
-}
-
-type Permission = enum {
-    Allow,
-    Deny,
-}
-
-type AuthError = enum {
-    InvalidCredentials,
-    SessionExpired,
-    InvalidToken,
-}
 
 // SecurityConfig is declared in main.mvl and available via prelude.
 // Re-declared here so the type is in scope when main.mvl is excluded from
@@ -54,7 +23,9 @@ type SecurityConfig = struct {
     session_ttl: Int where self > 0,
 }
 
-// ── Function re-declarations (workaround: #96) ─────────────────────────────
+// ── Effect-stripped shims of main.mvl functions ────────────────────────────
+// These preserve the branch structure without ! Log / ! CryptoRandom so
+// coverage probes can run from pure tests.
 
 total fn default_security_config() -> SecurityConfig {
     SecurityConfig { max_attempts: 3, session_ttl: 3600 }

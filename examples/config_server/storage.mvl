@@ -13,7 +13,7 @@
 //
 // Assurance note: 1 extern block (trust boundary: auth store init + key-value CRUD).
 
-// ── Type re-declarations (workaround: #96 — cross-module type resolution) ─
+// ── Type declarations ─────────────────────────────────────────────────────
 
 type HandlerError = enum {
     Unauthorized,
