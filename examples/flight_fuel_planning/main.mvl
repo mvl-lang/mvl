@@ -1,0 +1,91 @@
+// main.mvl — Flight fuel planning demo.
+//
+// Six scenarios walk through Dispatchable / RequiresReview /
+// RequiresSecondAlternate / Undispatchable outcomes.
+
+use model.{FlightPlan, FuelBurn, DispatchResult, UndispatchReason}
+use dispatch.{dispatch, compute_uplift}
+
+total fn describe(r: DispatchResult) -> String {
+    match r {
+        DispatchResult::Dispatchable                                  => "DISPATCHABLE",
+        DispatchResult::RequiresReview                                => "REQUIRES REVIEW",
+        DispatchResult::RequiresSecondAlternate                       => "REQUIRES SECOND ALTERNATE",
+        DispatchResult::Undispatchable(UndispatchReason::ExceedsMaxCapacity)      => "UNDISPATCHABLE (over capacity)",
+        DispatchResult::Undispatchable(UndispatchReason::InsufficientContingency) => "UNDISPATCHABLE (contingency)",
+        DispatchResult::Undispatchable(UndispatchReason::NoValidAlternate)        => "UNDISPATCHABLE (no alternate)",
+        DispatchResult::Undispatchable(UndispatchReason::ExpiredWeatherMinima)    => "UNDISPATCHABLE (weather)",
+    }
+}
+
+total fn narrow_body_plan(trip_nm: Int) -> FlightPlan {
+    FlightPlan {
+        trip_distance_nm: trip_nm,
+        cruise_speed_kt: 450,
+        alt_distance_nm: 100,
+        contingency_pct: 5,
+        reserve_min: 45,
+        taxi_kg: 200,
+    }
+}
+
+total fn narrow_body_burn() -> FuelBurn {
+    FuelBurn {
+        burn_kg_per_hr: 3000,
+        reserve_burn_kg_hr: 2000,
+    }
+}
+
+// ── Scenarios ────────────────────────────────────────────────────────
+
+total fn s1_dispatchable_short() -> String {
+    describe(dispatch(
+        narrow_body_plan(500), narrow_body_burn(),
+        30000, true, true, false, false, 100, false,
+    ))
+}
+
+total fn s2_review_high_load() -> String {
+    // Small max capacity forces the >95% band
+    describe(dispatch(
+        narrow_body_plan(2000), narrow_body_burn(),
+        17000, true, true, false, false, 100, false,
+    ))
+}
+
+total fn s3_review_marginal_wx() -> String {
+    describe(dispatch(
+        narrow_body_plan(500), narrow_body_burn(),
+        30000, true, true, true, false, 100, false,
+    ))
+}
+
+total fn s4_second_alternate_required() -> String {
+    describe(dispatch(
+        narrow_body_plan(500), narrow_body_burn(),
+        30000, false, false, false, false, 100, false,
+    ))
+}
+
+total fn s5_undispatchable_capacity() -> String {
+    describe(dispatch(
+        narrow_body_plan(8000), narrow_body_burn(),
+        20000, true, true, false, false, 100, false,
+    ))
+}
+
+total fn s6_medical_diversion_triggers_review() -> String {
+    describe(dispatch(
+        narrow_body_plan(500), narrow_body_burn(),
+        30000, true, true, false, false, 100, true,
+    ))
+}
+
+total fn main() -> Unit ! Console {
+    println("1. short haul, standard:              ".concat(s1_dispatchable_short()));
+    println("2. high load (>95% capacity):         ".concat(s2_review_high_load()));
+    println("3. marginal alt weather (non-ETOPS):  ".concat(s3_review_marginal_wx()));
+    println("4. both dest+alt weather degraded:    ".concat(s4_second_alternate_required()));
+    println("5. long haul over capacity:           ".concat(s5_undispatchable_capacity()));
+    println("6. medical diversion needs:           ".concat(s6_medical_diversion_triggers_review()));
+}
