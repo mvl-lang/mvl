@@ -157,6 +157,24 @@ pub fn run(path: &str, quiet: bool, verbose: bool, masking: bool, json: bool) {
             loader::collect_imported_module_names(&prog)
         })
         .collect();
+    // Fn/type names declared in test files — entry-point smoke files that
+    // shadow these are #96-workaround re-declarations and must be excluded
+    // from the test crate (their duplicate types would conflict with the
+    // sibling library's real types).  Mirrors `cli/test.rs`.
+    let test_decl_names: HashSet<String> = test_files
+        .iter()
+        .flat_map(|f| {
+            let (prog, _) = super::parse_or_exit(&f.display().to_string());
+            prog.declarations
+                .into_iter()
+                .filter_map(|d| match d {
+                    Decl::Fn(fd) => Some(fd.name),
+                    Decl::Type(td) => Some(td.name),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        })
+        .collect();
     let source_files = loader::mvl_files(path, false);
     // Track which source files have been loaded as prelude siblings — the
     // separate-module loop below must skip them so we don't emit two definitions
@@ -187,6 +205,25 @@ pub fn run(path: &str, quiet: bool, verbose: bool, masking: bool, json: bool) {
         let is_paired = paired_test_stems.contains(&stem);
         if has_inline_tests && !is_paired {
             continue;
+        }
+        // Exclude standalone entry-point smoke files that re-declare types
+        // (#96 workaround).  Matches the `entry_point_ok` guard in
+        // `cli/test.rs`: an entry-point file joins the prelude only when it
+        // is integrated (imports at least one non-stdlib module) AND its
+        // symbols don't overlap with test-file re-declarations.  Without
+        // this, files like `access_smoke.mvl` (which re-declares `Resource`
+        // WITHOUT the `Post` variant) shadow the real sibling type and
+        // break rustc resolution in the paired test module.
+        if transpiler::has_main_fn(&prog) {
+            let integrated = !loader::collect_imported_module_names(&prog).is_empty();
+            let shadows_tests = prog.declarations.iter().any(|d| match d {
+                Decl::Fn(f) if f.name != "main" => test_decl_names.contains(&f.name),
+                Decl::Type(t) => test_decl_names.contains(&t.name),
+                _ => false,
+            });
+            if !integrated || shadows_tests {
+                continue;
+            }
         }
         let should_include = is_paired
             || imported_by_test_files.contains(&stem)
