@@ -3,115 +3,29 @@
 // 11 compound boolean decisions using ==, !=, <, >, &&, ||.
 // 47 obligations (per analyzer), 44 coverable, 3 genuinely coupled.
 
-// ── Type re-declarations (workaround: #96) ──────────────────────────────
-
-type Priority = enum { Red, Orange, Yellow, Green, Blue }
-type Consciousness = enum { Alert, VoiceResponse, PainResponse, Unresponsive }
-type BreathingStatus = enum { Normal, Labored, Absent }
-type PulseStrength = enum { Strong, Weak, Absent }
-type Vitals = struct {
-    heart_rate: Int, systolic_bp: Int, oxygen_sat: Int, temperature: Int,
-    consciousness: Consciousness, breathing: BreathingStatus, pulse: PulseStrength,
-}
-type AgeGroup = enum { Infant, Child, Adult, Elderly }
-type ChiefComplaint = enum { ChestPain, Breathing, Trauma, Abdominal, Neurological, Fever, Minor }
-type Patient = struct {
-    age_group: AgeGroup, complaint: ChiefComplaint, vitals: Vitals,
-    allergies: Bool, pregnant: Bool,
-}
-type Assessment = struct { priority: Priority, resuscitate: Bool, isolate: Bool, reassess_mins: Int }
-
-// ── Function re-declarations (workaround: #96) ──────────────────────────
-// Must match triage.mvl exactly.
-
-fn airway_compromise(v: Vitals) -> Bool {
-    v.breathing == BreathingStatus::Absent
-    || (v.breathing == BreathingStatus::Labored && v.oxygen_sat < 92)
-    || v.pulse == PulseStrength::Absent
-}
-
-fn circulation_failure(v: Vitals) -> Bool {
-    (v.systolic_bp < 90 && v.pulse == PulseStrength::Weak)
-    || (v.heart_rate > 130 && v.systolic_bp < 100)
-}
-
-fn neuro_critical(v: Vitals, complaint: ChiefComplaint) -> Bool {
-    v.consciousness == Consciousness::Unresponsive
-    || (v.consciousness == Consciousness::PainResponse && complaint == ChiefComplaint::Neurological)
-    || (v.consciousness == Consciousness::VoiceResponse && v.oxygen_sat < 92)
-}
-
-fn is_red(v: Vitals, complaint: ChiefComplaint) -> Bool {
-    airway_compromise(v) || circulation_failure(v) || neuro_critical(v, complaint)
-}
-
-fn is_orange(p: Patient) -> Bool {
-    (p.complaint == ChiefComplaint::ChestPain
-        && (p.age_group == AgeGroup::Elderly || p.age_group == AgeGroup::Infant))
-    || (p.vitals.oxygen_sat > 91 && p.vitals.oxygen_sat < 95
-        && p.vitals.breathing == BreathingStatus::Labored)
-    || p.vitals.systolic_bp > 200
-}
-
-fn fever_risk(p: Patient) -> Bool {
-    p.vitals.temperature > 390
-    && (p.age_group == AgeGroup::Infant || p.age_group == AgeGroup::Elderly)
-    && p.complaint == ChiefComplaint::Fever
-}
-
-fn trauma_urgent(p: Patient) -> Bool {
-    p.complaint == ChiefComplaint::Trauma
-    && (p.vitals.pulse == PulseStrength::Weak || p.vitals.systolic_bp < 110)
-    && p.vitals.consciousness != Consciousness::Alert
-}
-
-fn needs_isolation(p: Patient) -> Bool {
-    p.vitals.temperature > 390
-    && (p.complaint == ChiefComplaint::Breathing || p.complaint == ChiefComplaint::Fever)
-}
-
-fn elderly_risk(p: Patient) -> Bool {
-    p.age_group == AgeGroup::Elderly
-    && (p.vitals.oxygen_sat < 92 || p.vitals.systolic_bp < 100)
-    && p.complaint != ChiefComplaint::Minor
-}
-
-fn pregnancy_escalate(p: Patient) -> Bool {
-    p.pregnant
-    && (p.complaint == ChiefComplaint::Abdominal || p.vitals.temperature > 390 || p.vitals.systolic_bp < 100)
-}
-
-fn needs_resuscitation(v: Vitals, complaint: ChiefComplaint) -> Bool {
-    v.breathing == BreathingStatus::Absent
-    || v.pulse == PulseStrength::Absent
-    || v.consciousness == Consciousness::Unresponsive
-    || (circulation_failure(v) && airway_compromise(v))
-}
-
-fn assign_priority(p: Patient) -> Priority {
-    if is_red(p.vitals, p.complaint) {
-        Priority::Red
-    } else if is_orange(p) || fever_risk(p) || trauma_urgent(p) || pregnancy_escalate(p) || elderly_risk(p) {
-        Priority::Orange
-    } else if needs_isolation(p) {
-        Priority::Yellow
-    } else if p.complaint == ChiefComplaint::Minor {
-        Priority::Blue
-    } else {
-        Priority::Green
-    }
-}
-
-fn reassess_interval(pri: Priority) -> Int
-    ensures result >= 0 && result <= 240
-{
-    match pri { Priority::Red => 0, Priority::Orange => 10, Priority::Yellow => 60, Priority::Green => 120, Priority::Blue => 240 }
-}
-
-fn assess(p: Patient) -> Assessment {
-    let pri: Priority = assign_priority(p);
-    Assessment { priority: pri, resuscitate: needs_resuscitation(p.vitals, p.complaint), isolate: needs_isolation(p), reassess_mins: reassess_interval(pri) }
-}
+use model::Priority;
+use model::Consciousness;
+use model::BreathingStatus;
+use model::PulseStrength;
+use model::Vitals;
+use model::AgeGroup;
+use model::ChiefComplaint;
+use model::Patient;
+use model::Assessment;
+use triage::airway_compromise;
+use triage::circulation_failure;
+use triage::neuro_critical;
+use triage::is_red;
+use triage::is_orange;
+use triage::fever_risk;
+use triage::trauma_urgent;
+use triage::needs_isolation;
+use triage::elderly_risk;
+use triage::pregnancy_escalate;
+use triage::needs_resuscitation;
+use triage::assign_priority;
+use triage::reassess_interval;
+use triage::assess;
 
 // ── Helpers ──────────────────────────────────────────────────────────────
 

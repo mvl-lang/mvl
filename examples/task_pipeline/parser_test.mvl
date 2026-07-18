@@ -5,151 +5,15 @@
 //   2. Req 4 (Null elim):     Option field tested for Some and None cases
 //   3. Req 5 (Errors):        each error variant mapped to a distinct assertion
 //
-// NOTE: type and function declarations below duplicate model.mvl / parser.mvl
-// because cross-file type resolution is not yet wired into the per-file checker
-// (issue #96). When #96 lands these can be replaced with:
-//   use model::Record;
-//   use model::ParseError;
-//   use parser::parse_record;
-//   use parser::parse_csv;
 // Assurance note: 0 extern blocks.
 
-// ── Type re-declarations (workaround: #96) ────────────────────────────────
+use model::Record;
+use model::ParseError;
+use parser::parse_record;
+use parser::parse_csv;
 
-type Record = struct {
-    name:     String,
-    age:      Int,
-    amount:   Float,
-    category: Option[String],
-}
-
-type ParseError = enum {
-    EmptyInput,
-    MissingField,
-    EmptyName,
-    InvalidAge,
-    InvalidAmount,
-}
-
-// ── Function re-declarations (workaround: #96) ────────────────────────────
-// Must match parser.mvl exactly.
-
-fn parse_age(s: String) -> Result[Int, ParseError] {
-    if s.is_empty() {
-        Err(ParseError::InvalidAge)
-    } else {
-        let result: Result[Int, String] = s.parse_int();
-        match result {
-            Err(_)  => Err(ParseError::InvalidAge),
-            Ok(age) => {
-                if age > 0 && age <= 150 {
-                    Ok(age)
-                } else {
-                    Err(ParseError::InvalidAge)
-                }
-            }
-        }
-    }
-}
-
-fn parse_amount(s: String) -> Result[Float, ParseError] {
-    if s.is_empty() {
-        Err(ParseError::InvalidAmount)
-    } else {
-        let result: Result[Float, String] = s.parse_float();
-        match result {
-            Err(_)     => Err(ParseError::InvalidAmount),
-            Ok(amount) => {
-                if amount >= 0.0 {
-                    Ok(amount)
-                } else {
-                    Err(ParseError::InvalidAmount)
-                }
-            }
-        }
-    }
-}
-
-fn parse_record(line: String) -> Result[Record, ParseError] {
-    let parts: List[String] = line.split(",");
-    if parts.len() < 3 {
-        Err(ParseError::MissingField)
-    } else {
-        let name: String = parts.get(0).unwrap_or("").trim();
-        let age_str: String = parts.get(1).unwrap_or("").trim();
-        let amount_str: String = parts.get(2).unwrap_or("").trim();
-        let cat_str: String = match parts.get(3) {
-            Some(s) => s.trim(),
-            None    => "",
-        };
-
-        if name.is_empty() {
-            Err(ParseError::EmptyName)
-        } else {
-            let age_result: Result[Int, ParseError] = parse_age(age_str);
-            match age_result {
-                Err(e)  => Err(e),
-                Ok(age) => {
-                    let amount_result: Result[Float, ParseError] = parse_amount(amount_str);
-                    match amount_result {
-                        Err(e)     => Err(e),
-                        Ok(amount) => {
-                            let category: Option[String] = if cat_str.is_empty() {
-                                None
-                            } else {
-                                Some(cat_str)
-                            };
-                            Ok(Record {
-                                name:     name,
-                                age:      age,
-                                amount:   amount,
-                                category: category,
-                            })
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-fn parse_csv(content: String) -> Result[List[Record], ParseError] {
-    if content.trim().is_empty() {
-        Err(ParseError::EmptyInput)
-    } else {
-        let lines: List[String] = content.split("\n");
-        let data_lines: List[String] = lines.skip(1);
-        data_lines.fold(
-            Ok([]),
-            |acc: Result[List[Record], ParseError], line: String| {
-                let trimmed: String = line.trim();
-                if trimmed.is_empty() || trimmed.starts_with("#") {
-                    acc
-                } else {
-                    match acc {
-                        Err(e)       => Err(e),
-                        Ok(records) => {
-                            match parse_record(trimmed) {
-                                Err(e)      => Err(e),
-                                Ok(record)  => Ok(records.concat([record])),
-                            }
-                        }
-                    }
-                }
-            }
-        )
-    }
-}
-
-fn parse_error_msg(e: ParseError) -> String {
-    match e {
-        ParseError::EmptyInput    => "CSV file is empty",
-        ParseError::MissingField  => "a row is missing required fields",
-        ParseError::EmptyName     => "a row has an empty name field",
-        ParseError::InvalidAge    => "a row has an invalid age",
-        ParseError::InvalidAmount => "a row has an invalid amount",
-    }
-}
+// parse_error_msg lives in main.mvl (not pub) — its tests are exercised
+// through integration runs, not this unit suite.
 
 // ── parse_record tests ────────────────────────────────────────────────────
 
@@ -304,34 +168,3 @@ test fn parse_csv_first_error_aborts() -> Unit {
     assert_eq(is_err, 1);
 }
 
-// ── parse_error_msg tests ─────────────────────────────────────────────────
-
-test fn parse_error_msg_empty_input() -> Unit {
-    let msg: String = parse_error_msg(ParseError::EmptyInput);
-    let ok: Int = if msg.is_empty() { 0 } else { 1 };
-    assert_eq(ok, 1);
-}
-
-test fn parse_error_msg_missing_field() -> Unit {
-    let msg: String = parse_error_msg(ParseError::MissingField);
-    let ok: Int = if msg.is_empty() { 0 } else { 1 };
-    assert_eq(ok, 1);
-}
-
-test fn parse_error_msg_empty_name() -> Unit {
-    let msg: String = parse_error_msg(ParseError::EmptyName);
-    let ok: Int = if msg.is_empty() { 0 } else { 1 };
-    assert_eq(ok, 1);
-}
-
-test fn parse_error_msg_invalid_age() -> Unit {
-    let msg: String = parse_error_msg(ParseError::InvalidAge);
-    let ok: Int = if msg.is_empty() { 0 } else { 1 };
-    assert_eq(ok, 1);
-}
-
-test fn parse_error_msg_invalid_amount() -> Unit {
-    let msg: String = parse_error_msg(ParseError::InvalidAmount);
-    let ok: Int = if msg.is_empty() { 0 } else { 1 };
-    assert_eq(ok, 1);
-}

@@ -2343,10 +2343,10 @@ fn transpile_covered_source_with_prelude_instruments_branches() {
 
 #[test]
 fn transpile_mutated_with_prelude_mutates_non_test_fn_bodies() {
-    // Regular fn bodies in _test.mvl files are re-declarations of source functions
-    // (workaround for #96, no cross-module imports yet).  cmd_mutate skips the source
-    // file when a _test.mvl covers it, so mutations must come from the test file's
-    // non-test fn re-declarations.
+    // Regular (non-`test`) fn bodies in _test.mvl files must still be mutated:
+    // they represent local test helpers whose logic contributes to test outcomes.
+    // cmd_mutate skips the source file when a _test.mvl covers it, so any
+    // mutations from a test file have to come from its non-`test` fn bodies.
     let src = "fn f(a: Int, b: Int) -> Int { a + b }";
     let prog = parse_prog(src);
     let r = do_transpile(

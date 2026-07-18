@@ -1,50 +1,10 @@
 // parser_test.mvl — Standalone specification tests for parser domain logic.
 //
-// NOTE (issue #96): Cross-module function calls require the module resolver.
-// Until it is available, test files are self-contained: the functions under
-// test are re-declared locally so this file transpiles and runs independently.
-//
-// IFC note: The live parser.mvl version takes Tainted[String] and sanitizes
-// input at the trust boundary.  This standalone test file accepts plain String
-// so that call sites can pass literals directly.  String literals are subtype-
-// compatible with Tainted[String] (Public ⊑ Tainted), so the IFC invariants are
-// preserved — unlabeled data may flow into a Tainted context without error.
-// The Tainted→Clean relabel trust(, "VALIDATED") flow is exercised in parser.mvl itself.
-//
 // Run with:  mvl test examples/log_analyzer/
 
-// ── Local type definitions (mirrors parser.mvl) ───────────────────────────
-// workaround: #96 — types re-declared locally until module resolver ships.
-
-type Severity = enum {
-    Debug,
-    Info,
-    Warn,
-    Error,
-}
-
-type ParseError = enum {
-    InvalidJson,
-    UnknownLevel,
-    MissingField,
-}
-
-// ── Local re-declaration of the function under test ───────────────────────
-//
-// Phase 4: parse_level now calls to_lower() before matching, so uppercase
-// inputs ("ERROR", "Warn") are accepted.  This local version mirrors that
-// behaviour so the standalone tests stay in sync.
-
-total fn parse_level(raw: Tainted[String]) -> Result[Severity, ParseError] {
-    let lower: String = relabel trust(raw, "VALIDATED").to_lower();
-    match lower {
-        "debug" => Ok(Severity::Debug),
-        "info"  => Ok(Severity::Info),
-        "warn"  => Ok(Severity::Warn),
-        "error" => Ok(Severity::Error),
-        _       => Err(ParseError::UnknownLevel),
-    }
-}
+use parser::Severity;
+use parser::ParseError;
+use parser::parse_level;
 
 // ── Test cases ─────────────────────────────────────────────────────────────
 
