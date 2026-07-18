@@ -80,22 +80,55 @@ fn prepare_llvm_text_tir_multi(
     let entry_dir = Path::new(path).parent().unwrap_or_else(|| Path::new("."));
     let sibling_modules = loader::load_sibling_modules_transitive(prog, entry_dir);
 
-    if sibling_modules.is_empty() {
+    // Transitively load pkg.* packages the entry or its siblings import (#1905).
+    // Mirrors the frontier walk in `src/cli/build.rs` so pkg-imported enum
+    // variants (e.g. `Key::Char` from pkg.tui) resolve during checking and
+    // emitting.  Without this, the checker reports `UndefinedFunction` and the
+    // emitter falls back to a raw `@Key::Char` call — invalid LLVM IR.
+    // Use the entry file's directory (not cwd) so `mvl test` invoked from any
+    // location finds the project's mvl.lock.
+    let entry_abs = entry_dir
+        .canonicalize()
+        .unwrap_or_else(|_| PathBuf::from(entry_dir));
+    let project_root = super::find_project_root(&entry_abs);
+    let sibling_progs_owned: Vec<Program> =
+        sibling_modules.iter().map(|(_, _, p)| p.clone()).collect();
+    let mut pkg_progs: Vec<Program> = Vec::new();
+    let mut seen_pkgs = std::collections::HashSet::<String>::new();
+    let mut frontier: Vec<Program> = std::iter::once(prog.clone())
+        .chain(sibling_progs_owned.iter().cloned())
+        .collect();
+    loop {
+        let new_pkgs =
+            loader::load_pkg_modules_tagged(&frontier, &project_root, &mut seen_pkgs);
+        if new_pkgs.is_empty() {
+            break;
+        }
+        let new_frontier: Vec<_> = new_pkgs.iter().map(|(_, p)| p.clone()).collect();
+        pkg_progs.extend(new_pkgs.into_iter().map(|(_, p)| p));
+        frontier = new_frontier;
+    }
+
+    if sibling_modules.is_empty() && pkg_progs.is_empty() {
         let (prelude_tirs, entry_tir, compiler) = prepare_llvm_text_tir(prog);
         return (prelude_tirs, entry_tir, vec![], compiler);
     }
 
     let sibling_progs: Vec<&Program> = sibling_modules.iter().map(|(_, _, p)| p).collect();
 
-    // Prelude covers entry + all siblings so stdlib selectors are complete.
+    // Prelude covers entry + siblings + pkg modules so stdlib selectors and
+    // pkg-imported types are all resolved.
     let mut prelude = loader::load_implicit_prelude();
     prelude.extend(load_full_prelude(
-        std::iter::once(prog).chain(sibling_progs.iter().copied()),
+        std::iter::once(prog)
+            .chain(sibling_progs.iter().copied())
+            .chain(pkg_progs.iter()),
         PreludeMode::Transpile,
     ));
     prelude.extend(loader::load_rust_backed_stdlib_fns(std::slice::from_ref(
         prog,
     )));
+    prelude.extend(pkg_progs.iter().cloned());
     let builtins = loader::collect_llvm_text_builtins(std::slice::from_ref(prog));
 
     // Check entry with siblings as cross-sibling prelude (Go model: same-dir files share decls).
