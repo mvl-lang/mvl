@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+## [1.5.2] - 2026-07-18
+
+### Added — #1828 activate rust/rust-tokio matrix backend
+
+`make test-rust-tokio` now runs `tests/corpus/12_actors/` (14 tests) through
+`mvl_runtime_tokio` (tokio tasks + channels). `mvl test --target=tokio` wires
+the tokio runtime crate into the generated test harness. `mvlr` and CI updated.
+
 ## [1.5.1] - 2026-07-17
 
 ### Removed — #1823 retire legacy corpus and cross-backend parity harness

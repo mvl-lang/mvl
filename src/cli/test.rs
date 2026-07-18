@@ -127,7 +127,7 @@ fn is_typecheck_only(prog: &mvl::mvl::parser::ast::Program) -> bool {
     saw_test
 }
 
-pub fn run(path: &str, quiet: bool, verbose: bool, coverage: bool, bdd: bool) {
+pub fn run(path: &str, quiet: bool, verbose: bool, coverage: bool, bdd: bool, use_tokio: bool) {
     if quiet && verbose {
         eprintln!(
             "warning: --quiet and --verbose are mutually exclusive; --verbose takes precedence"
@@ -775,11 +775,20 @@ pub fn run(path: &str, quiet: bool, verbose: bool, coverage: bool, bdd: bool) {
     // source path so no per-invocation copy is needed (and the shared target dir
     // caches the compiled crate across runs).
     let mvl_runtime_dep = if need_mvl_runtime {
-        let runtime_src = mvl::mvl::runtime_xdg::ensure_runtime_rust();
-        format!(
-            "mvl_runtime = {{ path = \"{}\", package = \"mvl_runtime_rust\" }}  # MVL security labels and prelude\n",
-            runtime_src.display()
-        )
+        if use_tokio {
+            let runtime_src = mvl::mvl::runtime_xdg::ensure_runtime_tokio();
+            format!(
+                "mvl_runtime = {{ path = \"{}\", package = \"mvl_runtime_tokio\" }}  # --target=tokio\n\
+                 tokio = {{ version = \"1\", features = [\"full\"] }}  # --target=tokio\n",
+                runtime_src.display()
+            )
+        } else {
+            let runtime_src = mvl::mvl::runtime_xdg::ensure_runtime_rust();
+            format!(
+                "mvl_runtime = {{ path = \"{}\", package = \"mvl_runtime_rust\" }}  # MVL security labels and prelude\n",
+                runtime_src.display()
+            )
+        }
     } else {
         String::new()
     };

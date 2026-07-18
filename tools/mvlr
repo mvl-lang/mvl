@@ -209,6 +209,18 @@ run_rust_llvm_dir() {
     "$MVL" test "$1" --backend=llvm
 }
 
+run_rust_tokio_file() {
+    if [[ "$1" == *_test.mvl ]]; then
+        "$MVL" test "$1" --target=tokio
+    else
+        "$MVL" run "$1" --target=tokio
+    fi
+}
+
+run_rust_tokio_dir() {
+    "$MVL" test "$1" --target=tokio
+}
+
 # rust/wasm: emit WAT, assemble to WASM, run under wasmtime.
 # Test files get the same `test fn → fn + synth main` treatment as LLVM.
 # `mvl build --backend=wasm` writes `<stem>.wat` into CWD, so we cd into
@@ -403,10 +415,11 @@ run_dir_iter() {
 run_file() {
     local combo="$1" src="$2"
     case "$combo" in
-        rust/rust)  run_rust_rust_file "$src" ;;
-        rust/llvm)  run_rust_llvm_file "$src" ;;
-        rust/wasm)  run_rust_wasm_file "$src" ;;
-        mvl/llvm)   run_mvl_llvm_file  "$src" ;;
+        rust/rust)       run_rust_rust_file  "$src" ;;
+        rust/llvm)       run_rust_llvm_file  "$src" ;;
+        rust/wasm)       run_rust_wasm_file  "$src" ;;
+        rust/rust-tokio) run_rust_tokio_file "$src" ;;
+        mvl/llvm)        run_mvl_llvm_file   "$src" ;;
         *)          echo "mvlr: no per-file runner for $combo" >&2; return 2 ;;
     esac
 }
@@ -416,15 +429,11 @@ run_file() {
 COMBO="$COMPILER/$BACKEND"
 
 case "$COMBO" in
-    rust/rust-tokio)
-        echo "mvlr: rust/rust-tokio not yet supported (#1828)" >&2
-        exit 1
-        ;;
     mvl/wasm)
         echo "mvlr: mvl/wasm not yet supported (#1828)" >&2
         exit 1
         ;;
-    rust/rust|rust/llvm|rust/wasm|mvl/llvm)
+    rust/rust|rust/llvm|rust/wasm|rust/rust-tokio|mvl/llvm)
         ;;
     *)
         echo "mvlr: unknown combo: $COMBO" >&2
@@ -448,9 +457,10 @@ rc=0
 for INPUT in "${POSITIONAL[@]}"; do
     if [ -d "$INPUT" ]; then
         case "$COMBO" in
-            rust/rust) run_rust_rust_dir "$INPUT" || rc=1 ;;
-            rust/llvm) run_rust_llvm_dir "$INPUT" || rc=1 ;;
-            *)         run_dir_iter "$INPUT" "$COMBO" || rc=1 ;;
+            rust/rust)       run_rust_rust_dir "$INPUT" || rc=1 ;;
+            rust/llvm)       run_rust_llvm_dir "$INPUT" || rc=1 ;;
+            rust/rust-tokio) run_rust_tokio_dir "$INPUT" || rc=1 ;;
+            *)               run_dir_iter "$INPUT" "$COMBO" || rc=1 ;;
         esac
     else
         run_file "$COMBO" "$INPUT" 2> >(grep -v "^MVLR_MARK:" >&2) || rc=1

@@ -130,6 +130,7 @@ pub(super) fn dispatch(args: &[String]) {
             let verbose = args.iter().any(|a| a == "--verbose" || a == "-v");
             let coverage = args.iter().any(|a| a == "--coverage");
             let bdd = args.iter().any(|a| a == "--bdd");
+            let use_tokio = args.iter().any(|a| a == "--target=tokio");
             if backend == "llvm" {
                 llvm_text::cmd_test_llvm_text(&path, quiet, verbose);
             } else if backend == "wasm" {
@@ -140,7 +141,7 @@ pub(super) fn dispatch(args: &[String]) {
                     // Only run // expect: annotated files through the Rust transpiler
                     test::run_expect_tests(&path, quiet, verbose);
                 } else {
-                    test::run(&path, quiet, verbose, coverage, bdd);
+                    test::run(&path, quiet, verbose, coverage, bdd, use_tokio);
                 }
             }
         }
