@@ -1,0 +1,151 @@
+// supervision_test.mvl — End-to-end scenario tests for ETCS supervision.
+//
+// Inline `test fn` blocks in `braking.mvl` and `supervision.mvl` cover
+// per-function behaviour and support MC/DC discovery.  This file adds
+// scenario-level tests exercising the composed supervise kernel + IFC
+// boundary.
+
+use model.{TrainState, MovementAuthority, BrakeCurve, SupervisionResult}
+use braking.{build_curve, braking_distance_squared_diff, kinetic_energy_index, safety_margin_kinematic}
+use supervision.{trust_movement_authority, supervise, is_route_permitted, needs_emergency_brake}
+
+// ── Scenario 1 — normal running ──────────────────────────────────────
+
+test fn scenario_normal_running() -> Unit {
+    let train: TrainState = TrainState {
+        speed_kmh: 70, position_m: 1000, mass_tonnes: 500, brake_ratio: 100,
+    };
+    let ma: MovementAuthority = MovementAuthority {
+        end_position_m: 10000, target_speed: 80, issued_at_ms: 1000,
+    };
+    match supervise(train, ma, false, false, false) {
+        SupervisionResult::NormalRunning => assert_eq(1, 1),
+        _                                => assert_eq(1, 0),
+    }
+}
+
+// ── Scenario 2 — warning issued when in warning band ─────────────────
+
+test fn scenario_warning_band() -> Unit {
+    let train: TrainState = TrainState {
+        speed_kmh: 88, position_m: 1000, mass_tonnes: 500, brake_ratio: 100,
+    };
+    let ma: MovementAuthority = MovementAuthority {
+        end_position_m: 10000, target_speed: 80, issued_at_ms: 1000,
+    };
+    match supervise(train, ma, false, false, false) {
+        SupervisionResult::WarningIssued => assert_eq(1, 1),
+        _                                => assert_eq(1, 0),
+    }
+}
+
+// ── Scenario 3 — service brake in shunting mode ──────────────────────
+
+test fn scenario_service_brake_shunting() -> Unit {
+    let train: TrainState = TrainState {
+        speed_kmh: 92, position_m: 1000, mass_tonnes: 500, brake_ratio: 100,
+    };
+    let ma: MovementAuthority = MovementAuthority {
+        end_position_m: 10000, target_speed: 80, issued_at_ms: 1000,
+    };
+    // Shunting active → service band stays at service (not emergency)
+    match supervise(train, ma, true, false, false) {
+        SupervisionResult::ServiceBrake => assert_eq(1, 1),
+        _                               => assert_eq(1, 0),
+    }
+}
+
+// ── Scenario 4 — emergency when above emergency line ─────────────────
+
+test fn scenario_emergency_above_line() -> Unit {
+    let train: TrainState = TrainState {
+        speed_kmh: 100, position_m: 1000, mass_tonnes: 500, brake_ratio: 100,
+    };
+    let ma: MovementAuthority = MovementAuthority {
+        end_position_m: 10000, target_speed: 80, issued_at_ms: 1000,
+    };
+    match supervise(train, ma, false, false, false) {
+        SupervisionResult::EmergencyBrake => assert_eq(1, 1),
+        _                                 => assert_eq(1, 0),
+    }
+}
+
+// ── Scenario 5 — emergency in service zone without override ──────────
+
+test fn scenario_emergency_service_no_override() -> Unit {
+    let train: TrainState = TrainState {
+        speed_kmh: 92, position_m: 1000, mass_tonnes: 500, brake_ratio: 100,
+    };
+    let ma: MovementAuthority = MovementAuthority {
+        end_position_m: 10000, target_speed: 80, issued_at_ms: 1000,
+    };
+    // No shunting, no override → coupled clause fires → emergency
+    match supervise(train, ma, false, false, false) {
+        SupervisionResult::EmergencyBrake => assert_eq(1, 1),
+        _                                 => assert_eq(1, 0),
+    }
+}
+
+// ── Scenario 6 — MA revocation dominates ─────────────────────────────
+
+test fn scenario_ma_revoked_dominates() -> Unit {
+    let train: TrainState = TrainState {
+        speed_kmh: 60, position_m: 1000, mass_tonnes: 500, brake_ratio: 100,
+    };
+    let ma: MovementAuthority = MovementAuthority {
+        end_position_m: 10000, target_speed: 80, issued_at_ms: 1000,
+    };
+    match supervise(train, ma, false, false, true) {
+        SupervisionResult::MovementAuthorityRevoked => assert_eq(1, 1),
+        _                                           => assert_eq(1, 0),
+    }
+}
+
+// ── IFC boundary — round-trip through relabel trust ──────────────────
+
+test fn ifc_trust_movement_authority_preserves_fields() -> Unit {
+    let raw: MovementAuthority = MovementAuthority {
+        end_position_m: 5000, target_speed: 100, issued_at_ms: 2000,
+    };
+    let tainted: Tainted[MovementAuthority] = relabel taint(raw, "TEST-RBC-INGEST");
+    let trusted: MovementAuthority = trust_movement_authority(tainted);
+    assert_eq(trusted.end_position_m, 5000);
+    assert_eq(trusted.target_speed, 100);
+    assert_eq(trusted.issued_at_ms, 2000);
+}
+
+// ── Route-permission scenario ────────────────────────────────────────
+
+test fn scenario_route_permitted_all_clear() -> Unit {
+    let train: TrainState = TrainState {
+        speed_kmh: 60, position_m: 1000, mass_tonnes: 500, brake_ratio: 100,
+    };
+    let ma: MovementAuthority = MovementAuthority {
+        end_position_m: 5000, target_speed: 80, issued_at_ms: 1000,
+    };
+    assert_eq(is_route_permitted(train, ma, false, true), true);
+}
+
+test fn scenario_route_blocked_beyond_ma() -> Unit {
+    let train: TrainState = TrainState {
+        speed_kmh: 60, position_m: 6000, mass_tonnes: 500, brake_ratio: 100,
+    };
+    let ma: MovementAuthority = MovementAuthority {
+        end_position_m: 5000, target_speed: 80, issued_at_ms: 1000,
+    };
+    assert_eq(is_route_permitted(train, ma, false, true), false);
+}
+
+// ── Arithmetic boundary tests ────────────────────────────────────────
+
+test fn squared_diff_hundred_to_sixty() -> Unit {
+    assert_eq(braking_distance_squared_diff(100, 60), 6400);
+}
+
+test fn kinetic_index_top_of_envelope() -> Unit {
+    assert_eq(kinetic_energy_index(200, 2000), 80000000);
+}
+
+test fn safety_margin_min_envelope() -> Unit {
+    assert_eq(safety_margin_kinematic(50, 50, 100), 250000);
+}
