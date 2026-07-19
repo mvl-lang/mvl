@@ -1222,7 +1222,47 @@ fn bv_from_expr<'ctx>(
     }
 }
 
-// ── QF-S implementation (#1919) ───────────────────────────────────────────────
+// ── QF-S implementation (#1919) ──────────────────────────────────────────────
+
+/// Assert the string-theory parts of a hypothesis on `self_str`, skipping
+/// sub-expressions the string solver cannot encode (e.g. `len(self) <= N`).
+///
+/// Used instead of `str_pred_to_bool` when asserting hypotheses so that
+/// compound predicates like `self.matches("…") && len(self) <= 4096`
+/// contribute their provable portion (`matches`) without being dropped
+/// entirely because `len` cannot be encoded in the string domain.
+/// This is sound: we assert a *weakening* of the hypothesis, which can only
+/// make the UNSAT check harder, never spuriously easy.
+#[cfg(feature = "z3")]
+fn assert_str_hyp_partial<'ctx>(
+    ctx: &'ctx z3::Context,
+    solver: &z3::Solver<'ctx>,
+    pred: &RefExpr,
+    self_str: &z3::ast::String<'ctx>,
+) {
+    match pred {
+        // And: assert each branch independently so a non-encodable branch
+        // (e.g. len comparison) doesn't silence the encodable branch (e.g.
+        // regex match).
+        RefExpr::LogicOp {
+            op: crate::mvl::parser::ast::LogicOp::And,
+            left,
+            right,
+            ..
+        } => {
+            assert_str_hyp_partial(ctx, solver, left, self_str);
+            assert_str_hyp_partial(ctx, solver, right, self_str);
+        }
+        // For everything else, attempt full encoding.  If it succeeds, assert
+        // it; if not (e.g. bare `len(self) <= N` falls through the string
+        // encoder), silently skip.
+        other => {
+            if let Some(b) = str_pred_to_bool(ctx, other, self_str) {
+                solver.assert(&b);
+            }
+        }
+    }
+}
 
 /// Prove `pred(arg)` using Z3's string theory (QF_S / seq theory).
 ///
@@ -1255,24 +1295,37 @@ fn impl_z3_str(
     let self_str = z3::ast::String::new_const(&ctx, "self");
 
     // If the argument is a string literal, constrain self_str to that value.
+    // If the argument is a variable name, propagate its in-scope string
+    // predicates onto self_str so the solver knows its type invariants.
     let is_concrete = if let Expr::Literal(Literal::Str(s), _) = arg {
         let lit = z3::ast::String::from_str(&ctx, s).ok()?;
         solver.assert(&self_str._eq(&lit));
         true
+    } else if let Expr::Ident(arg_name, _) = arg {
+        if let Some(Some(hyp)) = var_refs.get(arg_name.as_str()) {
+            if has_string_ops(hyp) {
+                assert_str_hyp_partial(&ctx, &solver, hyp, &self_str);
+            }
+        }
+        false
     } else {
         false
     };
 
-    // Assert hypotheses for in-scope variables with string-op predicates.
+    // Assert hypotheses for other in-scope variables with string-op predicates.
     // (Variables with purely integer hypotheses are skipped — they don't
     // affect string-content proofs.)
     for (var_name, maybe_hyp) in var_refs {
         if let Some(hyp) = maybe_hyp {
+            // Skip the arg variable itself — already handled above as self_str.
+            if let Expr::Ident(arg_name, _) = arg {
+                if var_name == arg_name {
+                    continue;
+                }
+            }
             if has_string_ops(hyp) {
                 let var_str = z3::ast::String::new_const(&ctx, var_name.as_str());
-                if let Some(b) = str_pred_to_bool(&ctx, hyp, &var_str) {
-                    solver.assert(&b);
-                }
+                assert_str_hyp_partial(&ctx, &solver, hyp, &var_str);
             }
         }
     }
@@ -1784,6 +1837,32 @@ mod tests {
         }
     }
 
+    fn regex_match_pred(pattern: &str) -> RefExpr {
+        RefExpr::RegexMatch {
+            receiver: Box::new(self_ref()),
+            pattern: pattern.to_string(),
+            span: dummy_span(),
+        }
+    }
+
+    /// Variable `e` with EscapedSqlParam regex hypothesis proves the same regex.
+    ///
+    /// The hypothesis `e.matches(re)` implies `result.matches(re)` (trivially UNSAT
+    /// when the negation `!self.matches(re)` is asserted alongside the hypothesis).
+    /// Z3 RegLan discharges this as L5.
+    #[test]
+    fn z3_str_escaped_param_hypothesis_proves_same_regex() {
+        let re = "^[a-zA-Z0-9_ .,=()@-]*$";
+        let pred = regex_match_pred(re); // goal: self.matches(re)
+        let arg = Expr::Ident("e".into(), dummy_span());
+        let mut var_refs = HashMap::new();
+        var_refs.insert("e".into(), Some(regex_match_pred(re)));
+        assert_eq!(
+            try_z3(&pred, &arg, &var_refs, None),
+            Some(RefResult::Proven)
+        );
+    }
+
     /// Multi-variable symbolic case: when both x and y are in-scope with no
     /// hypothesis, Z3 should surface assignments for both in the witness.
     #[test]
@@ -1818,5 +1897,82 @@ mod tests {
             }
             other => panic!("expected RuntimeCheckWithWitness, got {other:?}"),
         }
+    }
+
+    // ── QF-S / string-content tests (#1919 variable-hypothesis path) ─────────
+
+    fn self_ref() -> RefExpr {
+        RefExpr::Ident {
+            name: "self".into(),
+            span: dummy_span(),
+        }
+    }
+
+    fn not_contains(literal: &str) -> RefExpr {
+        RefExpr::Not {
+            inner: Box::new(RefExpr::StringOp {
+                op: crate::mvl::parser::ast::StringOp::Contains,
+                receiver: Box::new(self_ref()),
+                literal: literal.to_string(),
+                span: dummy_span(),
+            }),
+            span: dummy_span(),
+        }
+    }
+
+    fn and_pred(a: RefExpr, b: RefExpr) -> RefExpr {
+        RefExpr::LogicOp {
+            op: crate::mvl::parser::ast::LogicOp::And,
+            left: Box::new(a),
+            right: Box::new(b),
+            span: dummy_span(),
+        }
+    }
+
+    /// Variable `s` with SafeSqlParam hypothesis satisfies the same predicate.
+    ///
+    /// This is the ensures-clause case for `is_safe_input`: the return value
+    /// is `s`, which carries the SafeSqlParam type predicate, so the solver
+    /// must prove `!result.contains("'") && ...` from the hypothesis.
+    #[test]
+    fn z3_str_variable_hypothesis_implies_safe_sql_pred() {
+        let safe_pred = and_pred(
+            not_contains("'"),
+            and_pred(not_contains(";"), not_contains("--")),
+        );
+        let pred = safe_pred.clone(); // ensures clause: same predicate
+        let arg = Expr::Ident("s".into(), dummy_span());
+        let mut var_refs = HashMap::new();
+        var_refs.insert("s".into(), Some(safe_pred));
+        assert_eq!(
+            try_z3(&pred, &arg, &var_refs, None),
+            Some(RefResult::Proven)
+        );
+    }
+
+    /// Literal "safe_val" satisfies `!self.contains("'")`.
+    #[test]
+    fn z3_str_literal_without_metachar_proven() {
+        let pred = not_contains("'");
+        let arg = Expr::Literal(Literal::Str("safe_val".into()), dummy_span());
+        let var_refs = HashMap::new();
+        assert_eq!(
+            try_z3(&pred, &arg, &var_refs, None),
+            Some(RefResult::Proven)
+        );
+    }
+
+    /// Literal "O'Brien" violates `!self.contains("'")` — Z3 finds the failure.
+    #[test]
+    fn z3_str_literal_with_quote_fails() {
+        let pred = not_contains("'");
+        let arg = Expr::Literal(Literal::Str("O'Brien".into()), dummy_span());
+        let var_refs = HashMap::new();
+        assert_eq!(
+            try_z3(&pred, &arg, &var_refs, None),
+            Some(RefResult::Failed {
+                counterexample: None,
+            })
+        );
     }
 }

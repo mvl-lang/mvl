@@ -1,0 +1,81 @@
+// main.mvl — SQL-injection-prevention demo.
+//
+// Six representative scenarios walking through canonical attack
+// payloads and the accept path.  All decisions are pure logic; the
+// demo prints the outcome for each simulated input.
+
+use model.{InputRejectReason}
+use injection.{should_reject_input, input_reject_reason}
+
+// ── Helper: describe the outcome for an input ────────────────────────
+
+total fn describe_outcome(
+    length_exceeded: Bool,
+    contains_metachar: Bool,
+    is_from_trusted_zone: Bool,
+    has_explicit_bypass: Bool,
+) -> String {
+    if should_reject_input(length_exceeded, contains_metachar, is_from_trusted_zone, has_explicit_bypass) {
+        let r: InputRejectReason = input_reject_reason(length_exceeded, contains_metachar, is_from_trusted_zone, has_explicit_bypass);
+        match r {
+            InputRejectReason::LengthExceeded        => "rejected: input exceeds length envelope",
+            InputRejectReason::ContainsMetacharacter => "rejected: contains SQL metacharacter",
+            InputRejectReason::UntrustedOrigin       => "rejected: metacharacter from untrusted origin",
+            InputRejectReason::NoOverride            => "rejected: metacharacter without operator override",
+            InputRejectReason::IdentifierMalformed   => "rejected: malformed SQL identifier",
+        }
+    } else {
+        "accepted: input admitted to query envelope"
+    }
+}
+
+// ── Scenarios ────────────────────────────────────────────────────────
+
+total fn s1_clean_input_from_web() -> String {
+    // A normal login form field `alice_smith` — no metacharacter,
+    // arrives from an untrusted zone (public internet).
+    describe_outcome(false, false, false, false)
+}
+
+total fn s2_or_1_equals_1_payload() -> String {
+    // The canonical `' OR 1=1 --` — contains ', ;, --.
+    // Arrives from an untrusted origin without override.
+    describe_outcome(false, true, false, false)
+}
+
+total fn s3_stacked_query_dropping_table() -> String {
+    // `; DROP TABLE users --` — semicolon-stacked payload from an
+    // untrusted origin that also presents an override token.
+    // Rejected via UntrustedOrigin regardless of the bypass flag:
+    // untrusted-zone rejection is not waivable by override alone.
+    describe_outcome(false, true, false, true)
+}
+
+total fn s4_length_bomb() -> String {
+    // A 6000-character input attacks the length envelope.
+    describe_outcome(true, false, true, true)
+}
+
+total fn s5_internal_service_with_override() -> String {
+    // A trusted-zone service submits a query containing a legitimate
+    // apostrophe (e.g., name lookup for O'Brien) with the audit-tagged
+    // override.  Admitted.
+    describe_outcome(false, true, true, true)
+}
+
+total fn s6_internal_service_without_override_rejected() -> String {
+    // Same content as s5 but the override token is absent — reject
+    // to force explicit authorisation for the metacharacter.
+    describe_outcome(false, true, true, false)
+}
+
+// ── Entry point ─────────────────────────────────────────────────────
+
+total fn main() -> Unit ! Console {
+    println("1. clean web input:                 ".concat(s1_clean_input_from_web()));
+    println("2. ' OR 1=1 --:                     ".concat(s2_or_1_equals_1_payload()));
+    println("3. ; DROP TABLE users --:           ".concat(s3_stacked_query_dropping_table()));
+    println("4. length bomb (6000 chars):        ".concat(s4_length_bomb()));
+    println("5. internal + override (O'Brien):   ".concat(s5_internal_service_with_override()));
+    println("6. internal + no override:          ".concat(s6_internal_service_without_override_rejected()));
+}

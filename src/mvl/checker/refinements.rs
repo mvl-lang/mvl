@@ -760,6 +760,23 @@ pub(crate) fn build_type_alias_refinements(prog: &Program) -> HashMap<String, Op
     map
 }
 
+/// Multi-file variant: merge type-alias refinements from all loaded programs.
+///
+/// Used by the contracts checker so that `ensures` / `requires` clauses over
+/// parameters typed with a refined alias defined in an imported module (e.g.
+/// `s: SafeSqlParam` where `SafeSqlParam` is in `model.mvl`) see the correct
+/// type predicate in `var_refs`.  Without this, cross-module refined type
+/// aliases resolve to `None` and the solver cannot discharge the obligation.
+pub(crate) fn build_type_alias_refinements_combined(
+    progs: &[&Program],
+) -> HashMap<String, Option<RefExpr>> {
+    let mut map = HashMap::new();
+    for prog in progs {
+        map.extend(build_type_alias_refinements(prog));
+    }
+    map
+}
+
 /// Extract the outermost refinement from a `TypeExpr`, if present.
 fn extract_type_refinement(ty: &TypeExpr) -> Option<RefExpr> {
     match ty {

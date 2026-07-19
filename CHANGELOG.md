@@ -4,6 +4,20 @@
 
 ## [1.6.0] - 2026-07-19
 
+### Added — #1911
+
+- **`examples/sql_injection_prevention/`** — eighth case study for the refinement paper, exercising **QF-Strings theory** (the last major SMT theory MVL claimed but had not yet demonstrated) combined with IFC-on-taint. Domain: database query construction that structurally prevents SQL injection (OWASP A03:2021, CWE-89) via refined string types and IFC. `make prove` reports 7 proven (L1:3 L5:4), 0 runtime, 0 failed: 3 × L5:z3 QF-Strings (`contains` #1919, `matches` RegLan #1921) + 1 × L5:z3 QF-NIA. IFC anchor `SQL-DECLASSIFY-001` (sole `relabel trust` on user input), MC/DC anchor `MCDC-SQLINJ-001` (coupled-clause compound decision). `make test-owasp` provides the full OWASP A03:2021 assurance envelope.
+
+### Fixed — #1911
+
+- **Contracts checker (`refinements.rs`)**: `build_type_alias_refinements_combined` now merges type aliases from all loaded modules; previously `s: SafeSqlParam` (defined in `model.mvl`) had `None` predicate when checked in `injection.mvl`.
+- **Layer 5 solver (`layer5.rs`)**: `impl_z3_str` now looks up the argument variable's type predicate in `var_refs` and asserts it on the Z3 `self_str` variable when the `ensures` return expression is a variable name, making the hypothesis visible for UNSAT checking.
+- **Layer 5 solver (`layer5.rs`)**: new `assert_str_hyp_partial` encodes string-op sub-clauses of compound type predicates (e.g. `matches && len`) independently so a non-encodable `len` clause does not silence the provable `RegexMatch` portion.
+- **Rust backend (`emit_functions.rs`)**: escape double-quotes in `assert!` diagnostic messages so ensures clauses containing string literals (e.g. `contains("'")`) compile in the Rust backend.
+- **Rust backend (`emitter.rs`)**: `refined_aliases` registry now populated from sibling modules so cross-module refined type alias newtypes (e.g. `SafeSqlParam` from `model.mvl` returned as `String` in `injection.mvl`) receive the correct `.0` unwrap during codegen — previously caused E0599 "method not found" in smoke tests.
+
+## [1.6.0] - 2026-07-19
+
 ### Added — #1915, #1901, #1913, #1931
 
 - **Bounded-quantifier refinement predicates via L3 expansion (#1915).** New syntax `forall x in [lo..hi]. pred` and `exists x in [lo..hi]. pred` for universal/existential quantifiers over literal integer ranges. Discharged by symbolic expansion at Layer 3: unrolled into conjunctions (forall) or disjunctions (exists) of instantiated bodies, each dispatched through the full L1–L5 solver cascade. Layer 1 gained a closed-form evaluator that proves parameter-free predicates like `0 < 10` as tautologies. Requires clauses that reference no parameters are now dispatched through a dedicated `check_closed_requires` path (previously silently dropped). Expansion is capped at `MAX_BOUNDED_EXPANSION = 1000` obligations; wider ranges fall back to `RuntimeCheck`. Unbounded `forall x: T, pred` form is now rejected at parse time with a targeted diagnostic. Prerequisite for #1916 (array-index refinements) and #1910 (CBTC train-presence case study). ADR-0056 documents the design.

@@ -245,7 +245,10 @@ impl RustEmitter {
                 }
                 for req_pred in fd.requires.iter().filter(|p| is_runtime_checkable(p)) {
                     let pred_str = emit_ref_expr_for_assert(req_pred, "self");
-                    let msg = pred_str.replace('{', "{{").replace('}', "}}");
+                    let msg = pred_str
+                        .replace('"', "\\\"")
+                        .replace('{', "{{")
+                        .replace('}', "}}");
                     self.line(&format!("assert!({pred_str}, \"requires: {msg}\");"));
                 }
                 self.emit_fn_body_tir(fd);
@@ -285,7 +288,10 @@ impl RustEmitter {
         }
         for req_pred in fd.requires.iter().filter(|p| is_runtime_checkable(p)) {
             let pred_str = emit_ref_expr_for_assert(req_pred, "self");
-            let msg = pred_str.replace('{', "{{").replace('}', "}}");
+            let msg = pred_str
+                .replace('"', "\\\"")
+                .replace('{', "{{")
+                .replace('}', "}}");
             self.line(&format!("assert!({pred_str}, \"requires: {msg}\");"));
         }
         self.emit_fn_body_tir(fd);
@@ -403,7 +409,10 @@ impl RustEmitter {
                                     fd.ensures.iter().filter(|p| is_runtime_checkable(p))
                                 {
                                     let pred_str = emit_ref_expr_for_assert(ens_pred, "_result");
-                                    let msg = pred_str.replace('{', "{{").replace('}', "}}");
+                                    let msg = pred_str
+                                        .replace('"', "\\\"")
+                                        .replace('{', "{{")
+                                        .replace('}', "}}");
                                     self.line(&format!("assert!({pred_str}, \"ensures: {msg}\");"));
                                 }
                                 self.line("_result");

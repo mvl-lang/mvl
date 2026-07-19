@@ -125,7 +125,10 @@ pub fn check_contracts(
     // so ensures / requires clauses over refined struct params (e.g.
     // `field: Field` with `Field.height: Int where self >= 10`) see the
     // per-field hypothesis under keys like `"field.height"`.
-    let type_refs = crate::mvl::checker::refinements::build_type_alias_refinements(prog);
+    // Use _combined for both so cross-module refined type aliases (e.g.
+    // `SafeSqlParam` from model.mvl used in injection.mvl) are visible.
+    let type_refs =
+        crate::mvl::checker::refinements::build_type_alias_refinements_combined(all_progs);
     let struct_fields =
         crate::mvl::checker::refinements::build_struct_field_refinements_combined(all_progs);
     let const_map = crate::mvl::checker::refinements::build_const_map(all_progs);
