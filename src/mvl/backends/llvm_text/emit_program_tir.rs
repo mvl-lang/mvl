@@ -241,43 +241,6 @@ impl TextEmitter {
         }
     }
 
-    /// Emit LLVM struct type definitions from `prog` without emitting any fn bodies.
-    ///
-    /// Used in pass 2 for sibling modules with `extern "rust"` blocks. Pass 1
-    /// (`emit_program_tir_types_and_sigs`) registers lookup tables (struct_fields,
-    /// enum_variants) but skips `type_defs` to avoid duplicates. This method
-    /// emits the actual `%Foo = type { ... }` definitions so that call sites in
-    /// other modules can use those types (e.g. `%Response undef`).
-    pub(super) fn emit_program_tir_type_defs_only(&mut self, prog: &TirProgram) {
-        // Register enum variants (idempotent — already done in pass 1).
-        for td in &prog.types {
-            if let TirTypeBody::Enum(variants) = &td.body {
-                let variant_names: Vec<String> = variants.iter().map(|v| v.name.clone()).collect();
-                let variant_fields: Vec<Vec<TypeExpr>> = variants
-                    .iter()
-                    .map(|v| match &v.fields {
-                        TirVariantFields::Tuple(tys) => {
-                            tys.iter().map(ty_to_type_expr_or_unit).collect()
-                        }
-                        TirVariantFields::Struct(fields) => fields
-                            .iter()
-                            .map(|f| ty_to_type_expr_or_unit(&f.ty))
-                            .collect(),
-                        TirVariantFields::Unit => Vec::new(),
-                    })
-                    .collect();
-                self.module.enum_variants.insert(td.name.clone(), variant_names);
-                self.module.enum_variant_fields.insert(td.name.clone(), variant_fields);
-            }
-        }
-        // Emit struct type definitions (%Foo = type { ... }) into type_defs.
-        // register_type_decl_tir is guarded by emitted_type_def_names so it
-        // won't push duplicate entries even if called multiple times.
-        for td in &prog.types {
-            self.register_type_decl_tir(td);
-        }
-    }
-
     /// Emit a sibling module that has `extern "rust"` blocks: type definitions
     /// are always emitted, and function bodies are emitted only for functions
     /// that do NOT directly call any extern-rust function.
@@ -555,6 +518,14 @@ impl TextEmitter {
 
     /// Emit the body of a single [`TirFn`]. Mirrors `emit_fn(&FnDecl)`.
     pub(super) fn emit_fn_tir(&mut self, f: &TirFn) -> Result<(), String> {
+        // Guard: skip functions whose bodies have already been emitted.
+        // This prevents "invalid redefinition" when both a sibling module and
+        // the entry test file define a function with the same name (e.g. a
+        // shared helper `fn b` that appears in both mtf.mvl and mtf_test.mvl).
+        if !self.module.emitted_fn_names.insert(f.name.clone()) {
+            return Ok(());
+        }
+
         use crate::mvl::backends::llvm_text::context::FnCtx;
 
         let ret_ty_te = ty_to_type_expr_or_unit(&f.ret_ty);

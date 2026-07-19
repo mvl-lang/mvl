@@ -42,6 +42,10 @@ pub(super) struct ModuleCtx {
     /// `register_type_decl_tir` is called more than once (e.g. two-pass sibling
     /// emission where pass 1 registers lookup tables and pass 2 emits defs).
     pub emitted_type_def_names: HashSet<String>,
+    /// Tracks function names whose bodies have been emitted into `fn_bodies`.
+    /// Guards against duplicate `define @fn` entries when the same function
+    /// is defined in both a sibling module and the entry test file.
+    pub emitted_fn_names: HashSet<String>,
     pub extern_decls: Vec<String>,
 
     // ── Type registries (populated during first pass) ─────────────────────
@@ -134,6 +138,7 @@ impl ModuleCtx {
             str_globals: Vec::new(),
             type_defs: Vec::new(),
             emitted_type_def_names: HashSet::new(),
+            emitted_fn_names: HashSet::new(),
             extern_decls: Vec::new(),
             struct_fields: HashMap::new(),
             enum_variants: HashMap::new(),

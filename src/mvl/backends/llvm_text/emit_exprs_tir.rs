@@ -553,8 +553,18 @@ impl TextEmitter {
                 (name.to_string(), false, args_str)
             };
 
+        // Never-returning functions (e.g. exit) produce `void` in LLVM IR.
+        // After the call, emit `unreachable` so downstream phi nodes don't include
+        // this basic block as a predecessor — otherwise the phi type may mismatch.
+        let is_never = matches!(&ret_ty, crate::mvl::ir::TypeExpr::Base { name, .. } if name == "Never");
+
         if is_void {
             self.push_instr(&format!("call void @{effective_name}({args_str})"));
+            if is_never {
+                self.ensure_extern("declare void @llvm.trap()");
+                self.push_instr("unreachable");
+                self.fn_ctx.terminated = true;
+            }
             Ok(None)
         } else {
             let reg = self.next_reg();
@@ -2248,6 +2258,59 @@ impl TextEmitter {
         Ok(Some(r))
     }
 
+    /// Convert an `i64` sentinel value (-1 = None, >= 0 = Some(value)) into
+    /// an `{ i8, ptr }` Option tagged union. Used by `String::find` and any
+    /// other C-ABI function that returns an optional index as -1/index.
+    fn emit_i64_sentinel_none_to_option(&mut self, raw: &str) -> String {
+        let is_none = self.next_reg();
+        self.push_instr(&format!("{is_none} = icmp eq i64 {raw}, -1"));
+        self.fn_ctx.reg_types.insert(is_none.clone(), "i1".into());
+
+        let none_bb = self.next_bb("opt_none");
+        let some_bb = self.next_bb("opt_some");
+        let merge_bb = self.next_bb("opt_merge");
+        let result_slot = self.next_reg();
+        self.push_instr(&format!("{result_slot} = alloca {RESULT_LLVM_TY}"));
+        self.fn_ctx.reg_types.insert(result_slot.clone(), "ptr".into());
+        self.push_instr(&format!(
+            "br i1 {is_none}, label %{none_bb}, label %{some_bb}"
+        ));
+
+        // None branch
+        self.start_bb(&none_bb);
+        let nr0 = self.next_reg();
+        self.push_instr(&format!("{nr0} = insertvalue {RESULT_LLVM_TY} zeroinitializer, i8 1, 0"));
+        self.fn_ctx.reg_types.insert(nr0.clone(), RESULT_LLVM_TY.into());
+        let nr1 = self.next_reg();
+        self.push_instr(&format!("{nr1} = insertvalue {RESULT_LLVM_TY} {nr0}, ptr null, 1"));
+        self.fn_ctx.reg_types.insert(nr1.clone(), RESULT_LLVM_TY.into());
+        self.push_instr(&format!("store {RESULT_LLVM_TY} {nr1}, ptr {result_slot}"));
+        self.push_instr(&format!("br label %{merge_bb}"));
+        self.fn_ctx.terminated = true;
+
+        // Some branch — store the i64 index
+        self.start_bb(&some_bb);
+        let idx_slot = self.next_reg();
+        self.push_instr(&format!("{idx_slot} = alloca i64"));
+        self.push_instr(&format!("store i64 {raw}, ptr {idx_slot}"));
+        let sr0 = self.next_reg();
+        self.push_instr(&format!("{sr0} = insertvalue {RESULT_LLVM_TY} zeroinitializer, i8 0, 0"));
+        self.fn_ctx.reg_types.insert(sr0.clone(), RESULT_LLVM_TY.into());
+        let sr1 = self.next_reg();
+        self.push_instr(&format!("{sr1} = insertvalue {RESULT_LLVM_TY} {sr0}, ptr {idx_slot}, 1"));
+        self.fn_ctx.reg_types.insert(sr1.clone(), RESULT_LLVM_TY.into());
+        self.push_instr(&format!("store {RESULT_LLVM_TY} {sr1}, ptr {result_slot}"));
+        self.push_instr(&format!("br label %{merge_bb}"));
+        self.fn_ctx.terminated = true;
+
+        // Merge
+        self.start_bb(&merge_bb);
+        let result = self.next_reg();
+        self.push_instr(&format!("{result} = load {RESULT_LLVM_TY}, ptr {result_slot}"));
+        self.fn_ctx.reg_types.insert(result.clone(), RESULT_LLVM_TY.into());
+        result
+    }
+
     /// TIR variant of [`Self::emit_choice_call`].
     fn emit_choice_call_tir(&mut self, list_arg: &TirExpr) -> Result<Option<String>, String> {
         // Element LLVM type comes from the list's resolved element Ty.
@@ -2726,11 +2789,10 @@ impl TextEmitter {
                     Some(v) => v,
                     None => return Ok(None),
                 };
-                Ok(Some(self.emit_c_call_simple(
-                    "find",
-                    &val,
-                    &[("ptr", &needle)],
-                )))
+                // _mvl_str_find returns i64: index if found, -1 if not found.
+                // Convert to Option[Int] = { i8, ptr } tagged union (Some=0, None=1).
+                let raw = self.emit_c_call_simple("find", &val, &[("ptr", &needle)]);
+                Ok(Some(self.emit_i64_sentinel_none_to_option(&raw)))
             }
             ("contains", "ptr")
                 if args.len() == 1 && matches!(unwrap_labels(&receiver.ty), Ty::String) =>
