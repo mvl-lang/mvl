@@ -1219,8 +1219,8 @@ fn str_pred_to_bool<'ctx>(
             let needle = z3::ast::String::from_str(ctx, literal.as_str()).ok()?;
             Some(match op {
                 StringOp::Contains => self_str.contains(&needle),
-                StringOp::StartsWith => needle.prefix(self_str),
-                StringOp::EndsWith => needle.suffix(self_str),
+                StringOp::StartsWith => self_str.prefix(&needle),
+                StringOp::EndsWith => self_str.suffix(&needle),
             })
         }
         RefExpr::Not { inner, .. } => Some(str_pred_to_bool(ctx, inner, self_str)?.not()),

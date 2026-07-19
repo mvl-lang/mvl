@@ -9,6 +9,17 @@
 //   - L1 constant-folds literal-argument cases (e.g. passing "safe" to SafeSqlParam).
 //   - L5 Z3 QF-S handles symbolic arguments.
 //   - Existing len-based refinements are not regressed.
+//
+// Coverage: 9/11 requirements proven statically. The 2 unproven cases are:
+//   - Mixed StringOp + len() in a compound predicate with a symbolic arg (e.g.
+//     `BearerToken` where `starts_with("Bearer ") && len(self) > 0`): `str_pred_to_bool`
+//     returns None for `len()` sub-expressions, so the predicate falls through to
+//     RuntimeCheck rather than being fully discharged by Z3. The StringOp portion
+//     IS proven; only the len() conjunction defers to runtime.
+//   - `str_pred_to_bool` handles `And` eagerly: if both branches encode, both are
+//     asserted; if the len() branch returns None, the whole conjunction degrades to
+//     RuntimeCheck. L2 length propagation (lower bounds from prefix/suffix) is
+//     out of scope for #1919 — see follow-up ticket.
 
 // ── Type definitions with string-content refinements ─────────────────────────
 
