@@ -337,6 +337,9 @@ impl TypeChecker {
                 self.check_guard_ref_expr(list);
                 self.check_guard_ref_expr(index);
             }
+            RefExpr::RegexMatch { receiver, .. } => {
+                self.check_guard_ref_expr(receiver);
+            }
         }
     }
 

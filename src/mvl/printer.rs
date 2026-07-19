@@ -1311,6 +1311,11 @@ impl<'src> Printer<'src> {
                     self.fmt_ref_expr(index)
                 )
             }
+            RefExpr::RegexMatch {
+                receiver, pattern, ..
+            } => {
+                format!("{}.matches({:?})", self.fmt_ref_expr(receiver), pattern)
+            }
         }
     }
 

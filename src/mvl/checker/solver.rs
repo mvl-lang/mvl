@@ -20,6 +20,8 @@ pub mod layer2;
 pub mod layer3;
 pub mod layer4;
 pub mod layer5;
+#[cfg(feature = "z3")]
+pub(crate) mod regex_z3;
 pub(super) mod rewrite;
 
 use std::collections::HashMap;

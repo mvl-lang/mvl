@@ -91,10 +91,13 @@ pub(crate) fn try_z3(
 
 // ── String-op detection ───────────────────────────────────────────────────────
 
-/// Returns `true` if `pred` contains any `StringOp` node (contains/starts_with/ends_with).
+/// Returns `true` if `pred` contains any string-domain node — a `StringOp`
+/// (contains/starts_with/ends_with, #1919) or a `RegexMatch` (#1921). Both
+/// route to the shared `impl_z3_str` path since they live in the same Z3
+/// string sort.
 fn has_string_ops(pred: &RefExpr) -> bool {
     match pred {
-        RefExpr::StringOp { .. } => true,
+        RefExpr::StringOp { .. } | RefExpr::RegexMatch { .. } => true,
         RefExpr::LogicOp { left, right, .. }
         | RefExpr::Compare { left, right, .. }
         | RefExpr::ArithOp { left, right, .. } => has_string_ops(left) || has_string_ops(right),
@@ -1315,6 +1318,14 @@ fn str_pred_to_bool<'ctx>(
                 StringOp::StartsWith => self_str.prefix(&needle),
                 StringOp::EndsWith => self_str.suffix(&needle),
             })
+        }
+        // Regex-membership (#1921): translate the MVL regex literal into a Z3
+        // Regexp AST, then encode as `(str.in.re self regex)`. Returns None
+        // if the translator can't handle the pattern (e.g. a construct that
+        // slipped past parser::regex_frag) — caller falls through to RuntimeCheck.
+        RefExpr::RegexMatch { pattern, .. } => {
+            let re = crate::mvl::checker::solver::regex_z3::translate(ctx, pattern)?;
+            Some(self_str.regex_matches(&re))
         }
         RefExpr::Not { inner, .. } => Some(str_pred_to_bool(ctx, inner, self_str)?.not()),
         RefExpr::Grouped { inner, .. } => str_pred_to_bool(ctx, inner, self_str),

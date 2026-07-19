@@ -158,9 +158,10 @@ impl AtomNormalizer {
                 inner: Box::new(self.rewrite_refexpr(inner)),
                 span: *span,
             },
-            // StringOp nodes are left as-is — they are opaque to the arithmetic
-            // layers and are handled by L1 (literal strings) and L5 QF-S.
-            // Idents, literals, and quantifiers are also left as-is.
+            // StringOp and RegexMatch nodes are left as-is — they are opaque to
+            // the arithmetic layers and are handled by L1 (literal strings) and
+            // L5 (QF-S / RegLan). Idents, literals, and quantifiers are also
+            // left as-is.
             _ => r.clone(),
         }
     }
@@ -328,6 +329,11 @@ fn canon_refexpr(r: &RefExpr) -> String {
         }
         RefExpr::ArrayGet { list, index, .. } => {
             format!("{}[{}]", canon_refexpr(list), canon_refexpr(index))
+        }
+        RefExpr::RegexMatch {
+            receiver, pattern, ..
+        } => {
+            format!("{}.matches({pattern:?})", canon_refexpr(receiver))
         }
     }
 }

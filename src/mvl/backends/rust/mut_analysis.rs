@@ -467,6 +467,7 @@ impl MutTracker {
                 self.visit_refexpr(list);
                 self.visit_refexpr(index);
             }
+            RefExpr::RegexMatch { receiver, .. } => self.visit_refexpr(receiver),
         }
     }
 

@@ -665,6 +665,17 @@ pub enum RefExpr {
         index: Box<RefExpr>,
         span: Span,
     },
+    /// Regex-membership predicate in a refinement: `self.matches("pattern")`.
+    /// The pattern must be a compile-time string literal from the admitted
+    /// regular fragment (no backrefs, lookahead, recursion; see ADR-0057).
+    /// Discharged by L1 (literal haystack), L2 (length extraction from
+    /// anchored fixed-quantifier patterns), or L5 Z3 RegLan (symbolic).
+    /// See #1921.
+    RegexMatch {
+        receiver: Box<RefExpr>,
+        pattern: String,
+        span: Span,
+    },
 }
 
 /// String-content operations supported in refinement predicates (#1919).
@@ -1305,6 +1316,35 @@ pub(crate) fn expr_to_ref_expr_ext(expr: &Expr, fallback_span: Span) -> Option<R
                 op,
                 receiver: Box::new(recv),
                 literal,
+                span: *span,
+            })
+        }
+        // x.matches("regex") → RefExpr::RegexMatch (#1921)
+        // Pattern must be a compile-time string literal from the admitted regular
+        // fragment; irregular features (backrefs, lookaround, recursion) are
+        // rejected by the regex-fragment validator invoked in the where-clause
+        // parser (see parser/types.rs). Here, non-literal args are silently
+        // rejected (return None) as with StringOp.
+        Expr::MethodCall {
+            receiver,
+            method,
+            args,
+            span,
+        } if method.as_str() == "matches" && args.len() == 1 => {
+            let recv = expr_to_ref_expr_ext(receiver, fallback_span)?;
+            let pattern = match &args[0] {
+                Expr::Literal(Literal::Str(s), _) => s.clone(),
+                _ => return None,
+            };
+            // Validate the pattern here too — contract callers reach this path
+            // without going through parse_ref_atom, so a bad pattern would slip
+            // past parser validation otherwise.
+            if crate::mvl::parser::regex_frag::validate(&pattern).is_err() {
+                return None;
+            }
+            Some(RefExpr::RegexMatch {
+                receiver: Box::new(recv),
+                pattern,
                 span: *span,
             })
         }
