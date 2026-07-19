@@ -70,13 +70,75 @@ impl TextEmitter {
                     .insert(td.name.clone(), variant_fields);
             }
         }
+        // Register struct fields and type aliases into the lookup registries so
+        // ty_to_llvm_ctx returns correct types (%Struct, i64, etc.) when pass 2
+        // emits function bodies. Critically, do NOT push to `module.type_defs`
+        // (a Vec) here — that is done once by emit_program_tir in pass 2.
+        // Pushing twice would produce LLVM IR "redefinition of type" errors.
+        for td in &prog.types {
+            match &td.body {
+                TirTypeBody::Struct { fields, .. } => {
+                    if fields.is_empty() {
+                        continue;
+                    }
+                    let field_list: Vec<(String, TypeExpr)> = fields
+                        .iter()
+                        .map(|f| (f.name.clone(), ty_to_type_expr_or_unit(&f.ty)))
+                        .collect();
+                    // struct_fields is a HashMap — insert is idempotent.
+                    self.module.struct_fields.insert(td.name.clone(), field_list);
+                }
+                TirTypeBody::Alias(inner) => {
+                    let inner_te = ty_to_type_expr_or_unit(inner);
+                    if matches!(inner_te, TypeExpr::Fn { .. }) {
+                        self.module.fn_aliases.insert(td.name.clone(), inner_te);
+                    } else {
+                        self.module.type_aliases.insert(td.name.clone(), inner.clone());
+                    }
+                }
+                TirTypeBody::Enum(_) => {} // already handled in the pre-pass above
+            }
+        }
         // Register function signatures so call sites emit correct types.
         for f in &prog.fns {
             if f.type_params.is_empty() {
                 self.register_fn_tir_sig(f);
             }
         }
-        // Register type declarations (struct layouts, enum defs).
+    }
+
+    /// Emit LLVM struct type definitions from `prog` without emitting any fn bodies.
+    ///
+    /// Used in pass 2 for sibling modules with `extern "rust"` blocks. Pass 1
+    /// (`emit_program_tir_types_and_sigs`) registers lookup tables (struct_fields,
+    /// enum_variants) but skips `type_defs` to avoid duplicates. This method
+    /// emits the actual `%Foo = type { ... }` definitions so that call sites in
+    /// other modules can use those types (e.g. `%Response undef`).
+    pub(super) fn emit_program_tir_type_defs_only(&mut self, prog: &TirProgram) {
+        // Register enum variants (idempotent — already done in pass 1).
+        for td in &prog.types {
+            if let TirTypeBody::Enum(variants) = &td.body {
+                let variant_names: Vec<String> = variants.iter().map(|v| v.name.clone()).collect();
+                let variant_fields: Vec<Vec<TypeExpr>> = variants
+                    .iter()
+                    .map(|v| match &v.fields {
+                        TirVariantFields::Tuple(tys) => {
+                            tys.iter().map(ty_to_type_expr_or_unit).collect()
+                        }
+                        TirVariantFields::Struct(fields) => fields
+                            .iter()
+                            .map(|f| ty_to_type_expr_or_unit(&f.ty))
+                            .collect(),
+                        TirVariantFields::Unit => Vec::new(),
+                    })
+                    .collect();
+                self.module.enum_variants.insert(td.name.clone(), variant_names);
+                self.module.enum_variant_fields.insert(td.name.clone(), variant_fields);
+            }
+        }
+        // Emit struct type definitions (%Foo = type { ... }) into type_defs.
+        // register_type_decl_tir is guarded by emitted_type_def_names so it
+        // won't push duplicate entries even if called multiple times.
         for td in &prog.types {
             self.register_type_decl_tir(td);
         }
@@ -134,9 +196,15 @@ impl TextEmitter {
         }
 
         // Extern blocks: emit `declare` for each `extern "c"` fn (#811).
-        // Mirrors `emitter.rs::emit_program::Decl::Extern` handling.
+        // Also emit opaque `declare` stubs for `extern "rust"` fns so their
+        // callers produce valid IR (correct return type, not the i64 default).
+        // lli validates the whole file statically — without these stubs, any
+        // function that calls a rust-extern gets a type mismatch error that
+        // rejects the whole IR file, even when the test being run never calls
+        // that function. The stubs carry no body; lli's lazy JIT only resolves
+        // them if the test actually calls the function at runtime.
         for ed in &prog.externs {
-            if ed.abi != "c" {
+            if ed.abi != "c" && ed.abi != "rust" {
                 continue;
             }
             for lib in &ed.link_libs {
@@ -293,11 +361,16 @@ impl TextEmitter {
                     .iter()
                     .map(|(_, ty)| self.llvm_ty_ctx(ty))
                     .collect();
-                self.module.type_defs.push(format!(
-                    "%{} = type {{ {} }}",
-                    td.name,
-                    field_types.join(", ")
-                ));
+                // Guard: push the type def only once. Two-pass sibling emission
+                // calls register_type_decl_tir in both passes; the guard prevents
+                // duplicate `%Foo = type { ... }` definitions that lli rejects.
+                if self.module.emitted_type_def_names.insert(td.name.clone()) {
+                    self.module.type_defs.push(format!(
+                        "%{} = type {{ {} }}",
+                        td.name,
+                        field_types.join(", ")
+                    ));
+                }
                 self.module
                     .struct_fields
                     .insert(td.name.clone(), field_list);
@@ -409,9 +482,18 @@ impl TextEmitter {
     /// path (`compile_to_ir_test_crate`) so the dispatch main can call each
     /// test fn by name via `lli <file.ll> <test_name>`.
     pub(super) fn emit_program_tir_test_crate(&mut self, prog: &TirProgram) -> Result<(), String> {
-        // Clone prog with is_test cleared on all fns — the normal emit_program_tir
-        // path then emits them as regular functions without any further changes.
+        // Programs with `extern "rust"` blocks have production functions that
+        // call Rust-ABI symbols not in the test runtime library. Emitting them
+        // causes lli's JIT linker to fail with "symbols not found" even when the
+        // test being run never calls those functions (lli compiles eagerly).
+        // Emit only the test functions themselves — their bodies don't call
+        // extern-rust symbols and run correctly in the test sandbox.
+        // Pure siblings (no rust externs) are unaffected and use the normal path.
+        let has_rust_extern = prog.externs.iter().any(|ed| ed.abi == "rust");
         let mut test_prog = prog.clone();
+        if has_rust_extern {
+            test_prog.fns.retain(|f| f.is_test);
+        }
         for f in &mut test_prog.fns {
             f.is_test = false;
         }

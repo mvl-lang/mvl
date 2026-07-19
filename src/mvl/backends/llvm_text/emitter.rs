@@ -185,15 +185,27 @@ impl LlvmTextCompiler {
             }
             emitter.emit_program_tir(&stripped)?;
         }
+        // Pass 1: register types and signatures from ALL siblings before emitting
+        // any function body. Siblings are sorted alphabetically, so a function
+        // module (e.g. "audit") may precede its type module ("model"). Without a
+        // global pre-registration pass, ty_to_llvm_ctx falls back to "ptr" for
+        // unknown Named types, producing wrong parameter types and broken match
+        // dispatch. This mirrors the Rust backend: the Rust compiler sees all
+        // type declarations across the whole crate before compiling any body.
         for sib in siblings {
-            // Siblings with `extern "rust"` blocks cannot be fully emitted: the
-            // Rust-ABI externs have no LLVM `declare` and the emitter defaults
-            // their return type to i64, producing invalid IR that lli rejects.
-            // Match the Rust backend's behaviour: register types and signatures
-            // so call sites type-check, but skip bodies that call rust externs.
+            emitter.emit_program_tir_types_and_sigs(sib);
+        }
+        // Pass 2: emit type definitions and function bodies.
+        // - Pure siblings (no extern "rust"): full emit_program_tir.
+        // - Extern-rust siblings: emit type definitions only (no fn bodies).
+        //   Their bodies call Rust-ABI symbols not in the test runtime, so lli
+        //   would fail to JIT them. We still need the struct type definitions
+        //   (%Response, %Request, …) so call sites using those types are valid.
+        //   emit_program_tir re-runs its own type pre-pass — harmless (idempotent).
+        for sib in siblings {
             let has_rust_extern = sib.externs.iter().any(|ed| ed.abi == "rust");
             if has_rust_extern {
-                emitter.emit_program_tir_types_and_sigs(sib);
+                emitter.emit_program_tir_type_defs_only(sib);
             } else {
                 emitter.emit_program_tir(sib)?;
             }

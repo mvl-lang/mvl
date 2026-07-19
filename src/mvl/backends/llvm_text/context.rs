@@ -37,6 +37,11 @@ pub(super) struct ModuleCtx {
     pub str_counter: usize,
     pub str_globals: Vec<String>,
     pub type_defs: Vec<String>,
+    /// Tracks struct/alias names whose type def has been pushed to `type_defs`.
+    /// Guards against duplicate `%Foo = type { ... }` entries when
+    /// `register_type_decl_tir` is called more than once (e.g. two-pass sibling
+    /// emission where pass 1 registers lookup tables and pass 2 emits defs).
+    pub emitted_type_def_names: HashSet<String>,
     pub extern_decls: Vec<String>,
 
     // ── Type registries (populated during first pass) ─────────────────────
@@ -128,6 +133,7 @@ impl ModuleCtx {
             str_counter: 0,
             str_globals: Vec::new(),
             type_defs: Vec::new(),
+            emitted_type_def_names: HashSet::new(),
             extern_decls: Vec::new(),
             struct_fields: HashMap::new(),
             enum_variants: HashMap::new(),
