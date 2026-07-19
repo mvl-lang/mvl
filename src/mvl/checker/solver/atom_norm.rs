@@ -107,6 +107,12 @@ impl AtomNormalizer {
                 let name = self.atom_for(key);
                 RefExpr::Ident { name, span: *span }
             }
+            // list.get(i) — opaque array element; normalise to a fresh atom (#1916).
+            RefExpr::ArrayGet { span, .. } => {
+                let key = canon_refexpr(r);
+                let name = self.atom_for(key);
+                RefExpr::Ident { name, span: *span }
+            }
             RefExpr::LogicOp {
                 op,
                 left,
@@ -307,6 +313,9 @@ fn canon_refexpr(r: &RefExpr) -> String {
                 StringOp::EndsWith => "ends_with",
             };
             format!("{}.{}({literal:?})", canon_refexpr(receiver), m)
+        }
+        RefExpr::ArrayGet { list, index, .. } => {
+            format!("{}[{}]", canon_refexpr(list), canon_refexpr(index))
         }
     }
 }

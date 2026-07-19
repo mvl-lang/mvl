@@ -333,6 +333,10 @@ impl TypeChecker {
             RefExpr::StringOp { receiver, .. } => {
                 self.check_guard_ref_expr(receiver);
             }
+            RefExpr::ArrayGet { list, index, .. } => {
+                self.check_guard_ref_expr(list);
+                self.check_guard_ref_expr(index);
+            }
         }
     }
 

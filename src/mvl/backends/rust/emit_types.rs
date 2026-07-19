@@ -649,6 +649,9 @@ pub fn is_runtime_checkable(pred: &RefExpr) -> bool {
         }
         RefExpr::BitwiseNot { inner, .. } => is_runtime_checkable(inner),
         RefExpr::StringOp { receiver, .. } => is_runtime_checkable(receiver),
+        // ArrayGet is not runtime-checkable: the static checker handles bounds reasoning,
+        // and Rust's Vec::get returns Option<&T> which can't be directly compared. (#1916)
+        RefExpr::ArrayGet { .. } => false,
     }
 }
 
@@ -780,6 +783,10 @@ fn emit_ref_expr(pred: &RefExpr, binding: &str) -> String {
                 StringOp::StartsWith => format!("{recv}.starts_with({literal:?})"),
                 StringOp::EndsWith => format!("{recv}.ends_with({literal:?})"),
             }
+        }
+        // ArrayGet is not runtime-checkable; callers must check is_runtime_checkable first.
+        RefExpr::ArrayGet { .. } => {
+            unreachable!("ArrayGet is not runtime-checkable and must not appear in codegen")
         }
     }
 }

@@ -568,6 +568,10 @@ fn collect_len_idents(expr: &RefExpr, out: &mut Vec<String>) {
             collect_len_idents(body, out);
         }
         RefExpr::FieldAccess { object, .. } => collect_len_idents(object, out),
+        RefExpr::ArrayGet { list, index, .. } => {
+            collect_len_idents(list, out);
+            collect_len_idents(index, out);
+        }
         _ => {}
     }
 }

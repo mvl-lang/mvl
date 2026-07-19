@@ -657,6 +657,14 @@ pub enum RefExpr {
         literal: String,
         span: Span,
     },
+    /// `list.get(index)` — array-index access in a refinement predicate (#1916).
+    /// The index must be provably in-bounds from the surrounding context.
+    /// Discharged via L2 (interval length propagation) or L5 (Z3 QF-Arrays `select`).
+    ArrayGet {
+        list: Box<RefExpr>,
+        index: Box<RefExpr>,
+        span: Span,
+    },
 }
 
 /// String-content operations supported in refinement predicates (#1919).
@@ -1215,6 +1223,21 @@ pub(crate) fn expr_to_ref_expr_ext(expr: &Expr, fallback_span: Span) -> Option<R
             } else {
                 None
             }
+        }
+        // x.get(i) → RefExpr::ArrayGet (#1916)
+        Expr::MethodCall {
+            receiver,
+            method,
+            args,
+            span,
+        } if method == "get" && args.len() == 1 => {
+            let list = expr_to_ref_expr_ext(receiver, fallback_span)?;
+            let index = expr_to_ref_expr_ext(&args[0], fallback_span)?;
+            Some(RefExpr::ArrayGet {
+                list: Box::new(list),
+                index: Box::new(index),
+                span: *span,
+            })
         }
         // x.bit_and(y) / x.bit_or(y) / … → RefExpr::BitwiseOp (#1928)
         Expr::MethodCall {

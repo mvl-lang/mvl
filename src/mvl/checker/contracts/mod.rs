@@ -1244,6 +1244,11 @@ pub(super) fn normalize_pred(pred: &RefExpr, old_name: &str) -> RefExpr {
             literal: literal.clone(),
             span: *span,
         },
+        RefExpr::ArrayGet { list, index, span } => RefExpr::ArrayGet {
+            list: Box::new(normalize_pred(list, old_name)),
+            index: Box::new(normalize_pred(index, old_name)),
+            span: *span,
+        },
         // Leaves unchanged.
         RefExpr::Integer { .. }
         | RefExpr::Float { .. }
@@ -1446,6 +1451,11 @@ pub(super) fn subst_pred_ident(pred: &RefExpr, old_name: &str, new_val: &RefExpr
             literal: literal.clone(),
             span: *span,
         },
+        RefExpr::ArrayGet { list, index, span } => RefExpr::ArrayGet {
+            list: Box::new(subst_pred_ident(list, old_name, new_val)),
+            index: Box::new(subst_pred_ident(index, old_name, new_val)),
+            span: *span,
+        },
         RefExpr::Integer { .. }
         | RefExpr::Float { .. }
         | RefExpr::Bool { .. }
@@ -1620,6 +1630,10 @@ pub(super) fn collect_idents_inner(pred: &RefExpr, names: &mut Vec<String>) {
         }
         RefExpr::BitwiseNot { inner, .. } => collect_idents_inner(inner, names),
         RefExpr::StringOp { receiver, .. } => collect_idents_inner(receiver, names),
+        RefExpr::ArrayGet { list, index, .. } => {
+            collect_idents_inner(list, names);
+            collect_idents_inner(index, names);
+        }
     }
 }
 
@@ -1705,6 +1719,9 @@ pub(super) fn display_pred(pred: &RefExpr) -> String {
                 StringOp::EndsWith => "ends_with",
             };
             format!("{}.{}({:?})", display_pred(receiver), method, literal)
+        }
+        RefExpr::ArrayGet { list, index, .. } => {
+            format!("{}.get({})", display_pred(list), display_pred(index))
         }
     }
 }

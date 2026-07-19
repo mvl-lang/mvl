@@ -887,6 +887,20 @@ impl Parser {
                             literal,
                             span,
                         };
+                    } else if matches!(self.peek_kind(), TokenKind::LParen)
+                        && method_or_field == "get"
+                    {
+                        // list.get(index) — array-index access (#1916)
+                        self.advance(); // consume '('
+                        let index = self.parse_ref_expr()?;
+                        let rp = self.expect(&TokenKind::RParen);
+                        self.require(rp)?;
+                        let span = self.span_from(start);
+                        expr = RefExpr::ArrayGet {
+                            list: Box::new(expr),
+                            index: Box::new(index),
+                            span,
+                        };
                     } else {
                         // Regular field access.
                         expr = RefExpr::FieldAccess {
