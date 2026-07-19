@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added — #1936
+
+- **Method-call syntax for built-in refinement functions.** `abs`, `min`, `max`, `len`, `contains`, `starts_with`, `ends_with`, `get`, `matches`, `bit_and`, `bit_or`, `bit_xor`, `bit_not`, `shift_left`, `shift_right` can now be written in either form: `len(s)` / `s.len()`, `min(a, b)` / `a.min(b)`, etc. Both forms lower to the same AST node; the parser accepts them interchangeably in all refinement predicate positions (type aliases, struct fields, function parameter `where` clauses, `requires`/`ensures`). Unknown method names in refinement position produce a diagnostic with a Levenshtein-1 spelling suggestion.
+
 ## [1.6.0] - 2026-07-19
 
 ### Added — #1911
