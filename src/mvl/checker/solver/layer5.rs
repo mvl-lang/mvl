@@ -48,7 +48,7 @@
 
 use std::collections::HashMap;
 
-use crate::mvl::parser::ast::{CmpOp, Expr, RefExpr};
+use crate::mvl::parser::ast::{CmpOp, Expr, RefExpr, StringOp};
 use crate::mvl::parser::lexer::Span;
 
 use super::RefResult;
@@ -69,6 +69,9 @@ pub(crate) fn try_z3(
 ) -> Option<RefResult> {
     #[cfg(feature = "z3")]
     {
+        if has_string_ops(pred) {
+            return impl_z3_str(pred, arg, var_refs);
+        }
         if has_bitwise_ops(pred) {
             if let Some(r) = impl_z3_bv(pred, arg, var_refs) {
                 return Some(r);
@@ -81,6 +84,26 @@ pub(crate) fn try_z3(
     {
         let _ = (pred, arg, var_refs);
         None
+    }
+}
+
+// ── String-op detection ───────────────────────────────────────────────────────
+
+/// Returns `true` if `pred` contains any `StringOp` node (contains/starts_with/ends_with).
+fn has_string_ops(pred: &RefExpr) -> bool {
+    match pred {
+        RefExpr::StringOp { .. } => true,
+        RefExpr::LogicOp { left, right, .. }
+        | RefExpr::Compare { left, right, .. }
+        | RefExpr::ArithOp { left, right, .. } => {
+            has_string_ops(left) || has_string_ops(right)
+        }
+        RefExpr::Not { inner, .. }
+        | RefExpr::Grouped { inner, .. }
+        | RefExpr::Old { inner, .. } => has_string_ops(inner),
+        RefExpr::Forall { body, .. } | RefExpr::Exists { body, .. } => has_string_ops(body),
+        RefExpr::FieldAccess { object, .. } => has_string_ops(object),
+        _ => false,
     }
 }
 
@@ -1099,6 +1122,119 @@ fn bv_from_expr<'ctx>(
         } if method == "bit_not" && args.is_empty() => {
             Some(bv_from_expr(ctx, receiver, vars, width)?.bvnot())
         }
+        _ => None,
+    }
+}
+
+// ── QF-S implementation (#1919) ───────────────────────────────────────────────
+
+/// Prove `pred(arg)` using Z3's string theory (QF_S / seq theory).
+///
+/// Triggered when the predicate contains any `StringOp` node. Creates a Z3
+/// `String` variable for `self`; if the argument is a string literal, asserts
+/// equality. Encodes `contains`/`starts_with`/`ends_with` via Z3 sequence
+/// predicates and checks UNSAT of the negation.
+///
+/// Mixed predicates combining `StringOp` and `len(self)` comparisons (e.g.
+/// `starts_with("Bearer ") && len(self) <= 4096`) are encoded as far as the
+/// string-op sub-expressions allow; `len(self)` sub-expressions are not yet
+/// bridged to the string-length domain and cause `str_pred_to_bool` to return
+/// `None`, falling through to `RuntimeCheck` for those arms.
+#[cfg(feature = "z3")]
+fn impl_z3_str(
+    pred: &RefExpr,
+    arg: &Expr,
+    var_refs: &HashMap<String, Option<RefExpr>>,
+) -> Option<RefResult> {
+    use crate::mvl::parser::ast::Literal;
+    use z3::ast::Ast as _;
+    use z3::{Config, Context, SatResult, Solver};
+
+    let mut cfg = Config::new();
+    cfg.set_timeout_msec(1_000);
+    let ctx = Context::new(&cfg);
+    let solver = Solver::new(&ctx);
+
+    // `self_str`: Z3 String variable representing the argument.
+    let self_str = z3::ast::String::new_const(&ctx, "self");
+
+    // If the argument is a string literal, constrain self_str to that value.
+    let is_concrete = if let Expr::Literal(Literal::Str(s), _) = arg {
+        let lit = z3::ast::String::from_str(&ctx, s).ok()?;
+        solver.assert(&self_str._eq(&lit));
+        true
+    } else {
+        false
+    };
+
+    // Assert hypotheses for in-scope variables with string-op predicates.
+    // (Variables with purely integer hypotheses are skipped — they don't
+    // affect string-content proofs.)
+    for (var_name, maybe_hyp) in var_refs {
+        if let Some(hyp) = maybe_hyp {
+            if has_string_ops(hyp) {
+                let var_str = z3::ast::String::new_const(&ctx, var_name.as_str());
+                if let Some(b) = str_pred_to_bool(&ctx, hyp, &var_str) {
+                    solver.assert(&b);
+                }
+            }
+        }
+    }
+
+    // Encode the predicate and assert its negation.
+    let pred_bool = str_pred_to_bool(&ctx, pred, &self_str)?;
+    solver.assert(&pred_bool.not());
+
+    match solver.check() {
+        SatResult::Unsat => Some(RefResult::Proven),
+        SatResult::Sat => {
+            if is_concrete {
+                Some(RefResult::Failed {
+                    counterexample: None,
+                })
+            } else {
+                // Symbolic argument — runtime check preserves safety.
+                None
+            }
+        }
+        _ => None,
+    }
+}
+
+/// Encode a refinement predicate as a Z3 Bool in the string domain.
+///
+/// `self_str` is the Z3 String variable for `self`. Encodes `StringOp` nodes
+/// via Z3 sequence predicates (`str.contains`, `str.prefixof`, `str.suffixof`).
+/// Returns `None` for sub-expressions that cannot be encoded in this domain
+/// (e.g. `len(self)` comparisons), causing the caller to fall through to
+/// `RuntimeCheck`.
+#[cfg(feature = "z3")]
+fn str_pred_to_bool<'ctx>(
+    ctx: &'ctx z3::Context,
+    pred: &RefExpr,
+    self_str: &z3::ast::String<'ctx>,
+) -> Option<z3::ast::Bool<'ctx>> {
+    match pred {
+        RefExpr::StringOp { op, literal, .. } => {
+            let needle = z3::ast::String::from_str(ctx, literal.as_str()).ok()?;
+            Some(match op {
+                StringOp::Contains => self_str.contains(&needle),
+                StringOp::StartsWith => needle.prefix(self_str),
+                StringOp::EndsWith => needle.suffix(self_str),
+            })
+        }
+        RefExpr::Not { inner, .. } => Some(str_pred_to_bool(ctx, inner, self_str)?.not()),
+        RefExpr::Grouped { inner, .. } => str_pred_to_bool(ctx, inner, self_str),
+        RefExpr::LogicOp { op, left, right, .. } => {
+            let l = str_pred_to_bool(ctx, left, self_str)?;
+            let r = str_pred_to_bool(ctx, right, self_str)?;
+            Some(match op {
+                crate::mvl::parser::ast::LogicOp::And => z3::ast::Bool::and(ctx, &[&l, &r]),
+                crate::mvl::parser::ast::LogicOp::Or => z3::ast::Bool::or(ctx, &[&l, &r]),
+            })
+        }
+        // len(self) comparisons and other non-string sub-expressions cannot be
+        // encoded here — return None so the predicate falls through to RuntimeCheck.
         _ => None,
     }
 }

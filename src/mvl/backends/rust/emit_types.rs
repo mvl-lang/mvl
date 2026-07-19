@@ -648,6 +648,7 @@ pub fn is_runtime_checkable(pred: &RefExpr) -> bool {
             is_runtime_checkable(left) && is_runtime_checkable(right)
         }
         RefExpr::BitwiseNot { inner, .. } => is_runtime_checkable(inner),
+        RefExpr::StringOp { receiver, .. } => is_runtime_checkable(receiver),
     }
 }
 
@@ -767,6 +768,15 @@ fn emit_ref_expr(pred: &RefExpr, binding: &str) -> String {
             )
         }
         RefExpr::BitwiseNot { inner, .. } => format!("(!{})", emit_ref_expr(inner, binding)),
+        RefExpr::StringOp { op, receiver, literal, .. } => {
+            use crate::mvl::parser::ast::StringOp;
+            let recv = emit_ref_expr(receiver, binding);
+            match op {
+                StringOp::Contains => format!("{recv}.contains({literal:?})"),
+                StringOp::StartsWith => format!("{recv}.starts_with({literal:?})"),
+                StringOp::EndsWith => format!("{recv}.ends_with({literal:?})"),
+            }
+        }
     }
 }
 

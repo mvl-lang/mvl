@@ -17,7 +17,7 @@ use std::collections::HashMap;
 
 use crate::mvl::checker::const_eval;
 use crate::mvl::parser::ast::{
-    ArithOp, BinaryOp, CmpOp, Expr, FnDecl, Literal, LogicOp, RefExpr, UnaryOp,
+    ArithOp, BinaryOp, CmpOp, Expr, FnDecl, Literal, LogicOp, RefExpr, StringOp, UnaryOp,
 };
 
 use super::RefResult;
@@ -106,9 +106,22 @@ pub(super) fn try_trivial(
             })
         }),
 
-        // String literal: evaluate `len(ident)` predicates against the literal's length.
-        // Enables static proof of e.g. `validate_log_path("app.log")` where pred is `len(p) > 0`.
-        Expr::Literal(Literal::Str(s), _) => Some(eval_pred_str_len(s.len() as i64, pred)),
+        // String literal: evaluate `len(ident)` and string-content predicates against the literal.
+        // Enables static proof of e.g. `validate_log_path("app.log")` where pred is `len(p) > 0`,
+        // or `validate_param("safe")` where pred is `!self.contains("'")`.
+        Expr::Literal(Literal::Str(s), _) => {
+            // Try string-content evaluation first (covers StringOp nodes); fall back to len-only.
+            match eval_bool_str_content(s, pred) {
+                Some(b) => Some(if b {
+                    RefResult::Proven
+                } else {
+                    RefResult::Failed {
+                        counterexample: None,
+                    }
+                }),
+                None => Some(eval_pred_str_len(s.len() as i64, pred)),
+            }
+        }
 
         // String concat chain: prove len-based predicates using a conservative lower
         // bound derived from all literal substrings in the chain.  For example:
@@ -493,6 +506,58 @@ fn eval_num_str_len(len_val: i64, expr: &RefExpr) -> Option<i64> {
             }
         }
         RefExpr::Grouped { inner, .. } => eval_num_str_len(len_val, inner),
+        _ => None,
+    }
+}
+
+/// Evaluate a boolean predicate against a concrete string literal (#1919).
+///
+/// Handles `StringOp` nodes (contains/starts_with/ends_with) and `len(x)` nodes
+/// together — returns `Some(bool)` when all sub-expressions can be determined from
+/// the literal, `None` when any sub-expression is symbolic or unknown.
+///
+/// Short-circuits `And`/`Or` like the other evaluators.
+fn eval_bool_str_content(s: &str, pred: &RefExpr) -> Option<bool> {
+    let len_val = s.len() as i64;
+    match pred {
+        RefExpr::StringOp { op, literal, .. } => Some(match op {
+            StringOp::Contains => s.contains(literal.as_str()),
+            StringOp::StartsWith => s.starts_with(literal.as_str()),
+            StringOp::EndsWith => s.ends_with(literal.as_str()),
+        }),
+        RefExpr::Not { inner, .. } => Some(!eval_bool_str_content(s, inner)?),
+        RefExpr::Grouped { inner, .. } => eval_bool_str_content(s, inner),
+        RefExpr::LogicOp {
+            op, left, right, ..
+        } => match op {
+            LogicOp::And => {
+                let l = eval_bool_str_content(s, left);
+                if l == Some(false) {
+                    return Some(false);
+                }
+                let r = eval_bool_str_content(s, right);
+                match (l, r) {
+                    (Some(a), Some(b)) => Some(a && b),
+                    _ => None,
+                }
+            }
+            LogicOp::Or => {
+                let l = eval_bool_str_content(s, left);
+                if l == Some(true) {
+                    return Some(true);
+                }
+                let r = eval_bool_str_content(s, right);
+                match (l, r) {
+                    (Some(a), Some(b)) => Some(a || b),
+                    _ => None,
+                }
+            }
+        },
+        // Compare involving len(x) — delegate to the len evaluator for the numeric part.
+        RefExpr::Compare { .. } => {
+            // Use eval_bool_str_len to handle len(x) comparisons within a compound predicate.
+            eval_bool_str_len(len_val, pred)
+        }
         _ => None,
     }
 }

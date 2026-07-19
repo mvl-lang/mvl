@@ -462,6 +462,7 @@ impl MutTracker {
                 self.visit_refexpr(right);
             }
             RefExpr::BitwiseNot { inner, .. } => self.visit_refexpr(inner),
+            RefExpr::StringOp { receiver, .. } => self.visit_refexpr(receiver),
         }
     }
 

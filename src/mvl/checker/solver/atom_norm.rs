@@ -152,7 +152,9 @@ impl AtomNormalizer {
                 inner: Box::new(self.rewrite_refexpr(inner)),
                 span: *span,
             },
-            // Idents, literals, and quantifiers are left as-is.
+            // StringOp nodes are left as-is — they are opaque to the arithmetic
+            // layers and are handled by L1 (literal strings) and L5 QF-S.
+            // Idents, literals, and quantifiers are also left as-is.
             _ => r.clone(),
         }
     }
@@ -291,6 +293,15 @@ fn canon_refexpr(r: &RefExpr) -> String {
             var, lo, hi, body, ..
         } => {
             format!("∃{var}∈[{lo}..{hi}]. {}", canon_refexpr(body))
+        }
+        RefExpr::StringOp { op, receiver, literal, .. } => {
+            use crate::mvl::parser::ast::StringOp;
+            let m = match op {
+                StringOp::Contains => "contains",
+                StringOp::StartsWith => "starts_with",
+                StringOp::EndsWith => "ends_with",
+            };
+            format!("{}.{}({literal:?})", canon_refexpr(receiver), m)
         }
     }
 }
