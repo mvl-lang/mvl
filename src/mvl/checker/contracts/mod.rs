@@ -401,7 +401,8 @@ fn check_return_pred_for_expr(
     // `check_arg_against_pred_counted` via `record()` — do not increment
     // here or return-refinement outcomes will double-count.
     let proof_outcome = match &outcome {
-        RefResult::Proven => ProofOutcome::Proven { layer },
+        RefResult::Proven => ProofOutcome::Proven { layer, is_bv: false },
+        RefResult::ProvenBv => ProofOutcome::Proven { layer, is_bv: true },
         RefResult::RuntimeCheck => ProofOutcome::RuntimeCheck,
         RefResult::Failed { counterexample } => {
             ctx.errors.push(CheckError::RefinementViolated {
@@ -516,7 +517,8 @@ pub(super) fn check_requires_at_call(
                     .find(|&i| ctx.counts.by_layer[i] > layer_before[i])
                     .unwrap_or(0);
                 let proof_outcome = match &outcome {
-                    RefResult::Proven => ProofOutcome::Proven { layer },
+                    RefResult::Proven => ProofOutcome::Proven { layer, is_bv: false },
+        RefResult::ProvenBv => ProofOutcome::Proven { layer, is_bv: true },
                     RefResult::RuntimeCheck => ProofOutcome::RuntimeCheck,
                     RefResult::Failed { counterexample } => {
                         ctx.errors.push(CheckError::PreconditionViolated {
@@ -539,13 +541,73 @@ pub(super) fn check_requires_at_call(
                 });
             }
             _ => {
-                // Phase 2: try multi-param substitution when all referenced args are literals.
-                check_multi_param_requires_literal(
-                    fn_name, &req_pred, params, args, var_refs, call_span, ctx,
-                );
+                // Closed predicate (#1915): the requires clause references no
+                // parameter — for example a bounded quantifier `forall i in
+                // [0..N]. p(i)` where `i` is bound and no free parameter appears.
+                // Dispatch with a dummy Unit argument so bounded-quantifier
+                // expansion in the layered solver can discharge it.
+                let referenced_params = collect_ident_names(&req_pred)
+                    .into_iter()
+                    .any(|n| params.iter().any(|p| p.name == n));
+                if !referenced_params {
+                    check_closed_requires(fn_name, &req_pred, var_refs, call_span, ctx);
+                } else {
+                    // Phase 2: try multi-param substitution when all referenced args are literals.
+                    check_multi_param_requires_literal(
+                        fn_name, &req_pred, params, args, var_refs, call_span, ctx,
+                    );
+                }
             }
         }
     }
+}
+
+/// Dispatch a closed `requires` predicate (no parameter references) through the
+/// layered solver, using a dummy Unit argument. Bounded quantifiers (#1915)
+/// are the main real-world source of these.
+fn check_closed_requires(
+    fn_name: &str,
+    pred: &RefExpr,
+    var_refs: &HashMap<String, Option<RefExpr>>,
+    call_span: Span,
+    ctx: &mut ContractCheckCtx<'_>,
+) {
+    let dummy_arg = Expr::Literal(Literal::Unit, call_span);
+    let layer_before = ctx.counts.by_layer;
+    let outcome = check_arg_against_pred_counted(
+        &dummy_arg,
+        pred,
+        var_refs,
+        ctx.fn_decls,
+        ctx.counts,
+    );
+    let layer = (1..6)
+        .find(|&i| ctx.counts.by_layer[i] > layer_before[i])
+        .unwrap_or(0);
+    let proof_outcome = match &outcome {
+        RefResult::Proven | RefResult::ProvenBv => ProofOutcome::Proven {
+            layer,
+            is_bv: matches!(outcome, RefResult::ProvenBv),
+        },
+        RefResult::RuntimeCheck => ProofOutcome::RuntimeCheck,
+        RefResult::Failed { counterexample } => {
+            ctx.errors.push(CheckError::PreconditionViolated {
+                fn_name: fn_name.to_string(),
+                pred: display_pred(pred),
+                span: call_span,
+                counterexample: counterexample.clone(),
+            });
+            ProofOutcome::Failed
+        }
+    };
+    ctx.counts.sites.push(ProofSite {
+        caller_fn: ctx.counts.current_fn.clone(),
+        fn_name: fn_name.to_string(),
+        param_name: String::new(),
+        predicate: format!("requires {}", display_pred(pred)),
+        span: call_span,
+        outcome: proof_outcome,
+    });
 }
 
 // ── ensures: return-point checker ────────────────────────────────────────────
@@ -943,7 +1005,7 @@ pub(super) fn check_ensures_for_return(
             .find(|&i| ctx.counts.by_layer[i] > layer_before[i])
             .unwrap_or(0);
         let proof_outcome = match &outcome {
-            RefResult::Proven => {
+            RefResult::Proven | RefResult::ProvenBv => {
                 ctx.counts.proof_log.push(ProofEntry {
                     file: String::new(),
                     line: ret_span.line,
@@ -952,7 +1014,10 @@ pub(super) fn check_ensures_for_return(
                     predicate: format!("ensures {}", display_pred(&ens_pred)),
                     layer,
                 });
-                ProofOutcome::Proven { layer }
+                ProofOutcome::Proven {
+                    layer,
+                    is_bv: matches!(outcome, RefResult::ProvenBv),
+                }
             }
             RefResult::RuntimeCheck => ProofOutcome::RuntimeCheck,
             RefResult::Failed { counterexample } => {
@@ -1086,6 +1151,40 @@ pub(super) fn normalize_pred(pred: &RefExpr, old_name: &str) -> RefExpr {
             }),
             span: *span,
         },
+        RefExpr::BoundedForall {
+            var,
+            lo,
+            hi,
+            body,
+            span,
+        } => RefExpr::BoundedForall {
+            var: var.clone(),
+            lo: *lo,
+            hi: *hi,
+            body: Box::new(if var == old_name {
+                *body.clone()
+            } else {
+                normalize_pred(body, old_name)
+            }),
+            span: *span,
+        },
+        RefExpr::BoundedExists {
+            var,
+            lo,
+            hi,
+            body,
+            span,
+        } => RefExpr::BoundedExists {
+            var: var.clone(),
+            lo: *lo,
+            hi: *hi,
+            body: Box::new(if var == old_name {
+                *body.clone()
+            } else {
+                normalize_pred(body, old_name)
+            }),
+            span: *span,
+        },
         // Field access: recurse into object, keep field unchanged.
         RefExpr::FieldAccess {
             object,
@@ -1094,6 +1193,21 @@ pub(super) fn normalize_pred(pred: &RefExpr, old_name: &str) -> RefExpr {
         } => RefExpr::FieldAccess {
             object: Box::new(normalize_pred(object, old_name)),
             field: field.clone(),
+            span: *span,
+        },
+        RefExpr::BitwiseOp {
+            op,
+            left,
+            right,
+            span,
+        } => RefExpr::BitwiseOp {
+            op: *op,
+            left: Box::new(normalize_pred(left, old_name)),
+            right: Box::new(normalize_pred(right, old_name)),
+            span: *span,
+        },
+        RefExpr::BitwiseNot { inner, span } => RefExpr::BitwiseNot {
+            inner: Box::new(normalize_pred(inner, old_name)),
             span: *span,
         },
         // Leaves unchanged.
@@ -1226,6 +1340,40 @@ pub(super) fn subst_pred_ident(pred: &RefExpr, old_name: &str, new_val: &RefExpr
             }),
             span: *span,
         },
+        RefExpr::BoundedForall {
+            var,
+            lo,
+            hi,
+            body,
+            span,
+        } => RefExpr::BoundedForall {
+            var: var.clone(),
+            lo: *lo,
+            hi: *hi,
+            body: Box::new(if var == old_name {
+                *body.clone()
+            } else {
+                subst_pred_ident(body, old_name, new_val)
+            }),
+            span: *span,
+        },
+        RefExpr::BoundedExists {
+            var,
+            lo,
+            hi,
+            body,
+            span,
+        } => RefExpr::BoundedExists {
+            var: var.clone(),
+            lo: *lo,
+            hi: *hi,
+            body: Box::new(if var == old_name {
+                *body.clone()
+            } else {
+                subst_pred_ident(body, old_name, new_val)
+            }),
+            span: *span,
+        },
         // Field access: substitute inside the object expression.
         RefExpr::FieldAccess {
             object,
@@ -1234,6 +1382,21 @@ pub(super) fn subst_pred_ident(pred: &RefExpr, old_name: &str, new_val: &RefExpr
         } => RefExpr::FieldAccess {
             object: Box::new(subst_pred_ident(object, old_name, new_val)),
             field: field.clone(),
+            span: *span,
+        },
+        RefExpr::BitwiseOp {
+            op,
+            left,
+            right,
+            span,
+        } => RefExpr::BitwiseOp {
+            op: *op,
+            left: Box::new(subst_pred_ident(left, old_name, new_val)),
+            right: Box::new(subst_pred_ident(right, old_name, new_val)),
+            span: *span,
+        },
+        RefExpr::BitwiseNot { inner, span } => RefExpr::BitwiseNot {
+            inner: Box::new(subst_pred_ident(inner, old_name, new_val)),
             span: *span,
         },
         RefExpr::Integer { .. }
@@ -1333,7 +1496,8 @@ pub(super) fn check_multi_param_requires_literal(
         .find(|&i| ctx.counts.by_layer[i] > layer_before[i])
         .unwrap_or(0);
     let proof_outcome = match &outcome {
-        RefResult::Proven => ProofOutcome::Proven { layer },
+        RefResult::Proven => ProofOutcome::Proven { layer, is_bv: false },
+        RefResult::ProvenBv => ProofOutcome::Proven { layer, is_bv: true },
         RefResult::RuntimeCheck => ProofOutcome::RuntimeCheck,
         RefResult::Failed { counterexample } => {
             ctx.errors.push(CheckError::PreconditionViolated {
@@ -1390,13 +1554,21 @@ pub(super) fn collect_idents_inner(pred: &RefExpr, names: &mut Vec<String>) {
         }
         // Quantifiers: collect free identifiers from the body (bound var is treated as free
         // here since the caller uses this to count variables, and the bound var is in scope).
-        RefExpr::Forall { body, .. } | RefExpr::Exists { body, .. } => {
+        RefExpr::Forall { body, .. }
+        | RefExpr::Exists { body, .. }
+        | RefExpr::BoundedForall { body, .. }
+        | RefExpr::BoundedExists { body, .. } => {
             collect_idents_inner(body, names);
         }
         RefExpr::Len { ident, .. } => names.push(ident.clone()),
         RefExpr::Integer { .. } | RefExpr::Float { .. } | RefExpr::Bool { .. } => {}
         // Field access: collect idents from the object (e.g. `self` in `self.size`).
         RefExpr::FieldAccess { object, .. } => collect_idents_inner(object, names),
+        RefExpr::BitwiseOp { left, right, .. } => {
+            collect_idents_inner(left, names);
+            collect_idents_inner(right, names);
+        }
+        RefExpr::BitwiseNot { inner, .. } => collect_idents_inner(inner, names),
     }
 }
 
@@ -1447,8 +1619,28 @@ pub(super) fn display_pred(pred: &RefExpr) -> String {
         RefExpr::Len { ident, .. } => format!("len({ident})"),
         RefExpr::Forall { var, body, .. } => format!("forall {var}, {}", display_pred(body)),
         RefExpr::Exists { var, body, .. } => format!("exists {var}, {}", display_pred(body)),
+        RefExpr::BoundedForall {
+            var, lo, hi, body, ..
+        } => format!("forall {var} in [{lo}..{hi}]. {}", display_pred(body)),
+        RefExpr::BoundedExists {
+            var, lo, hi, body, ..
+        } => format!("exists {var} in [{lo}..{hi}]. {}", display_pred(body)),
         RefExpr::FieldAccess { object, field, .. } => {
             format!("{}.{}", display_pred(object), field)
         }
+        RefExpr::BitwiseOp {
+            op, left, right, ..
+        } => {
+            use crate::mvl::parser::ast::BitwiseOp;
+            let op_str = match op {
+                BitwiseOp::And => "&",
+                BitwiseOp::Or => "|",
+                BitwiseOp::Xor => "^",
+                BitwiseOp::Shl => "<<",
+                BitwiseOp::Shr => ">>",
+            };
+            format!("{} {op_str} {}", display_pred(left), display_pred(right))
+        }
+        RefExpr::BitwiseNot { inner, .. } => format!("~{}", display_pred(inner)),
     }
 }

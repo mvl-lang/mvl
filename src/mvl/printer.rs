@@ -1249,6 +1249,47 @@ impl<'src> Printer<'src> {
                     self.fmt_ref_expr(body)
                 )
             }
+            RefExpr::BitwiseOp {
+                op, left, right, ..
+            } => {
+                use crate::mvl::parser::ast::BitwiseOp;
+                let op_s = match op {
+                    BitwiseOp::And => "&",
+                    BitwiseOp::Or => "|",
+                    BitwiseOp::Xor => "^",
+                    BitwiseOp::Shl => "<<",
+                    BitwiseOp::Shr => ">>",
+                };
+                format!(
+                    "{} {} {}",
+                    self.fmt_ref_expr(left),
+                    op_s,
+                    self.fmt_ref_expr(right)
+                )
+            }
+            RefExpr::BitwiseNot { inner, .. } => format!("~{}", self.fmt_ref_expr(inner)),
+            RefExpr::BoundedForall {
+                var, lo, hi, body, ..
+            } => {
+                format!(
+                    "forall {} in [{}..{}]. {}",
+                    var,
+                    lo,
+                    hi,
+                    self.fmt_ref_expr(body)
+                )
+            }
+            RefExpr::BoundedExists {
+                var, lo, hi, body, ..
+            } => {
+                format!(
+                    "exists {} in [{}..{}]. {}",
+                    var,
+                    lo,
+                    hi,
+                    self.fmt_ref_expr(body)
+                )
+            }
         }
     }
 

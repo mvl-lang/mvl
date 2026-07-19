@@ -130,6 +130,11 @@ install: ## Install all artifacts (mvl, stdlib, rust/llvm/wasm runtimes) from lo
 
 # === Build ===
 
+# Prevent the mvl binary from re-execing to the installed pinned toolchain.
+# Without this, `make test` would silently run the installed release binary
+# instead of the freshly-built debug binary, making local test runs useless.
+export MVL_NO_REEXEC := 1
+
 # BUILD=debug (default) or BUILD=release
 BUILD              ?= debug
 BUILD_CARGO_FLAGS  := $(if $(filter release,$(BUILD)),--release)
@@ -142,6 +147,9 @@ build: ## Build the MVL compiler + LLVM runtime (BUILD=debug|release, default de
 # === Test ===
 
 MVL ?= ./target/debug/mvl
+# All test targets use the freshly built dev binary. Prevent it from re-execing
+# to a project-pinned toolchain (see src/main.rs and CLAUDE.md).
+export MVL_NO_REEXEC = 1
 # mvlr — matrix run driver. Prefer the in-tree copy when it exists so a
 # dev checkout always runs the mvlr matching this source (the emitter
 # under test needs the mvlr that knows how to drive it — the installed

@@ -19,10 +19,17 @@
 //!
 //! # Supported subset
 //!
-//! Integer constants, free variables, `+`, `-`, `*`, `div`, `rem`, and all
-//! six comparison operators, `&&`, `||`, `!`.  Float predicates, `Len` nodes,
-//! and non-linear multiplication of two unknowns are translated to `None` so
-//! the layer safely falls through.
+//! **QF-NIA path** (default): integer constants, free variables, `+`, `-`, `*`,
+//! `div`, `rem`, and all six comparison operators, `&&`, `||`, `!`.
+//!
+//! **QF-BV path** (#1928): triggered when the predicate contains any bitwise
+//! operation (`bit_and`, `bit_or`, `bit_xor`, `bit_not`, `shift_left`,
+//! `shift_right`).  All variables and literals are encoded as 64-bit signed
+//! bit-vectors.  Returns `RefResult::ProvenBv` so the caller can label the
+//! proof site `(5:z3-bv)` in `mvl prove` output.
+//!
+//! Float predicates, `Len` nodes, and non-linear multiplication of two unknowns
+//! are translated to `None` so the layer safely falls through.
 //!
 //! Compile-time gated: the entire implementation is `#[cfg(feature = "z3")]`.
 //! When the feature is absent, `try_z3` is a no-op returning `None`.
@@ -49,7 +56,9 @@ use super::RefResult;
 
 /// Try to prove `pred(arg)` using the Z3 SMT solver.
 ///
-/// Returns `Some(Proven)` when Z3 confirms the implication is valid.
+/// When the predicate contains bitwise operations, dispatches to the QF-BV
+/// path and returns `RefResult::ProvenBv` on success.  Otherwise uses the
+/// standard QF-NIA path and returns `RefResult::Proven`.
 /// Returns `None` for unsupported constructs or when Z3 cannot decide within
 /// the built-in 1 second timeout.
 pub(crate) fn try_z3(
@@ -58,11 +67,39 @@ pub(crate) fn try_z3(
     var_refs: &HashMap<String, Option<RefExpr>>,
 ) -> Option<RefResult> {
     #[cfg(feature = "z3")]
-    return impl_z3(pred, arg, var_refs);
+    {
+        if has_bitwise_ops(pred) {
+            if let Some(r) = impl_z3_bv(pred, arg, var_refs) {
+                return Some(r);
+            }
+            // BV path returned None (unsupported shape) — fall through to NIA.
+        }
+        return impl_z3(pred, arg, var_refs);
+    }
     #[cfg(not(feature = "z3"))]
     {
         let _ = (pred, arg, var_refs);
         None
+    }
+}
+
+// ── Bitwise-op detection ──────────────────────────────────────────────────────
+
+/// Returns `true` if `pred` contains any `BitwiseOp` or `BitwiseNot` node.
+fn has_bitwise_ops(pred: &RefExpr) -> bool {
+    match pred {
+        RefExpr::BitwiseOp { .. } | RefExpr::BitwiseNot { .. } => true,
+        RefExpr::LogicOp { left, right, .. }
+        | RefExpr::Compare { left, right, .. }
+        | RefExpr::ArithOp { left, right, .. } => {
+            has_bitwise_ops(left) || has_bitwise_ops(right)
+        }
+        RefExpr::Not { inner, .. }
+        | RefExpr::Grouped { inner, .. }
+        | RefExpr::Old { inner, .. } => has_bitwise_ops(inner),
+        RefExpr::Forall { body, .. } | RefExpr::Exists { body, .. } => has_bitwise_ops(body),
+        RefExpr::FieldAccess { object, .. } => has_bitwise_ops(object),
+        _ => false,
     }
 }
 
@@ -78,13 +115,15 @@ fn collect_len_idents(expr: &RefExpr, out: &mut Vec<String>) {
         RefExpr::Len { ident, .. } => out.push(ident.clone()),
         RefExpr::LogicOp { left, right, .. }
         | RefExpr::Compare { left, right, .. }
-        | RefExpr::ArithOp { left, right, .. } => {
+        | RefExpr::ArithOp { left, right, .. }
+        | RefExpr::BitwiseOp { left, right, .. } => {
             collect_len_idents(left, out);
             collect_len_idents(right, out);
         }
         RefExpr::Not { inner, .. }
         | RefExpr::Grouped { inner, .. }
-        | RefExpr::Old { inner, .. } => collect_len_idents(inner, out),
+        | RefExpr::Old { inner, .. }
+        | RefExpr::BitwiseNot { inner, .. } => collect_len_idents(inner, out),
         RefExpr::Forall { body, .. } | RefExpr::Exists { body, .. } => {
             collect_len_idents(body, out);
         }
@@ -436,6 +475,245 @@ fn is_constrained_literal(arg: &Expr, pred_uses_len: bool) -> bool {
     }
 }
 
+// ── QF-BV implementation (#1928) ──────────────────────────────────────────────
+
+/// Prove `pred(arg)` using Z3's bit-vector theory (QF-BV).
+///
+/// All integer values are encoded as 64-bit signed bit-vectors.  Triggered
+/// only when `has_bitwise_ops(pred)` is true.  Returns `Some(ProvenBv)` on
+/// success, or `None` to fall through.
+#[cfg(feature = "z3")]
+fn impl_z3_bv(
+    pred: &RefExpr,
+    arg: &Expr,
+    var_refs: &HashMap<String, Option<RefExpr>>,
+) -> Option<RefResult> {
+    use z3::{Config, Context, SatResult, Solver};
+
+    const BV_WIDTH: u32 = 64;
+
+    let mut cfg = Config::new();
+    cfg.set_timeout_msec(1_000);
+    let ctx = Context::new(&cfg);
+    let solver = Solver::new(&ctx);
+
+    // Create one Z3 BV constant per in-scope variable.
+    let vars: HashMap<String, z3::ast::BV> = var_refs
+        .keys()
+        .map(|name| {
+            (
+                name.clone(),
+                z3::ast::BV::new_const(&ctx, name.as_str(), BV_WIDTH),
+            )
+        })
+        .collect();
+
+    // Assert each variable's refinement hypothesis in BV domain.
+    for (var_name, maybe_hyp) in var_refs {
+        if let Some(hyp) = maybe_hyp {
+            let var = vars.get(var_name)?;
+            let z3_hyp = bv_pred_to_bool(&ctx, hyp, var, &vars, BV_WIDTH)?;
+            solver.assert(&z3_hyp);
+        }
+    }
+
+    // Translate the call-site argument to a Z3 BV.
+    let arg_bv = bv_from_expr(&ctx, arg, &vars, BV_WIDTH)?;
+
+    // Assert ¬pred(arg); unsat ↔ Proven.
+    let z3_pred = bv_pred_to_bool(&ctx, pred, &arg_bv, &vars, BV_WIDTH)?;
+    solver.assert(&z3_pred.not());
+
+    match solver.check() {
+        SatResult::Unsat => Some(RefResult::ProvenBv),
+        _ => None,
+    }
+}
+
+/// Translate a `RefExpr` to a Z3 Bool using bit-vector arithmetic.
+#[cfg(feature = "z3")]
+fn bv_pred_to_bool<'ctx>(
+    ctx: &'ctx z3::Context,
+    expr: &RefExpr,
+    self_term: &z3::ast::BV<'ctx>,
+    vars: &HashMap<String, z3::ast::BV<'ctx>>,
+    width: u32,
+) -> Option<z3::ast::Bool<'ctx>> {
+    use crate::mvl::parser::ast::{CmpOp, LogicOp};
+    use z3::ast::Ast;
+
+    match expr {
+        RefExpr::Compare {
+            op, left, right, ..
+        } => {
+            let l = bv_from_ref(ctx, left, self_term, vars, width)?;
+            let r = bv_from_ref(ctx, right, self_term, vars, width)?;
+            Some(match op {
+                CmpOp::Eq => l._eq(&r),
+                CmpOp::Ne => l._eq(&r).not(),
+                CmpOp::Lt => l.bvslt(&r),
+                CmpOp::Le => l.bvsle(&r),
+                CmpOp::Gt => l.bvsgt(&r),
+                CmpOp::Ge => l.bvsge(&r),
+            })
+        }
+        RefExpr::LogicOp {
+            op, left, right, ..
+        } => {
+            let l = bv_pred_to_bool(ctx, left, self_term, vars, width)?;
+            let r = bv_pred_to_bool(ctx, right, self_term, vars, width)?;
+            Some(match op {
+                LogicOp::And => z3::ast::Bool::and(ctx, &[&l, &r]),
+                LogicOp::Or => z3::ast::Bool::or(ctx, &[&l, &r]),
+            })
+        }
+        RefExpr::Not { inner, .. } => {
+            Some(bv_pred_to_bool(ctx, inner, self_term, vars, width)?.not())
+        }
+        RefExpr::Grouped { inner, .. } => bv_pred_to_bool(ctx, inner, self_term, vars, width),
+        _ => None,
+    }
+}
+
+/// Translate a `RefExpr` to a Z3 BV (bit-vector integer).
+#[cfg(feature = "z3")]
+fn bv_from_ref<'ctx>(
+    ctx: &'ctx z3::Context,
+    expr: &RefExpr,
+    self_term: &z3::ast::BV<'ctx>,
+    vars: &HashMap<String, z3::ast::BV<'ctx>>,
+    width: u32,
+) -> Option<z3::ast::BV<'ctx>> {
+    use crate::mvl::parser::ast::{ArithOp, BitwiseOp};
+
+    match expr {
+        RefExpr::Integer { value, .. } => {
+            Some(z3::ast::BV::from_i64(ctx, *value, width))
+        }
+        RefExpr::Ident { name, .. } => {
+            if name == "self" {
+                Some(self_term.clone())
+            } else {
+                vars.get(name).cloned()
+            }
+        }
+        RefExpr::ArithOp {
+            op, left, right, ..
+        } => {
+            let l = bv_from_ref(ctx, left, self_term, vars, width)?;
+            let r = bv_from_ref(ctx, right, self_term, vars, width)?;
+            Some(match op {
+                ArithOp::Add => l.bvadd(&r),
+                ArithOp::Sub => l.bvsub(&r),
+                ArithOp::Mul => l.bvmul(&r),
+                ArithOp::Div => l.bvsdiv(&r),
+                ArithOp::Rem => l.bvsrem(&r),
+            })
+        }
+        RefExpr::BitwiseOp {
+            op, left, right, ..
+        } => {
+            let l = bv_from_ref(ctx, left, self_term, vars, width)?;
+            let r = bv_from_ref(ctx, right, self_term, vars, width)?;
+            Some(match op {
+                BitwiseOp::And => l.bvand(&r),
+                BitwiseOp::Or => l.bvor(&r),
+                BitwiseOp::Xor => l.bvxor(&r),
+                BitwiseOp::Shl => l.bvshl(&r),
+                BitwiseOp::Shr => l.bvashr(&r),
+            })
+        }
+        RefExpr::BitwiseNot { inner, .. } => {
+            Some(bv_from_ref(ctx, inner, self_term, vars, width)?.bvnot())
+        }
+        RefExpr::Grouped { inner, .. } => bv_from_ref(ctx, inner, self_term, vars, width),
+        _ => None,
+    }
+}
+
+/// Translate a call-site `Expr` to a Z3 BV.
+#[cfg(feature = "z3")]
+fn bv_from_expr<'ctx>(
+    ctx: &'ctx z3::Context,
+    expr: &Expr,
+    vars: &HashMap<String, z3::ast::BV<'ctx>>,
+    width: u32,
+) -> Option<z3::ast::BV<'ctx>> {
+    use crate::mvl::parser::ast::{BinaryOp, BitwiseOp, Literal, UnaryOp};
+
+    match expr {
+        Expr::Literal(Literal::Integer(i), _) => Some(z3::ast::BV::from_i64(ctx, *i, width)),
+        Expr::Ident(name, _) => vars.get(name).cloned(),
+        Expr::Unary {
+            op: UnaryOp::Neg,
+            expr: inner,
+            ..
+        } => Some(bv_from_expr(ctx, inner, vars, width)?.bvneg()),
+        Expr::Unary {
+            op: UnaryOp::BitNot,
+            expr: inner,
+            ..
+        } => Some(bv_from_expr(ctx, inner, vars, width)?.bvnot()),
+        Expr::Binary {
+            op, left, right, ..
+        } => {
+            let l = bv_from_expr(ctx, left, vars, width)?;
+            let r = bv_from_expr(ctx, right, vars, width)?;
+            Some(match op {
+                BinaryOp::Add => l.bvadd(&r),
+                BinaryOp::Sub => l.bvsub(&r),
+                BinaryOp::Mul => l.bvmul(&r),
+                BinaryOp::Div => l.bvsdiv(&r),
+                BinaryOp::Rem => l.bvsrem(&r),
+                BinaryOp::BitAnd => l.bvand(&r),
+                BinaryOp::BitOr => l.bvor(&r),
+                BinaryOp::BitXor => l.bvxor(&r),
+                BinaryOp::Shl => l.bvshl(&r),
+                BinaryOp::Shr => l.bvashr(&r),
+                _ => return None,
+            })
+        }
+        Expr::MethodCall {
+            receiver,
+            method,
+            args,
+            ..
+        } if args.len() == 1
+            && matches!(
+                method.as_str(),
+                "bit_and" | "bit_or" | "bit_xor" | "shift_left" | "shift_right"
+            ) =>
+        {
+            let l = bv_from_expr(ctx, receiver, vars, width)?;
+            let r = bv_from_expr(ctx, &args[0], vars, width)?;
+            let bop = match method.as_str() {
+                "bit_and" => BitwiseOp::And,
+                "bit_or" => BitwiseOp::Or,
+                "bit_xor" => BitwiseOp::Xor,
+                "shift_left" => BitwiseOp::Shl,
+                "shift_right" => BitwiseOp::Shr,
+                _ => unreachable!(),
+            };
+            Some(match bop {
+                BitwiseOp::And => l.bvand(&r),
+                BitwiseOp::Or => l.bvor(&r),
+                BitwiseOp::Xor => l.bvxor(&r),
+                BitwiseOp::Shl => l.bvshl(&r),
+                BitwiseOp::Shr => l.bvashr(&r),
+            })
+        }
+        Expr::MethodCall {
+            receiver,
+            method,
+            args,
+            ..
+        } if method == "bit_not" && args.is_empty() => {
+            Some(bv_from_expr(ctx, receiver, vars, width)?.bvnot())
+        }
+        _ => None,
+    }
+}
+
 // ── Unit tests ────────────────────────────────────────────────────────────────
 
 #[cfg(all(test, feature = "z3"))]
@@ -672,5 +950,126 @@ mod tests {
             }),
         );
         assert_eq!(try_z3(&pred, &arg, &var_refs), Some(RefResult::Proven));
+    }
+
+    // ── QF-BV tests (#1928) ──────────────────────────────────────────────────
+
+    /// Helper: `(self.bit_and(mask)) == self` as a RefExpr.
+    fn self_bit_and_eq(mask: i64) -> RefExpr {
+        RefExpr::Compare {
+            op: CmpOp::Eq,
+            left: Box::new(RefExpr::BitwiseOp {
+                op: crate::mvl::parser::ast::BitwiseOp::And,
+                left: Box::new(RefExpr::Ident {
+                    name: "self".into(),
+                    span: dummy_span(),
+                }),
+                right: Box::new(RefExpr::Integer {
+                    value: mask,
+                    span: dummy_span(),
+                }),
+                span: dummy_span(),
+            }),
+            right: Box::new(RefExpr::Ident {
+                name: "self".into(),
+                span: dummy_span(),
+            }),
+            span: dummy_span(),
+        }
+    }
+
+    /// 4 & 15 == 4: Z3 QF-BV proves a nibble-range constraint.
+    #[test]
+    fn z3_bv_literal_satisfies_nibble_pred() {
+        let pred = self_bit_and_eq(15); // (self & 15) == self
+        let arg = int_lit(4);
+        let var_refs = HashMap::new();
+        assert_eq!(try_z3(&pred, &arg, &var_refs), Some(RefResult::ProvenBv));
+    }
+
+    /// 16 does NOT satisfy (self & 15) == self — 16 & 15 = 0 ≠ 16.
+    #[test]
+    fn z3_bv_literal_violates_nibble_pred() {
+        let pred = self_bit_and_eq(15);
+        let arg = int_lit(16);
+        let var_refs = HashMap::new();
+        // 16 is a literal → definite failure but impl_z3_bv returns None on Sat
+        // (no counterexample extraction in BV path — falls through to runtime).
+        assert_eq!(try_z3(&pred, &arg, &var_refs), None);
+    }
+
+    /// Variable y with hypothesis (y & 15) == y satisfies (self & 15) == self.
+    #[test]
+    fn z3_bv_hypothesis_implies_nibble_pred() {
+        let pred = self_bit_and_eq(15); // (self & 15) == self
+        let arg = Expr::Ident("y".into(), dummy_span());
+        let mut var_refs = HashMap::new();
+        var_refs.insert("y".into(), Some(self_bit_and_eq(15)));
+        assert_eq!(try_z3(&pred, &arg, &var_refs), Some(RefResult::ProvenBv));
+    }
+
+    /// 255 & 255 == 255: full byte mask proves trivially.
+    #[test]
+    fn z3_bv_byte_mask_satisfied() {
+        let pred = self_bit_and_eq(255); // (self & 255) == self
+        let arg = int_lit(128);
+        let var_refs = HashMap::new();
+        assert_eq!(try_z3(&pred, &arg, &var_refs), Some(RefResult::ProvenBv));
+    }
+
+    /// Shift: (self << 0) == self is trivially true.
+    #[test]
+    fn z3_bv_shift_zero_identity() {
+        let pred = RefExpr::Compare {
+            op: CmpOp::Eq,
+            left: Box::new(RefExpr::BitwiseOp {
+                op: crate::mvl::parser::ast::BitwiseOp::Shl,
+                left: Box::new(RefExpr::Ident {
+                    name: "self".into(),
+                    span: dummy_span(),
+                }),
+                right: Box::new(RefExpr::Integer {
+                    value: 0,
+                    span: dummy_span(),
+                }),
+                span: dummy_span(),
+            }),
+            right: Box::new(RefExpr::Ident {
+                name: "self".into(),
+                span: dummy_span(),
+            }),
+            span: dummy_span(),
+        };
+        let arg = int_lit(42);
+        let var_refs = HashMap::new();
+        assert_eq!(try_z3(&pred, &arg, &var_refs), Some(RefResult::ProvenBv));
+    }
+
+    /// Test that mimics the full pipeline: atom-normalize then try_z3.
+    #[test]
+    fn z3_bv_pipeline_after_atom_norm() {
+        use crate::mvl::checker::solver::atom_norm::AtomNormalizer;
+        use crate::mvl::parser::ast::BitwiseOp as Bop;
+
+        let pred = RefExpr::Compare {
+            op: CmpOp::Eq,
+            left: Box::new(RefExpr::BitwiseOp {
+                op: Bop::And,
+                left: Box::new(RefExpr::Ident { name: "self".into(), span: dummy_span() }),
+                right: Box::new(RefExpr::Integer { value: 15, span: dummy_span() }),
+                span: dummy_span(),
+            }),
+            right: Box::new(RefExpr::Ident { name: "self".into(), span: dummy_span() }),
+            span: dummy_span(),
+        };
+        let arg = int_lit(4);
+        let var_refs = HashMap::new();
+
+        let mut norm = AtomNormalizer::new();
+        let n_pred = norm.rewrite_refexpr(&pred);
+        let n_arg = norm.rewrite_expr(&arg);
+        let n_var_refs = norm.rewrite_var_refs(&var_refs);
+
+        assert_eq!(try_z3(&n_pred, &n_arg, &n_var_refs), Some(RefResult::ProvenBv));
     }
 }
