@@ -99,8 +99,7 @@ fn prepare_llvm_text_tir_multi(
         .chain(sibling_progs_owned.iter().cloned())
         .collect();
     loop {
-        let new_pkgs =
-            loader::load_pkg_modules_tagged(&frontier, &project_root, &mut seen_pkgs);
+        let new_pkgs = loader::load_pkg_modules_tagged(&frontier, &project_root, &mut seen_pkgs);
         if new_pkgs.is_empty() {
             break;
         }
@@ -319,7 +318,9 @@ fn discover_and_compile_pkg_bridges(test_path: &str) -> Vec<PathBuf> {
     if !p.errors().is_empty() {
         return Vec::new();
     }
-    let entry_dir = Path::new(test_path).parent().unwrap_or_else(|| Path::new("."));
+    let entry_dir = Path::new(test_path)
+        .parent()
+        .unwrap_or_else(|| Path::new("."));
     let entry_abs = entry_dir
         .canonicalize()
         .unwrap_or_else(|_| PathBuf::from(entry_dir));
@@ -327,16 +328,14 @@ fn discover_and_compile_pkg_bridges(test_path: &str) -> Vec<PathBuf> {
 
     // Walk the pkg frontier the same way build.rs / prepare_llvm_text_tir_multi do.
     let sibling_modules = loader::load_sibling_modules_transitive(&prog, entry_dir);
-    let sibling_progs: Vec<Program> =
-        sibling_modules.iter().map(|(_, _, p)| p.clone()).collect();
+    let sibling_progs: Vec<Program> = sibling_modules.iter().map(|(_, _, p)| p.clone()).collect();
     let mut seen_pkgs = std::collections::HashSet::<String>::new();
     let mut pkg_progs: Vec<Program> = Vec::new();
     let mut frontier: Vec<Program> = std::iter::once(prog.clone())
         .chain(sibling_progs.iter().cloned())
         .collect();
     loop {
-        let new_pkgs =
-            loader::load_pkg_modules_tagged(&frontier, &project_root, &mut seen_pkgs);
+        let new_pkgs = loader::load_pkg_modules_tagged(&frontier, &project_root, &mut seen_pkgs);
         if new_pkgs.is_empty() {
             break;
         }
@@ -708,10 +707,7 @@ pub(super) fn cmd_test_llvm_text(path: &str, quiet: bool, verbose: bool) {
 
         for (file, ir, test_names) in &testfn_cases {
             let file_str = file.display().to_string();
-            let pkg_libs: &[PathBuf] = bridge_cache
-                .get(file)
-                .map(|v| v.as_slice())
-                .unwrap_or(&[]);
+            let pkg_libs: &[PathBuf] = bridge_cache.get(file).map(|v| v.as_slice()).unwrap_or(&[]);
             // Write IR to a temp file once; reuse for all test fns in this file.
             let tmp = match tempfile::NamedTempFile::with_suffix(".ll") {
                 Ok(t) => t,
