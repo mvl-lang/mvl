@@ -157,6 +157,64 @@ impl LlvmTextCompiler {
 
         Ok((emitter.finish(), test_names))
     }
+
+    /// Like [`compile_to_ir_test_crate`] but also emits sibling modules before
+    /// the test file so cross-module imports resolve at runtime (#1821).
+    pub fn compile_to_ir_test_crate_with_siblings(
+        &self,
+        prelude: &[TirProgram],
+        siblings: &[TirProgram],
+        prog: &TirProgram,
+        module_name: &str,
+    ) -> Result<(String, Vec<String>), String> {
+        let test_names: Vec<String> = prog
+            .fns
+            .iter()
+            .filter(|f| f.is_test && !f.is_builtin && f.type_params.is_empty())
+            .map(|f| f.name.clone())
+            .collect();
+
+        let mut emitter =
+            TextEmitter::new_with_builtins(module_name, &self.target_triple, &self.builtin_symbols);
+        for p in prelude {
+            let stripped = strip_prelude_extension_methods_tir(p);
+            for f in &p.fns {
+                if stripped.fns.iter().all(|sf| sf.name != f.name) && f.type_params.is_empty() {
+                    emitter.register_fn_tir_sig(f);
+                }
+            }
+            emitter.emit_program_tir(&stripped)?;
+        }
+        // Pass 1: register types and signatures from ALL siblings before emitting
+        // any function body. Siblings are sorted alphabetically, so a function
+        // module (e.g. "audit") may precede its type module ("model"). Without a
+        // global pre-registration pass, ty_to_llvm_ctx falls back to "ptr" for
+        // unknown Named types, producing wrong parameter types and broken match
+        // dispatch. This mirrors the Rust backend: the Rust compiler sees all
+        // type declarations across the whole crate before compiling any body.
+        for sib in siblings {
+            emitter.emit_program_tir_types_and_sigs(sib);
+        }
+        // Pass 2: emit type definitions and function bodies.
+        // - Pure siblings (no extern "rust"): full emit_program_tir.
+        // - Extern-rust siblings: emit type defs + only those function bodies
+        //   that do NOT directly call extern-rust symbols. lli's ORC JIT
+        //   materializes the whole module at once; unresolvable externs cause
+        //   all tests to fail even when the test never calls the impure function.
+        //   Pure helpers (e.g. parse_level) are emitted so tests can call them.
+        for sib in siblings {
+            let has_rust_extern = sib.externs.iter().any(|ed| ed.abi == "rust");
+            if has_rust_extern {
+                emitter.emit_program_tir_without_extern_rust_callers(sib)?;
+            } else {
+                emitter.emit_program_tir(sib)?;
+            }
+        }
+        emitter.emit_program_tir_test_crate(prog)?;
+        emitter.emit_test_dispatch_main(&test_names);
+
+        Ok((emitter.finish(), test_names))
+    }
 }
 
 impl Default for LlvmTextCompiler {

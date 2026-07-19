@@ -130,6 +130,11 @@ install: ## Install all artifacts (mvl, stdlib, rust/llvm/wasm runtimes) from lo
 
 # === Build ===
 
+# Prevent the mvl binary from re-execing to the installed pinned toolchain.
+# Without this, `make test` would silently run the installed release binary
+# instead of the freshly-built debug binary, making local test runs useless.
+export MVL_NO_REEXEC := 1
+
 # BUILD=debug (default) or BUILD=release
 BUILD              ?= debug
 BUILD_CARGO_FLAGS  := $(if $(filter release,$(BUILD)),--release)

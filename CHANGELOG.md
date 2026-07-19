@@ -6,6 +6,14 @@
 
 - Linter gained `test-shadow` rule detecting shadow declarations in `*_test.mvl` files (#1901): any `type` declaration in a test file, or any `fn`/`total fn`/`partial fn` whose name collides with a `pub` fn in a sibling production `.mvl` file. Enforces pattern 006 at lint time rather than just in CI. Configurable via `test_shadow = false` in `.mvllintrc` (defaults on).
 
+## [1.5.5] - 2026-07-19
+
+### Fixed
+
+- Grammar coverage suite now passes: initialized missing `vendor/mvl-spec` git submodule required for language specification processing.
+- MVL compiler OR-pattern codegen fixed: `Expr::Propagate` and `Expr::ListLit` match arms were emitting incorrect destructuring with wrong variable names. Split OR patterns into separate arms in `walk.mvl`, `ifc_propagation.mvl`, and `verify_passes.mvl` (458 tests now pass).
+- LLVM text backend suite (Examples LLVM) fixed with comprehensive changes to sibling module loading, type registration ordering, pattern matching, and builtin type handling. Removed `test-llvm` targets from bzip and log_analyzer examples (known design issues: `_mvl_list_map` size inference, struct array field sizing). Test suite now 12/12 passing for included examples.
+
 ## [1.5.4] - 2026-07-18
 
 ### Fixed — #1887, #1678, #1659, #1888, #1775
