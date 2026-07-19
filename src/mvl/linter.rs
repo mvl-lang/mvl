@@ -19,6 +19,8 @@ pub mod config;
 pub mod errors;
 pub mod rules;
 
+use std::path::Path;
+
 use crate::mvl::parser::ast::Program;
 use config::LintConfig;
 use errors::LintDiag;
@@ -75,7 +77,7 @@ impl LintResult {
 ///
 /// Phase 4 — Complexity (regenerability): cyclomatic complexity, nested match
 /// depth, effect signature width, trait impl count, module fan-out, extern ratio.
-pub fn lint(prog: &Program, src: &str, cfg: &LintConfig) -> LintResult {
+pub fn lint(prog: &Program, src: &str, cfg: &LintConfig, path: &Path) -> LintResult {
     let mut diags: Vec<LintDiag> = Vec::new();
 
     // Phase 1: source rules
@@ -104,6 +106,7 @@ pub fn lint(prog: &Program, src: &str, cfg: &LintConfig) -> LintResult {
     rules::silent_result_discard(prog, cfg, &mut diags);
     rules::relabel_tag_hygiene(prog, cfg, &mut diags);
     rules::wildcard_enum_match(prog, cfg, &mut diags);
+    rules::test_shadow(prog, cfg, path, &mut diags);
 
     // Phase 3: LLM corpus quality rules
     rules::consistent_comment_style(src, cfg, &mut diags);
@@ -237,7 +240,7 @@ mod tests {
     fn lint_clean_source_no_diags() {
         let src = "fn add(x: Int, y: Int) -> Int {\n    x + y\n}\n";
         let prog = parse(src);
-        let result = lint(&prog, src, &default_cfg());
+        let result = lint(&prog, src, &default_cfg(), Path::new(""));
         assert!(result.is_ok());
     }
 
@@ -247,7 +250,7 @@ mod tests {
         let prog = parse(src);
         let mut cfg = default_cfg();
         cfg.trailing_ws = true;
-        let result = lint(&prog, src, &cfg);
+        let result = lint(&prog, src, &cfg, Path::new(""));
         assert!(
             result.diags.iter().any(|d| d.rule == "trailing-whitespace"),
             "expected trailing-whitespace diagnostic"
@@ -261,7 +264,7 @@ mod tests {
         let prog = parse(&src);
         let mut cfg = default_cfg();
         cfg.line_length = 120;
-        let result = lint(&prog, &src, &cfg);
+        let result = lint(&prog, &src, &cfg, Path::new(""));
         assert!(
             result.diags.iter().any(|d| d.rule == "line-length"),
             "expected line-length diagnostic"
@@ -272,7 +275,7 @@ mod tests {
     fn lint_results_sorted_by_line() {
         let src = "fn foo() -> Int { 1 }   \nfn bar() -> Int { 2 }   \n";
         let prog = parse(src);
-        let result = lint(&prog, src, &default_cfg());
+        let result = lint(&prog, src, &default_cfg(), Path::new(""));
         let lines: Vec<u32> = result.diags.iter().map(|d| d.span.line).collect();
         let mut sorted = lines.clone();
         sorted.sort();
@@ -285,7 +288,7 @@ mod tests {
         let prog = parse(src);
         let mut cfg = default_cfg();
         cfg.trailing_ws = false;
-        let result = lint(&prog, src, &cfg);
+        let result = lint(&prog, src, &cfg, Path::new(""));
         assert!(
             result.diags.iter().all(|d| d.rule != "trailing-whitespace"),
             "trailing-whitespace should be suppressed when disabled"

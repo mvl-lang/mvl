@@ -2579,13 +2579,14 @@ fn ptr_type_resolves_in_extern_c() {
 fn extern_rust_deprecation_warning_fires() {
     use mvl::mvl::linter::{config::LintConfig, lint};
     use mvl::mvl::parser::Parser;
+    use std::path::Path;
     let src = r#"extern "rust" {
     fn hash(data: String) -> String;
 }"#;
     let (mut p, _) = Parser::new(src);
     let prog = p.parse_program();
     let cfg = LintConfig::default(); // deprecated_extern_rust = true by default
-    let result = lint(&prog, src, &cfg);
+    let result = lint(&prog, src, &cfg, Path::new(""));
     assert!(
         result
             .diags
@@ -2600,6 +2601,7 @@ fn extern_rust_deprecation_warning_fires() {
 fn extern_rust_deprecation_warning_suppressible() {
     use mvl::mvl::linter::{config::LintConfig, lint};
     use mvl::mvl::parser::Parser;
+    use std::path::Path;
     let src = r#"extern "rust" {
     fn hash(data: String) -> String;
 }"#;
@@ -2609,7 +2611,7 @@ fn extern_rust_deprecation_warning_suppressible() {
         deprecated_extern_rust: false,
         ..LintConfig::default()
     };
-    let result = lint(&prog, src, &cfg);
+    let result = lint(&prog, src, &cfg, Path::new(""));
     assert!(
         result
             .diags

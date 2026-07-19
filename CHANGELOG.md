@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Linter gained `test-shadow` rule detecting shadow declarations in `*_test.mvl` files (#1901): any `type` declaration in a test file, or any `fn`/`total fn`/`partial fn` whose name collides with a `pub` fn in a sibling production `.mvl` file. Enforces pattern 006 at lint time rather than just in CI. Configurable via `test_shadow = false` in `.mvllintrc` (defaults on).
+
 ## [1.5.4] - 2026-07-18
 
 ### Fixed — #1887, #1678, #1659, #1888, #1775
