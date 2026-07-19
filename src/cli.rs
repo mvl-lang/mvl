@@ -8,6 +8,7 @@ pub mod check;
 pub mod doctor;
 pub mod fmt;
 pub mod fuzz;
+pub mod kloc;
 pub mod lint;
 pub mod llvm_text;
 pub mod mcdc;
@@ -268,6 +269,13 @@ pub(super) fn dispatch(args: &[String]) {
         }
         "doctor" => {
             doctor::run();
+        }
+        "kloc" => {
+            let path = args
+                .get(2)
+                .map(|s| s.as_str())
+                .unwrap_or(".");
+            kloc::run(path);
         }
         "init" => {
             meta::cmd_init(args);
