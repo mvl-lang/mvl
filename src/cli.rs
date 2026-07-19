@@ -8,6 +8,8 @@ pub mod check;
 pub mod doctor;
 pub mod fmt;
 pub mod fuzz;
+pub mod harden;
+pub mod kloc;
 pub mod lint;
 pub mod llvm_text;
 pub mod mcdc;
@@ -15,7 +17,6 @@ pub mod meta;
 pub mod mutate;
 #[cfg(feature = "openapi")]
 pub mod openapi;
-pub mod harden;
 pub mod prove;
 pub mod test;
 pub mod tir;
@@ -221,7 +222,14 @@ pub(super) fn dispatch(args: &[String]) {
                 None
             };
             let emit_tests = args.iter().any(|a| a == "--emit-tests");
-            harden::run(&path, verbose, json, emit_tests, stdlib_profile, callee_filter);
+            harden::run(
+                &path,
+                verbose,
+                json,
+                emit_tests,
+                stdlib_profile,
+                callee_filter,
+            );
         }
         "complexity" => {
             use mvl::mvl::passes::complexity;
@@ -289,6 +297,16 @@ pub(super) fn dispatch(args: &[String]) {
         }
         "doctor" => {
             doctor::run();
+        }
+        "kloc" => {
+            let csv = args.iter().any(|a| a == "--csv");
+            let path = args
+                .iter()
+                .skip(2)
+                .find(|a| !a.starts_with("--"))
+                .map(|s| s.as_str())
+                .unwrap_or(".");
+            kloc::run(path, csv);
         }
         "init" => {
             meta::cmd_init(args);

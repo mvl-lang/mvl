@@ -131,35 +131,11 @@ impl LlvmTextCompiler {
         prog: &TirProgram,
         module_name: &str,
     ) -> Result<(String, Vec<String>), String> {
-        let test_names: Vec<String> = prog
-            .fns
-            .iter()
-            .filter(|f| f.is_test && !f.is_builtin && f.type_params.is_empty())
-            .map(|f| f.name.clone())
-            .collect();
-
-        // Emit all functions, including test fns (is_test filter removed).
-        let mut emitter =
-            TextEmitter::new_with_builtins(module_name, &self.target_triple, &self.builtin_symbols);
-        for p in prelude {
-            let stripped = strip_prelude_extension_methods_tir(p);
-            for f in &p.fns {
-                if stripped.fns.iter().all(|sf| sf.name != f.name) && f.type_params.is_empty() {
-                    emitter.register_fn_tir_sig(f);
-                }
-            }
-            emitter.emit_program_tir(&stripped)?;
-        }
-        emitter.emit_program_tir_test_crate(prog)?;
-
-        // Emit the dispatch main.
-        emitter.emit_test_dispatch_main(&test_names);
-
-        Ok((emitter.finish(), test_names))
+        self.compile_to_ir_test_crate_with_siblings(prelude, &[], prog, module_name)
     }
 
     /// Like [`compile_to_ir_test_crate`] but also emits sibling modules before
-    /// the test file so cross-module imports resolve at runtime (#1821).
+    /// the test file so cross-module imports resolve at runtime (#1821, #1880).
     pub fn compile_to_ir_test_crate_with_siblings(
         &self,
         prelude: &[TirProgram],

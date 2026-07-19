@@ -183,8 +183,11 @@ fn check_invariant_at_entry(
             .find(|&i| ctx.counts.by_layer[i] > layer_before[i])
             .unwrap_or(0);
         let proof_outcome = match &outcome {
-            RefResult::Proven => ProofOutcome::Proven { layer, is_bv: false },
-        RefResult::ProvenBv => ProofOutcome::Proven { layer, is_bv: true },
+            RefResult::Proven => ProofOutcome::Proven {
+                layer,
+                is_bv: false,
+            },
+            RefResult::ProvenBv => ProofOutcome::Proven { layer, is_bv: true },
             RefResult::RuntimeCheck => ProofOutcome::RuntimeCheck,
             RefResult::Failed { counterexample } => {
                 ctx.errors.push(CheckError::InvariantViolated {
@@ -682,8 +685,11 @@ fn check_spawn_at_site(
                     .find(|&i| ctx.counts.by_layer[i] > layer_before[i])
                     .unwrap_or(0);
                 let proof_outcome = match &outcome {
-                    RefResult::Proven => ProofOutcome::Proven { layer, is_bv: false },
-        RefResult::ProvenBv => ProofOutcome::Proven { layer, is_bv: true },
+                    RefResult::Proven => ProofOutcome::Proven {
+                        layer,
+                        is_bv: false,
+                    },
+                    RefResult::ProvenBv => ProofOutcome::Proven { layer, is_bv: true },
                     RefResult::RuntimeCheck => ProofOutcome::RuntimeCheck,
                     RefResult::Failed { counterexample } => {
                         ctx.errors.push(CheckError::RefinementViolated {
@@ -859,8 +865,11 @@ fn check_construct_at_site(
                     .find(|&i| ctx.counts.by_layer[i] > layer_before[i])
                     .unwrap_or(0);
                 let proof_outcome = match &outcome {
-                    RefResult::Proven => ProofOutcome::Proven { layer, is_bv: false },
-        RefResult::ProvenBv => ProofOutcome::Proven { layer, is_bv: true },
+                    RefResult::Proven => ProofOutcome::Proven {
+                        layer,
+                        is_bv: false,
+                    },
+                    RefResult::ProvenBv => ProofOutcome::Proven { layer, is_bv: true },
                     RefResult::RuntimeCheck => ProofOutcome::RuntimeCheck,
                     RefResult::Failed { counterexample } => {
                         ctx.errors.push(CheckError::RefinementViolated {

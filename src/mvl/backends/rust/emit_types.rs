@@ -753,7 +753,7 @@ fn emit_ref_expr(pred: &RefExpr, binding: &str) -> String {
         RefExpr::BitwiseOp {
             op, left, right, ..
         } => {
-            use crate::mvl::parser::ast::BitwiseOp;
+            use crate::mvl::ir::BitwiseOp;
             let op_str = match op {
                 BitwiseOp::And => "&",
                 BitwiseOp::Or => "|",
