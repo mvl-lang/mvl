@@ -1275,22 +1275,53 @@ impl TextEmitter {
         self.fn_ctx.reg_types.insert(disc_reg.clone(), "i8".into());
 
         let n = self.fn_ctx.bb;
-        self.fn_ctx.bb += arms.len() + 2;
+        // Collect Err arm indices whose inner pattern is a qualified enum variant
+        // (e.g. `Err(AuthError::InvalidCredentials)`). When there are multiple such
+        // arms they must NOT all emit `i8 1` in the outer switch — LLVM rejects
+        // duplicate case values. Instead route all of them to one `err_dispatch_bb`
+        // which performs a second switch on the inner error discriminant.
+        let qualified_err_indices: Vec<usize> = arms
+            .iter()
+            .enumerate()
+            .filter(|(_, a)| {
+                matches!(&a.pattern, Pattern::Err { inner, .. }
+                    if matches!(inner.as_ref(), Pattern::Ident(qn, _) if qn.contains("::")))
+            })
+            .map(|(i, _)| i)
+            .collect();
+        let use_err_dispatch = qualified_err_indices.len() > 1;
+
+        self.fn_ctx.bb += arms.len() + 2 + usize::from(use_err_dispatch);
         let default_bb = format!("match_default_{n}");
-        let merge_bb = format!("match_merge_{}", n + arms.len() + 1);
+        let merge_bb = format!(
+            "match_merge_{}",
+            n + arms.len() + 1 + usize::from(use_err_dispatch)
+        );
         let arm_bbs: Vec<String> = (0..arms.len())
             .map(|i| format!("match_arm_{}", n + i))
             .collect();
+        let err_dispatch_bb = format!("err_dispatch_{}", n + arms.len());
 
         let mut switch_str = format!("switch i8 {disc_reg}, label %{default_bb} [\n");
         let mut wildcard_arm: Option<usize> = None;
+        let mut err_outer_added = false;
         for (idx, arm) in arms.iter().enumerate() {
             match &arm.pattern {
                 Pattern::Ok { .. } => {
                     switch_str.push_str(&format!("    i8 0, label %{}\n", arm_bbs[idx]));
                 }
                 Pattern::Err { .. } => {
-                    switch_str.push_str(&format!("    i8 1, label %{}\n", arm_bbs[idx]));
+                    if use_err_dispatch {
+                        // Add the single outer Err case only once.
+                        if !err_outer_added {
+                            switch_str
+                                .push_str(&format!("    i8 1, label %{err_dispatch_bb}\n"));
+                            err_outer_added = true;
+                        }
+                    } else {
+                        switch_str
+                            .push_str(&format!("    i8 1, label %{}\n", arm_bbs[idx]));
+                    }
                 }
                 _ => {
                     wildcard_arm = Some(idx);
@@ -1299,6 +1330,50 @@ impl TextEmitter {
         }
         switch_str.push_str("  ]");
         self.push_instr(&switch_str);
+
+        // Two-level dispatch: load inner error value, switch on its discriminant.
+        if use_err_dispatch {
+            self.fn_ctx.fn_buf.push(format!("{err_dispatch_bb}:"));
+            self.fn_ctx.current_bb = err_dispatch_bb.clone();
+            self.fn_ctx.terminated = false;
+
+            let pp = self.next_reg();
+            self.push_instr(&format!(
+                "{pp} = extractvalue {RESULT_LLVM_TY} {scrut_val}, 1"
+            ));
+            let inner_val = self.next_reg();
+            self.push_instr(&format!("{inner_val} = load {err_load_ty}, ptr {pp}"));
+            self.fn_ctx
+                .reg_types
+                .insert(inner_val.clone(), err_load_ty.clone());
+
+            let inner_default = format!("err_dispatch_default_{}", n + arms.len());
+            let mut inner_sw = format!(
+                "switch {err_load_ty} {inner_val}, label %{inner_default} [\n"
+            );
+            for &idx in &qualified_err_indices {
+                if let Pattern::Err { inner, .. } = &arms[idx].pattern {
+                    if let Pattern::Ident(qname, _) = inner.as_ref() {
+                        if let Some(disc) = self.pattern_discriminant(qname) {
+                            inner_sw.push_str(&format!(
+                                "    {err_load_ty} {disc}, label %{}\n",
+                                arm_bbs[idx]
+                            ));
+                        }
+                    }
+                }
+            }
+            inner_sw.push_str("  ]");
+            self.push_instr(&inner_sw);
+
+            self.fn_ctx.fn_buf.push(format!("{inner_default}:"));
+            self.fn_ctx.current_bb = inner_default.clone();
+            self.fn_ctx.terminated = false;
+            self.ensure_extern("declare void @llvm.trap()");
+            self.push_instr("call void @llvm.trap()");
+            self.push_instr("unreachable");
+            self.fn_ctx.terminated = true;
+        }
 
         let mut phi_entries: Vec<(String, String, String)> = Vec::new();
         let mut no_val_arms: Vec<String> = Vec::new();
@@ -1341,7 +1416,11 @@ impl TextEmitter {
                         .reg_types
                         .insert(err_val.clone(), err_load_ty.clone());
                     if let Pattern::Ident(var_name, _) = inner.as_ref() {
-                        if var_name != "_" {
+                        // Qualified names (e.g. `AuthError::InvalidCredentials`) are
+                        // discriminant checks, not variable bindings — the dispatch is
+                        // already done in err_dispatch_bb. Plain names (e.g. `e`) ARE
+                        // variable bindings and must be bound for arm body use.
+                        if var_name != "_" && !var_name.contains("::") {
                             self.fn_ctx.locals.insert(var_name.clone(), err_val.clone());
                             bound_var = Some(var_name.clone());
                         }
