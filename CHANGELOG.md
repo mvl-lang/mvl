@@ -2,9 +2,22 @@
 
 ## [Unreleased]
 
-### Added
+## [1.6.0] - 2026-07-19
 
+### Added — #1915, #1901
+
+- **Bounded-quantifier refinement predicates via L3 expansion (#1915).** New syntax `forall x in [lo..hi]. pred` and `exists x in [lo..hi]. pred` for universal/existential quantifiers over literal integer ranges. Discharged by symbolic expansion at Layer 3: unrolled into conjunctions (forall) or disjunctions (exists) of instantiated bodies, each dispatched through the full L1–L5 solver cascade. Layer 1 gained a closed-form evaluator that proves parameter-free predicates like `0 < 10` as tautologies. Requires clauses that reference no parameters are now dispatched through a dedicated `check_closed_requires` path (previously silently dropped). Expansion is capped at `MAX_BOUNDED_EXPANSION = 1000` obligations; wider ranges fall back to `RuntimeCheck`. Unbounded `forall x: T, pred` form is now rejected at parse time with a targeted diagnostic. Prerequisite for #1916 (array-index refinements) and #1910 (CBTC train-presence case study). ADR-0056 documents the design.
 - Linter gained `test-shadow` rule detecting shadow declarations in `*_test.mvl` files (#1901): any `type` declaration in a test file, or any `fn`/`total fn`/`partial fn` whose name collides with a `pub` fn in a sibling production `.mvl` file. Enforces pattern 006 at lint time rather than just in CI. Configurable via `test_shadow = false` in `.mvllintrc` (defaults on).
+
+### Changed
+
+- Test harness `tests/solver_corpus.rs` now sets `MVL_NO_REEXEC=1` so freshly-built binaries under test are exercised instead of the pinned toolchain (see ADR-0009). The Makefile Test section exports the same variable so `make test-solver` and other `MVL`-driven targets follow suit.
+- Restored `tests/fixtures/13_stdlib/log_output.mvl` (orphaned when the `corpus_old` tree was retired in d9c7dd72; the `compile_and_run` harness still referenced it).
+- Migrated `tests/fixtures/01_syntax/keywords.mvl` and `tests/fixtures/11_contracts/loop_verification.mvl` from unbounded to bounded quantifier form.
+
+### Documentation
+
+- `CLAUDE.md` — added "Verify After Writing" section documenting `MVL_NO_REEXEC=1` requirement (see `src/main.rs::39-45`), and "Debugging the compiler: no print statements" section codifying the rule against `eprintln!/println!` tracing (write `#[cfg(test)]` unit tests instead).
 
 ## [1.5.5] - 2026-07-19
 

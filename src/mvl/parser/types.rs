@@ -753,40 +753,34 @@ impl Parser {
                 let span = self.span_from(start);
                 Ok(RefExpr::Len { ident, span })
             }
-            // forall x: T, pred — universal quantifier, ghost/contract context (Phase 5, #628)
+            // forall x in [lo..hi]. pred — bounded universal quantifier (#1915)
             TokenKind::Forall => {
                 self.advance(); // consume `forall`
                 let ident_result = self.expect_ident();
                 let (var, _) = self.require(ident_result)?;
-                let colon = self.expect(&TokenKind::Colon);
-                self.require(colon)?;
-                let ty = self.parse_type_expr()?;
-                let comma = self.expect(&TokenKind::Comma);
-                self.require(comma)?;
+                let (lo, hi) = self.parse_bounded_quantifier_range(&var)?;
                 let body = self.parse_ref_expr()?;
                 let span = self.span_from(start);
-                Ok(RefExpr::Forall {
+                Ok(RefExpr::BoundedForall {
                     var,
-                    ty: Box::new(ty),
+                    lo,
+                    hi,
                     body: Box::new(body),
                     span,
                 })
             }
-            // exists x: T, pred — existential quantifier, ghost/contract context (Phase 5, #628)
+            // exists x in [lo..hi]. pred — bounded existential quantifier (#1915)
             TokenKind::Exists => {
                 self.advance(); // consume `exists`
                 let ident_result = self.expect_ident();
                 let (var, _) = self.require(ident_result)?;
-                let colon = self.expect(&TokenKind::Colon);
-                self.require(colon)?;
-                let ty = self.parse_type_expr()?;
-                let comma = self.expect(&TokenKind::Comma);
-                self.require(comma)?;
+                let (lo, hi) = self.parse_bounded_quantifier_range(&var)?;
                 let body = self.parse_ref_expr()?;
                 let span = self.span_from(start);
-                Ok(RefExpr::Exists {
+                Ok(RefExpr::BoundedExists {
                     var,
-                    ty: Box::new(ty),
+                    lo,
+                    hi,
                     body: Box::new(body),
                     span,
                 })
@@ -892,6 +886,76 @@ impl Parser {
                 let err = ParseError {
                     message: format!("expected refinement, found `{}`", self.peek_kind()),
                     span: start,
+                };
+                self.push_recover(err);
+                Err(())
+            }
+        }
+    }
+
+    /// Parse the range clause of a bounded quantifier: `in [<int>..<int>].`
+    ///
+    /// Both endpoints must be integer literals (optionally negated). Rejects the
+    /// legacy unbounded form `<var>: <type>, body` with a clear diagnostic (#1915).
+    fn parse_bounded_quantifier_range(&mut self, var: &str) -> Result<(i64, i64), ()> {
+        // Detect legacy unbounded form and give a targeted error.
+        if matches!(self.peek_kind(), TokenKind::Colon) {
+            let err = ParseError {
+                message: format!(
+                    "unbounded quantifiers are not supported in refinement predicates; \
+                     use `{var} in [lo..hi]. pred` with literal integer bounds instead"
+                ),
+                span: self.peek_span(),
+            };
+            self.push_recover(err);
+            return Err(());
+        }
+        let in_tok = self.expect(&TokenKind::In);
+        self.require(in_tok)?;
+        let lb = self.expect(&TokenKind::LBracket);
+        self.require(lb)?;
+        let lo = self.parse_signed_int_literal()?;
+        let dd = self.expect(&TokenKind::DotDot);
+        self.require(dd)?;
+        let hi = self.parse_signed_int_literal()?;
+        let rb = self.expect(&TokenKind::RBracket);
+        self.require(rb)?;
+        let dot = self.expect(&TokenKind::Dot);
+        self.require(dot)?;
+        if lo > hi {
+            let err = ParseError {
+                message: format!(
+                    "bounded quantifier range `[{lo}..{hi}]` is empty (lo > hi)"
+                ),
+                span: self.peek_span(),
+            };
+            self.push_recover(err);
+            return Err(());
+        }
+        Ok((lo, hi))
+    }
+
+    /// Parse a possibly-negative integer literal used as a bounded-quantifier
+    /// range endpoint. Only literals are accepted (no arithmetic, no identifiers).
+    fn parse_signed_int_literal(&mut self) -> Result<i64, ()> {
+        let negate = if matches!(self.peek_kind(), TokenKind::Minus) {
+            self.advance();
+            true
+        } else {
+            false
+        };
+        match self.peek_kind() {
+            TokenKind::Integer(n) => {
+                let n = *n;
+                self.advance();
+                Ok(if negate { -n } else { n })
+            }
+            other => {
+                let err = ParseError {
+                    message: format!(
+                        "expected integer literal in bounded-quantifier range, found `{other}`"
+                    ),
+                    span: self.peek_span(),
                 };
                 self.push_recover(err);
                 Err(())
@@ -1082,6 +1146,67 @@ mod tests {
         assert_eq!(fields[0].name, "x");
         assert_eq!(fields[1].name, "y");
         assert!(invariant.is_none());
+    }
+
+    fn ref_expr_direct(src: &str) -> Result<RefExpr, Vec<ParseError>> {
+        let (mut p, lex_errs) = Parser::new(src);
+        assert!(lex_errs.is_empty(), "lex errors: {:?}", lex_errs);
+        match p.parse_ref_expr() {
+            Ok(re) if p.errors.is_empty() => Ok(re),
+            _ => Err(p.errors.clone()),
+        }
+    }
+
+    #[test]
+    fn parse_bounded_forall_atom_ok() {
+        // #1915: bounded universal quantifier
+        let re = ref_expr_direct("forall i in [0..9]. i < 10").expect("parse ok");
+        match re {
+            RefExpr::BoundedForall {
+                var, lo, hi, ..
+            } => {
+                assert_eq!(var, "i");
+                assert_eq!(lo, 0);
+                assert_eq!(hi, 9);
+            }
+            other => panic!("expected BoundedForall, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parse_bounded_exists_atom_ok() {
+        let re = ref_expr_direct("exists i in [-3..3]. i == 0").expect("parse ok");
+        match re {
+            RefExpr::BoundedExists {
+                var, lo, hi, ..
+            } => {
+                assert_eq!(var, "i");
+                assert_eq!(lo, -3);
+                assert_eq!(hi, 3);
+            }
+            other => panic!("expected BoundedExists, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn reject_unbounded_forall_with_diagnostic() {
+        // #1915: unbounded form is rejected with a clear diagnostic.
+        let errs = ref_expr_direct("forall i: Int, i >= 0").expect_err("should reject");
+        assert!(
+            errs.iter().any(|e| e.message.contains("unbounded quantifiers")),
+            "expected 'unbounded quantifiers' diagnostic, got: {:?}",
+            errs
+        );
+    }
+
+    #[test]
+    fn reject_empty_bounded_range() {
+        let errs = ref_expr_direct("forall i in [5..3]. i < 5").expect_err("should reject");
+        assert!(
+            errs.iter().any(|e| e.message.contains("empty")),
+            "expected 'empty' diagnostic, got: {:?}",
+            errs
+        );
     }
 
     #[test]

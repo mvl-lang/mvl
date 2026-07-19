@@ -43,6 +43,18 @@ pub(super) fn try_trivial(
             counterexample: None,
         });
     }
+    // Closed-form evaluation (#1915): predicate has no free identifiers and can
+    // be fully evaluated as a concrete boolean. Enables L1 discharge of bounded-
+    // quantifier expansion instances like `Integer(0) < Integer(10)`.
+    if let Some(b) = try_eval_closed(pred) {
+        return Some(if b {
+            RefResult::Proven
+        } else {
+            RefResult::Failed {
+                counterexample: None,
+            }
+        });
+    }
 
     // ── Argument-level analysis ───────────────────────────────────────────
     match arg {
@@ -271,6 +283,89 @@ fn bounds_contradictory((op_a, v_a): (CmpOp, i64), (op_b, v_b): (CmpOp, i64)) ->
         (CmpOp::Gt, CmpOp::Lt) | (CmpOp::Gt, CmpOp::Le) | (CmpOp::Ge, CmpOp::Lt) => v_b <= v_a,
         (CmpOp::Ge, CmpOp::Le) => v_b < v_a,
         _ => false,
+    }
+}
+
+// ── Closed-form evaluation (#1915) ────────────────────────────────────────────
+
+/// Evaluate a predicate that has no free identifiers to a concrete boolean.
+///
+/// Returns `None` when the predicate references any identifier (including
+/// `self`), any `len(...)`, `old(...)`, quantifier, or field access. Enables
+/// L1 to discharge instances produced by bounded-quantifier expansion whose
+/// bound variable has already been substituted with a literal integer.
+fn try_eval_closed(pred: &RefExpr) -> Option<bool> {
+    match pred {
+        RefExpr::Bool { value, .. } => Some(*value),
+        RefExpr::Compare {
+            op, left, right, ..
+        } => {
+            let l = eval_closed_num(left)?;
+            let r = eval_closed_num(right)?;
+            Some(match op {
+                CmpOp::Eq => l == r,
+                CmpOp::Ne => l != r,
+                CmpOp::Lt => l < r,
+                CmpOp::Gt => l > r,
+                CmpOp::Le => l <= r,
+                CmpOp::Ge => l >= r,
+            })
+        }
+        RefExpr::LogicOp {
+            op, left, right, ..
+        } => {
+            let l = try_eval_closed(left);
+            let r = try_eval_closed(right);
+            match op {
+                LogicOp::And => match (l, r) {
+                    (Some(false), _) | (_, Some(false)) => Some(false),
+                    (Some(true), Some(true)) => Some(true),
+                    _ => None,
+                },
+                LogicOp::Or => match (l, r) {
+                    (Some(true), _) | (_, Some(true)) => Some(true),
+                    (Some(false), Some(false)) => Some(false),
+                    _ => None,
+                },
+            }
+        }
+        RefExpr::Not { inner, .. } => Some(!try_eval_closed(inner)?),
+        RefExpr::Grouped { inner, .. } => try_eval_closed(inner),
+        _ => None,
+    }
+}
+
+/// Evaluate a numeric sub-expression with no free identifiers.
+fn eval_closed_num(expr: &RefExpr) -> Option<i64> {
+    match expr {
+        RefExpr::Integer { value, .. } => Some(*value),
+        RefExpr::ArithOp {
+            op, left, right, ..
+        } => {
+            let l = eval_closed_num(left)?;
+            let r = eval_closed_num(right)?;
+            match op {
+                ArithOp::Add => l.checked_add(r),
+                ArithOp::Sub => l.checked_sub(r),
+                ArithOp::Mul => l.checked_mul(r),
+                ArithOp::Div => {
+                    if r == 0 {
+                        None
+                    } else {
+                        Some(l / r)
+                    }
+                }
+                ArithOp::Rem => {
+                    if r == 0 {
+                        None
+                    } else {
+                        Some(l % r)
+                    }
+                }
+            }
+        }
+        RefExpr::Grouped { inner, .. } => eval_closed_num(inner),
+        _ => None,
     }
 }
 

@@ -56,3 +56,5 @@
 | [0052](0052-qualified-module-paths.md) | Qualified module paths for nested files — dot-separated names derived from relative paths | Accepted |
 | [0053](0053-no-rustc-concepts-in-mvl.md) | No rustc concepts in MVL grammar — reject trailing `where T: Trait` fn-signature bounds | Accepted |
 | [0054](0054-method-receiver-clone-semantics.md) | Method receiver clone semantics — per-dispatch-path clone insertion for user vs stdlib methods | Accepted |
+| [0055](0055-solver-atom-normalization.md) | Atom normalization at the solver dispatch boundary — compound-atom `FieldAccess`/`MethodCall` args normalized to fresh idents before L2..L5 | Accepted |
+| [0056](0056-bounded-quantifier-refinements.md) | Bounded quantifiers in refinement predicates via L3 expansion — `forall i in [lo..hi]. p` unrolls into conjunction of instantiated bodies | Accepted |

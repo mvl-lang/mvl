@@ -5,12 +5,30 @@
 **After writing or modifying any `.mvl` file, run:**
 
 ```bash
-cargo run -- check <file.mvl>
+MVL_NO_REEXEC=1 cargo run -- check <file.mvl>
 ```
+
+The `mvl` CLI re-execs to a project-pinned toolchain by default (`src/main.rs`
+resolves `requires-mvl` and re-execs to the installed binary). **When
+iterating on the compiler, you MUST set `MVL_NO_REEXEC=1`** or you'll be
+testing an older binary and think your code changes did nothing. Symptom:
+parser tests pass in `cargo test` but `cargo run -- check` shows the old
+behavior. See `src/main.rs` lines 39–45.
 
 If it fails, fix the errors before moving on. The compiler is the oracle — don't guess syntax, verify it.
 
 For full test suite: `make test-corpus` (parse+check all corpus files) or `make test-rust-rust` (run corpus through Rust backend).
+
+## Debugging the compiler: no print statements
+
+**Do not add `eprintln!`/`println!` "MARKER-…" prints to trace behavior.**
+When a code path seems dead, write a `#[cfg(test)]` unit test that exercises
+the exact parser/checker path directly (`Parser::new(src)`, `p.parse_ref_expr()`,
+etc.). A green unit test with the wrong end-to-end result is a *deployment*
+issue (see re-exec above), not a code issue.
+
+If the unit test is green and the CLI is red, the binary in use is not the one
+you just compiled — check `MVL_NO_REEXEC` before touching source again.
 
 ---
 
