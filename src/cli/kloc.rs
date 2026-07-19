@@ -6,28 +6,35 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process;
 
-#[derive(Default)]
-struct Counts {
-    src: usize,
-    tests: usize,
+#[derive(Default, Clone)]
+struct FileCounts {
+    files: usize,
     lines: usize,
     code: usize,
     comments: usize,
     blanks: usize,
 }
 
-impl Counts {
-    fn files(&self) -> usize {
-        self.src + self.tests
-    }
-
-    fn add(&mut self, other: &Counts) {
-        self.src += other.src;
-        self.tests += other.tests;
+impl FileCounts {
+    fn add(&mut self, other: &FileCounts) {
+        self.files += other.files;
         self.lines += other.lines;
         self.code += other.code;
         self.comments += other.comments;
         self.blanks += other.blanks;
+    }
+}
+
+#[derive(Default)]
+struct GroupCounts {
+    src: FileCounts,
+    tests: FileCounts,
+}
+
+impl GroupCounts {
+    fn add(&mut self, other: &GroupCounts) {
+        self.src.add(&other.src);
+        self.tests.add(&other.tests);
     }
 }
 
@@ -38,32 +45,31 @@ fn is_test_file(path: &Path) -> bool {
         .unwrap_or(false)
 }
 
-fn count_file(path: &Path) -> Counts {
+fn count_file(path: &Path) -> GroupCounts {
     let source = match fs::read_to_string(path) {
         Ok(s) => s,
-        Err(_) => return Counts::default(),
+        Err(_) => return GroupCounts::default(),
     };
-    let is_test = is_test_file(path);
-    let mut counts = Counts {
-        src: usize::from(!is_test),
-        tests: usize::from(is_test),
-        ..Default::default()
-    };
+    let mut fc = FileCounts { files: 1, ..Default::default() };
     for line in source.lines() {
-        counts.lines += 1;
+        fc.lines += 1;
         let trimmed = line.trim();
         if trimmed.is_empty() {
-            counts.blanks += 1;
+            fc.blanks += 1;
         } else if trimmed.starts_with("///")
             || trimmed.starts_with("//!")
             || trimmed.starts_with("//")
         {
-            counts.comments += 1;
+            fc.comments += 1;
         } else {
-            counts.code += 1;
+            fc.code += 1;
         }
     }
-    counts
+    if is_test_file(path) {
+        GroupCounts { src: FileCounts::default(), tests: fc }
+    } else {
+        GroupCounts { src: fc, tests: FileCounts::default() }
+    }
 }
 
 fn collect_mvl_files(dir: &Path) -> Vec<PathBuf> {
@@ -75,7 +81,6 @@ fn collect_mvl_files(dir: &Path) -> Vec<PathBuf> {
     for entry in entries.flatten() {
         let path = entry.path();
         if path.is_dir() {
-            // Skip hidden directories (e.g. .mvl/ package cache)
             let is_hidden = path
                 .file_name()
                 .and_then(|n| n.to_str())
@@ -91,11 +96,38 @@ fn collect_mvl_files(dir: &Path) -> Vec<PathBuf> {
     result
 }
 
-// Width: 1 + 32 + 1 + 5 + 1 + 6 + 1 + 10 + 1 + 10 + 1 + 10 + 1 + 10 = 90
-const WIDTH: usize = 90;
+// Width: 1 + 32 + 1 + 7 + 1 + 10 + 1 + 10 + 1 + 10 + 1 + 10 = 85
+const WIDTH: usize = 85;
 
-fn row(dir: &str, src: usize, tests: usize, lines: usize, code: usize, comments: usize, blanks: usize) {
-    println!(" {:<32} {:>5} {:>6} {:>10} {:>10} {:>10} {:>10}", dir, src, tests, lines, code, comments, blanks);
+fn row(dir: &str, c: &FileCounts) {
+    println!(
+        " {:<32} {:>7} {:>10} {:>10} {:>10} {:>10}",
+        dir, c.files, c.lines, c.code, c.comments, c.blanks
+    );
+}
+
+fn section(title: &str, groups: &BTreeMap<String, GroupCounts>, get: impl Fn(&GroupCounts) -> &FileCounts) {
+    let sep = "━".repeat(WIDTH);
+    let thin = "─".repeat(WIDTH);
+
+    let relevant: Vec<_> = groups.iter().filter(|(_, g)| get(g).files > 0).collect();
+    if relevant.is_empty() {
+        return;
+    }
+
+    println!("{sep}");
+    println!(" {:<32} {:>7} {:>10} {:>10} {:>10} {:>10}", title, "Files", "Lines", "Code", "Comments", "Blanks");
+    println!("{sep}");
+
+    let mut subtotal = FileCounts::default();
+    for (label, g) in &relevant {
+        let c = get(g);
+        row(label, c);
+        subtotal.add(c);
+    }
+
+    println!("{thin}");
+    row("Subtotal", &subtotal);
 }
 
 pub fn run(root: &str) {
@@ -114,8 +146,7 @@ pub fn run(root: &str) {
         .unwrap_or(root)
         .to_string();
 
-    // Group files by immediate subdirectory (depth 1 from root)
-    let mut groups: BTreeMap<String, Counts> = BTreeMap::new();
+    let mut groups: BTreeMap<String, GroupCounts> = BTreeMap::new();
 
     let entries = match fs::read_dir(root_path) {
         Ok(e) => e,
@@ -134,7 +165,6 @@ pub fn run(root: &str) {
             .to_string();
 
         if path.is_dir() {
-            // Skip hidden directories (e.g. .mvl/ package cache)
             if name.starts_with('.') {
                 continue;
             }
@@ -150,27 +180,25 @@ pub fn run(root: &str) {
         }
     }
 
-    // Remove empty groups
-    groups.retain(|_, v| v.files() > 0);
+    groups.retain(|_, g| g.src.files + g.tests.files > 0);
 
     if groups.is_empty() {
         eprintln!("no .mvl files found in '{}'", root);
         process::exit(0);
     }
 
-    let sep = "━".repeat(WIDTH);
-    let thin = "─".repeat(WIDTH);
-    println!("{sep}");
-    println!(" {:<32} {:>5} {:>6} {:>10} {:>10} {:>10} {:>10}", "Directory", "Src", "Tests", "Lines", "Code", "Comments", "Blanks");
-    println!("{sep}");
+    section("Source", &groups, |g| &g.src);
+    section("Tests", &groups, |g| &g.tests);
 
-    let mut total = Counts::default();
-    for (label, c) in &groups {
-        row(label, c.src, c.tests, c.lines, c.code, c.comments, c.blanks);
-        total.add(c);
+    // Grand total
+    let mut total = GroupCounts::default();
+    for g in groups.values() {
+        total.add(g);
     }
-
-    println!("{thin}");
-    row("Total", total.src, total.tests, total.lines, total.code, total.comments, total.blanks);
+    let sep = "━".repeat(WIDTH);
+    println!("{sep}");
+    let mut all = total.src.clone();
+    all.add(&total.tests);
+    row("Total", &all);
     println!("{sep}");
 }
