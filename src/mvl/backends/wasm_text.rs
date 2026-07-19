@@ -87,6 +87,12 @@ struct Ctx<'a> {
     /// Used both when a variant appears as a `Var` value and as a match
     /// pattern (`Pattern::Ident`).
     enum_variants: &'a HashMap<String, i32>,
+    /// Parameter names whose MVL type is `String` for the function currently
+    /// being emitted. These are split into two WASM params (`$name_ptr i32`,
+    /// `$name_len i32`) instead of one `i64`. A `Var(name)` with a String
+    /// type is emitted as two `local.get` ops. Updated per-function in
+    /// `emit_fn`.
+    string_params: std::cell::RefCell<std::collections::HashSet<String>>,
     /// Monotonic counter for fresh WAT labels (`$while_0`, `$while_1`, …).
     label_counter: Cell<usize>,
     /// Set by emitters that reach for `runtime/wasm/` symbols (#1819).
@@ -204,6 +210,18 @@ const RUNTIME_IMPORTS: &[(&str, &str)] = &[
         "(param i32 i32 i32) (result i32)",
     ),
     ("_mvl_map_drop_si64", "(param i32)"),
+    // Group G — Result ops (#1821 extension). i32 pointer to heap-allocated
+    // MvlResult. Ok = tag 0, Err = tag 1. Corpus scope: Result[Int, String].
+    ("_mvl_result_ok_i64", "(param i64) (result i32)"),
+    ("_mvl_result_ok_i32", "(param i32) (result i32)"),
+    ("_mvl_result_err_str", "(param i32 i32) (result i32)"),
+    ("_mvl_result_tag", "(param i32) (result i32)"),
+    ("_mvl_result_value_i64", "(param i32) (result i64)"),
+    ("_mvl_result_value_i32", "(param i32) (result i32)"),
+    ("_mvl_result_drop", "(param i32)"),
+    // Group H — String parse ops. Take raw (ptr, len) byte slice; return
+    // heap-allocated MvlResult pointer.
+    ("_mvl_string_parse_int", "(param i32 i32) (result i32)"),
 ];
 
 /// Layout offsets on `MvlString` — mirrors `runtime/wasm/src/lib.rs` /
@@ -242,6 +260,7 @@ impl Backend for WasmTextCompiler {
             literals: &literals,
             enum_types: &enum_types,
             enum_variants: &enum_variants,
+            string_params: std::cell::RefCell::new(std::collections::HashSet::new()),
             label_counter: Cell::new(0),
             needs_runtime: Cell::new(false),
         };
@@ -303,7 +322,12 @@ impl Backend for WasmTextCompiler {
 /// `if (result T)` — otherwise the WASM validator rejects the fn (values
 /// left over inside a bare `if` block don't propagate to the enclosing
 /// function's return slot).
-fn if_stmt_result_ty(then: &TirBlock, else_: &Option<TirElseBranch>) -> Option<Ty> {
+///
+/// Type comparison uses WASM-level types (e.g. `"i32"`) rather than MVL
+/// types, because the TIR type-checker leaves `Ty::Unknown` in Result/Option
+/// type params (e.g. `Result[Unknown, String]` vs `Result[Int, Unknown]`)
+/// that differ structurally yet lower to the same `i32` slot.
+fn if_stmt_result_ty(then: &TirBlock, else_: &Option<TirElseBranch>, ctx: &Ctx) -> Option<Ty> {
     let t = block_trailing_ty(then)?;
     let e = match else_ {
         Some(TirElseBranch::Block(b)) => block_trailing_ty(b)?,
@@ -312,12 +336,12 @@ fn if_stmt_result_ty(then: &TirBlock, else_: &Option<TirElseBranch>) -> Option<T
                 then: t2,
                 else_: e2,
                 ..
-            } => if_stmt_result_ty(t2, e2)?,
+            } => if_stmt_result_ty(t2, e2, ctx)?,
             _ => return None,
         },
         None => return None,
     };
-    if matches!(t, Ty::Unit) || t != e {
+    if matches!(t, Ty::Unit) || wasm_ty(&t, ctx) != wasm_ty(&e, ctx) {
         None
     } else {
         Some(t)
@@ -346,10 +370,28 @@ fn effective_name(f: &TirFn, needs_wasi: bool) -> (&str, &str) {
 }
 
 fn emit_fn(out: &mut String, f: &TirFn, ctx: &Ctx) {
+    // Update the per-function String-param registry so that `Var` accesses
+    // to these params emit two `local.get` ops instead of one.
+    *ctx.string_params.borrow_mut() = f
+        .params
+        .iter()
+        .filter(|p| matches!(&p.ty, Ty::String))
+        .map(|p| p.name.clone())
+        .collect();
+
     let (wasm_name, _) = effective_name(f, ctx.needs_wasi);
     out.push_str(&format!("  (func ${wasm_name}"));
     for p in &f.params {
-        out.push_str(&format!(" (param ${} {})", p.name, wasm_ty(&p.ty, ctx)));
+        if matches!(&p.ty, Ty::String) {
+            // String params split into (ptr: i32, len: i32) — the raw byte-slice
+            // ABI used by `_mvl_string_*` runtime ops.
+            out.push_str(&format!(
+                " (param ${}_ptr i32) (param ${}_len i32)",
+                p.name, p.name
+            ));
+        } else {
+            out.push_str(&format!(" (param ${} {})", p.name, wasm_ty(&p.ty, ctx)));
+        }
     }
     if !matches!(f.ret_ty, Ty::Unit) {
         out.push_str(&format!(" (result {})", wasm_ty(&f.ret_ty, ctx)));
@@ -401,15 +443,33 @@ fn emit_fn(out: &mut String, f: &TirFn, ctx: &Ctx) {
                 // here is defense-in-depth without double-free risk.
                 out.push_str(&format!("    local.get ${name}\n"));
                 out.push_str("    call $_mvl_option_drop\n");
+            } else if name.starts_with("__mr_") {
+                // Same as __mo_*: Result.unwrap_or drops inline; re-drop is
+                // null-safe defense-in-depth.
+                out.push_str(&format!("    local.get ${name}\n"));
+                out.push_str("    call $_mvl_result_drop\n");
             } else if name.starts_with("__match_") && option_inner_ty(ty).is_some() {
                 // Match scrutinee that was an Option — drop the box the
                 // arms consumed by value.
                 out.push_str(&format!("    local.get ${name}\n"));
                 out.push_str("    call $_mvl_option_drop\n");
+            } else if name.starts_with("__match_") && result_ok_ty(ty).is_some() {
+                // Match scrutinee that was a Result — drop the box.
+                out.push_str(&format!("    local.get ${name}\n"));
+                out.push_str("    call $_mvl_result_drop\n");
+            } else if name.starts_with("__pr_") {
+                // `?`-operator temp — the Result was already propagated (Ok
+                // or Err) so drop its box here at fn exit. Null-safe.
+                out.push_str(&format!("    local.get ${name}\n"));
+                out.push_str("    call $_mvl_result_drop\n");
             } else if !name.starts_with("__") && option_inner_ty(ty).is_some() {
                 // User-bound `let opt: Option[T] = …`. Rare in corpus.
                 out.push_str(&format!("    local.get ${name}\n"));
                 out.push_str("    call $_mvl_option_drop\n");
+            } else if !name.starts_with("__") && result_ok_ty(ty).is_some() {
+                // User-bound `let r: Result[T, E] = …`.
+                out.push_str(&format!("    local.get ${name}\n"));
+                out.push_str("    call $_mvl_result_drop\n");
             } else if !name.starts_with("__")
                 && collection_elem_ty(ty).is_some()
                 && collection_elem_ty(ty)
@@ -547,18 +607,29 @@ fn collect_locals_expr(expr: &TirExpr, locals: &mut Vec<(String, Ty)>) {
             // the scrutinee here so it doesn't re-evaluate per arm.
             locals.push((match_temp_name(expr), scrutinee.ty.clone()));
             collect_locals_expr(scrutinee, locals);
-            // Some(inner) patterns bind `inner` — declare it as a fn-scoped
-            // local of the Option's payload type so `local.set` in the arm
-            // body validates. Skips `_`.
-            let inner_ty = option_inner_ty(&scrutinee.ty).cloned();
+            // Some(inner) / Ok(inner) patterns bind `inner` — declare it as
+            // a fn-scoped local of the payload type so `local.set` validates.
+            let option_inner = option_inner_ty(&scrutinee.ty).cloned();
+            let result_ok = result_ok_ty(&scrutinee.ty).cloned();
             for arm in arms {
-                if let Pattern::Some { inner, .. } = &arm.pattern {
-                    if let Pattern::Ident(name, _) = inner.as_ref() {
-                        if name != "_" {
-                            let ty = inner_ty.clone().unwrap_or(Ty::Int);
-                            locals.push((name.clone(), ty));
+                match &arm.pattern {
+                    Pattern::Some { inner, .. } => {
+                        if let Pattern::Ident(name, _) = inner.as_ref() {
+                            if name != "_" {
+                                let ty = option_inner.clone().unwrap_or(Ty::Int);
+                                locals.push((name.clone(), ty));
+                            }
                         }
                     }
+                    Pattern::Ok { inner, .. } => {
+                        if let Pattern::Ident(name, _) = inner.as_ref() {
+                            if name != "_" {
+                                let ty = result_ok.clone().unwrap_or(Ty::Int);
+                                locals.push((name.clone(), ty));
+                            }
+                        }
+                    }
+                    _ => {}
                 }
                 match &arm.body {
                     TirMatchBody::Expr(e) => collect_locals_expr(e, locals),
@@ -572,6 +643,15 @@ fn collect_locals_expr(expr: &TirExpr, locals: &mut Vec<(String, Ty)>) {
             collect_locals_expr(right, locals);
         }
         TirExprKind::Unary { expr, .. } => collect_locals_expr(expr, locals),
+        TirExprKind::Propagate(inner) => {
+            collect_locals_expr(inner, locals);
+            // Temp local to stash the Result pointer during tag inspection.
+            // Uses Ty::Bool (→ i32) as a proxy for a raw i32 pointer.
+            locals.push((
+                format!("__pr_{}_{}", expr.span.offset, expr.span.len),
+                Ty::Bool,
+            ));
+        }
         TirExprKind::FnCall { args, .. } => {
             for a in args {
                 collect_locals_expr(a, locals);
@@ -604,6 +684,10 @@ fn collect_locals_expr(expr: &TirExpr, locals: &mut Vec<(String, Ty)>) {
             // a value.
             if option_inner_ty(&receiver.ty).is_some() && method == "unwrap_or" {
                 locals.push((mvl_option_temp_name(expr), Ty::Bool));
+            }
+            // Same for Result.unwrap_or — stashes the Result pointer in __mr_*.
+            if result_ok_ty(&receiver.ty).is_some() && method == "unwrap_or" {
+                locals.push((mvl_result_temp_name(expr), Ty::Bool));
             }
         }
         // List / Set literals stash their `*MvlArray` pointer in a temp
@@ -674,7 +758,7 @@ fn emit_stmt(out: &mut String, stmt: &TirStmt, ctx: &Ctx) {
             cond, then, else_, ..
         } => {
             emit_expr(out, cond, ctx);
-            match if_stmt_result_ty(then, else_) {
+            match if_stmt_result_ty(then, else_, ctx) {
                 Some(ty) => {
                     out.push_str(&format!("    if (result {})\n", wasm_ty(&ty, ctx)));
                 }
@@ -770,9 +854,18 @@ fn emit_expr(out: &mut String, expr: &TirExpr, ctx: &Ctx) {
             // locals by presence in the enum-variant registry.
             if let Some(&id) = ctx.enum_variants.get(name) {
                 out.push_str(&format!("    i32.const {id}\n"));
-            } else {
-                out.push_str(&format!("    local.get ${name}\n"));
+                return;
             }
+            // String function params are split into two WASM params
+            // (`$name_ptr`, `$name_len`). Push both to leave a (ptr, len)
+            // pair on the stack — the shape expected by `_mvl_string_*`
+            // runtime ops and by calls to functions taking String params.
+            if matches!(&expr.ty, Ty::String) && ctx.string_params.borrow().contains(name) {
+                out.push_str(&format!("    local.get ${name}_ptr\n"));
+                out.push_str(&format!("    local.get ${name}_len\n"));
+                return;
+            }
+            out.push_str(&format!("    local.get ${name}\n"));
         }
         TirExprKind::Unary { op, expr: inner } => {
             emit_unary(out, *op, inner, ctx);
@@ -816,6 +909,28 @@ fn emit_expr(out: &mut String, expr: &TirExpr, ctx: &Ctx) {
                 let inner = option_inner_ty(&expr.ty).cloned().unwrap_or(Ty::Int);
                 let (some_ctor, _) = option_ops_for(&inner, ctx);
                 out.push_str(&format!("    call ${some_ctor}\n"));
+                return;
+            }
+            // `Ok(x)` constructor — dispatch to the typed result constructor.
+            if name == "Ok" && args.len() == 1 && matches!(&expr.ty, Ty::Result(_, _)) {
+                ctx.needs_runtime.set(true);
+                emit_expr(out, &args[0], ctx);
+                let ok_ty = result_ok_ty(&expr.ty).cloned().unwrap_or(Ty::Int);
+                let (ok_ctor, _) = result_ops_for_ok(&ok_ty, ctx);
+                out.push_str(&format!("    call ${ok_ctor}\n"));
+                return;
+            }
+            // `Err(x)` constructor — `Err(s: String)` routes to
+            // `_mvl_result_err_str`. Other error types not yet supported.
+            if name == "Err" && args.len() == 1 && matches!(&expr.ty, Ty::Result(_, _)) {
+                let err_ty = result_err_ty(&expr.ty).cloned().unwrap_or(Ty::String);
+                if matches!(err_ty, Ty::String) {
+                    ctx.needs_runtime.set(true);
+                    emit_expr(out, &args[0], ctx);
+                    out.push_str("    call $_mvl_result_err_str\n");
+                } else {
+                    out.push_str("    ;; unsupported Err type (only String errors supported)\n");
+                }
                 return;
             }
             for a in args {
@@ -889,6 +1004,43 @@ fn emit_expr(out: &mut String, expr: &TirExpr, ctx: &Ctx) {
             }
             out.push_str(&format!("    call $_mvl_string_{method}\n"));
             emit_unpack_mvl_string(out, expr);
+        }
+        // `String.parse_int()` — returns a heap-allocated MvlResult pointer
+        // (Group H import). Receiver is the raw (ptr, len) string on the stack.
+        TirExprKind::MethodCall {
+            receiver,
+            method,
+            args,
+        } if matches!(&receiver.ty, Ty::String) && method == "parse_int" && args.is_empty() => {
+            ctx.needs_runtime.set(true);
+            emit_expr(out, receiver, ctx);
+            out.push_str("    call $_mvl_string_parse_int\n");
+        }
+        // `Result[T, E].unwrap_or(default)` — inline if/else on the tag,
+        // then drop the Result box. Mirrors the Option.unwrap_or handler.
+        TirExprKind::MethodCall {
+            receiver,
+            method,
+            args,
+        } if result_ok_ty(&receiver.ty).is_some() && method == "unwrap_or" && args.len() == 1 => {
+            ctx.needs_runtime.set(true);
+            let ok_ty = result_ok_ty(&receiver.ty).cloned().unwrap_or(Ty::Int);
+            let (_, getter) = result_ops_for_ok(&ok_ty, ctx);
+            let result_wasm_ty = wasm_ty(&ok_ty, ctx);
+            let temp = mvl_result_temp_name(expr);
+            emit_expr(out, receiver, ctx);
+            out.push_str(&format!("    local.tee ${temp}\n"));
+            out.push_str("    call $_mvl_result_tag\n");
+            // tag == 0 → Ok. i32.eqz maps 0→1, non-zero→0.
+            out.push_str("    i32.eqz\n");
+            out.push_str(&format!("    if (result {result_wasm_ty})\n"));
+            out.push_str(&format!("    local.get ${temp}\n"));
+            out.push_str(&format!("    call ${getter}\n"));
+            out.push_str("    else\n");
+            emit_expr(out, &args[0], ctx);
+            out.push_str("    end\n");
+            out.push_str(&format!("    local.get ${temp}\n"));
+            out.push_str("    call $_mvl_result_drop\n");
         }
         // Map[String, Int] methods (#1820). Guarded by `map_key_val_ty` so
         // these never fire on List / Set receivers.
@@ -1163,6 +1315,51 @@ fn emit_expr(out: &mut String, expr: &TirExpr, ctx: &Ctx) {
                 // emit a comment so wasm-tools flags it.
                 out.push_str("    ;; if-expr with missing else\n");
             }
+            out.push_str("    end\n");
+        }
+        // `expr?` — Result propagation operator. Evaluates the inner expr
+        // (→ i32 Result pointer), checks the tag, and if Err returns the
+        // Result directly from the function. If Ok, leaves the Ok payload
+        // on the stack as the expression value.
+        //
+        // WAT pattern (for Ok payload type i64):
+        //   <emit inner>          ;; → i32 result ptr
+        //   local.tee $__pr_N     ;; stash ptr
+        //   call $_mvl_result_tag ;; → i32 tag (0=Ok, 1=Err)
+        //   i32.eqz               ;; → 1 if Ok, 0 if Err
+        //   if (result <payload_ty>)
+        //     local.get $__pr_N
+        //     call $_mvl_result_value_{i64|i32}  ;; → payload
+        //   else
+        //     local.get $__pr_N
+        //     return                              ;; propagate Err upward
+        //     <payload_ty>.const 0               ;; dead code; satisfies validator
+        //   end
+        TirExprKind::Propagate(inner) => {
+            ctx.needs_runtime.set(true);
+            let ok_ty = result_ok_ty(&inner.ty).cloned().unwrap_or(Ty::Int);
+            let payload_wasm = wasm_ty(&ok_ty, ctx);
+            let (_, getter) = result_ops_for_ok(&ok_ty, ctx);
+            let dead_val = if payload_wasm == "f64" {
+                "f64.const 0"
+            } else if payload_wasm == "i32" {
+                "i32.const 0"
+            } else {
+                "i64.const 0"
+            };
+            // Use the span offset of the inner expr as a unique local name.
+            let pr_local = format!("__pr_{}_{}", expr.span.offset, expr.span.len);
+            emit_expr(out, inner, ctx);
+            out.push_str(&format!("    local.tee ${pr_local}\n"));
+            out.push_str("    call $_mvl_result_tag\n");
+            out.push_str("    i32.eqz\n");
+            out.push_str(&format!("    if (result {payload_wasm})\n"));
+            out.push_str(&format!("    local.get ${pr_local}\n"));
+            out.push_str(&format!("    call ${getter}\n"));
+            out.push_str("    else\n");
+            out.push_str(&format!("    local.get ${pr_local}\n"));
+            out.push_str("    return\n");
+            out.push_str(&format!("    {dead_val}\n"));
             out.push_str("    end\n");
         }
         other => {
@@ -1440,6 +1637,38 @@ fn emit_match_impl(
                 out.push_str("    else\n");
                 open_ifs += 1;
             }
+            // `Ok(inner)` pattern on Result[T, E]. Check tag == 0, bind inner.
+            Pattern::Ok { inner, .. } => {
+                ctx.needs_runtime.set(true);
+                let ok_ty = result_ok_ty(&scrutinee.ty).cloned().unwrap_or(Ty::Int);
+                let (_, getter) = result_ops_for_ok(&ok_ty, ctx);
+                out.push_str(&format!("    local.get ${temp}\n"));
+                out.push_str("    call $_mvl_result_tag\n");
+                out.push_str("    i32.eqz\n"); // 1 when tag == 0 (Ok)
+                out.push_str(&if_open);
+                if let Pattern::Ident(name, _) = inner.as_ref() {
+                    if name != "_" {
+                        out.push_str(&format!("    local.get ${temp}\n"));
+                        out.push_str(&format!("    call ${getter}\n"));
+                        out.push_str(&format!("    local.set ${name}\n"));
+                    }
+                }
+                emit_match_body(out, &arm.body, ctx);
+                out.push_str("    else\n");
+                open_ifs += 1;
+            }
+            // `Err(inner)` pattern on Result[T, E]. Check tag == 1.
+            // The Err payload is not extracted here (wildcard only for now).
+            Pattern::Err { .. } => {
+                ctx.needs_runtime.set(true);
+                out.push_str(&format!("    local.get ${temp}\n"));
+                out.push_str("    call $_mvl_result_tag\n");
+                // tag == 1 (Err) → truthy i32.
+                out.push_str(&if_open);
+                emit_match_body(out, &arm.body, ctx);
+                out.push_str("    else\n");
+                open_ifs += 1;
+            }
             Pattern::Wildcard(_) | Pattern::Ident(_, _) => {
                 // First wildcard/ident wins as the default; later arms are
                 // unreachable so we can stop looking.
@@ -1595,6 +1824,13 @@ fn mvl_map_temp_name(expr: &TirExpr) -> String {
     format!("__mm_{}_{}", expr.span.offset, expr.span.len)
 }
 
+/// Temp local name for the `*MvlResult` pointer stashed during a
+/// `.unwrap_or(default)` invocation on a `Result[T, E]`. Same span-based
+/// scheme as `mvl_option_temp_name`.
+fn mvl_result_temp_name(expr: &TirExpr) -> String {
+    format!("__mr_{}_{}", expr.span.offset, expr.span.len)
+}
+
 /// Peel `Ref` / `Labeled` / `Refined` wrappers and return the inner
 /// `(key_ty, val_ty)` if `ty` is a `Map[K, V]`, else `None`.
 fn map_key_val_ty(ty: &Ty) -> Option<(&Ty, &Ty)> {
@@ -1683,6 +1919,46 @@ fn option_ops_for(inner_ty: &Ty, ctx: &Ctx) -> (&'static str, &'static str) {
     }
 }
 
+/// Extract the Ok-payload type from a `Result[T, E]` type, unwrapping
+/// through `Ref` / `Labeled` / `Refined` wrappers.
+fn result_ok_ty(ty: &Ty) -> Option<&Ty> {
+    let mut cur = ty;
+    loop {
+        match cur {
+            Ty::Ref(_, inner) | Ty::Labeled(_, inner) | Ty::Refined(inner, _) => {
+                cur = inner;
+            }
+            Ty::Result(ok, _) => return Some(ok),
+            _ => return None,
+        }
+    }
+}
+
+/// Extract the Err-payload type from a `Result[T, E]` type.
+fn result_err_ty(ty: &Ty) -> Option<&Ty> {
+    let mut cur = ty;
+    loop {
+        match cur {
+            Ty::Ref(_, inner) | Ty::Labeled(_, inner) | Ty::Refined(inner, _) => {
+                cur = inner;
+            }
+            Ty::Result(_, err) => return Some(err),
+            _ => return None,
+        }
+    }
+}
+
+/// Constructor and value-getter names for a `Result[T, E]` Ok payload of
+/// `ok_ty`. Returns `(ok_ctor, value_getter)` — unprefixed runtime symbol
+/// names (no `$`).
+fn result_ops_for_ok(ok_ty: &Ty, ctx: &Ctx) -> (&'static str, &'static str) {
+    if is_i32(ok_ty, ctx) {
+        ("_mvl_result_ok_i32", "_mvl_result_value_i32")
+    } else {
+        ("_mvl_result_ok_i64", "_mvl_result_value_i64")
+    }
+}
+
 /// Emit `assert_eq(a, b)` or `assert_ne(a, b)` — mirrors the LLVM backend's
 /// `emit_assert_eq_builtin_tir` (#1837). Compares the two values with a
 /// type-directed equality op, then traps via `unreachable` when the check
@@ -1759,6 +2035,19 @@ fn emit_unary(out: &mut String, op: UnaryOp, inner: &TirExpr, ctx: &Ctx) {
 /// Emit a binary operator, picking i64/f64/i32 opcode family from operand type.
 /// Short-circuit `&&` / `||` lower to an inline structured `if` for laziness.
 fn emit_binary(out: &mut String, op: BinaryOp, left: &TirExpr, right: &TirExpr, ctx: &Ctx) {
+    // String equality / inequality — both operands leave (ptr, len) on the
+    // stack; `_mvl_string_eq` consumes all four i32s and returns i32.
+    if matches!(&left.ty, Ty::String) && matches!(op, BinaryOp::Eq | BinaryOp::Ne) {
+        ctx.needs_runtime.set(true);
+        emit_expr(out, left, ctx);
+        emit_expr(out, right, ctx);
+        out.push_str("    call $_mvl_string_eq\n");
+        if matches!(op, BinaryOp::Ne) {
+            out.push_str("    i32.eqz\n"); // flip: 1 → 0, 0 → 1
+        }
+        return;
+    }
+
     // Short-circuit boolean ops — need laziness, can't emit both operands up
     // front. `a && b` ≡ `if a then b else false`; `a || b` ≡ `if a then true else b`.
     if matches!(op, BinaryOp::And | BinaryOp::Or) {
