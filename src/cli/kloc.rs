@@ -3,10 +3,11 @@
 
 use std::collections::BTreeMap;
 use std::fs;
+use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 use std::process;
 
-// ── Data model ───────────────────────────────────────────────────────────────
+// ── Data model ────────────────────────────────────────────────────────────────
 
 #[derive(Default, Clone)]
 struct FileCounts {
@@ -15,6 +16,7 @@ struct FileCounts {
     code: usize,
     comments: usize,
     blanks: usize,
+    test_fns: usize,
 }
 
 impl FileCounts {
@@ -24,6 +26,7 @@ impl FileCounts {
         self.code += other.code;
         self.comments += other.comments;
         self.blanks += other.blanks;
+        self.test_fns += other.test_fns;
     }
 }
 
@@ -34,6 +37,12 @@ struct GroupCounts {
 }
 
 impl GroupCounts {
+    fn total(&self) -> FileCounts {
+        let mut t = self.src.clone();
+        t.add(&self.tests);
+        t
+    }
+
     fn add(&mut self, other: &GroupCounts) {
         self.src.add(&other.src);
         self.tests.add(&other.tests);
@@ -49,12 +58,26 @@ fn is_test_file(path: &Path) -> bool {
         .unwrap_or(false)
 }
 
+fn count_test_fns(source: &str) -> usize {
+    source
+        .lines()
+        .filter(|l| {
+            let t = l.trim();
+            t.starts_with("test fn ")
+        })
+        .count()
+}
+
 fn count_file(path: &Path) -> GroupCounts {
     let source = match fs::read_to_string(path) {
         Ok(s) => s,
         Err(_) => return GroupCounts::default(),
     };
-    let mut fc = FileCounts { files: 1, ..Default::default() };
+    let mut fc = FileCounts {
+        files: 1,
+        test_fns: count_test_fns(&source),
+        ..Default::default()
+    };
     for line in source.lines() {
         fc.lines += 1;
         let trimmed = line.trim();
@@ -102,7 +125,6 @@ fn collect_mvl_files(dir: &Path) -> Vec<PathBuf> {
 
 // ── Formatting helpers ────────────────────────────────────────────────────────
 
-/// Format a number with comma thousand separators: 1234567 → "1,234,567".
 fn fmt_num(n: usize) -> String {
     let s = n.to_string();
     let mut out = String::with_capacity(s.len() + s.len() / 3);
@@ -115,116 +137,153 @@ fn fmt_num(n: usize) -> String {
     out.chars().rev().collect()
 }
 
-// ── Table output ──────────────────────────────────────────────────────────────
-
-// Width: 1 + 32 + 1 + 9 + 1 + 10 + 1 + 10 + 1 + 11 + 1 + 9 = 87
-const WIDTH: usize = 87;
-
-fn table_row(dir: &str, c: &FileCounts) {
-    println!(
-        " {:<32} {:>9} {:>10} {:>10} {:>11} {:>9}",
-        dir,
-        fmt_num(c.files),
-        fmt_num(c.lines),
-        fmt_num(c.code),
-        fmt_num(c.comments),
-        fmt_num(c.blanks),
-    );
+struct Color {
+    bold: &'static str,
+    dim_green: &'static str,
+    dim_yellow: &'static str,
+    cyan_bold: &'static str,
+    reset: &'static str,
 }
 
-fn table_section(
-    title: &str,
-    groups: &BTreeMap<String, GroupCounts>,
-    get: impl Fn(&GroupCounts) -> &FileCounts,
-) {
-    let sep = "━".repeat(WIDTH);
-    let thin = "─".repeat(WIDTH);
+const COLORS: Color = Color {
+    bold: "\x1b[1m",
+    dim_green: "\x1b[2;32m",
+    dim_yellow: "\x1b[2;33m",
+    cyan_bold: "\x1b[1;36m",
+    reset: "\x1b[0m",
+};
 
-    let relevant: Vec<_> = groups.iter().filter(|(_, g)| get(g).files > 0).collect();
-    if relevant.is_empty() {
-        return;
+const NO_COLORS: Color = Color {
+    bold: "",
+    dim_green: "",
+    dim_yellow: "",
+    cyan_bold: "",
+    reset: "",
+};
+
+fn colors() -> &'static Color {
+    if std::io::stdout().is_terminal() && std::env::var("NO_COLOR").is_err() {
+        &COLORS
+    } else {
+        &NO_COLORS
     }
+}
 
-    println!("{sep}");
+// ── Table output ──────────────────────────────────────────────────────────────
+
+// Width: 1 + 30 + 1 + 7 + 1 + 10 + 1 + 10 + 1 + 11 + 1 + 9 + 1 + 8 = 92
+const WIDTH: usize = 92;
+
+fn table_row(c: &Color, prefix: &str, label: &str, fc: &FileCounts) {
     println!(
-        " {:<32} {:>9} {:>10} {:>10} {:>11} {:>9}",
-        title, "Files", "Lines", "Code", "Comments", "Blanks"
+        "{}{} {:<30} {:>7} {:>10} {:>10} {:>11} {:>9} {:>8}{}",
+        prefix,
+        c.reset,
+        label,
+        fmt_num(fc.files),
+        fmt_num(fc.lines),
+        fmt_num(fc.code),
+        fmt_num(fc.comments),
+        fmt_num(fc.blanks),
+        fmt_num(fc.test_fns),
+        c.reset,
     );
-    println!("{sep}");
-
-    let mut subtotal = FileCounts::default();
-    for (label, g) in &relevant {
-        let c = get(g);
-        table_row(label, c);
-        subtotal.add(c);
-    }
-
-    println!("{thin}");
-    table_row("Subtotal", &subtotal);
 }
 
 fn print_table(root_label: &str, groups: &BTreeMap<String, GroupCounts>) {
-    table_section("Source", groups, |g| &g.src);
-    table_section("Tests", groups, |g| &g.tests);
-
-    let mut total = GroupCounts::default();
-    for g in groups.values() {
-        total.add(g);
-    }
+    let c = colors();
     let sep = "━".repeat(WIDTH);
+    let thin = "─".repeat(WIDTH);
+
     println!("{sep}");
-    let mut all = total.src.clone();
-    all.add(&total.tests);
-    table_row(&format!("Total  ({})", root_label), &all);
+    println!(
+        "{} {:<30} {:>7} {:>10} {:>10} {:>11} {:>9} {:>8}{}",
+        c.bold,
+        "Directory",
+        "Files",
+        "Lines",
+        "Code",
+        "Comments",
+        "Blanks",
+        "TestFns",
+        c.reset,
+    );
+    println!("{sep}");
+
+    let mut grand_total = GroupCounts::default();
+
+    for (label, g) in groups {
+        let total = g.total();
+
+        // Directory total row
+        print!("{}", c.cyan_bold);
+        table_row(c, c.cyan_bold, label, &total);
+
+        // Sub-rows: only when both buckets are non-empty
+        if g.src.files > 0 && g.tests.files > 0 {
+            print!("{}", c.dim_green);
+            table_row(c, c.dim_green, "  + source", &g.src);
+            print!("{}", c.dim_yellow);
+            table_row(c, c.dim_yellow, "  * tests", &g.tests);
+        }
+
+        grand_total.add(g);
+    }
+
+    let all = grand_total.total();
+    println!("{thin}");
+    print!("{}", c.bold);
+    table_row(c, c.bold, &format!("Total  ({})", root_label), &all);
     println!("{sep}");
 }
 
 // ── CSV output ────────────────────────────────────────────────────────────────
 
 fn print_csv(groups: &BTreeMap<String, GroupCounts>) {
-    println!("section,directory,files,lines,code,comments,blanks");
+    println!("directory,type,files,lines,code,comments,blanks,test_fns");
 
-    for section_name in &["Source", "Tests"] {
-        let get: Box<dyn Fn(&GroupCounts) -> &FileCounts> = match *section_name {
-            "Source" => Box::new(|g: &GroupCounts| &g.src),
-            _ => Box::new(|g: &GroupCounts| &g.tests),
-        };
-        let mut subtotal = FileCounts::default();
-        for (label, g) in groups {
-            let c = get(g);
-            if c.files == 0 {
-                continue;
-            }
-            let dir_field = if label.contains(',') { format!("\"{label}\"") } else { label.clone() };
+    let mut grand_total = GroupCounts::default();
+
+    for (label, g) in groups {
+        let total = g.total();
+        let dir = if label.contains(',') { format!("\"{label}\"") } else { label.clone() };
+
+        println!(
+            "{},total,{},{},{},{},{},{}",
+            dir, total.files, total.lines, total.code, total.comments, total.blanks, total.test_fns
+        );
+        if g.src.files > 0 {
             println!(
-                "{},{},{},{},{},{},{}",
-                section_name, dir_field, c.files, c.lines, c.code, c.comments, c.blanks
-            );
-            subtotal.add(c);
-        }
-        if subtotal.files > 0 {
-            println!(
-                "{},Subtotal,{},{},{},{},{}",
-                section_name,
-                subtotal.files,
-                subtotal.lines,
-                subtotal.code,
-                subtotal.comments,
-                subtotal.blanks,
+                "{},source,{},{},{},{},{},{}",
+                dir,
+                g.src.files,
+                g.src.lines,
+                g.src.code,
+                g.src.comments,
+                g.src.blanks,
+                g.src.test_fns,
             );
         }
+        if g.tests.files > 0 {
+            println!(
+                "{},tests,{},{},{},{},{},{}",
+                dir,
+                g.tests.files,
+                g.tests.lines,
+                g.tests.code,
+                g.tests.comments,
+                g.tests.blanks,
+                g.tests.test_fns,
+            );
+        }
+
+        grand_total.add(g);
     }
 
-    // Grand total
-    let mut total = GroupCounts::default();
-    for g in groups.values() {
-        total.add(g);
-    }
-    let mut all = total.src.clone();
-    all.add(&total.tests);
+    let all = grand_total.total();
     println!(
-        "Total,All,{},{},{},{},{}",
-        all.files, all.lines, all.code, all.comments, all.blanks
+        "Total,all,{},{},{},{},{},{}",
+        all.files, all.lines, all.code, all.comments, all.blanks, all.test_fns
     );
 }
 
