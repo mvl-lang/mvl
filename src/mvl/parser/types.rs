@@ -1102,8 +1102,8 @@ impl Parser {
                                 };
                                 let mut diff = 0usize;
                                 let mut si = 0;
-                                for li in 0..longer.len() {
-                                    if si < shorter.len() && shorter[si] == longer[li] {
+                                for &c in longer {
+                                    if si < shorter.len() && shorter[si] == c {
                                         si += 1;
                                     } else {
                                         diff += 1;
