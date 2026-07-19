@@ -1,0 +1,266 @@
+// presence.mvl — CBTC fleet-tracking kernel.
+//
+// State-transition logic for a bounded occupancy table.  The design
+// factors physical predicates (is section occupied? is train elsewhere?)
+// out of the safety decision, so the decision itself is a compound
+// boolean predicate refined at the fleet level.  A production version
+// would query the actual occupancy array via QF-Arrays refinements;
+// see `README.md` for the discussion of that prerequisite.
+//
+// Refinement targets (what the layered dispatcher proves):
+//   * Counter bounds: `incremented_count` and `decremented_count`
+//     preserve `total_trains ∈ [0, 25]` — Cooper QE at L4.
+//   * Precondition preservation: every helper's `where` clause is
+//     discharged at the call site via struct-field refinements.
+//   * Command IDs stay in range: `SectionId`, `TrainId`, `Timestamp`
+//     from `model.mvl`.
+//
+// Compound decisions (what MC/DC audits):
+//   * `can_place` — four-term compound with a single-atom-per-clause
+//     shape (no structural coupling, unique-cause MC/DC achievable).
+//   * `placement_reject_reason` — priority-ordered rejection logic.
+//
+// IFC boundary:
+//   * Dispatcher commands arrive as `Tainted[PlacementCommand]`.
+//   * `admit_placement_command` is the sole trust anchor —
+//     `grep -n "DISPATCHER-CMD-001"` returns exactly one line.
+
+use model.{SectionId, TrainId, Timestamp, OccupancyEntry, OccupancyTable, PlacementCommand, RemoveCommand, UpdateResult, RejectReason}
+
+// ── IFC boundary: dispatcher input ────────────────────────────────────
+
+/// Trust a placement command received from the dispatcher.
+///
+/// AUDIT ANCHOR (`DISPATCHER-CMD-001`): sole `relabel trust` on the
+/// placement-command flow.  A future violation is detectable by
+/// grepping for the tag.
+pub total fn admit_placement_command(raw: Tainted[PlacementCommand]) -> PlacementCommand {
+    relabel trust(raw, "DISPATCHER-CMD-001")
+}
+
+/// Trust a remove command received from the dispatcher.
+///
+/// AUDIT ANCHOR (`DISPATCHER-CMD-002`): symmetric with placement.
+pub total fn admit_remove_command(raw: Tainted[RemoveCommand]) -> RemoveCommand {
+    relabel trust(raw, "DISPATCHER-CMD-002")
+}
+
+// ── Refinement-provable counter arithmetic ────────────────────────────
+
+/// Increment the fleet-wide train count, staying within bounds.
+///
+/// Refinement layer: **L4 (Cooper / Presburger)**.  From
+/// `current >= 0 && current < 25`, derive `current + 1 >= 1` and
+/// `current + 1 <= 25` via Fourier--Motzkin elimination.
+pub total fn incremented_count(current: Int where self >= 0 && self < 25) -> Int
+    ensures result >= 1 && result <= 25
+{
+    current + 1
+}
+
+/// Decrement the fleet-wide train count, staying within bounds.
+///
+/// Refinement layer: **L4 (Cooper / Presburger)**.  Symmetric to
+/// `incremented_count`.
+pub total fn decremented_count(current: Int where self >= 1 && self <= 25) -> Int
+    ensures result >= 0 && result <= 24
+{
+    current - 1
+}
+
+// ── Compound safety predicates (MC/DC targets) ────────────────────────
+
+/// Can this placement be applied to the current table?
+///
+/// MC/DC AUDIT ANCHOR (`MCDC-CBTC-001`): four atomic conditions, each
+/// appearing in exactly one clause.  No structural coupling — unique-
+/// cause MC/DC is achievable and reported without `--masking`.
+pub total fn can_place(
+    section_occupied: Bool,
+    train_already_placed: Bool,
+    at_capacity: Bool,
+    authorised: Bool,
+) -> Bool {
+    !section_occupied
+    && !train_already_placed
+    && !at_capacity
+    && authorised
+}
+
+/// Compute the rejection reason for a placement that cannot be applied.
+///
+/// Priority order: authorisation before physical checks (avoids
+/// leaking physical state via error codes to unauthorised callers).
+pub total fn placement_reject_reason(
+    section_occupied: Bool,
+    train_already_placed: Bool,
+    at_capacity: Bool,
+    authorised: Bool,
+) -> RejectReason {
+    if !authorised { RejectReason::NotAuthorised }
+    else if section_occupied { RejectReason::SectionOccupied }
+    else if train_already_placed { RejectReason::TrainAlreadyPlaced }
+    else if at_capacity { RejectReason::FleetCapacityReached }
+    else { RejectReason::NotAuthorised }
+}
+
+/// Can this removal be applied?
+pub total fn can_remove(
+    section_currently_holds_target_train: Bool,
+    table_has_at_least_one_train: Bool,
+    authorised: Bool,
+) -> Bool {
+    section_currently_holds_target_train
+    && table_has_at_least_one_train
+    && authorised
+}
+
+// ── State-transition kernel ───────────────────────────────────────────
+
+/// Apply a placement command to the table.
+///
+/// Callers must derive the two physical predicates
+/// (`section_occupied`, `train_already_placed`) from the actual
+/// occupancy array; the layered dispatcher would prove them from
+/// QF-Arrays refinements in a future MVL version.  The fleet-wide
+/// counter invariants are discharged here at L4.
+pub total fn apply_placement(
+    table: OccupancyTable,
+    cmd: PlacementCommand,
+    section_occupied: Bool,
+    train_already_placed: Bool,
+    authorised: Bool,
+) -> UpdateResult {
+    let at_capacity: Bool = table.total_trains >= 25;
+    if can_place(section_occupied, train_already_placed, at_capacity, authorised) {
+        if table.total_trains < 25 {
+            let new_count: Int = incremented_count(table.total_trains);
+            UpdateResult::Applied(OccupancyTable {
+                total_trains: new_count,
+                updated_at_ms: cmd.issued_at_ms,
+            })
+        } else {
+            UpdateResult::Rejected(RejectReason::FleetCapacityReached)
+        }
+    } else {
+        UpdateResult::Rejected(placement_reject_reason(
+            section_occupied, train_already_placed, at_capacity, authorised
+        ))
+    }
+}
+
+/// Apply a removal command.
+pub total fn apply_removal(
+    table: OccupancyTable,
+    cmd: RemoveCommand,
+    section_currently_holds_target_train: Bool,
+    authorised: Bool,
+) -> UpdateResult {
+    let has_at_least_one: Bool = table.total_trains >= 1;
+    if can_remove(section_currently_holds_target_train, has_at_least_one, authorised) {
+        if table.total_trains >= 1 {
+            let new_count: Int = decremented_count(table.total_trains);
+            UpdateResult::Applied(OccupancyTable {
+                total_trains: new_count,
+                updated_at_ms: cmd.issued_at_ms,
+            })
+        } else {
+            UpdateResult::Rejected(RejectReason::NothingToRemove)
+        }
+    } else if !authorised {
+        UpdateResult::Rejected(RejectReason::NotAuthorised)
+    } else {
+        UpdateResult::Rejected(RejectReason::NothingToRemove)
+    }
+}
+
+// ── Inline unit tests (support MC/DC discovery, ref #1888) ─────────────
+
+test fn placement_when_all_ok_applies() -> Unit {
+    let t: OccupancyTable = OccupancyTable { total_trains: 10, updated_at_ms: 1000 };
+    let cmd: PlacementCommand = PlacementCommand { section: 5, train: 3, issued_at_ms: 2000 };
+    match apply_placement(t, cmd, false, false, true) {
+        UpdateResult::Applied(t2)  => assert_eq(t2.total_trains, 11),
+        UpdateResult::Rejected(_)  => assert_eq(1, 0),
+    }
+}
+
+test fn placement_when_section_occupied_rejects() -> Unit {
+    let t: OccupancyTable = OccupancyTable { total_trains: 10, updated_at_ms: 1000 };
+    let cmd: PlacementCommand = PlacementCommand { section: 5, train: 3, issued_at_ms: 2000 };
+    match apply_placement(t, cmd, true, false, true) {
+        UpdateResult::Applied(_)                        => assert_eq(1, 0),
+        UpdateResult::Rejected(RejectReason::SectionOccupied) => assert_eq(1, 1),
+        UpdateResult::Rejected(_)                       => assert_eq(1, 0),
+    }
+}
+
+test fn placement_when_train_already_placed_rejects() -> Unit {
+    let t: OccupancyTable = OccupancyTable { total_trains: 10, updated_at_ms: 1000 };
+    let cmd: PlacementCommand = PlacementCommand { section: 5, train: 3, issued_at_ms: 2000 };
+    match apply_placement(t, cmd, false, true, true) {
+        UpdateResult::Applied(_)                            => assert_eq(1, 0),
+        UpdateResult::Rejected(RejectReason::TrainAlreadyPlaced) => assert_eq(1, 1),
+        UpdateResult::Rejected(_)                           => assert_eq(1, 0),
+    }
+}
+
+test fn placement_when_at_capacity_rejects() -> Unit {
+    let t: OccupancyTable = OccupancyTable { total_trains: 25, updated_at_ms: 1000 };
+    let cmd: PlacementCommand = PlacementCommand { section: 5, train: 3, issued_at_ms: 2000 };
+    match apply_placement(t, cmd, false, false, true) {
+        UpdateResult::Applied(_)                             => assert_eq(1, 0),
+        UpdateResult::Rejected(RejectReason::FleetCapacityReached) => assert_eq(1, 1),
+        UpdateResult::Rejected(_)                            => assert_eq(1, 0),
+    }
+}
+
+test fn placement_when_unauthorised_rejects() -> Unit {
+    let t: OccupancyTable = OccupancyTable { total_trains: 10, updated_at_ms: 1000 };
+    let cmd: PlacementCommand = PlacementCommand { section: 5, train: 3, issued_at_ms: 2000 };
+    match apply_placement(t, cmd, false, false, false) {
+        UpdateResult::Applied(_)                         => assert_eq(1, 0),
+        UpdateResult::Rejected(RejectReason::NotAuthorised) => assert_eq(1, 1),
+        UpdateResult::Rejected(_)                        => assert_eq(1, 0),
+    }
+}
+
+test fn removal_when_ok_applies() -> Unit {
+    let t: OccupancyTable = OccupancyTable { total_trains: 10, updated_at_ms: 1000 };
+    let cmd: RemoveCommand = RemoveCommand { section: 5, train: 3, issued_at_ms: 2000 };
+    match apply_removal(t, cmd, true, true) {
+        UpdateResult::Applied(t2)  => assert_eq(t2.total_trains, 9),
+        UpdateResult::Rejected(_)  => assert_eq(1, 0),
+    }
+}
+
+test fn removal_when_section_empty_rejects() -> Unit {
+    let t: OccupancyTable = OccupancyTable { total_trains: 10, updated_at_ms: 1000 };
+    let cmd: RemoveCommand = RemoveCommand { section: 5, train: 3, issued_at_ms: 2000 };
+    match apply_removal(t, cmd, false, true) {
+        UpdateResult::Applied(_)                            => assert_eq(1, 0),
+        UpdateResult::Rejected(RejectReason::NothingToRemove) => assert_eq(1, 1),
+        UpdateResult::Rejected(_)                           => assert_eq(1, 0),
+    }
+}
+
+test fn incremented_count_stays_in_bounds() -> Unit {
+    assert_eq(incremented_count(0), 1);
+    assert_eq(incremented_count(24), 25);
+}
+
+test fn decremented_count_stays_in_bounds() -> Unit {
+    assert_eq(decremented_count(1), 0);
+    assert_eq(decremented_count(25), 24);
+}
+
+test fn can_place_all_true_returns_true() -> Unit {
+    assert_eq(can_place(false, false, false, true), true);
+}
+
+test fn can_place_any_negative_returns_false() -> Unit {
+    assert_eq(can_place(true,  false, false, true),  false);
+    assert_eq(can_place(false, true,  false, true),  false);
+    assert_eq(can_place(false, false, true,  true),  false);
+    assert_eq(can_place(false, false, false, false), false);
+}

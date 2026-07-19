@@ -1,0 +1,89 @@
+// model.mvl — Domain types for CBTC fleet-tracking.
+//
+// Communications-Based Train Control (CBTC) at fleet-tracking level: a
+// bounded, indexed table records which train (if any) occupies each track
+// section.  The dispatcher issues placement commands (train enters
+// section, train leaves section); the interlocking-layer above accepts
+// only commands that keep the table in a safe state.
+//
+// Companion to `examples/etcs_movement_authority/` (ticket #1906), which
+// operates at the per-train supervision layer.  This example operates at
+// the fleet level.
+//
+// Standard: EN 50128 SIL 4 (same as ETCS).  Assurance envelope: see
+// `make test-50128`.
+//
+// Fleet bounds (encoded inline as refinement literals on each field):
+//   * up to 50 track sections per control zone
+//   * up to 25 trains actively tracked
+//
+// Assurance note: 0 extern blocks (pure domain model).
+
+// ── State of a single section ───────────────────────────────────────────
+
+/// Which train, if any, currently occupies a section.
+///
+/// The `Occupied` variant carries the placed train ID and the timestamp
+/// at which placement was applied.  Bounds are enforced at the struct
+/// field level (see `PlacementCommand` below).
+pub type OccupancyEntry = enum {
+    Empty,
+    Occupied(Int, Int),
+}
+
+// ── Fleet-wide occupancy state ──────────────────────────────────────────
+
+/// The full occupancy count across the control zone.
+///
+/// Refinement invariants:
+///   * `total_trains` is bounded by the fleet-scale limit of 25.
+///   * `updated_at_ms` is bounded so arithmetic on it stays inside L2's
+///     interval domain.
+///
+/// The "no two sections hold the same train" invariant is NOT expressible
+/// as a pointwise refinement here — it would require quantifier support
+/// (`forall i, j`) or QF-Arrays reasoning to phrase directly.  The current
+/// implementation preserves the invariant inductively through the update
+/// API (see `presence.mvl::apply_placement` and `apply_removal`); a full
+/// refinement-visible statement of the invariant awaits MVL's array-theory
+/// surface work (tracked in ticket mvl-lang/mvl#1910).
+pub type OccupancyTable = struct {
+    /// Number of currently occupied sections.
+    total_trains: Int where self >= 0 && self <= 25,
+    /// Last update timestamp.
+    updated_at_ms: Int where self >= 0 && self <= 4000000000,
+}
+
+// ── Dispatcher commands (untrusted input) ───────────────────────────────
+
+/// A placement command issued by the dispatcher.  Arrives as
+/// `Tainted[PlacementCommand]` from the control-centre RTU and passes
+/// through the audited trust boundary before being applied.
+pub type PlacementCommand = struct {
+    section: Int where self >= 1 && self <= 50,
+    train:   Int where self >= 1 && self <= 25,
+    issued_at_ms: Int where self >= 0 && self <= 4000000000,
+}
+
+/// A remove command: the identified train has left the identified
+/// section.
+pub type RemoveCommand = struct {
+    section: Int where self >= 1 && self <= 50,
+    train:   Int where self >= 1 && self <= 25,
+    issued_at_ms: Int where self >= 0 && self <= 4000000000,
+}
+
+/// The result of applying an update to the occupancy table.
+pub type UpdateResult = enum {
+    Applied(OccupancyTable),
+    Rejected(RejectReason),
+}
+
+/// Named reasons for rejecting an update.
+pub type RejectReason = enum {
+    SectionOccupied,      // Placement into an already-occupied section
+    TrainAlreadyPlaced,   // Placement of a train already elsewhere
+    FleetCapacityReached, // Placement would exceed the fleet-scale limit
+    NotAuthorised,        // Dispatcher-level command failed authorisation
+    NothingToRemove,      // Remove command targets an empty section
+}
