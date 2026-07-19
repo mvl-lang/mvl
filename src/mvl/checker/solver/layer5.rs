@@ -75,7 +75,7 @@ pub(crate) fn try_z3(
             }
             // BV path returned None (unsupported shape) — fall through to NIA.
         }
-        return impl_z3(pred, arg, var_refs);
+        impl_z3(pred, arg, var_refs)
     }
     #[cfg(not(feature = "z3"))]
     {

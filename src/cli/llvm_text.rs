@@ -772,6 +772,7 @@ pub(super) fn cmd_test_llvm_text(path: &str, quiet: bool, verbose: bool) {
 
 /// Run one `test fn` by name: invoke `lli <ir_file> <test_name>`.
 /// Exit code 0 = pass; any other exit or signal (e.g. SIGILL from llvm.trap) = fail.
+#[allow(clippy::too_many_arguments)]
 fn run_one_testfn(
     file_str: &str,
     test_name: &str,
