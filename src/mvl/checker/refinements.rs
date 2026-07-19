@@ -1172,6 +1172,16 @@ fn normalize_pred(pred: &RefExpr, param_name: &str) -> RefExpr {
             literal: literal.clone(),
             span: *span,
         },
+        // RegexMatch: same shape — recurse into receiver, pattern is a compile-time const.
+        RefExpr::RegexMatch {
+            receiver,
+            pattern,
+            span,
+        } => RefExpr::RegexMatch {
+            receiver: Box::new(normalize_pred(receiver, param_name)),
+            pattern: pattern.clone(),
+            span: *span,
+        },
         // Literals and Len don't contain the param name.
         other => other.clone(),
     }
@@ -2057,6 +2067,11 @@ fn display_pred(pred: &RefExpr) -> String {
         }
         RefExpr::ArrayGet { list, index, .. } => {
             format!("{}.get({})", display_pred(list), display_pred(index))
+        }
+        RefExpr::RegexMatch {
+            receiver, pattern, ..
+        } => {
+            format!("{}.matches({:?})", display_pred(receiver), pattern)
         }
     }
 }

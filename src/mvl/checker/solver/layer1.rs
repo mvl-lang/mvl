@@ -525,6 +525,14 @@ fn eval_bool_str_content(s: &str, pred: &RefExpr) -> Option<bool> {
             StringOp::StartsWith => s.starts_with(literal.as_str()),
             StringOp::EndsWith => s.ends_with(literal.as_str()),
         }),
+        // Regex-membership fold (#1921). The pattern has already been validated
+        // by the parser-side fragment checker, so it should compile — but if a
+        // pattern still fails to compile in the `regex` crate (unlikely), return
+        // `None` and let a higher tier handle it rather than panicking.
+        RefExpr::RegexMatch { pattern, .. } => match ::regex::Regex::new(pattern) {
+            Ok(re) => Some(re.is_match(s)),
+            Err(_) => None,
+        },
         RefExpr::Not { inner, .. } => Some(!eval_bool_str_content(s, inner)?),
         RefExpr::Grouped { inner, .. } => eval_bool_str_content(s, inner),
         RefExpr::LogicOp {

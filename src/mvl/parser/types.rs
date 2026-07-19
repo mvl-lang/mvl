@@ -901,6 +901,46 @@ impl Parser {
                             index: Box::new(index),
                             span,
                         };
+                    } else if matches!(self.peek_kind(), TokenKind::LParen)
+                        && method_or_field == "matches"
+                    {
+                        // Regex-membership predicate: receiver.matches("pattern") (#1921)
+                        // The argument must be a compile-time string literal, and the
+                        // pattern must fall within the admitted regular fragment
+                        // (see ADR-0057). Rejections here surface as clear parse errors.
+                        self.advance(); // consume '('
+                        let lit_tok = self.advance();
+                        let (pattern, pat_span) = match lit_tok.kind {
+                            TokenKind::Str(s) => (s, lit_tok.span),
+                            _ => {
+                                self.push_error(ParseError {
+                                    message: format!(
+                                        "expected string literal as argument to `matches`, found `{:?}`",
+                                        lit_tok.kind
+                                    ),
+                                    span: lit_tok.span,
+                                });
+                                return Err(());
+                            }
+                        };
+                        if let Err(e) = crate::mvl::parser::regex_frag::validate(&pattern) {
+                            self.push_error(ParseError {
+                                message: format!(
+                                    "regex fragment error: {} — MVL admits only the regular fragment (see ADR-0057)",
+                                    e.feature
+                                ),
+                                span: pat_span,
+                            });
+                            return Err(());
+                        }
+                        let rp = self.expect(&TokenKind::RParen);
+                        self.require(rp)?;
+                        let span = self.span_from(start);
+                        expr = RefExpr::RegexMatch {
+                            receiver: Box::new(expr),
+                            pattern,
+                            span,
+                        };
                     } else {
                         // Regular field access.
                         expr = RefExpr::FieldAccess {

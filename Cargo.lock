@@ -649,6 +649,7 @@ dependencies = [
  "criterion",
  "flate2",
  "libc",
+ "regex",
  "tar",
  "tempfile",
  "ureq",

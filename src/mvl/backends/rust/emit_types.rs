@@ -652,6 +652,7 @@ pub fn is_runtime_checkable(pred: &RefExpr) -> bool {
         // ArrayGet is not runtime-checkable: the static checker handles bounds reasoning,
         // and Rust's Vec::get returns Option<&T> which can't be directly compared. (#1916)
         RefExpr::ArrayGet { .. } => false,
+        RefExpr::RegexMatch { receiver, .. } => is_runtime_checkable(receiver),
     }
 }
 
@@ -787,6 +788,12 @@ fn emit_ref_expr(pred: &RefExpr, binding: &str) -> String {
         // ArrayGet is not runtime-checkable; callers must check is_runtime_checkable first.
         RefExpr::ArrayGet { .. } => {
             unreachable!("ArrayGet is not runtime-checkable and must not appear in codegen")
+        }
+        RefExpr::RegexMatch {
+            receiver, pattern, ..
+        } => {
+            let recv = emit_ref_expr(receiver, binding);
+            format!("::mvl_runtime::refine::mvl_regex_matches(&{recv}, {pattern:?})")
         }
     }
 }

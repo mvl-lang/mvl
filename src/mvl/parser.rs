@@ -9,6 +9,7 @@ pub mod expressions;
 pub mod externs;
 pub mod functions;
 pub mod lexer;
+pub mod regex_frag;
 pub mod statements;
 pub mod types;
 pub mod visit;
