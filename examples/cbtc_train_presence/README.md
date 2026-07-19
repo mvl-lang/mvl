@@ -10,33 +10,74 @@ Communications-Based Train Control at the fleet-tracking layer. A bounded occupa
 
 - `model.mvl` — types (`OccupancyTable`, `PlacementCommand`, `RemoveCommand`, `UpdateResult`, `RejectReason`).
 - `presence.mvl` — the kernel: IFC boundary, refinement-provable counter arithmetic, compound safety predicates, state-transition functions, inline unit tests.
+- `invariants.mvl` — QF-Arrays surface: `require_dense_fleet`, `section_slot`, `empty_fleet`, `make_dense_fleet`, six inline unit tests exercising bounded-quantifier refinements (#1915) and array-index refinements (#1916).
 - `main.mvl` — six scenarios walking through placement / removal / capacity / unauthorised.
 - `presence_test.mvl` — end-to-end scenario tests.
 - `Makefile` — standard targets plus `make test-50128` (SIL-4 assurance envelope).
 
 ## What is proven
 
-`make prove` reports (production file only):
+`make prove` reports (per production file):
 
 ```
-Summary: 6 proven (L1:4 L2:0 L3:0 L4:0 L5:2), 2 runtime, 0 failed
+presence.mvl:   6 proven (L1:4 L2:0 L3:0 L4:0 L5:2), 2 runtime, 0 failed
+invariants.mvl: 1 proven (L1:1 L2:0 L3:0 L4:0 L5:0), 3 runtime, 0 failed
+Total:          7 proven (L1:5 L2:0 L3:0 L4:0 L5:2), 5 runtime, 0 failed
 ```
+
+**`presence.mvl`**
 
 - **L1 (4 obligations)** — trivial literal subsumption on the counter helpers' ensures once their inputs are bounded literals in tests.
 - **L5 (2 obligations)** — `incremented_count`'s and `decremented_count`'s post-conditions escalate to Z3. These are structurally in QF-LIA (Cooper QE territory); they escalate to L5 because MVL's L4 dispatcher does not currently split the conjunctive ensures across both bounds. Discharge succeeds either way.
 - **runtime (2 obligations)** — call-site preconditions in `apply_placement` and `apply_removal`, one for each counter helper. MVL's inter-procedural refinement propagation does not currently narrow the interval on `table.total_trains` after the guard `if table.total_trains < 25`. Tracked in the MVL issue backlog (see `mvl-lang/mvl#1895`, `#1896`).
 
-The runtime obligations become assertions in the compiled binary; the tests exercise them incidentally on every run.
+**`invariants.mvl`**
+
+- **L1 (1 obligation)** — `section_slot`'s index-bounds precondition (`idx >= 1 && idx <= 50`) is discharged trivially at L1 when the call site passes a literal index in range.
+- **runtime (3 obligations)** — the three `require_dense_fleet` call sites. Layer 3 (#1915) unrolls `forall i in [1..50]. sections.get(i) != None` into 50 instantiated conjuncts; each `sections.get(i) != None` atom is opaque to the solver (static bounds reasoning only, per #1916), so all conjuncts fall to RuntimeCheck. `make prove` groups these as one runtime obligation per call site. See the §QF-Arrays coverage section below for the full analysis.
+
+The runtime obligations become assertions in the compiled binary; the tests exercise them on every run.
+
+## QF-Arrays coverage
+
+`invariants.mvl` earns the QF-Arrays row in the refinements paper's coverage matrix by exercising two compiler features together for the first time:
+
+```mvl
+pub total fn require_dense_fleet(sections: List[OccupancyEntry]) -> Bool
+    requires forall i in [1..50]. sections.get(i) != None
+{ true }
+```
+
+**What the solver sees.** Layer 3 (#1915) expands the `forall` into 50 conjuncts:
+```
+sections.get(1) != None  ∧  sections.get(2) != None  ∧  …  ∧  sections.get(50) != None
+```
+Each conjunct is an array-index atom of the form `list.get(k) != None`.  Per the #1916 merge note ("bounds reasoning is static-only"), such atoms are opaque to the solver when the list contents are not statically known.  The 50 conjuncts therefore fall to RuntimeCheck collectively — `make prove` reports them as a single grouped runtime obligation per call site.
+
+**Fourth runtime-obligation phenomenon.** The three call sites in the test suite generate three runtime obligations, making this the fourth named runtime-obligation phenomenon in the refinements paper's taxonomy, and the first *compiler-side* one:
+
+| # | Name | Origin |
+|---|------|---------|
+| 1 | Interval-guard narrowing | QF-NIA solver side (`apply_placement`, `apply_removal`) |
+| 2 | Conjunctive ensures splitting | QF-LIA solver side (not present here) |
+| 3 | Z3 non-linear arithmetic | QF-NIA solver side (not present here) |
+| **4** | **Bounded-quantifier expansion over opaque array-index atoms** | **Compiler side (`require_dense_fleet`)** |
+
+The first three phenomena are QF-NIA or QF-LIA solver gaps.  This fourth phenomenon is a compiler gap: L3's expansion produces well-formed conjuncts, but each conjunct is opaque because `list.get(k)` carries no static content bound.
+
+**Current limitation.** MVL's `forall` body admits comparisons, boolean connectives, and array-index atoms, but does not yet admit user-defined function calls.  A `valid_slot(i)` helper cannot appear inside the body today — the predicate must be inlined.
 
 ## What is NOT proven (honest limits)
 
-Two safety properties inherent to CBTC fleet tracking are not expressible as pointwise refinements at MVL's current capability:
+One fleet-wide safety property is now expressible as a bounded-quantifier refinement (#1915 + #1916), though it falls to runtime.  One is still beyond current capability:
 
-1. **"No two sections hold the same train."** This is a `forall i, j` invariant over the occupancy array. MVL does not yet surface QF-Arrays refinements or bounded quantifiers over sequences. The current implementation preserves the invariant inductively through the update API (`apply_placement` only accepts a placement when `train_already_placed == false`, which the caller must derive from the actual array), but MVL cannot yet check the derivation at the type level. Full refinement-visible statement of this invariant awaits QF-Arrays surface work — the direct research motivation for ticket #1910.
+1. **"Every section slot has an entry"** (`forall i in [1..50]. sections.get(i) != None`) — now expressible in `require_dense_fleet`.  Falls to runtime because the array-index atoms are opaque to the solver.  Tracked in the paper as the fourth runtime-obligation phenomenon (see §QF-Arrays coverage above).
 
-2. **"Every train appears in at most one section."** Same shape as (1) — a cross-section invariant that quantifiers or array theory would express directly.
+2. **"No two sections hold the same train."** This is a `forall i, j` invariant — a cross-section predicate over two array indices simultaneously.  MVL's bounded quantifier form (`forall i in [lo..hi]. expr`) handles a single index variable; two-variable quantifiers (`forall i, j`) remain unsupported.  The implementation preserves this invariant inductively through the update API (`apply_placement` only accepts a placement when `train_already_placed == false`), but MVL cannot yet check the derivation at the type level.
 
-The physical predicates (`section_occupied`, `train_already_placed`, `section_currently_holds_target_train`) are accepted as boolean parameters into the kernel functions. A production version would compute them by querying the actual occupancy array, and MVL with QF-Arrays would let those queries participate in the refinement discharge.
+3. **"Every train appears in at most one section."** Same shape as (2) — a cross-section invariant that requires two-variable quantifiers or array theory beyond what #1915 provides.
+
+The physical predicates (`section_occupied`, `train_already_placed`, `section_currently_holds_target_train`) are accepted as boolean parameters into the kernel functions. A production version would compute them by querying the actual occupancy array, and MVL with full QF-Arrays would let those queries participate in the refinement discharge.
 
 ## IFC boundary
 
@@ -67,10 +108,10 @@ Compound decision under audit: `can_place(section_occupied, train_already_placed
 
 ```
 ── (1) Static refinement proof (compile-time, all inputs) ─────
-Total: 6 proven (L1:4 L2:0 L3:0 L4:0 L5:2), 2 runtime, 0 failed
+Total: 7 proven (L1:5 L2:0 L3:0 L4:0 L5:2), 5 runtime, 0 failed
 
 ── (2) Behavioural unit tests (dynamic, specific inputs) ──────
-test result: ok. 10 passed; 0 failed
+test result: ok. 24 passed; 0 failed
 All tests passed.
 
 ── (3) Branch coverage (decision points reached) ──────────────

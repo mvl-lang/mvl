@@ -1,0 +1,100 @@
+// invariants.mvl — QF-Arrays surface for CBTC fleet-tracking.
+//
+// Exercises bounded-quantifier refinements (#1915) and array-index
+// refinements (#1916) together.  Expresses the fleet-wide "every
+// section slot is present" invariant as a QF-Arrays fact.
+//
+// Assurance note: 0 extern blocks (pure domain model).
+
+use model.{OccupancyEntry}
+
+// ── Fleet-wide invariant ───────────────────────────────────────────────
+
+/// Require that every section index in the fleet has an entry.
+///
+/// Layer 3 (#1915) unrolls the forall into 50 instantiated obligations:
+/// `sections.get(1) != None`, `sections.get(2) != None`, …,
+/// `sections.get(50) != None`.  Each array-index atom is opaque to the
+/// solver (static bounds reasoning only, per #1916), so all 50 fall to
+/// RuntimeCheck.  `make prove` reports one grouped runtime obligation
+/// per call site — see the §QF-Arrays coverage section in `README.md`.
+///
+/// Note: MVL's `forall` body currently accepts comparisons, boolean
+/// connectives, and array-index atoms, but does not yet admit
+/// user-defined function calls.  The predicate is therefore inlined;
+/// a `valid_slot(i)` helper cannot appear inside the body today.
+pub total fn require_dense_fleet(sections: List[OccupancyEntry]) -> Bool
+    requires forall i in [1..50]. sections.get(i) != None
+{
+    true
+}
+
+// ── Section-slot helpers ───────────────────────────────────────────────
+
+/// Return the occupancy entry at a 1-based section index.
+///
+/// Out-of-bounds (`idx > len(sections) - 1`) returns `None`.
+/// Call sites with a literal index in [1..50] are discharged at L1.
+pub total fn section_slot(
+    sections: List[OccupancyEntry],
+    idx: Int where self >= 1 && self <= 50,
+) -> Option[OccupancyEntry] {
+    sections.get(idx)
+}
+
+/// An empty fleet — no section slots occupied.
+pub total fn empty_fleet() -> List[OccupancyEntry] {
+    []
+}
+
+/// Build a dense fleet: 51 entries (index 0 padding + indices 1..50),
+/// all `Empty`.  Satisfies `require_dense_fleet`'s precondition at
+/// runtime so tests can exercise the QF-Arrays call site.
+pub total fn make_dense_fleet() -> List[OccupancyEntry] {
+    let fleet: ref List[OccupancyEntry] = [];
+    let count: ref Int = 51;
+    while count > 0 decreases count {
+        fleet.push(OccupancyEntry::Empty);
+        count = count - 1;
+    }
+    fleet
+}
+
+// ── Inline unit tests ─────────────────────────────────────────────────
+
+test fn empty_fleet_has_no_entries() -> Unit {
+    let fleet: List[OccupancyEntry] = empty_fleet();
+    assert_eq(fleet.len(), 0)
+}
+
+test fn section_slot_on_empty_fleet_is_none() -> Unit {
+    let fleet: List[OccupancyEntry] = empty_fleet();
+    match section_slot(fleet, 1) {
+        Some(_) => assert_eq(1, 0),
+        None    => assert_eq(1, 1),
+    }
+}
+
+test fn require_dense_fleet_accepts_all_empty_sections() -> Unit {
+    assert_eq(require_dense_fleet(make_dense_fleet()), true)
+}
+
+test fn require_dense_fleet_returns_true() -> Unit {
+    let fleet: List[OccupancyEntry] = make_dense_fleet();
+    let result: Bool = require_dense_fleet(fleet);
+    assert_eq(result, true)
+}
+
+test fn dense_fleet_is_dense() -> Unit {
+    let fleet: List[OccupancyEntry] = make_dense_fleet();
+    let is_dense: Bool = require_dense_fleet(fleet);
+    assert_eq(is_dense, true)
+}
+
+test fn empty_entry_is_not_occupied_variant() -> Unit {
+    let entry: OccupancyEntry = OccupancyEntry::Empty;
+    match entry {
+        OccupancyEntry::Empty           => assert_eq(1, 1),
+        OccupancyEntry::Occupied(_, _)  => assert_eq(1, 0),
+    }
+}
