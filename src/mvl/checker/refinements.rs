@@ -1896,13 +1896,8 @@ fn expand_bounded_quantifier(
             mode: counts.mode,
             ..Default::default()
         };
-        let r = check_arg_against_pred_counted(
-            arg,
-            &instance,
-            var_refs,
-            fn_decls,
-            &mut inner_counts,
-        );
+        let r =
+            check_arg_against_pred_counted(arg, &instance, var_refs, fn_decls, &mut inner_counts);
         counts.by_layer[3] += 1;
         match r {
             RefResult::Proven | RefResult::ProvenBv => {
@@ -1942,9 +1937,8 @@ fn expand_bounded_quantifier(
         }
     } else if all_failed {
         RefResult::Failed {
-            counterexample: first_failure.or_else(|| {
-                Some(format!("no witness found in [{lo}..{hi}]"))
-            }),
+            counterexample: first_failure
+                .or_else(|| Some(format!("no witness found in [{lo}..{hi}]"))),
         }
     } else {
         RefResult::RuntimeCheck

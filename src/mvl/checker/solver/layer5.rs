@@ -92,9 +92,7 @@ fn has_bitwise_ops(pred: &RefExpr) -> bool {
         RefExpr::BitwiseOp { .. } | RefExpr::BitwiseNot { .. } => true,
         RefExpr::LogicOp { left, right, .. }
         | RefExpr::Compare { left, right, .. }
-        | RefExpr::ArithOp { left, right, .. } => {
-            has_bitwise_ops(left) || has_bitwise_ops(right)
-        }
+        | RefExpr::ArithOp { left, right, .. } => has_bitwise_ops(left) || has_bitwise_ops(right),
         RefExpr::Not { inner, .. }
         | RefExpr::Grouped { inner, .. }
         | RefExpr::Old { inner, .. } => has_bitwise_ops(inner),
@@ -976,9 +974,7 @@ fn bv_from_ref<'ctx>(
     use crate::mvl::parser::ast::{ArithOp, BitwiseOp};
 
     match expr {
-        RefExpr::Integer { value, .. } => {
-            Some(z3::ast::BV::from_i64(ctx, *value, width))
-        }
+        RefExpr::Integer { value, .. } => Some(z3::ast::BV::from_i64(ctx, *value, width)),
         RefExpr::Ident { name, .. } => {
             if name == "self" {
                 Some(self_term.clone())
@@ -1444,11 +1440,20 @@ mod tests {
             op: CmpOp::Eq,
             left: Box::new(RefExpr::BitwiseOp {
                 op: Bop::And,
-                left: Box::new(RefExpr::Ident { name: "self".into(), span: dummy_span() }),
-                right: Box::new(RefExpr::Integer { value: 15, span: dummy_span() }),
+                left: Box::new(RefExpr::Ident {
+                    name: "self".into(),
+                    span: dummy_span(),
+                }),
+                right: Box::new(RefExpr::Integer {
+                    value: 15,
+                    span: dummy_span(),
+                }),
                 span: dummy_span(),
             }),
-            right: Box::new(RefExpr::Ident { name: "self".into(), span: dummy_span() }),
+            right: Box::new(RefExpr::Ident {
+                name: "self".into(),
+                span: dummy_span(),
+            }),
             span: dummy_span(),
         };
         let arg = int_lit(4);
@@ -1459,6 +1464,9 @@ mod tests {
         let n_arg = norm.rewrite_expr(&arg);
         let n_var_refs = norm.rewrite_var_refs(&var_refs);
 
-        assert_eq!(try_z3(&n_pred, &n_arg, &n_var_refs), Some(RefResult::ProvenBv));
+        assert_eq!(
+            try_z3(&n_pred, &n_arg, &n_var_refs),
+            Some(RefResult::ProvenBv)
+        );
     }
 }

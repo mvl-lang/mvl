@@ -402,7 +402,10 @@ fn check_return_pred_for_expr(
     // `check_arg_against_pred_counted` via `record()` — do not increment
     // here or return-refinement outcomes will double-count.
     let proof_outcome = match &outcome {
-        RefResult::Proven => ProofOutcome::Proven { layer, is_bv: false },
+        RefResult::Proven => ProofOutcome::Proven {
+            layer,
+            is_bv: false,
+        },
         RefResult::ProvenBv => ProofOutcome::Proven { layer, is_bv: true },
         RefResult::RuntimeCheck => ProofOutcome::RuntimeCheck,
         RefResult::Failed { counterexample } => {
@@ -518,8 +521,11 @@ pub(super) fn check_requires_at_call(
                     .find(|&i| ctx.counts.by_layer[i] > layer_before[i])
                     .unwrap_or(0);
                 let proof_outcome = match &outcome {
-                    RefResult::Proven => ProofOutcome::Proven { layer, is_bv: false },
-        RefResult::ProvenBv => ProofOutcome::Proven { layer, is_bv: true },
+                    RefResult::Proven => ProofOutcome::Proven {
+                        layer,
+                        is_bv: false,
+                    },
+                    RefResult::ProvenBv => ProofOutcome::Proven { layer, is_bv: true },
                     RefResult::RuntimeCheck => ProofOutcome::RuntimeCheck,
                     RefResult::Failed { counterexample } => {
                         ctx.errors.push(CheckError::PreconditionViolated {
@@ -575,13 +581,8 @@ fn check_closed_requires(
 ) {
     let dummy_arg = Expr::Literal(Literal::Unit, call_span);
     let layer_before = ctx.counts.by_layer;
-    let outcome = check_arg_against_pred_counted(
-        &dummy_arg,
-        pred,
-        var_refs,
-        ctx.fn_decls,
-        ctx.counts,
-    );
+    let outcome =
+        check_arg_against_pred_counted(&dummy_arg, pred, var_refs, ctx.fn_decls, ctx.counts);
     let layer = (1..6)
         .find(|&i| ctx.counts.by_layer[i] > layer_before[i])
         .unwrap_or(0);
@@ -1518,7 +1519,10 @@ pub(super) fn check_multi_param_requires_literal(
         .find(|&i| ctx.counts.by_layer[i] > layer_before[i])
         .unwrap_or(0);
     let proof_outcome = match &outcome {
-        RefResult::Proven => ProofOutcome::Proven { layer, is_bv: false },
+        RefResult::Proven => ProofOutcome::Proven {
+            layer,
+            is_bv: false,
+        },
         RefResult::ProvenBv => ProofOutcome::Proven { layer, is_bv: true },
         RefResult::RuntimeCheck => ProofOutcome::RuntimeCheck,
         RefResult::Failed { counterexample } => {

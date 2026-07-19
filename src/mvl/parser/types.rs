@@ -12,8 +12,7 @@
 
 use crate::mvl::parser::ast::{
     ArithOp, BitwiseOp, Capability, CmpOp, Effect, FieldDecl, GenericParam, LogicOp, RefExpr,
-    SessionOp,
-    TypeBody, TypeDecl, TypeExpr, Variant, VariantFields,
+    SessionOp, TypeBody, TypeDecl, TypeExpr, Variant, VariantFields,
 };
 use crate::mvl::parser::lexer::{Span, TokenKind};
 use crate::mvl::parser::{ParseError, Parser};
@@ -924,9 +923,7 @@ impl Parser {
         self.require(dot)?;
         if lo > hi {
             let err = ParseError {
-                message: format!(
-                    "bounded quantifier range `[{lo}..{hi}]` is empty (lo > hi)"
-                ),
+                message: format!("bounded quantifier range `[{lo}..{hi}]` is empty (lo > hi)"),
                 span: self.peek_span(),
             };
             self.push_recover(err);
@@ -1162,9 +1159,7 @@ mod tests {
         // #1915: bounded universal quantifier
         let re = ref_expr_direct("forall i in [0..9]. i < 10").expect("parse ok");
         match re {
-            RefExpr::BoundedForall {
-                var, lo, hi, ..
-            } => {
+            RefExpr::BoundedForall { var, lo, hi, .. } => {
                 assert_eq!(var, "i");
                 assert_eq!(lo, 0);
                 assert_eq!(hi, 9);
@@ -1177,9 +1172,7 @@ mod tests {
     fn parse_bounded_exists_atom_ok() {
         let re = ref_expr_direct("exists i in [-3..3]. i == 0").expect("parse ok");
         match re {
-            RefExpr::BoundedExists {
-                var, lo, hi, ..
-            } => {
+            RefExpr::BoundedExists { var, lo, hi, .. } => {
                 assert_eq!(var, "i");
                 assert_eq!(lo, -3);
                 assert_eq!(hi, 3);
@@ -1193,7 +1186,8 @@ mod tests {
         // #1915: unbounded form is rejected with a clear diagnostic.
         let errs = ref_expr_direct("forall i: Int, i >= 0").expect_err("should reject");
         assert!(
-            errs.iter().any(|e| e.message.contains("unbounded quantifiers")),
+            errs.iter()
+                .any(|e| e.message.contains("unbounded quantifiers")),
             "expected 'unbounded quantifiers' diagnostic, got: {:?}",
             errs
         );
