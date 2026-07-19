@@ -122,10 +122,11 @@ struct HardenSite<'a> {
     hint: HardenHint,
 }
 
-fn print_json(sites: &[HardenSite<'_>], total_runtime: usize, total_failed: usize) {
+fn print_json(sites: &[HardenSite<'_>], total_proven: usize, total_runtime: usize, total_failed: usize) {
     println!("{{");
     println!("  \"axis\": 1,");
     println!("  \"axis_name\": \"runtime_to_static_promotion\",");
+    println!("  \"total_proven\": {total_proven},");
     println!("  \"total_runtime\": {total_runtime},");
     println!("  \"total_failed\": {total_failed},");
     println!("  \"promotion_candidates\": [");
@@ -222,12 +223,14 @@ pub fn run(path: &str, verbose: bool, json: bool, stdlib_profile: &str, callee_f
     ));
 
     let mut grand_total_runtime = 0usize;
+    let mut grand_total_proven = 0usize;
     let mut grand_total_failed = 0usize;
 
     // Collect results per file so we can print the human report inline.
     struct FileResult {
         file_str: String,
         sites_data: Vec<(u32, String, String, String, String, HardenHint)>,
+        proven: usize,
         runtime: usize,
         failed: usize,
     }
@@ -246,16 +249,20 @@ pub fn run(path: &str, verbose: bool, json: bool, stdlib_profile: &str, callee_f
         );
 
         let all_sites = &result.refinement_counts.sites;
+        let mut file_proven = 0usize;
         let mut file_runtime = 0usize;
         let mut file_failed = 0usize;
 
-        // Collect runtime sites (and count failed) for this file.
+        // Collect runtime sites (count proven/failed) for this file.
         let mut sites_data: Vec<(u32, String, String, String, String, HardenHint)> = Vec::new();
         for site in all_sites {
             let matches_filter = callee_filter
                 .map(|f| site.fn_name == f)
                 .unwrap_or(true);
             match &site.outcome {
+                ProofOutcome::Proven { .. } if matches_filter => {
+                    file_proven += 1;
+                }
                 ProofOutcome::RuntimeCheck if matches_filter => {
                     file_runtime += 1;
                     let hint = HardenHint::classify(&site.predicate);
@@ -275,11 +282,13 @@ pub fn run(path: &str, verbose: bool, json: bool, stdlib_profile: &str, callee_f
             }
         }
 
+        grand_total_proven += file_proven;
         grand_total_runtime += file_runtime;
         grand_total_failed += file_failed;
         file_results.push(FileResult {
             file_str: file_str.clone(),
             sites_data,
+            proven: file_proven,
             runtime: file_runtime,
             failed: file_failed,
         });
@@ -301,7 +310,7 @@ pub fn run(path: &str, verbose: bool, json: bool, stdlib_profile: &str, callee_f
                 });
             }
         }
-        print_json(&flat, grand_total_runtime, grand_total_failed);
+        print_json(&flat, grand_total_proven, grand_total_runtime, grand_total_failed);
         if grand_total_failed > 0 {
             process::exit(1);
         }
@@ -314,7 +323,8 @@ pub fn run(path: &str, verbose: bool, json: bool, stdlib_profile: &str, callee_f
     let dash = "─".repeat(70);
 
     for fr in &file_results {
-        if fr.sites_data.is_empty() && fr.failed == 0 {
+        // Skip files with no refinement sites at all (no contracts to analyse).
+        if fr.proven == 0 && fr.runtime == 0 && fr.failed == 0 {
             continue;
         }
 
@@ -323,7 +333,10 @@ pub fn run(path: &str, verbose: bool, json: bool, stdlib_profile: &str, callee_f
         println!("{sep}");
 
         if fr.sites_data.is_empty() {
-            println!("  No runtime obligations — all call sites proven statically.");
+            println!(
+                "  {} site(s) proven statically — no runtime obligations.",
+                fr.proven
+            );
         } else {
             // Group by caller function.
             let mut by_caller: HashMap<&str, Vec<_>> = HashMap::new();
@@ -353,9 +366,10 @@ pub fn run(path: &str, verbose: bool, json: bool, stdlib_profile: &str, callee_f
             }
         }
 
+        let pv = fr.proven;
         let rt = fr.runtime;
         let fa = fr.failed;
-        println!("\n  Summary (Axis 1): {rt} runtime obligations, {fa} failed\n");
+        println!("\n  Summary (Axis 1): {pv} proven, {rt} runtime obligations, {fa} failed\n");
         println!("{sep}\n");
         println!(
             "  Axes 2 (contract tightening) and 3 (boundary test generation) are not yet\n  \
@@ -366,7 +380,7 @@ pub fn run(path: &str, verbose: bool, json: bool, stdlib_profile: &str, callee_f
     // Multi-file grand total.
     if check_count > 1 {
         println!(
-            "Total: {grand_total_runtime} runtime obligations, {grand_total_failed} failed"
+            "Total: {grand_total_proven} proven, {grand_total_runtime} runtime obligations, {grand_total_failed} failed"
         );
     }
 
