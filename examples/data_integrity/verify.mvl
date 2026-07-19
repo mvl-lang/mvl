@@ -18,6 +18,64 @@
 
 use model.{MacTag, SignedMessage, VerificationContext, VerifyResult, RejectReason}
 
+// ── L5 QF-BV forcing functions (#1928) ───────────────────────────────────────
+//
+// Three functions whose `requires` predicates contain bitwise operations.
+// L5 encodes them via Z3's bit-vector theory; proved sites appear as
+// `(5:z3-bv)` in `mvl prove` output.
+
+/// Validate that a padding length is a valid PKCS#7-style nibble (low 4 bits only).
+///
+/// Call-site `requires` predicate `(self & 15) == self` is proved by L1 for
+/// literal arguments.
+pub total fn is_valid_padding_nibble(
+    padding_len: Int where self.bit_and(15) == self,
+) -> Bool {
+    (padding_len & 15) == padding_len
+}
+
+/// Mask a byte value to its low nibble.
+///
+/// Refinement layer: **L5 (Z3 QF-BV)**.
+/// `ensures (result & 15) == result` — masking a byte to 4 bits always
+/// gives a nibble.  Body uses binary `&` so atom normalization leaves it
+/// intact; Z3 BV discharges the postcondition from the hypothesis.
+pub total fn mask_low_nibble(
+    tag_byte: Int where self.bit_and(255) == self,
+) -> Int
+    ensures result.bit_and(15) == result
+{
+    tag_byte & 15
+}
+
+/// Extract the high nibble of a tag byte (bits 7–4).
+///
+/// Refinement layer: **L5 (Z3 QF-BV)**.
+/// `ensures (result & 15) == result` is proved by Z3 BV: right-shifting by 4
+/// and masking to 4 bits always fits in a nibble.
+/// Body uses binary `>>` and `&` for correct atom-normalizer handling.
+pub total fn high_nibble_of(
+    tag_byte: Int where self.bit_and(255) == self,
+) -> Int
+    ensures result.bit_and(15) == result
+{
+    (tag_byte >> 4) & 15
+}
+
+/// XOR two tag bytes together for checksum accumulation.
+///
+/// Refinement layer: **L5 (Z3 QF-BV)**.
+/// `ensures (result & 255) == result`: XOR of two byte-range values stays in
+/// byte range.  Body uses binary `^` for atom-normalizer transparency.
+pub total fn xor_tag_bytes(
+    a: Int where self.bit_and(255) == self,
+    b: Int where self.bit_and(255) == self,
+) -> Int
+    ensures result.bit_and(255) == result
+{
+    a ^ b
+}
+
 // ── IFC boundary: key classification ────────────────────────────────
 
 /// Classify a fresh key value as Secret.
@@ -188,6 +246,32 @@ pub total fn verify_message(
 }
 
 // ── Inline unit tests (activate MC/DC discovery per #1888 workaround) ──
+
+// ── QF-BV inline tests (#1928) ────────────────────────────────────────────────
+//
+// Call-site requires: proved by L1 for literal args (bitwise on concrete values).
+// Return-value ensures: proved by L5 QF-BV from hypotheses on symbolic params.
+// See `mvl prove` for `(5:z3-bv)` labels on the ensures obligations.
+
+test fn bv_padding_nibble_valid_4() -> Unit {
+    assert_eq(is_valid_padding_nibble(4), true);
+}
+
+test fn bv_padding_nibble_valid_0() -> Unit {
+    assert_eq(is_valid_padding_nibble(0), true);
+}
+
+test fn bv_mask_low_nibble_byte() -> Unit {
+    assert_eq(mask_low_nibble(255), 15);
+}
+
+test fn bv_high_nibble_of_byte() -> Unit {
+    assert_eq(high_nibble_of(128), 8);
+}
+
+test fn bv_xor_tag_bytes_commutative() -> Unit {
+    assert_eq(xor_tag_bytes(15, 240), xor_tag_bytes(240, 15));
+}
 
 test fn tag_match_when_identical() -> Unit {
     let t1: MacTag = MacTag { fingerprint: 12345, length_bits: 256 };

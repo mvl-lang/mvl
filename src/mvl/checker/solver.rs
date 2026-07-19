@@ -65,6 +65,8 @@ impl SolverMode {
 pub(crate) enum RefResult {
     /// The argument statically satisfies the predicate — no runtime check needed.
     Proven,
+    /// The argument satisfies the predicate, proven via Z3 QF-BV (bit-vector theory) (#1928).
+    ProvenBv,
     /// Cannot be proven statically — a runtime assertion must be emitted.
     RuntimeCheck,
     /// The argument statically violates the predicate — a compile-time error.

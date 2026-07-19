@@ -320,6 +320,13 @@ impl TypeChecker {
             RefExpr::Forall { body, .. } | RefExpr::Exists { body, .. } => {
                 self.check_guard_ref_expr(body);
             }
+            RefExpr::BitwiseOp { left, right, .. } => {
+                self.check_guard_ref_expr(left);
+                self.check_guard_ref_expr(right);
+            }
+            RefExpr::BitwiseNot { inner, .. } => {
+                self.check_guard_ref_expr(inner);
+            }
         }
     }
 

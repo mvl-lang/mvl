@@ -11,7 +11,8 @@
 //! - All type expressions including security labels (Requirement 7)
 
 use crate::mvl::parser::ast::{
-    ArithOp, Capability, CmpOp, Effect, FieldDecl, GenericParam, LogicOp, RefExpr, SessionOp,
+    ArithOp, BitwiseOp, Capability, CmpOp, Effect, FieldDecl, GenericParam, LogicOp, RefExpr,
+    SessionOp,
     TypeBody, TypeDecl, TypeExpr, Variant, VariantFields,
 };
 use crate::mvl::parser::lexer::{Span, TokenKind};
@@ -810,17 +811,59 @@ impl Parser {
                     name,
                     span: self.span_from(start),
                 };
-                // Handle field access: `self.field`, `self.a.b`, etc.
+                // Handle field access and bitwise method calls:
+                //   `self.field`, `self.bit_and(15)`, etc.
                 while matches!(self.peek_kind(), TokenKind::Dot) {
                     self.advance(); // consume '.'
                     let field_result = self.expect_ident();
-                    let (field, _) = self.require(field_result)?;
+                    let (method_or_field, _) = self.require(field_result)?;
                     let span = self.span_from(start);
-                    expr = RefExpr::FieldAccess {
-                        object: Box::new(expr),
-                        field,
-                        span,
-                    };
+
+                    // Bitwise binary method call: self.bit_and(arg), etc.
+                    if matches!(self.peek_kind(), TokenKind::LParen)
+                        && matches!(
+                            method_or_field.as_str(),
+                            "bit_and" | "bit_or" | "bit_xor" | "shift_left" | "shift_right"
+                        )
+                    {
+                        self.advance(); // consume '('
+                        let arg = self.parse_ref_expr()?;
+                        let rp = self.expect(&TokenKind::RParen);
+                        self.require(rp)?;
+                        let span = self.span_from(start);
+                        let op = match method_or_field.as_str() {
+                            "bit_and" => BitwiseOp::And,
+                            "bit_or" => BitwiseOp::Or,
+                            "bit_xor" => BitwiseOp::Xor,
+                            "shift_left" => BitwiseOp::Shl,
+                            "shift_right" => BitwiseOp::Shr,
+                            _ => unreachable!(),
+                        };
+                        expr = RefExpr::BitwiseOp {
+                            op,
+                            left: Box::new(expr),
+                            right: Box::new(arg),
+                            span,
+                        };
+                    } else if matches!(self.peek_kind(), TokenKind::LParen)
+                        && method_or_field == "bit_not"
+                    {
+                        self.advance(); // consume '('
+                        let rp = self.expect(&TokenKind::RParen);
+                        self.require(rp)?;
+                        let span = self.span_from(start);
+                        expr = RefExpr::BitwiseNot {
+                            inner: Box::new(expr),
+                            span,
+                        };
+                    } else {
+                        // Regular field access.
+                        expr = RefExpr::FieldAccess {
+                            object: Box::new(expr),
+                            field: method_or_field,
+                            span,
+                        };
+                    }
                 }
                 Ok(expr)
             }

@@ -152,7 +152,7 @@ pub(super) fn try_symbolic(
             .or_else(|| layer2::try_interval(pred, &return_expr, &path_var_refs));
 
         match result {
-            Some(RefResult::Proven) => {}
+            Some(RefResult::Proven | RefResult::ProvenBv) => {}
             Some(RefResult::Failed { counterexample }) => {
                 return Some(RefResult::Failed { counterexample })
             }
@@ -193,7 +193,7 @@ fn check_direct_paths(
         let result = layer1::try_trivial(pred, &return_expr, &path_var_refs, fn_decls)
             .or_else(|| layer2::try_interval(pred, &return_expr, &path_var_refs));
         match result {
-            Some(RefResult::Proven) => {}
+            Some(RefResult::Proven | RefResult::ProvenBv) => {}
             Some(RefResult::Failed { counterexample }) => {
                 return Some(RefResult::Failed { counterexample })
             }

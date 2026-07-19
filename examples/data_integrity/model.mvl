@@ -17,11 +17,24 @@
 // Common Criteria positioning.  Assurance envelope: see
 // `make test-fips140`.
 //
-// Full QF-Strings and QF-BV reasoning over tag bytes and payload
-// content awaits compiler surface work — see the README §"Explicitly
-// out of scope for this example" for the exact boundary.
+// QF-BV: byte-level bit-vector refinements now exercised via mask_low_nibble,
+// high_nibble_of, xor_tag_bytes — see verify.mvl and README §"QF-BV coverage".
 //
 // Assurance note: 0 extern blocks (demonstration model).
+
+// ── Byte-level types (QF-BV refinements) ────────────────────────────────────
+//
+// These types carry bitwise refinement predicates proved by the L5 Z3 QF-BV
+// encoder (#1928).  The predicate `(self.bit_and(mask)) == self` is the
+// canonical form: it asserts that all high bits outside `mask` are zero.
+
+/// A padding byte fitting in the low 4 bits (nibble).
+/// `(self & 0x0F) == self` — proved by L5 QF-BV.
+pub type PaddingNibble = Int where self.bit_and(15) == self
+
+/// An unsigned byte value in [0, 255].
+/// `(self & 0xFF) == self` — proved by L5 QF-BV.
+pub type TagByte = Int where self.bit_and(255) == self
 
 // ── Tag representation ───────────────────────────────────────────────
 
