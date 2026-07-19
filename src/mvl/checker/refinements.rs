@@ -1515,8 +1515,7 @@ impl<'a, 'ast> Visit<'ast> for RefinementAnalyzer<'a, 'ast> {
                     );
                     match outcome {
                         RefResult::Proven | RefResult::ProvenBv => self.counts.proven += 1,
-                        RefResult::RuntimeCheck
-                        | RefResult::RuntimeCheckWithWitness { .. } => {
+                        RefResult::RuntimeCheck | RefResult::RuntimeCheckWithWitness { .. } => {
                             self.counts.runtime_checked += 1
                         }
                         RefResult::Failed { counterexample } => {

@@ -719,9 +719,8 @@ fn impl_z3(
                 // Symbolic arg — fall through to runtime check, but surface the
                 // Z3 witness so `mvl prove` can show which values break the pred.
                 let model = solver.get_model();
-                let ce = model.and_then(|m| {
-                    extract_symbolic_counterexample(&m, &vars, arg, &arg_int, norm)
-                });
+                let ce = model
+                    .and_then(|m| extract_symbolic_counterexample(&m, &vars, arg, &arg_int, norm));
                 ce.map(|counterexample| RefResult::RuntimeCheckWithWitness { counterexample })
             }
         }
@@ -1370,7 +1369,10 @@ mod tests {
         // var_refs: y has hypothesis self > 5 (i.e., y > 5)
         let mut var_refs = HashMap::new();
         var_refs.insert("y".into(), Some(self_gt(5)));
-        assert_eq!(try_z3(&pred, &arg, &var_refs, None), Some(RefResult::Proven));
+        assert_eq!(
+            try_z3(&pred, &arg, &var_refs, None),
+            Some(RefResult::Proven)
+        );
     }
 
     /// Literal 7 satisfies self > 0: proven by Z3.
@@ -1379,7 +1381,10 @@ mod tests {
         let pred = self_gt(0); // self > 0
         let arg = int_lit(7);
         let var_refs = HashMap::new();
-        assert_eq!(try_z3(&pred, &arg, &var_refs, None), Some(RefResult::Proven));
+        assert_eq!(
+            try_z3(&pred, &arg, &var_refs, None),
+            Some(RefResult::Proven)
+        );
     }
 
     /// Literal 0 does NOT satisfy self > 0: Z3 returns Failed with counterexample.
@@ -1405,7 +1410,10 @@ mod tests {
         let arg = Expr::Ident("y".into(), dummy_span());
         let mut var_refs = HashMap::new();
         var_refs.insert("y".into(), Some(self_gt(5)));
-        assert_eq!(try_z3(&pred, &arg, &var_refs, None), Some(RefResult::Proven));
+        assert_eq!(
+            try_z3(&pred, &arg, &var_refs, None),
+            Some(RefResult::Proven)
+        );
     }
 
     /// Variable without refinement does not prove self > 0; Z3 now returns a witness.
@@ -1448,7 +1456,10 @@ mod tests {
         let mut var_refs = HashMap::new();
         var_refs.insert("x".into(), Some(x_gt_10));
         var_refs.insert("y".into(), Some(y_gt_x));
-        assert_eq!(try_z3(&pred, &arg, &var_refs, None), Some(RefResult::Proven));
+        assert_eq!(
+            try_z3(&pred, &arg, &var_refs, None),
+            Some(RefResult::Proven)
+        );
         let _ = LogicOp::And; // suppress unused import warning
     }
 
@@ -1490,7 +1501,10 @@ mod tests {
         let pred = len_self_lt(256);
         let arg = Expr::Literal(Literal::Str("hello".into()), dummy_span());
         let var_refs = HashMap::new();
-        assert_eq!(try_z3(&pred, &arg, &var_refs, None), Some(RefResult::Proven));
+        assert_eq!(
+            try_z3(&pred, &arg, &var_refs, None),
+            Some(RefResult::Proven)
+        );
     }
 
     /// Empty string satisfies `len(self) >= 0` (non-negativity axiom).
@@ -1499,7 +1513,10 @@ mod tests {
         let pred = len_self_ge(0);
         let arg = Expr::Literal(Literal::Str("".into()), dummy_span());
         let var_refs = HashMap::new();
-        assert_eq!(try_z3(&pred, &arg, &var_refs, None), Some(RefResult::Proven));
+        assert_eq!(
+            try_z3(&pred, &arg, &var_refs, None),
+            Some(RefResult::Proven)
+        );
     }
 
     /// String literal "hello" does NOT satisfy `len(self) < 3` — Z3 returns Failed.
@@ -1540,7 +1557,10 @@ mod tests {
                 span: dummy_span(),
             }),
         );
-        assert_eq!(try_z3(&pred, &arg, &var_refs, None), Some(RefResult::Proven));
+        assert_eq!(
+            try_z3(&pred, &arg, &var_refs, None),
+            Some(RefResult::Proven)
+        );
     }
 
     /// Variable `s` with hypothesis `len(self) > 5` satisfies `len(self) > 3`.
@@ -1575,7 +1595,10 @@ mod tests {
                 span: dummy_span(),
             }),
         );
-        assert_eq!(try_z3(&pred, &arg, &var_refs, None), Some(RefResult::Proven));
+        assert_eq!(
+            try_z3(&pred, &arg, &var_refs, None),
+            Some(RefResult::Proven)
+        );
     }
 
     // ── QF-BV tests (#1928) ──────────────────────────────────────────────────
@@ -1610,7 +1633,10 @@ mod tests {
         let pred = self_bit_and_eq(15); // (self & 15) == self
         let arg = int_lit(4);
         let var_refs = HashMap::new();
-        assert_eq!(try_z3(&pred, &arg, &var_refs, None), Some(RefResult::ProvenBv));
+        assert_eq!(
+            try_z3(&pred, &arg, &var_refs, None),
+            Some(RefResult::ProvenBv)
+        );
     }
 
     /// 16 does NOT satisfy (self & 15) == self — 16 & 15 = 0 ≠ 16.
@@ -1631,7 +1657,10 @@ mod tests {
         let arg = Expr::Ident("y".into(), dummy_span());
         let mut var_refs = HashMap::new();
         var_refs.insert("y".into(), Some(self_bit_and_eq(15)));
-        assert_eq!(try_z3(&pred, &arg, &var_refs, None), Some(RefResult::ProvenBv));
+        assert_eq!(
+            try_z3(&pred, &arg, &var_refs, None),
+            Some(RefResult::ProvenBv)
+        );
     }
 
     /// 255 & 255 == 255: full byte mask proves trivially.
@@ -1640,7 +1669,10 @@ mod tests {
         let pred = self_bit_and_eq(255); // (self & 255) == self
         let arg = int_lit(128);
         let var_refs = HashMap::new();
-        assert_eq!(try_z3(&pred, &arg, &var_refs, None), Some(RefResult::ProvenBv));
+        assert_eq!(
+            try_z3(&pred, &arg, &var_refs, None),
+            Some(RefResult::ProvenBv)
+        );
     }
 
     /// Shift: (self << 0) == self is trivially true.
@@ -1668,7 +1700,10 @@ mod tests {
         };
         let arg = int_lit(42);
         let var_refs = HashMap::new();
-        assert_eq!(try_z3(&pred, &arg, &var_refs, None), Some(RefResult::ProvenBv));
+        assert_eq!(
+            try_z3(&pred, &arg, &var_refs, None),
+            Some(RefResult::ProvenBv)
+        );
     }
 
     /// Test that mimics the full pipeline: atom-normalize then try_z3.
