@@ -157,6 +157,42 @@ same layered solver as parameter-referencing predicates.
   either stay under the cap or fall back to `RuntimeCheck`. A dedicated
   diagnostic for depth > 2 is a possible follow-up.
 
+---
+
+## Relation to language definition
+
+### Eleven Requirements (ADR-0001)
+
+- **R7 — Refinement Discharge:** *strengthens*. Bounded quantifiers `forall i
+  in [lo..hi]. p(i)` become a first-class refinement construct that expands
+  into a finite conjunction and discharges inside the decidable L1–L3 tiers,
+  extending the "programs that stay out of L5 are fully decidable" claim to
+  fixed-arity pointwise properties over arrays.
+- **R2 — Explicit Effects:** unchanged. Quantifier bodies are pure refinement
+  predicates and carry no effect.
+- **R1, R3–R6, R8–R11:** unchanged.
+
+### Design Principles (README)
+
+- **Explicit over implicit** — *strengthens*: the unbounded form is a hard
+  parse error, so every quantifier states the exact range it iterates.
+- **One way to do it** — *strengthens*: `forall x in [lo..hi]. p` is the
+  single admitted quantifier form; the ambient-scope legacy form is removed.
+- **The signature IS the threat model** — *strengthens*: pointwise array
+  invariants (bounds, non-empty, sorted, etc.) surface in the type signature
+  rather than deferring to runtime assertions.
+- Remaining principles: *consistent with*.
+
+### Specifications
+
+- No specs in `.openspec/specs/` currently pin the quantifier syntax; when
+  the refinement-language spec is written it must reference the bounded
+  form and cite this ADR. Two corpus fixtures were migrated in-place
+  (`tests/fixtures/01_syntax/keywords.mvl`,
+  `tests/fixtures/11_contracts/loop_verification.mvl`).
+
+---
+
 ## References
 
 - Issue #1915 — this ticket.
