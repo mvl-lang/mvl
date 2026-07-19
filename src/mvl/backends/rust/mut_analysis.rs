@@ -454,6 +454,11 @@ impl MutTracker {
                 self.visit_refexpr(body);
             }
             RefExpr::Integer { .. } | RefExpr::Float { .. } | RefExpr::Bool { .. } => {}
+            RefExpr::BitwiseOp { left, right, .. } => {
+                self.visit_refexpr(left);
+                self.visit_refexpr(right);
+            }
+            RefExpr::BitwiseNot { inner, .. } => self.visit_refexpr(inner),
         }
     }
 

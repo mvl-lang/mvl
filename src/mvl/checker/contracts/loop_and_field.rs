@@ -183,7 +183,8 @@ fn check_invariant_at_entry(
             .find(|&i| ctx.counts.by_layer[i] > layer_before[i])
             .unwrap_or(0);
         let proof_outcome = match &outcome {
-            RefResult::Proven => ProofOutcome::Proven { layer },
+            RefResult::Proven => ProofOutcome::Proven { layer, is_bv: false },
+        RefResult::ProvenBv => ProofOutcome::Proven { layer, is_bv: true },
             RefResult::RuntimeCheck => ProofOutcome::RuntimeCheck,
             RefResult::Failed { counterexample } => {
                 ctx.errors.push(CheckError::InvariantViolated {
@@ -394,7 +395,7 @@ fn check_decreases_at_entry(
         span: loop_span,
     };
     let outcome = check_standalone_pred(&lt_zero, var_refs, loop_span, ctx);
-    if outcome == RefResult::Proven {
+    if matches!(outcome, RefResult::Proven | RefResult::ProvenBv) {
         ctx.errors.push(CheckError::DecreasesNotBounded {
             fn_name: fn_name.to_string(),
             measure: display_pred(decreases_expr),
@@ -447,7 +448,7 @@ fn check_decreases_across_iteration(
     };
 
     let outcome = check_standalone_pred(&not_decreasing, var_refs, loop_span, ctx);
-    if outcome == RefResult::Proven {
+    if matches!(outcome, RefResult::Proven | RefResult::ProvenBv) {
         ctx.errors.push(CheckError::DecreasesNotDecreasing {
             fn_name: fn_name.to_string(),
             measure: display_pred(decreases_expr),
@@ -503,7 +504,7 @@ fn check_invariant_preserved(
         span: loop_span,
     };
     let outcome = check_standalone_pred(&negated_post, &augmented, loop_span, ctx);
-    if outcome == RefResult::Proven {
+    if matches!(outcome, RefResult::Proven | RefResult::ProvenBv) {
         ctx.errors.push(CheckError::InvariantNotPreserved {
             fn_name: fn_name.to_string(),
             pred: display_pred(inv_pred),
@@ -681,7 +682,8 @@ fn check_spawn_at_site(
                     .find(|&i| ctx.counts.by_layer[i] > layer_before[i])
                     .unwrap_or(0);
                 let proof_outcome = match &outcome {
-                    RefResult::Proven => ProofOutcome::Proven { layer },
+                    RefResult::Proven => ProofOutcome::Proven { layer, is_bv: false },
+        RefResult::ProvenBv => ProofOutcome::Proven { layer, is_bv: true },
                     RefResult::RuntimeCheck => ProofOutcome::RuntimeCheck,
                     RefResult::Failed { counterexample } => {
                         ctx.errors.push(CheckError::RefinementViolated {
@@ -857,7 +859,8 @@ fn check_construct_at_site(
                     .find(|&i| ctx.counts.by_layer[i] > layer_before[i])
                     .unwrap_or(0);
                 let proof_outcome = match &outcome {
-                    RefResult::Proven => ProofOutcome::Proven { layer },
+                    RefResult::Proven => ProofOutcome::Proven { layer, is_bv: false },
+        RefResult::ProvenBv => ProofOutcome::Proven { layer, is_bv: true },
                     RefResult::RuntimeCheck => ProofOutcome::RuntimeCheck,
                     RefResult::Failed { counterexample } => {
                         ctx.errors.push(CheckError::RefinementViolated {

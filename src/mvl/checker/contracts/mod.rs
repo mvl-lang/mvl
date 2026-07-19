@@ -401,7 +401,8 @@ fn check_return_pred_for_expr(
     // `check_arg_against_pred_counted` via `record()` — do not increment
     // here or return-refinement outcomes will double-count.
     let proof_outcome = match &outcome {
-        RefResult::Proven => ProofOutcome::Proven { layer },
+        RefResult::Proven => ProofOutcome::Proven { layer, is_bv: false },
+        RefResult::ProvenBv => ProofOutcome::Proven { layer, is_bv: true },
         RefResult::RuntimeCheck => ProofOutcome::RuntimeCheck,
         RefResult::Failed { counterexample } => {
             ctx.errors.push(CheckError::RefinementViolated {
@@ -516,7 +517,8 @@ pub(super) fn check_requires_at_call(
                     .find(|&i| ctx.counts.by_layer[i] > layer_before[i])
                     .unwrap_or(0);
                 let proof_outcome = match &outcome {
-                    RefResult::Proven => ProofOutcome::Proven { layer },
+                    RefResult::Proven => ProofOutcome::Proven { layer, is_bv: false },
+        RefResult::ProvenBv => ProofOutcome::Proven { layer, is_bv: true },
                     RefResult::RuntimeCheck => ProofOutcome::RuntimeCheck,
                     RefResult::Failed { counterexample } => {
                         ctx.errors.push(CheckError::PreconditionViolated {
@@ -943,7 +945,7 @@ pub(super) fn check_ensures_for_return(
             .find(|&i| ctx.counts.by_layer[i] > layer_before[i])
             .unwrap_or(0);
         let proof_outcome = match &outcome {
-            RefResult::Proven => {
+            RefResult::Proven | RefResult::ProvenBv => {
                 ctx.counts.proof_log.push(ProofEntry {
                     file: String::new(),
                     line: ret_span.line,
@@ -952,7 +954,10 @@ pub(super) fn check_ensures_for_return(
                     predicate: format!("ensures {}", display_pred(&ens_pred)),
                     layer,
                 });
-                ProofOutcome::Proven { layer }
+                ProofOutcome::Proven {
+                    layer,
+                    is_bv: matches!(outcome, RefResult::ProvenBv),
+                }
             }
             RefResult::RuntimeCheck => ProofOutcome::RuntimeCheck,
             RefResult::Failed { counterexample } => {
@@ -1096,6 +1101,21 @@ pub(super) fn normalize_pred(pred: &RefExpr, old_name: &str) -> RefExpr {
             field: field.clone(),
             span: *span,
         },
+        RefExpr::BitwiseOp {
+            op,
+            left,
+            right,
+            span,
+        } => RefExpr::BitwiseOp {
+            op: *op,
+            left: Box::new(normalize_pred(left, old_name)),
+            right: Box::new(normalize_pred(right, old_name)),
+            span: *span,
+        },
+        RefExpr::BitwiseNot { inner, span } => RefExpr::BitwiseNot {
+            inner: Box::new(normalize_pred(inner, old_name)),
+            span: *span,
+        },
         // Leaves unchanged.
         RefExpr::Integer { .. }
         | RefExpr::Float { .. }
@@ -1236,6 +1256,21 @@ pub(super) fn subst_pred_ident(pred: &RefExpr, old_name: &str, new_val: &RefExpr
             field: field.clone(),
             span: *span,
         },
+        RefExpr::BitwiseOp {
+            op,
+            left,
+            right,
+            span,
+        } => RefExpr::BitwiseOp {
+            op: *op,
+            left: Box::new(subst_pred_ident(left, old_name, new_val)),
+            right: Box::new(subst_pred_ident(right, old_name, new_val)),
+            span: *span,
+        },
+        RefExpr::BitwiseNot { inner, span } => RefExpr::BitwiseNot {
+            inner: Box::new(subst_pred_ident(inner, old_name, new_val)),
+            span: *span,
+        },
         RefExpr::Integer { .. }
         | RefExpr::Float { .. }
         | RefExpr::Bool { .. }
@@ -1333,7 +1368,8 @@ pub(super) fn check_multi_param_requires_literal(
         .find(|&i| ctx.counts.by_layer[i] > layer_before[i])
         .unwrap_or(0);
     let proof_outcome = match &outcome {
-        RefResult::Proven => ProofOutcome::Proven { layer },
+        RefResult::Proven => ProofOutcome::Proven { layer, is_bv: false },
+        RefResult::ProvenBv => ProofOutcome::Proven { layer, is_bv: true },
         RefResult::RuntimeCheck => ProofOutcome::RuntimeCheck,
         RefResult::Failed { counterexample } => {
             ctx.errors.push(CheckError::PreconditionViolated {
@@ -1397,6 +1433,11 @@ pub(super) fn collect_idents_inner(pred: &RefExpr, names: &mut Vec<String>) {
         RefExpr::Integer { .. } | RefExpr::Float { .. } | RefExpr::Bool { .. } => {}
         // Field access: collect idents from the object (e.g. `self` in `self.size`).
         RefExpr::FieldAccess { object, .. } => collect_idents_inner(object, names),
+        RefExpr::BitwiseOp { left, right, .. } => {
+            collect_idents_inner(left, names);
+            collect_idents_inner(right, names);
+        }
+        RefExpr::BitwiseNot { inner, .. } => collect_idents_inner(inner, names),
     }
 }
 
@@ -1450,5 +1491,19 @@ pub(super) fn display_pred(pred: &RefExpr) -> String {
         RefExpr::FieldAccess { object, field, .. } => {
             format!("{}.{}", display_pred(object), field)
         }
+        RefExpr::BitwiseOp {
+            op, left, right, ..
+        } => {
+            use crate::mvl::parser::ast::BitwiseOp;
+            let op_str = match op {
+                BitwiseOp::And => "&",
+                BitwiseOp::Or => "|",
+                BitwiseOp::Xor => "^",
+                BitwiseOp::Shl => "<<",
+                BitwiseOp::Shr => ">>",
+            };
+            format!("{} {op_str} {}", display_pred(left), display_pred(right))
+        }
+        RefExpr::BitwiseNot { inner, .. } => format!("~{}", display_pred(inner)),
     }
 }

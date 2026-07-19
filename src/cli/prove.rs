@@ -166,8 +166,13 @@ pub fn run(path: &str, verbose: bool, stdlib_profile: &str, callee_filter: Optio
         let verdict_width = sites
             .iter()
             .map(|s| match &s.outcome {
-                ProofOutcome::Proven { layer } => {
-                    format!("({layer}:{})", LAYER_NAMES[*layer]).chars().count()
+                ProofOutcome::Proven { layer, is_bv } => {
+                    let base = LAYER_NAMES[*layer];
+                    if *is_bv {
+                        format!("({layer}:{base}-bv)").chars().count()
+                    } else {
+                        format!("({layer}:{base})").chars().count()
+                    }
                 }
                 ProofOutcome::RuntimeCheck => "(runtime)".len(),
                 ProofOutcome::Failed => "(FAILED)".len(),
@@ -192,8 +197,13 @@ pub fn run(path: &str, verbose: bool, stdlib_profile: &str, callee_filter: Optio
                 cw = caller_width
             );
             let verdict = match &site.outcome {
-                ProofOutcome::Proven { layer } => {
-                    format!("({layer}:{})", LAYER_NAMES[*layer])
+                ProofOutcome::Proven { layer, is_bv } => {
+                    let base = LAYER_NAMES[*layer];
+                    if *is_bv {
+                        format!("({layer}:{base}-bv)")
+                    } else {
+                        format!("({layer}:{base})")
+                    }
                 }
                 ProofOutcome::RuntimeCheck => "(runtime)".to_string(),
                 ProofOutcome::Failed => "(FAILED)".to_string(),
@@ -227,7 +237,7 @@ pub fn run(path: &str, verbose: bool, stdlib_profile: &str, callee_filter: Optio
         let mut file_by_layer = [0usize; 6];
         for site in sites {
             match &site.outcome {
-                ProofOutcome::Proven { layer } => {
+                ProofOutcome::Proven { layer, .. } => {
                     file_proven += 1;
                     file_by_layer[*layer] += 1;
                 }

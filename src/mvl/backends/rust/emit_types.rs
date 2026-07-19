@@ -641,6 +641,10 @@ pub fn is_runtime_checkable(pred: &RefExpr) -> bool {
         | RefExpr::Float { .. }
         | RefExpr::Bool { .. }
         | RefExpr::Len { .. } => true,
+        RefExpr::BitwiseOp { left, right, .. } => {
+            is_runtime_checkable(left) && is_runtime_checkable(right)
+        }
+        RefExpr::BitwiseNot { inner, .. } => is_runtime_checkable(inner),
     }
 }
 
@@ -739,6 +743,24 @@ fn emit_ref_expr(pred: &RefExpr, binding: &str) -> String {
         RefExpr::Forall { .. } | RefExpr::Exists { .. } => {
             unreachable!("quantifiers are ghost-only and must not appear in codegen")
         }
+        RefExpr::BitwiseOp {
+            op, left, right, ..
+        } => {
+            use crate::mvl::parser::ast::BitwiseOp;
+            let op_str = match op {
+                BitwiseOp::And => "&",
+                BitwiseOp::Or => "|",
+                BitwiseOp::Xor => "^",
+                BitwiseOp::Shl => "<<",
+                BitwiseOp::Shr => ">>",
+            };
+            format!(
+                "({} {op_str} {})",
+                emit_ref_expr(left, binding),
+                emit_ref_expr(right, binding)
+            )
+        }
+        RefExpr::BitwiseNot { inner, .. } => format!("(!{})", emit_ref_expr(inner, binding)),
     }
 }
 

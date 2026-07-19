@@ -278,6 +278,10 @@ fn canon_refexpr(r: &RefExpr) -> String {
         RefExpr::Exists { var, body, .. } => {
             format!("∃{var}. {}", canon_refexpr(body))
         }
+        RefExpr::BitwiseOp {
+            op, left, right, ..
+        } => format!("({} {op:?} {})", canon_refexpr(left), canon_refexpr(right)),
+        RefExpr::BitwiseNot { inner, .. } => format!("(~ {})", canon_refexpr(inner)),
     }
 }
 

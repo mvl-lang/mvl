@@ -614,6 +614,29 @@ pub enum RefExpr {
         body: Box<RefExpr>,
         span: Span,
     },
+    /// Bitwise binary operation in a predicate (#1928): `self.bit_and(15) == self` etc.
+    /// Emitted to Z3 via QF-BV when any bitwise op appears in the predicate.
+    BitwiseOp {
+        op: BitwiseOp,
+        left: Box<RefExpr>,
+        right: Box<RefExpr>,
+        span: Span,
+    },
+    /// Bitwise NOT in a predicate (#1928): `self.bit_not()`.
+    BitwiseNot {
+        inner: Box<RefExpr>,
+        span: Span,
+    },
+}
+
+/// Bitwise operators supported in refinement predicates (#1928).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BitwiseOp {
+    And,  // bit_and / &
+    Or,   // bit_or  / |
+    Xor,  // bit_xor / ^
+    Shl,  // shift_left  / <<
+    Shr,  // shift_right / >>
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1155,6 +1178,47 @@ pub(crate) fn expr_to_ref_expr_ext(expr: &Expr, fallback_span: Span) -> Option<R
                 None
             }
         }
+        // x.bit_and(y) / x.bit_or(y) / … → RefExpr::BitwiseOp (#1928)
+        Expr::MethodCall {
+            receiver,
+            method,
+            args,
+            span,
+        } if matches!(
+            method.as_str(),
+            "bit_and" | "bit_or" | "bit_xor" | "shift_left" | "shift_right"
+        ) && args.len() == 1 =>
+        {
+            let recv = expr_to_ref_expr_ext(receiver, fallback_span)?;
+            let rhs = expr_to_ref_expr_ext(&args[0], *span)?;
+            let op = match method.as_str() {
+                "bit_and" => BitwiseOp::And,
+                "bit_or" => BitwiseOp::Or,
+                "bit_xor" => BitwiseOp::Xor,
+                "shift_left" => BitwiseOp::Shl,
+                "shift_right" => BitwiseOp::Shr,
+                _ => unreachable!(),
+            };
+            Some(RefExpr::BitwiseOp {
+                op,
+                left: Box::new(recv),
+                right: Box::new(rhs),
+                span: *span,
+            })
+        }
+        // x.bit_not() → RefExpr::BitwiseNot (#1928)
+        Expr::MethodCall {
+            receiver,
+            method,
+            args,
+            span,
+        } if method == "bit_not" && args.is_empty() => {
+            let recv = expr_to_ref_expr_ext(receiver, fallback_span)?;
+            Some(RefExpr::BitwiseNot {
+                inner: Box::new(recv),
+                span: *span,
+            })
+        }
         Expr::Binary {
             op,
             left,
@@ -1193,6 +1257,16 @@ pub(crate) fn expr_to_ref_expr_ext(expr: &Expr, fallback_span: Span) -> Option<R
                     span: *span,
                 })
             };
+            let bitwise = |bop: BitwiseOp| -> Option<RefExpr> {
+                let l = expr_to_ref_expr_ext(left, *span)?;
+                let r = expr_to_ref_expr_ext(right, *span)?;
+                Some(RefExpr::BitwiseOp {
+                    op: bop,
+                    left: Box::new(l),
+                    right: Box::new(r),
+                    span: *span,
+                })
+            };
             match op {
                 BinaryOp::Add => arith(ArithOp::Add),
                 BinaryOp::Sub => arith(ArithOp::Sub),
@@ -1207,7 +1281,11 @@ pub(crate) fn expr_to_ref_expr_ext(expr: &Expr, fallback_span: Span) -> Option<R
                 BinaryOp::Ge => cmp(CmpOp::Ge),
                 BinaryOp::And => logic(LogicOp::And),
                 BinaryOp::Or => logic(LogicOp::Or),
-                _ => None,
+                BinaryOp::BitAnd => bitwise(BitwiseOp::And),
+                BinaryOp::BitOr => bitwise(BitwiseOp::Or),
+                BinaryOp::BitXor => bitwise(BitwiseOp::Xor),
+                BinaryOp::Shl => bitwise(BitwiseOp::Shl),
+                BinaryOp::Shr => bitwise(BitwiseOp::Shr),
             }
         }
         Expr::Unary {
@@ -1233,6 +1311,17 @@ pub(crate) fn expr_to_ref_expr_ext(expr: &Expr, fallback_span: Span) -> Option<R
         } => {
             let inner_ref = expr_to_ref_expr_ext(inner, *span)?;
             Some(RefExpr::Not {
+                inner: Box::new(inner_ref),
+                span: *span,
+            })
+        }
+        Expr::Unary {
+            op: UnaryOp::BitNot,
+            expr: inner,
+            span,
+        } => {
+            let inner_ref = expr_to_ref_expr_ext(inner, *span)?;
+            Some(RefExpr::BitwiseNot {
                 inner: Box::new(inner_ref),
                 span: *span,
             })

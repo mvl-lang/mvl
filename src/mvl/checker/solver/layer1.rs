@@ -488,6 +488,22 @@ fn eval_num_int(self_val: i64, expr: &RefExpr) -> Option<i64> {
             }
         }
         RefExpr::Grouped { inner, .. } => eval_num_int(self_val, inner),
+        // Bitwise operations on integer literals (#1928).
+        RefExpr::BitwiseOp {
+            op, left, right, ..
+        } => {
+            use crate::mvl::parser::ast::BitwiseOp;
+            let l = eval_num_int(self_val, left)?;
+            let r = eval_num_int(self_val, right)?;
+            Some(match op {
+                BitwiseOp::And => l & r,
+                BitwiseOp::Or => l | r,
+                BitwiseOp::Xor => l ^ r,
+                BitwiseOp::Shl => l.checked_shl(r.try_into().ok()?).unwrap_or(0),
+                BitwiseOp::Shr => l.checked_shr(r.try_into().ok()?).unwrap_or(0),
+            })
+        }
+        RefExpr::BitwiseNot { inner, .. } => eval_num_int(self_val, inner).map(|v| !v),
         // Float literals and Len are not in the integer domain.
         _ => None,
     }

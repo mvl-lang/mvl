@@ -98,7 +98,8 @@ pub struct RefinementCounts {
 #[derive(Debug, Clone)]
 pub enum ProofOutcome {
     /// Proven statically at the given solver layer (1–5).
-    Proven { layer: usize },
+    /// `is_bv = true` when Layer 5 used Z3 QF-BV (bit-vector theory) (#1928).
+    Proven { layer: usize, is_bv: bool },
     /// Could not prove statically; a runtime assertion will be emitted.
     RuntimeCheck,
     /// Statically violated — the argument provably breaks the predicate.
@@ -1428,7 +1429,7 @@ impl<'a, 'ast> Visit<'ast> for RefinementAnalyzer<'a, 'ast> {
                         self.counts,
                     );
                     match outcome {
-                        RefResult::Proven => self.counts.proven += 1,
+                        RefResult::Proven | RefResult::ProvenBv => self.counts.proven += 1,
                         RefResult::RuntimeCheck => self.counts.runtime_checked += 1,
                         RefResult::Failed { counterexample } => {
                             self.counts.failed += 1;
@@ -1613,7 +1614,7 @@ fn check_call_site(
         // `check_arg_against_pred_counted` via `record()` — do not
         // increment here or they will double-count.
         let proof_outcome = match &outcome {
-            RefResult::Proven => {
+            RefResult::Proven | RefResult::ProvenBv => {
                 counts.proof_log.push(ProofEntry {
                     file: String::new(), // filled by assurance aggregator
                     line: call_span.line,
@@ -1622,7 +1623,10 @@ fn check_call_site(
                     predicate: format!("{}: {}", param_name, display_pred(pred)),
                     layer,
                 });
-                ProofOutcome::Proven { layer }
+                ProofOutcome::Proven {
+                    layer,
+                    is_bv: matches!(outcome, RefResult::ProvenBv),
+                }
             }
             RefResult::RuntimeCheck => ProofOutcome::RuntimeCheck,
             RefResult::Failed { counterexample } => {
@@ -1663,7 +1667,7 @@ fn record(n: usize, r: RefResult, counts: &mut RefinementCounts) -> RefResult {
     // summed to the real proof total. Centralising the update here makes it
     // impossible to add a new caller that silently drops counts.
     match &r {
-        RefResult::Proven => {
+        RefResult::Proven | RefResult::ProvenBv => {
             counts.by_layer[n] += 1;
             counts.proven += 1;
         }
@@ -1798,6 +1802,20 @@ fn display_pred(pred: &RefExpr) -> String {
         RefExpr::FieldAccess { object, field, .. } => {
             format!("{}.{}", display_pred(object), field)
         }
+        RefExpr::BitwiseOp {
+            op, left, right, ..
+        } => {
+            use crate::mvl::parser::ast::BitwiseOp;
+            let op_str = match op {
+                BitwiseOp::And => "&",
+                BitwiseOp::Or => "|",
+                BitwiseOp::Xor => "^",
+                BitwiseOp::Shl => "<<",
+                BitwiseOp::Shr => ">>",
+            };
+            format!("{} {op_str} {}", display_pred(left), display_pred(right))
+        }
+        RefExpr::BitwiseNot { inner, .. } => format!("~{}", display_pred(inner)),
     }
 }
 
@@ -1889,7 +1907,7 @@ mod tests {
         let result = check_arg_against_pred_counted(&arg, &pred, &var_refs, &fn_decls, &mut counts);
         // With Z3 feature: Proven (by_layer[5] = 1). Without: RuntimeCheck.
         match result {
-            RefResult::Proven => assert_eq!(counts.by_layer[5], 1),
+            RefResult::Proven | RefResult::ProvenBv => assert_eq!(counts.by_layer[5], 1),
             RefResult::RuntimeCheck => {} // z3 feature not enabled
             RefResult::Failed { .. } => panic!("unexpected Failed"),
         }
