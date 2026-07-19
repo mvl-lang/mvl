@@ -2296,11 +2296,10 @@ impl TextEmitter {
         // Build the comparison chain: for each literal arm, emit a _mvl_string_eq
         // check and branch; wildcard arms become the final else.
         let mut wildcard_arm: Option<usize> = None;
-        let mut cmp_bb = format!("str_cmp_{n}_0");
-        // First check: emit from current block
-        self.push_instr(&format!("br label %{cmp_bb}"));
-        self.fn_ctx.fn_buf.push(format!("{cmp_bb}:"));
-        self.fn_ctx.current_bb = cmp_bb.clone();
+        let first_cmp_bb = format!("str_cmp_{n}_0");
+        self.push_instr(&format!("br label %{first_cmp_bb}"));
+        self.fn_ctx.fn_buf.push(format!("{first_cmp_bb}:"));
+        self.fn_ctx.current_bb = first_cmp_bb;
         self.fn_ctx.terminated = false;
 
         for (idx, arm) in arms.iter().enumerate() {
@@ -2320,7 +2319,6 @@ impl TextEmitter {
                     self.fn_ctx.fn_buf.push(format!("{next_cmp_bb}:"));
                     self.fn_ctx.current_bb = next_cmp_bb.clone();
                     self.fn_ctx.terminated = false;
-                    cmp_bb = next_cmp_bb;
                 }
                 Pattern::Wildcard(_) | Pattern::Ident(_, _) => {
                     wildcard_arm = Some(idx);
