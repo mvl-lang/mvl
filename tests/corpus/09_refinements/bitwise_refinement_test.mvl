@@ -1,0 +1,159 @@
+// 09_refinements/bitwise_refinement_test.mvl — bitwise ops in refinement predicates (#1941).
+//
+// Verifies that .bit_and, .bit_or, .bit_xor, .shift_left, .shift_right, and
+// .bit_not parse and type-check inside `where` clauses in both:
+//   (a) type-alias-body position: `type T = Int where self.bit_and(15) == self`
+//   (b) function-parameter position: `fn f(x: Int where self.bit_and(15) == self)`
+//
+// All call sites use literal arguments (0, 7, 15, -1) proved by L1.
+//
+// Rust-backend note: refined aliases lower to Rust newtype structs, so both
+// sides of assert_eq must carry the same refined type via a typed local.
+
+// ── Type-alias-body forms ─────────────────────────────────────────────────────
+
+/// Int fitting in 4 bits (0–15): `self.bit_and(15) == self`.
+pub type LowNibble = Int where self.bit_and(15) == self
+
+/// Int with all low 4 bits already set: `self.bit_or(15) == self`.
+pub type LowNibbleSet = Int where self.bit_or(15) == self
+
+/// Tautological XOR form (parse check): `self.bit_xor(0) == self`.
+pub type XorTrivial = Int where self.bit_xor(0) == self
+
+/// Tautological left-shift form (parse check): `self.shift_left(0) == self`.
+pub type ShiftLeftTrivial = Int where self.shift_left(0) == self
+
+/// Tautological right-shift form (parse check): `self.shift_right(0) == self`.
+pub type ShiftRightTrivial = Int where self.shift_right(0) == self
+
+/// All bits set (value == -1): `self.bit_not() == 0`.
+pub type AllBitsSet = Int where self.bit_not() == 0
+
+// ── Type-alias identity helpers ───────────────────────────────────────────────
+
+fn identity_nibble(x: LowNibble) -> LowNibble { x }
+fn identity_nibble_set(x: LowNibbleSet) -> LowNibbleSet { x }
+fn identity_xor_trivial(x: XorTrivial) -> XorTrivial { x }
+fn identity_shift_left(x: ShiftLeftTrivial) -> ShiftLeftTrivial { x }
+fn identity_shift_right(x: ShiftRightTrivial) -> ShiftRightTrivial { x }
+fn identity_all_bits(x: AllBitsSet) -> AllBitsSet { x }
+
+// ── Function-parameter-position forms ────────────────────────────────────────
+
+/// bit_and in parameter position: values 0–15 satisfy `self.bit_and(15) == self`.
+pub fn nibble_param(x: Int where self.bit_and(15) == self) -> Int { x }
+
+/// bit_or in parameter position: values with low nibble set satisfy `self.bit_or(15) == self`.
+pub fn nibble_or_param(x: Int where self.bit_or(15) == self) -> Int { x }
+
+/// bit_xor in parameter position: tautology `self.bit_xor(0) == self`.
+pub fn xor_param(x: Int where self.bit_xor(0) == self) -> Int { x }
+
+/// shift_left in parameter position: tautology `self.shift_left(0) == self`.
+pub fn shl_param(x: Int where self.shift_left(0) == self) -> Int { x }
+
+/// shift_right in parameter position: tautology `self.shift_right(0) == self`.
+pub fn shr_param(x: Int where self.shift_right(0) == self) -> Int { x }
+
+/// bit_not in parameter position: -1 satisfies `self.bit_not() == 0`.
+pub fn bitnot_param(x: Int where self.bit_not() == 0) -> Int { x }
+
+// ── Tests: type-alias-body forms ─────────────────────────────────────────────
+
+test fn bit_and_alias_zero() -> Unit {
+    let n: LowNibble = 0;
+    let expected: LowNibble = 0;
+    assert_eq(identity_nibble(n), expected)
+}
+
+test fn bit_and_alias_seven() -> Unit {
+    let n: LowNibble = 7;
+    let expected: LowNibble = 7;
+    assert_eq(identity_nibble(n), expected)
+}
+
+test fn bit_and_alias_fifteen() -> Unit {
+    let n: LowNibble = 15;
+    let expected: LowNibble = 15;
+    assert_eq(identity_nibble(n), expected)
+}
+
+test fn bit_or_alias_fifteen() -> Unit {
+    let n: LowNibbleSet = 15;
+    let expected: LowNibbleSet = 15;
+    assert_eq(identity_nibble_set(n), expected)
+}
+
+test fn bit_or_alias_255() -> Unit {
+    let n: LowNibbleSet = 255;
+    let expected: LowNibbleSet = 255;
+    assert_eq(identity_nibble_set(n), expected)
+}
+
+test fn bit_xor_alias_zero() -> Unit {
+    let n: XorTrivial = 0;
+    let expected: XorTrivial = 0;
+    assert_eq(identity_xor_trivial(n), expected)
+}
+
+test fn bit_xor_alias_nonzero() -> Unit {
+    let n: XorTrivial = 42;
+    let expected: XorTrivial = 42;
+    assert_eq(identity_xor_trivial(n), expected)
+}
+
+test fn shift_left_alias_zero() -> Unit {
+    let n: ShiftLeftTrivial = 0;
+    let expected: ShiftLeftTrivial = 0;
+    assert_eq(identity_shift_left(n), expected)
+}
+
+test fn shift_right_alias_zero() -> Unit {
+    let n: ShiftRightTrivial = 0;
+    let expected: ShiftRightTrivial = 0;
+    assert_eq(identity_shift_right(n), expected)
+}
+
+test fn bit_not_alias_neg_one() -> Unit {
+    let n: AllBitsSet = -1;
+    let expected: AllBitsSet = -1;
+    assert_eq(identity_all_bits(n), expected)
+}
+
+// ── Tests: function-parameter-position forms ─────────────────────────────────
+
+test fn bit_and_param_zero() -> Unit {
+    assert_eq(nibble_param(0), 0)
+}
+
+test fn bit_and_param_seven() -> Unit {
+    assert_eq(nibble_param(7), 7)
+}
+
+test fn bit_and_param_fifteen() -> Unit {
+    assert_eq(nibble_param(15), 15)
+}
+
+test fn bit_or_param_fifteen() -> Unit {
+    assert_eq(nibble_or_param(15), 15)
+}
+
+test fn bit_xor_param_tautology() -> Unit {
+    assert_eq(xor_param(0), 0);
+    assert_eq(xor_param(42), 42)
+}
+
+test fn shift_left_param_tautology() -> Unit {
+    assert_eq(shl_param(0), 0);
+    assert_eq(shl_param(42), 42)
+}
+
+test fn shift_right_param_tautology() -> Unit {
+    assert_eq(shr_param(0), 0);
+    assert_eq(shr_param(42), 42)
+}
+
+test fn bit_not_param_neg_one() -> Unit {
+    assert_eq(bitnot_param(-1), -1)
+}
