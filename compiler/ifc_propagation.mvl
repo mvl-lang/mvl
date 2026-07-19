@@ -338,7 +338,12 @@ pub partial fn infer_label_extended(
                 Some(e) => infer_label_extended(e, env, explicit, inferred), None => None
             }
         },
-        Expr::Propagate(cell, _) | Expr::Consume(cell, _) => {
+        Expr::Propagate(cell, _) => {
+            match cell.get(0) {
+                Some(e) => infer_label_extended(e, env, explicit, inferred), None => None
+            }
+        },
+        Expr::Consume(cell, _) => {
             match cell.get(0) {
                 Some(e) => infer_label_extended(e, env, explicit, inferred), None => None
             }
@@ -401,7 +406,10 @@ pub partial fn infer_label_extended(
             }
             None
         },
-        Expr::ListLit(elems, _) | Expr::SetLit(elems, _) => {
+        Expr::ListLit(elems, _) => {
+            ile_first_labeled(elems, env, explicit, inferred)
+        },
+        Expr::SetLit(elems, _) => {
             ile_first_labeled(elems, env, explicit, inferred)
         },
         Expr::MapLit(ml) => {

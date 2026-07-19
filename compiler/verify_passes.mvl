@@ -316,7 +316,10 @@ partial fn walk_expr_vp(expr: Expr) -> List[Expr] {
         },
         Expr::ListLit(elems, _) => { for e in elems { out.extend(walk_expr_vp(e)) } },
         Expr::BlockExpr(blk, _) => { out.extend(walk_block_vp(blk)) },
-        Expr::Propagate(cell, _) | Expr::Consume(cell, _) => {
+        Expr::Propagate(cell, _) => {
+            match cell.get(0) { Some(e) => out.extend(walk_expr_vp(e)), None => {} }
+        },
+        Expr::Consume(cell, _) => {
             match cell.get(0) { Some(e) => out.extend(walk_expr_vp(e)), None => {} }
         },
         _ => {},

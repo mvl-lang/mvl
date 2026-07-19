@@ -502,8 +502,14 @@ pub(super) fn cmd_test_llvm_text(path: &str, quiet: bool, verbose: bool) {
         if has_test_fns {
             let module_name = loader::stem(&file_str);
             let (prog, _) = super::parse_or_exit(&file_str);
-            let (prelude_tirs, entry_tir, compiler) = prepare_llvm_text_tir(&prog);
-            match compiler.compile_to_ir_test_crate(&prelude_tirs, &entry_tir, &module_name) {
+            let (prelude_tirs, entry_tir, sibling_tirs, compiler) =
+                prepare_llvm_text_tir_multi(&prog, &file_str);
+            match compiler.compile_to_ir_test_crate_with_siblings(
+                &prelude_tirs,
+                &sibling_tirs,
+                &entry_tir,
+                &module_name,
+            ) {
                 Ok((ir, names)) if !names.is_empty() => {
                     testfn_cases.push((file.clone(), ir, names));
                 }

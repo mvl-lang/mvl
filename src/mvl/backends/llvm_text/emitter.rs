@@ -157,6 +157,52 @@ impl LlvmTextCompiler {
 
         Ok((emitter.finish(), test_names))
     }
+
+    /// Like [`compile_to_ir_test_crate`] but also emits sibling modules before
+    /// the test file so cross-module imports resolve at runtime (#1821).
+    pub fn compile_to_ir_test_crate_with_siblings(
+        &self,
+        prelude: &[TirProgram],
+        siblings: &[TirProgram],
+        prog: &TirProgram,
+        module_name: &str,
+    ) -> Result<(String, Vec<String>), String> {
+        let test_names: Vec<String> = prog
+            .fns
+            .iter()
+            .filter(|f| f.is_test && !f.is_builtin && f.type_params.is_empty())
+            .map(|f| f.name.clone())
+            .collect();
+
+        let mut emitter =
+            TextEmitter::new_with_builtins(module_name, &self.target_triple, &self.builtin_symbols);
+        for p in prelude {
+            let stripped = strip_prelude_extension_methods_tir(p);
+            for f in &p.fns {
+                if stripped.fns.iter().all(|sf| sf.name != f.name) && f.type_params.is_empty() {
+                    emitter.register_fn_tir_sig(f);
+                }
+            }
+            emitter.emit_program_tir(&stripped)?;
+        }
+        for sib in siblings {
+            // Siblings with `extern "rust"` blocks cannot be fully emitted: the
+            // Rust-ABI externs have no LLVM `declare` and the emitter defaults
+            // their return type to i64, producing invalid IR that lli rejects.
+            // Match the Rust backend's behaviour: register types and signatures
+            // so call sites type-check, but skip bodies that call rust externs.
+            let has_rust_extern = sib.externs.iter().any(|ed| ed.abi == "rust");
+            if has_rust_extern {
+                emitter.emit_program_tir_types_and_sigs(sib);
+            } else {
+                emitter.emit_program_tir(sib)?;
+            }
+        }
+        emitter.emit_program_tir_test_crate(prog)?;
+        emitter.emit_test_dispatch_main(&test_names);
+
+        Ok((emitter.finish(), test_names))
+    }
 }
 
 impl Default for LlvmTextCompiler {

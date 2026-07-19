@@ -37,6 +37,51 @@ impl TextEmitter {
     /// Mirror of `emit_program(&Program)` but consumes already-lowered TIR.
     /// Monomorphization is performed by `ir::lower::lower` upstream, so the
     /// `MonoQueue` infrastructure used by the AST path is no-op here.
+    /// Register types and function signatures from `prog` without emitting bodies.
+    ///
+    /// Used for sibling modules that have `extern "rust"` blocks: their function
+    /// bodies call Rust-ABI externs that the LLVM emitter cannot declare correctly,
+    /// so we only expose their types and signatures to the test crate. This gives
+    /// call sites correct type information while avoiding broken IR from bodies
+    /// that call undeclared extern-rust functions.
+    pub(super) fn emit_program_tir_types_and_sigs(&mut self, prog: &TirProgram) {
+        // Register enum variants (needed for discriminant lookups at call sites).
+        for td in &prog.types {
+            if let TirTypeBody::Enum(variants) = &td.body {
+                let variant_names: Vec<String> = variants.iter().map(|v| v.name.clone()).collect();
+                let variant_fields: Vec<Vec<TypeExpr>> = variants
+                    .iter()
+                    .map(|v| match &v.fields {
+                        TirVariantFields::Tuple(tys) => {
+                            tys.iter().map(ty_to_type_expr_or_unit).collect()
+                        }
+                        TirVariantFields::Struct(fields) => fields
+                            .iter()
+                            .map(|f| ty_to_type_expr_or_unit(&f.ty))
+                            .collect(),
+                        TirVariantFields::Unit => Vec::new(),
+                    })
+                    .collect();
+                self.module
+                    .enum_variants
+                    .insert(td.name.clone(), variant_names);
+                self.module
+                    .enum_variant_fields
+                    .insert(td.name.clone(), variant_fields);
+            }
+        }
+        // Register function signatures so call sites emit correct types.
+        for f in &prog.fns {
+            if f.type_params.is_empty() {
+                self.register_fn_tir_sig(f);
+            }
+        }
+        // Register type declarations (struct layouts, enum defs).
+        for td in &prog.types {
+            self.register_type_decl_tir(td);
+        }
+    }
+
     pub(super) fn emit_program_tir(&mut self, prog: &TirProgram) -> Result<(), String> {
         // Pre-pass: register enum variants so struct field type resolution via
         // `ty_to_llvm_ctx` can see enum types regardless of declaration order.

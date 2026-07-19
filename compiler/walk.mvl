@@ -87,7 +87,10 @@ partial fn walk_children(expr: Expr, out: ref List[Expr]) -> Unit {
             }
         },
 
-        Expr::ListLit(elems, _) | Expr::SetLit(elems, _) => {
+        Expr::ListLit(elems, _) => {
+            for e in elems { out.extend(walk_expr(e)) }
+        },
+        Expr::SetLit(elems, _) => {
             for e in elems { out.extend(walk_expr(e)) }
         },
 
@@ -108,7 +111,10 @@ partial fn walk_children(expr: Expr, out: ref List[Expr]) -> Unit {
             out.extend(walk_block(block));
         },
 
-        Expr::Propagate(cell, _) | Expr::Consume(cell, _) => {
+        Expr::Propagate(cell, _) => {
+            match cell.get(0) { Some(e) => out.extend(walk_expr(e)), None => {} }
+        },
+        Expr::Consume(cell, _) => {
             match cell.get(0) { Some(e) => out.extend(walk_expr(e)), None => {} }
         },
 
