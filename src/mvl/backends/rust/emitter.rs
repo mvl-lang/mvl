@@ -637,6 +637,21 @@ impl RustEmitter {
                 }
             }
         }
+        // Also include refined aliases from sibling modules so that cross-module
+        // refined type aliases (e.g. `SafeSqlParam` from `model.mvl` used in
+        // `injection.mvl`) are visible to `refined_alias_base` during codegen.
+        // Without this, the `.0` unwrap for newtype return coercion is skipped and
+        // string-method calls on the newtype fail to compile (#1911 smoke test).
+        for st in sibling_tirs {
+            for td in &st.types {
+                if let crate::mvl::ir::TirTypeBody::Alias(crate::mvl::ir::Ty::Refined(inner, _)) =
+                    &td.body
+                {
+                    self.refined_aliases
+                        .insert(td.name.clone(), inner.as_ref().clone());
+                }
+            }
+        }
 
         // Populate unit-variant registry for pattern qualification (#1707 phase 5).
         // Enum name → set of its Unit-fielded variants.  Used by emit_pattern to
