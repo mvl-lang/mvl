@@ -93,9 +93,15 @@ fn count_file(path: &Path) -> GroupCounts {
         }
     }
     if is_test_file(path) {
-        GroupCounts { src: FileCounts::default(), tests: fc }
+        GroupCounts {
+            src: FileCounts::default(),
+            tests: fc,
+        }
     } else {
-        GroupCounts { src: fc, tests: FileCounts::default() }
+        GroupCounts {
+            src: fc,
+            tests: FileCounts::default(),
+        }
     }
 }
 
@@ -233,7 +239,11 @@ fn print_csv(groups: &BTreeMap<String, GroupCounts>) {
 
     for (label, g) in groups {
         let total = g.total();
-        let dir = if label.contains(',') { format!("\"{label}\"") } else { label.clone() };
+        let dir = if label.contains(',') {
+            format!("\"{label}\"")
+        } else {
+            label.clone()
+        };
 
         println!(
             "{},total,{},{},{},{},{},{}",

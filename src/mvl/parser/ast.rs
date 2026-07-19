@@ -652,12 +652,11 @@ pub enum RefExpr {
 /// Bitwise operators supported in refinement predicates (#1928).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BitwiseOp {
-    And,  // bit_and / &
-    Or,   // bit_or  / |
-    Xor,  // bit_xor / ^
-    Shl,  // shift_left  / <<
-    Shr,  // shift_right / >>
-
+    And, // bit_and / &
+    Or,  // bit_or  / |
+    Xor, // bit_xor / ^
+    Shl, // shift_left  / <<
+    Shr, // shift_right / >>
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

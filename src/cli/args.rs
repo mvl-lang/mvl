@@ -81,7 +81,9 @@ pub fn print_usage() {
     eprintln!(
         "  mvl fmt   --stdin                  — read from stdin, write formatted output to stdout"
     );
-    eprintln!("  mvl kloc  [<dir>]                  — per-directory lines-of-code report (default: .)");
+    eprintln!(
+        "  mvl kloc  [<dir>]                  — per-directory lines-of-code report (default: .)"
+    );
     eprintln!("  mvl kloc  [<dir>] --csv            — emit CSV instead of the formatted table");
     eprintln!("  mvl tir   <file>                   — emit TirProgram as JSON (spike 004, self-hosting Stage A)");
     eprintln!("  mvl lint  <file|dir>               — check style rules");
