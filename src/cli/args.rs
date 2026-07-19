@@ -73,6 +73,12 @@ pub fn print_usage() {
     eprintln!(
         "  mvl prove  <file|dir> --callee <fn>       — filter sites to a specific callee function"
     );
+    eprintln!("  mvl harden <file|dir>                      — contract hardening: list runtime obligations with promotion hints (Axis 1, #1913)");
+    eprintln!("  mvl harden <file|dir> --verbose           — include predicate text in each line");
+    eprintln!("  mvl harden <file|dir> --json              — machine-readable JSON output for CI");
+    eprintln!(
+        "  mvl harden <file|dir> --callee <fn>       — filter obligations to a specific callee"
+    );
     eprintln!("  mvl fmt   <file|dir>               — format MVL source files in place");
     eprintln!(
         "  mvl fmt   <file|dir> --check       — exit 1 if any file is not formatted (CI gate)"
