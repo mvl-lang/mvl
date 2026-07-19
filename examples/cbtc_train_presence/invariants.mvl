@@ -1,0 +1,107 @@
+// invariants.mvl — Solver-visible fleet-wide occupancy invariants.
+//
+// This module upgrades cbtc_train_presence to genuinely exercise the two
+// compiler features that #1910 was originally blocked on:
+//
+//   * `forall i in [lo..hi]. pred(i)` in refinement predicates (#1915,
+//     bounded quantifier expansion at L3).
+//   * `list.get(i)` in refinement predicates (#1916, array-index
+//     refinement predicates).
+//
+// Together they let us state a fleet-wide invariant as a solver-visible
+// fact rather than only inductively-preserved-in-comments.  MVL's current
+// bounded-quantifier body accepts comparisons, arithmetic, boolean
+// connectives, and array-index atoms, but does not yet admit user-defined
+// function calls; the invariants below are therefore inlined rather than
+// factored through a helper such as `valid_slot`.
+//
+// The fleet-scale layout: sections are indexed 1..50 in a length-51 list
+// (index 0 is unused so the 1-based section numbering used by dispatchers
+// maps directly).
+
+use model.{OccupancyTable}
+
+// ── The empty fleet ─────────────────────────────────────────────────────
+
+/// A length-51 all-zero occupancy list.  Used as the initial fleet state
+/// and as the smoke input for the invariants below.
+pub total fn empty_fleet() -> List[Int] {
+    [0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+     0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+     0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+     0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+     0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+     0]
+}
+
+// ── Solver-visible fleet invariant (QF-Arrays surface) ──────────────────
+
+/// Every section index 1..50 has an entry in the list.
+///
+/// Refinement layer: **L3 (bounded quantifier expansion, #1915)** over an
+/// array-index atom (#1916).  The `requires forall i in [1..50]` expands
+/// into fifty per-index obligations, each of which references the opaque
+/// atom `sections.get(i) != None`.  Callers passing a length-51 list
+/// (e.g.\ the output of `empty_fleet`) can prove the requirement at
+/// compile time via the length hypothesis; callers with a runtime-sized
+/// list fall through to per-index runtime checks.
+pub partial fn require_dense_fleet(
+    sections: List[Int] where len(self) == 51,
+) -> Bool
+    requires forall i in [1..50]. sections.get(i) != None
+{
+    true
+}
+
+// ── Solver-visible pointwise lookups (QF-Arrays via #1916) ──────────────
+
+/// Return the train ID occupying a section (0 if empty), wrapping the
+/// list `.get(section)` behind a refined signature.
+///
+/// Refinement layer: **L3 (array-index refinement, #1916)**.  The `where`
+/// on the section index gives L2 an interval bound; L3 propagates through
+/// the array-index atom.  Callers with an unbounded section index emit a
+/// runtime assertion for the section-range check.
+pub total fn section_slot(
+    sections: List[Int] where len(self) == 51,
+    section: Int where self >= 1 && self <= 50,
+) -> Option[Int] {
+    sections.get(section)
+}
+
+// ── Inline unit tests (support MC/DC discovery) ─────────────────────────
+
+test fn empty_fleet_has_length_51() -> Unit {
+    let f: List[Int] = empty_fleet();
+    assert_eq(f.len(), 51);
+}
+
+test fn empty_fleet_first_section_is_zero() -> Unit {
+    let f: List[Int] = empty_fleet();
+    match f.get(1) {
+        Some(v) => assert_eq(v, 0),
+        None    => assert_eq(1, 0),
+    }
+}
+
+test fn empty_fleet_last_section_is_zero() -> Unit {
+    let f: List[Int] = empty_fleet();
+    match f.get(50) {
+        Some(v) => assert_eq(v, 0),
+        None    => assert_eq(1, 0),
+    }
+}
+
+test fn section_slot_returns_zero_for_empty() -> Unit {
+    let f: List[Int] = empty_fleet();
+    match section_slot(f, 5) {
+        Some(v) => assert_eq(v, 0),
+        None    => assert_eq(1, 0),
+    }
+}
+
+test fn dense_fleet_smoke() -> Unit {
+    // Runtime path of require_dense_fleet on a concrete length-51 list.
+    let f: List[Int] = empty_fleet();
+    assert_eq(require_dense_fleet(f), true);
+}

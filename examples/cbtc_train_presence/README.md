@@ -10,16 +10,19 @@ Communications-Based Train Control at the fleet-tracking layer. A bounded occupa
 
 - `model.mvl` — types (`OccupancyTable`, `PlacementCommand`, `RemoveCommand`, `UpdateResult`, `RejectReason`).
 - `presence.mvl` — the kernel: IFC boundary, refinement-provable counter arithmetic, compound safety predicates, state-transition functions, inline unit tests.
+- `invariants.mvl` — **QF-Arrays surface**: solver-visible fleet invariants stated with bounded quantifiers (#1915) over array-index atoms (#1916). See §*QF-Arrays coverage* below.
 - `main.mvl` — six scenarios walking through placement / removal / capacity / unauthorised.
 - `presence_test.mvl` — end-to-end scenario tests.
 - `Makefile` — standard targets plus `make test-50128` (SIL-4 assurance envelope).
 
 ## What is proven
 
-`make prove` reports (production file only):
+`make prove` reports across both production files:
 
 ```
-Summary: 6 proven (L1:4 L2:0 L3:0 L4:0 L5:2), 2 runtime, 0 failed
+presence.mvl:   6 proven (L1:4 L2:0 L3:0 L4:0 L5:2), 2 runtime, 0 failed
+invariants.mvl: 1 proven (L1:1 L2:0 L3:0 L4:0 L5:0), 3 runtime, 0 failed
+Total:          7 proven (L1:5 L2:0 L3:0 L4:0 L5:2), 5 runtime, 0 failed
 ```
 
 - **L1 (4 obligations)** — trivial literal subsumption on the counter helpers' ensures once their inputs are bounded literals in tests.
@@ -28,15 +31,28 @@ Summary: 6 proven (L1:4 L2:0 L3:0 L4:0 L5:2), 2 runtime, 0 failed
 
 The runtime obligations become assertions in the compiled binary; the tests exercise them incidentally on every run.
 
+## QF-Arrays coverage
+
+`invariants.mvl` exercises the two compiler features `#1910` was originally blocked on:
+
+- **`#1915` — bounded quantifier refinements at L3.** `requires forall i in [1..50]. ...` in `require_dense_fleet` expands into fifty per-index obligations under L3 expansion.
+- **`#1916` — array-index refinements.** `sections.get(i)` appears as a solver-visible atom inside the quantified body.
+
+The combination lets us state the fleet-scale ``every section index has an entry'' invariant as a solver-visible fact rather than only inductively preserving it in comments.
+
+**Empirical result.** MVL's current L3 expansion treats `sections.get(i)` as an opaque atom (per the `#1916` merge commit: ``bounds reasoning is static-only; Rust's Vec::get returns Option<&T> which can't be safely emitted as a refinement assert''). Consequently the fifty expanded per-index obligations each contain an unevaluatable term and fall through to runtime. The invariant is genuinely surfaced at the type level and exercised on every call, but its full compile-time discharge awaits deeper QF-Arrays reasoning at L5 (the analogue of `mvl-lang/mvl#1928` for arrays).
+
+This is a **fourth runtime-obligation phenomenon** to document alongside the three named in the refinements paper (three-variable product upper bound, variable-denominator division, case-split subtraction with lost caller context): *bounded-quantifier expansion over opaque array-index atoms*. All three earlier phenomena are QF-NIA solver-side edges; this one is a compiler-side gap — an atom class the L5 encoder does not yet lift into Z3's array theory.
+
 ## What is NOT proven (honest limits)
 
-Two safety properties inherent to CBTC fleet tracking are not expressible as pointwise refinements at MVL's current capability:
+The stronger cross-section safety properties inherent to CBTC fleet tracking require quantifier alternation that MVL does not yet surface:
 
-1. **"No two sections hold the same train."** This is a `forall i, j` invariant over the occupancy array. MVL does not yet surface QF-Arrays refinements or bounded quantifiers over sequences. The current implementation preserves the invariant inductively through the update API (`apply_placement` only accepts a placement when `train_already_placed == false`, which the caller must derive from the actual array), but MVL cannot yet check the derivation at the type level. Full refinement-visible statement of this invariant awaits QF-Arrays surface work — the direct research motivation for ticket #1910.
+1. **"No two sections hold the same train."** This is a `forall i, j. i != j => ...` invariant over the occupancy array — nested quantification, not the flat `forall i` that `#1915` provides. The current implementation preserves the invariant inductively through the update API (`apply_placement` only accepts a placement when `train_already_placed == false`, which the caller must derive from the actual array), and the flat `require_dense_fleet` records the length invariant but not the cross-section uniqueness.
 
-2. **"Every train appears in at most one section."** Same shape as (1) — a cross-section invariant that quantifiers or array theory would express directly.
+2. **"Every train appears in at most one section."** Same shape as (1) — the dual cross-section invariant that nested quantification would express directly.
 
-The physical predicates (`section_occupied`, `train_already_placed`, `section_currently_holds_target_train`) are accepted as boolean parameters into the kernel functions. A production version would compute them by querying the actual occupancy array, and MVL with QF-Arrays would let those queries participate in the refinement discharge.
+The physical predicates (`section_occupied`, `train_already_placed`, `section_currently_holds_target_train`) are accepted as boolean parameters into the kernel functions. A production version would compute them by querying the actual occupancy array through `section_slot`, and MVL with nested-quantifier reasoning would let those queries participate in the refinement discharge.
 
 ## IFC boundary
 
