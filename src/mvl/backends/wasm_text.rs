@@ -1022,10 +1022,7 @@ fn emit_expr(out: &mut String, expr: &TirExpr, ctx: &Ctx) {
             receiver,
             method,
             args,
-        } if result_ok_ty(&receiver.ty).is_some()
-            && method == "unwrap_or"
-            && args.len() == 1 =>
-        {
+        } if result_ok_ty(&receiver.ty).is_some() && method == "unwrap_or" && args.len() == 1 => {
             ctx.needs_runtime.set(true);
             let ok_ty = result_ok_ty(&receiver.ty).cloned().unwrap_or(Ty::Int);
             let (_, getter) = result_ops_for_ok(&ok_ty, ctx);
