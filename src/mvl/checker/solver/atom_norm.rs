@@ -207,6 +207,18 @@ impl AtomNormalizer {
     pub fn atom_count(&self) -> usize {
         self.next
     }
+
+    /// Reverse-lookup: given an atom name (`__atom_N`), return the canonical
+    /// source-level key it was synthesized for (e.g. `"b.size"`).
+    ///
+    /// Used by the Z3 counter-example extractor to project internal atom names
+    /// back to source-level variable names in diagnostic output.
+    pub fn source_name_for(&self, atom: &str) -> Option<&str> {
+        self.map
+            .iter()
+            .find(|(_, v)| v.as_str() == atom)
+            .map(|(k, _)| k.as_str())
+    }
 }
 
 /// Deterministic string form of an `Expr` subtree, independent of source

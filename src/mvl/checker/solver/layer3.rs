@@ -156,7 +156,9 @@ pub(super) fn try_symbolic(
             Some(RefResult::Failed { counterexample }) => {
                 return Some(RefResult::Failed { counterexample })
             }
-            Some(RefResult::RuntimeCheck) | None => any_undecided = true,
+            Some(RefResult::RuntimeCheck | RefResult::RuntimeCheckWithWitness { .. }) | None => {
+                any_undecided = true
+            }
         }
     }
 
@@ -197,7 +199,9 @@ fn check_direct_paths(
             Some(RefResult::Failed { counterexample }) => {
                 return Some(RefResult::Failed { counterexample })
             }
-            Some(RefResult::RuntimeCheck) | None => any_undecided = true,
+            Some(RefResult::RuntimeCheck | RefResult::RuntimeCheckWithWitness { .. }) | None => {
+                any_undecided = true
+            }
         }
     }
     if any_undecided {

@@ -407,7 +407,9 @@ fn check_return_pred_for_expr(
             is_bv: false,
         },
         RefResult::ProvenBv => ProofOutcome::Proven { layer, is_bv: true },
-        RefResult::RuntimeCheck => ProofOutcome::RuntimeCheck,
+        RefResult::RuntimeCheck | RefResult::RuntimeCheckWithWitness { .. } => {
+            ProofOutcome::RuntimeCheck
+        }
         RefResult::Failed { counterexample } => {
             ctx.errors.push(CheckError::RefinementViolated {
                 pred: format!(
@@ -526,7 +528,9 @@ pub(super) fn check_requires_at_call(
                         is_bv: false,
                     },
                     RefResult::ProvenBv => ProofOutcome::Proven { layer, is_bv: true },
-                    RefResult::RuntimeCheck => ProofOutcome::RuntimeCheck,
+                    RefResult::RuntimeCheck | RefResult::RuntimeCheckWithWitness { .. } => {
+                        ProofOutcome::RuntimeCheck
+                    }
                     RefResult::Failed { counterexample } => {
                         ctx.errors.push(CheckError::PreconditionViolated {
                             fn_name: fn_name.to_string(),
@@ -591,7 +595,9 @@ fn check_closed_requires(
             layer,
             is_bv: matches!(outcome, RefResult::ProvenBv),
         },
-        RefResult::RuntimeCheck => ProofOutcome::RuntimeCheck,
+        RefResult::RuntimeCheck | RefResult::RuntimeCheckWithWitness { .. } => {
+            ProofOutcome::RuntimeCheck
+        }
         RefResult::Failed { counterexample } => {
             ctx.errors.push(CheckError::PreconditionViolated {
                 fn_name: fn_name.to_string(),
@@ -1042,7 +1048,9 @@ pub(super) fn check_ensures_for_return(
                     is_bv: matches!(outcome, RefResult::ProvenBv),
                 }
             }
-            RefResult::RuntimeCheck => ProofOutcome::RuntimeCheck,
+            RefResult::RuntimeCheck | RefResult::RuntimeCheckWithWitness { .. } => {
+                ProofOutcome::RuntimeCheck
+            }
             RefResult::Failed { counterexample } => {
                 ctx.errors.push(CheckError::PostconditionViolated {
                     fn_name: fn_name.to_string(),
@@ -1558,7 +1566,9 @@ pub(super) fn check_multi_param_requires_literal(
             is_bv: false,
         },
         RefResult::ProvenBv => ProofOutcome::Proven { layer, is_bv: true },
-        RefResult::RuntimeCheck => ProofOutcome::RuntimeCheck,
+        RefResult::RuntimeCheck | RefResult::RuntimeCheckWithWitness { .. } => {
+            ProofOutcome::RuntimeCheck
+        }
         RefResult::Failed { counterexample } => {
             ctx.errors.push(CheckError::PreconditionViolated {
                 fn_name: fn_name.to_string(),
