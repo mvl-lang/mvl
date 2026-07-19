@@ -556,7 +556,8 @@ impl TextEmitter {
         // Never-returning functions (e.g. exit) produce `void` in LLVM IR.
         // After the call, emit `unreachable` so downstream phi nodes don't include
         // this basic block as a predecessor — otherwise the phi type may mismatch.
-        let is_never = matches!(&ret_ty, crate::mvl::ir::TypeExpr::Base { name, .. } if name == "Never");
+        let is_never =
+            matches!(&ret_ty, crate::mvl::ir::TypeExpr::Base { name, .. } if name == "Never");
 
         if is_void {
             self.push_instr(&format!("call void @{effective_name}({args_str})"));
@@ -1336,13 +1337,11 @@ impl TextEmitter {
                     if use_err_dispatch {
                         // Add the single outer Err case only once.
                         if !err_outer_added {
-                            switch_str
-                                .push_str(&format!("    i8 1, label %{err_dispatch_bb}\n"));
+                            switch_str.push_str(&format!("    i8 1, label %{err_dispatch_bb}\n"));
                             err_outer_added = true;
                         }
                     } else {
-                        switch_str
-                            .push_str(&format!("    i8 1, label %{}\n", arm_bbs[idx]));
+                        switch_str.push_str(&format!("    i8 1, label %{}\n", arm_bbs[idx]));
                     }
                 }
                 _ => {
@@ -1370,9 +1369,8 @@ impl TextEmitter {
                 .insert(inner_val.clone(), err_load_ty.clone());
 
             let inner_default = format!("err_dispatch_default_{}", n + arms.len());
-            let mut inner_sw = format!(
-                "switch {err_load_ty} {inner_val}, label %{inner_default} [\n"
-            );
+            let mut inner_sw =
+                format!("switch {err_load_ty} {inner_val}, label %{inner_default} [\n");
             for &idx in &qualified_err_indices {
                 if let Pattern::Err { inner, .. } = &arms[idx].pattern {
                     if let Pattern::Ident(qname, _) = inner.as_ref() {
@@ -2308,13 +2306,21 @@ impl TextEmitter {
                     let next_cmp_bb = format!("str_cmp_{n}_{}", idx + 1);
                     let lit_global = self.emit_str_global(s);
                     let lit_ptr = self.next_reg();
-                    self.push_instr(&format!("{lit_ptr} = call ptr @_mvl_string_new(ptr @{lit_global}, i64 {})", s.len()));
+                    self.push_instr(&format!(
+                        "{lit_ptr} = call ptr @_mvl_string_new(ptr @{lit_global}, i64 {})",
+                        s.len()
+                    ));
                     self.fn_ctx.reg_types.insert(lit_ptr.clone(), "ptr".into());
                     self.ensure_extern("declare i1 @_mvl_string_eq(ptr, ptr)");
                     let cmp = self.next_reg();
-                    self.push_instr(&format!("{cmp} = call i1 @_mvl_string_eq(ptr {scrut_val}, ptr {lit_ptr})"));
+                    self.push_instr(&format!(
+                        "{cmp} = call i1 @_mvl_string_eq(ptr {scrut_val}, ptr {lit_ptr})"
+                    ));
                     self.fn_ctx.reg_types.insert(cmp.clone(), "i1".into());
-                    self.push_instr(&format!("br i1 {cmp}, label %{}, label %{next_cmp_bb}", arm_bbs[idx]));
+                    self.push_instr(&format!(
+                        "br i1 {cmp}, label %{}, label %{next_cmp_bb}",
+                        arm_bbs[idx]
+                    ));
                     self.fn_ctx.terminated = true;
                     self.fn_ctx.fn_buf.push(format!("{next_cmp_bb}:"));
                     self.fn_ctx.current_bb = next_cmp_bb.clone();
@@ -2342,7 +2348,9 @@ impl TextEmitter {
 
             if let Pattern::Ident(name, _) = &arm.pattern {
                 if !name.contains("::") {
-                    self.fn_ctx.locals.insert(name.clone(), scrut_val.to_string());
+                    self.fn_ctx
+                        .locals
+                        .insert(name.clone(), scrut_val.to_string());
                 }
             }
 
@@ -2416,7 +2424,9 @@ impl TextEmitter {
         let merge_bb = self.next_bb("opt_merge");
         let result_slot = self.next_reg();
         self.push_instr(&format!("{result_slot} = alloca {RESULT_LLVM_TY}"));
-        self.fn_ctx.reg_types.insert(result_slot.clone(), "ptr".into());
+        self.fn_ctx
+            .reg_types
+            .insert(result_slot.clone(), "ptr".into());
         self.push_instr(&format!(
             "br i1 {is_none}, label %{none_bb}, label %{some_bb}"
         ));
@@ -2424,11 +2434,19 @@ impl TextEmitter {
         // None branch
         self.start_bb(&none_bb);
         let nr0 = self.next_reg();
-        self.push_instr(&format!("{nr0} = insertvalue {RESULT_LLVM_TY} zeroinitializer, i8 1, 0"));
-        self.fn_ctx.reg_types.insert(nr0.clone(), RESULT_LLVM_TY.into());
+        self.push_instr(&format!(
+            "{nr0} = insertvalue {RESULT_LLVM_TY} zeroinitializer, i8 1, 0"
+        ));
+        self.fn_ctx
+            .reg_types
+            .insert(nr0.clone(), RESULT_LLVM_TY.into());
         let nr1 = self.next_reg();
-        self.push_instr(&format!("{nr1} = insertvalue {RESULT_LLVM_TY} {nr0}, ptr null, 1"));
-        self.fn_ctx.reg_types.insert(nr1.clone(), RESULT_LLVM_TY.into());
+        self.push_instr(&format!(
+            "{nr1} = insertvalue {RESULT_LLVM_TY} {nr0}, ptr null, 1"
+        ));
+        self.fn_ctx
+            .reg_types
+            .insert(nr1.clone(), RESULT_LLVM_TY.into());
         self.push_instr(&format!("store {RESULT_LLVM_TY} {nr1}, ptr {result_slot}"));
         self.push_instr(&format!("br label %{merge_bb}"));
         self.fn_ctx.terminated = true;
@@ -2439,11 +2457,19 @@ impl TextEmitter {
         self.push_instr(&format!("{idx_slot} = alloca i64"));
         self.push_instr(&format!("store i64 {raw}, ptr {idx_slot}"));
         let sr0 = self.next_reg();
-        self.push_instr(&format!("{sr0} = insertvalue {RESULT_LLVM_TY} zeroinitializer, i8 0, 0"));
-        self.fn_ctx.reg_types.insert(sr0.clone(), RESULT_LLVM_TY.into());
+        self.push_instr(&format!(
+            "{sr0} = insertvalue {RESULT_LLVM_TY} zeroinitializer, i8 0, 0"
+        ));
+        self.fn_ctx
+            .reg_types
+            .insert(sr0.clone(), RESULT_LLVM_TY.into());
         let sr1 = self.next_reg();
-        self.push_instr(&format!("{sr1} = insertvalue {RESULT_LLVM_TY} {sr0}, ptr {idx_slot}, 1"));
-        self.fn_ctx.reg_types.insert(sr1.clone(), RESULT_LLVM_TY.into());
+        self.push_instr(&format!(
+            "{sr1} = insertvalue {RESULT_LLVM_TY} {sr0}, ptr {idx_slot}, 1"
+        ));
+        self.fn_ctx
+            .reg_types
+            .insert(sr1.clone(), RESULT_LLVM_TY.into());
         self.push_instr(&format!("store {RESULT_LLVM_TY} {sr1}, ptr {result_slot}"));
         self.push_instr(&format!("br label %{merge_bb}"));
         self.fn_ctx.terminated = true;
@@ -2451,8 +2477,12 @@ impl TextEmitter {
         // Merge
         self.start_bb(&merge_bb);
         let result = self.next_reg();
-        self.push_instr(&format!("{result} = load {RESULT_LLVM_TY}, ptr {result_slot}"));
-        self.fn_ctx.reg_types.insert(result.clone(), RESULT_LLVM_TY.into());
+        self.push_instr(&format!(
+            "{result} = load {RESULT_LLVM_TY}, ptr {result_slot}"
+        ));
+        self.fn_ctx
+            .reg_types
+            .insert(result.clone(), RESULT_LLVM_TY.into());
         result
     }
 

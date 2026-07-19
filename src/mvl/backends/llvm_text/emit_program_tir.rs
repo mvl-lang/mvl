@@ -68,10 +68,7 @@ fn else_calls_any(else_: &crate::mvl::ir::TirElseBranch, targets: &HashSet<Strin
     }
 }
 
-fn match_body_calls_any(
-    body: &crate::mvl::ir::TirMatchBody,
-    targets: &HashSet<String>,
-) -> bool {
+fn match_body_calls_any(body: &crate::mvl::ir::TirMatchBody, targets: &HashSet<String>) -> bool {
     match body {
         crate::mvl::ir::TirMatchBody::Expr(e) => expr_calls_any(e, targets),
         crate::mvl::ir::TirMatchBody::Block(b) => fn_calls_any(&b.stmts, targets),
@@ -86,7 +83,9 @@ fn stmt_calls_any(stmt: &TirStmt, targets: &HashSet<String>) -> bool {
             value.as_ref().map_or(false, |e| expr_calls_any(e, targets))
         }
         TirStmt::Expr { expr, .. } => expr_calls_any(expr, targets),
-        TirStmt::If { cond, then, else_, .. } => {
+        TirStmt::If {
+            cond, then, else_, ..
+        } => {
             expr_calls_any(cond, targets)
                 || fn_calls_any(&then.stmts, targets)
                 || else_.as_ref().map_or(false, |b| else_calls_any(b, targets))
@@ -94,7 +93,9 @@ fn stmt_calls_any(stmt: &TirStmt, targets: &HashSet<String>) -> bool {
         TirStmt::While { cond, body, .. } => {
             expr_calls_any(cond, targets) || fn_calls_any(&body.stmts, targets)
         }
-        TirStmt::Match { scrutinee, arms, .. } => {
+        TirStmt::Match {
+            scrutinee, arms, ..
+        } => {
             expr_calls_any(scrutinee, targets)
                 || arms.iter().any(|a| match_body_calls_any(&a.body, targets))
         }
@@ -122,12 +123,16 @@ fn expr_calls_any(expr: &TirExpr, targets: &HashSet<String>) -> bool {
         | TirExprKind::FieldAccess { expr: inner, .. }
         | TirExprKind::Relabel { expr: inner, .. } => expr_calls_any(inner, targets),
         TirExprKind::Block(block) => fn_calls_any(&block.stmts, targets),
-        TirExprKind::If { cond, then, else_, .. } => {
+        TirExprKind::If {
+            cond, then, else_, ..
+        } => {
             expr_calls_any(cond, targets)
                 || fn_calls_any(&then.stmts, targets)
                 || else_.as_ref().map_or(false, |e| expr_calls_any(e, targets))
         }
-        TirExprKind::Match { scrutinee, arms, .. } => {
+        TirExprKind::Match {
+            scrutinee, arms, ..
+        } => {
             expr_calls_any(scrutinee, targets)
                 || arms.iter().any(|a| match_body_calls_any(&a.body, targets))
         }
@@ -140,13 +145,9 @@ fn expr_calls_any(expr: &TirExpr, targets: &HashSet<String>) -> bool {
         TirExprKind::Map { pairs } => pairs
             .iter()
             .any(|(k, v)| expr_calls_any(k, targets) || expr_calls_any(v, targets)),
-        TirExprKind::Spawn { fields, .. } => {
-            fields.iter().any(|(_, e)| expr_calls_any(e, targets))
-        }
+        TirExprKind::Spawn { fields, .. } => fields.iter().any(|(_, e)| expr_calls_any(e, targets)),
         TirExprKind::Lambda { body, .. } => expr_calls_any(body, targets),
-        TirExprKind::Select { arms } => arms
-            .iter()
-            .any(|a| fn_calls_any(&a.body.stmts, targets)),
+        TirExprKind::Select { arms } => arms.iter().any(|a| fn_calls_any(&a.body.stmts, targets)),
         // Leaf nodes — no nested calls
         TirExprKind::Literal(_) | TirExprKind::Var(_) | TirExprKind::Quantifier(_) => false,
     }
@@ -220,14 +221,18 @@ impl TextEmitter {
                         .map(|f| (f.name.clone(), ty_to_type_expr_or_unit(&f.ty)))
                         .collect();
                     // struct_fields is a HashMap — insert is idempotent.
-                    self.module.struct_fields.insert(td.name.clone(), field_list);
+                    self.module
+                        .struct_fields
+                        .insert(td.name.clone(), field_list);
                 }
                 TirTypeBody::Alias(inner) => {
                     let inner_te = ty_to_type_expr_or_unit(inner);
                     if matches!(inner_te, TypeExpr::Fn { .. }) {
                         self.module.fn_aliases.insert(td.name.clone(), inner_te);
                     } else {
-                        self.module.type_aliases.insert(td.name.clone(), inner.clone());
+                        self.module
+                            .type_aliases
+                            .insert(td.name.clone(), inner.clone());
                     }
                 }
                 TirTypeBody::Enum(_) => {} // already handled in the pre-pass above
@@ -260,7 +265,9 @@ impl TextEmitter {
             .collect();
         let excluded = compute_extern_rust_exclusion_set(prog, &rust_extern_names);
         let mut filtered = prog.clone();
-        filtered.fns.retain(|f| !f.is_test && !excluded.contains(&f.name));
+        filtered
+            .fns
+            .retain(|f| !f.is_test && !excluded.contains(&f.name));
         self.emit_program_tir(&filtered)
     }
 
@@ -542,7 +549,11 @@ impl TextEmitter {
                 } else {
                     // `entry` conflicts with the `entry:` basic block label in LLVM's
                     // symbol table — rename to `entry_p` in the signature.
-                    let pname = if p.name == "entry" { "entry_p" } else { &p.name };
+                    let pname = if p.name == "entry" {
+                        "entry_p"
+                    } else {
+                        &p.name
+                    };
                     Some(format!("{ty_str} %{pname}"))
                 }
             })
@@ -641,7 +652,9 @@ impl TextEmitter {
         let mut test_prog = prog.clone();
         if !rust_extern_names.is_empty() {
             let excluded = compute_extern_rust_exclusion_set(prog, &rust_extern_names);
-            test_prog.fns.retain(|f| f.is_test || !excluded.contains(&f.name));
+            test_prog
+                .fns
+                .retain(|f| f.is_test || !excluded.contains(&f.name));
         }
         for f in &mut test_prog.fns {
             f.is_test = false;
