@@ -5,8 +5,7 @@
 //!
 //! # Design
 //!
-//! This command has three planned axes of hardening.  Only **Axis 1** is
-//! implemented here; Axes 2 and 3 are tracked in the follow-up issue.
+//! This command implements three axes of contract hardening.
 //!
 //! ## Axis 1 (this file): Runtime → Static Promotion
 //!
@@ -19,25 +18,26 @@
 //! `check_call_site()` in `src/mvl/checker/refinements.rs` — the same
 //! source used by `mvl prove`.  No new solver infrastructure is needed.
 //!
-//! ## Axis 2 (future): Contract Tightening
+//! ## Axis 2: Contract Tightening
 //!
-//! Binary-search over Z3 to find the tightest provable bound for each
-//! `ensures` clause and suggest strengthening the declared postcondition.
-//! Requires new Z3 query infrastructure (counterexample extraction +
-//! bound refinement loop).  See follow-up issue.
+//! Binary-searches over Z3 to find the tightest provable bound for each
+//! `ensures` clause and suggests strengthening the declared postcondition.
+//! See `src/mvl/checker/solver/layer5.rs::try_z3_tighten`.
 //!
-//! ## Axis 3 (future): Boundary Test Generation
+//! ## Axis 3: Boundary Test Generation
 //!
-//! Query Z3 for edge-case witnesses (values that hit contract boundaries)
-//! and emit `*_boundary_test.mvl` files exercising those paths.
-//! Requires Z3 model extraction and MVL test-file synthesis.
-//! See follow-up issue.
+//! Queries Z3 for concrete witness inputs that reach each return branch and
+//! satisfy the tighter postcondition.  With `--emit-tests`, synthesizes and
+//! writes `*_boundary_test.mvl` files containing `test fn` blocks.
+//! See `try_z3_witness` in `layer5.rs`.
 
 use mvl::mvl::checker;
-use mvl::mvl::checker::refinements::{ProofOutcome, TighteningCandidate};
+use mvl::mvl::checker::refinements::{
+    synthesize_witness, ProofOutcome, TighteningCandidate, WitnessArg, WitnessValue,
+};
 use mvl::mvl::checker::SolverMode;
 use mvl::mvl::loader;
-use mvl::mvl::parser::ast::Program;
+use mvl::mvl::parser::ast::{Decl, Program, TypeBody, TypeExpr};
 use mvl::mvl::pipeline::{load_full_prelude, PreludeMode};
 use mvl::mvl::resolver;
 use mvl::mvl::stdlib;
@@ -205,8 +205,128 @@ fn deduplicate_tightenings(
 
 // ── Entry point ────────────────────────────────────────────────────────────────
 
-/// Run `mvl harden` (Axes 1 and 2) over a `.mvl` file or directory.
-pub fn run(path: &str, verbose: bool, json: bool, stdlib_profile: &str, callee_filter: Option<&str>) {
+// ── Struct field map ──────────────────────────────────────────────────────────
+
+/// Build `type_name → [(field_name, base_type_name)]` from all parsed programs.
+///
+/// Used by `try_z3_witness` to create `param__field` Z3 variables for struct
+/// parameters and by the test synthesizer to emit struct constructor expressions.
+fn build_struct_fields(programs: &[(String, Program)]) -> HashMap<String, Vec<(String, String)>> {
+    let mut out: HashMap<String, Vec<(String, String)>> = HashMap::new();
+    for (_, prog) in programs {
+        for decl in &prog.declarations {
+            if let Decl::Type(td) = decl {
+                if let TypeBody::Struct { fields, .. } = &td.body {
+                    let field_list: Vec<(String, String)> = fields
+                        .iter()
+                        .map(|f| {
+                            let base = match &f.ty {
+                                TypeExpr::Base { name, .. } => name.clone(),
+                                TypeExpr::Refined { inner, .. } => match inner.as_ref() {
+                                    TypeExpr::Base { name, .. } => name.clone(),
+                                    _ => "?".to_string(),
+                                },
+                                _ => "?".to_string(),
+                            };
+                            (f.name.clone(), base)
+                        })
+                        .collect();
+                    out.entry(td.name.clone()).or_default().extend(field_list);
+                }
+            }
+        }
+    }
+    out
+}
+
+// ── Witness formatting ────────────────────────────────────────────────────────
+
+/// Format a `WitnessValue` as a MVL literal or constructor expression.
+fn format_witness_value(val: &WitnessValue) -> String {
+    match val {
+        WitnessValue::Int(n) => n.to_string(),
+        WitnessValue::Struct { type_name, fields } => {
+            if fields.is_empty() {
+                return format!("{type_name} {{}}");
+            }
+            let field_strs: Vec<String> = fields
+                .iter()
+                .map(|(name, v)| format!("{name}: {}", format_witness_value(v)))
+                .collect();
+            format!("{type_name} {{ {} }}", field_strs.join(", "))
+        }
+        WitnessValue::Unknown => "_".to_string(),
+    }
+}
+
+/// Derive a MVL type expression string for a `WitnessValue`.
+fn witness_type_str(val: &WitnessValue, param_type: &TypeExpr) -> String {
+    match val {
+        WitnessValue::Int(_) => "Int".to_string(),
+        WitnessValue::Struct { type_name, .. } => type_name.clone(),
+        WitnessValue::Unknown => {
+            // Fall back to the declared parameter type.
+            match param_type {
+                TypeExpr::Base { name, .. } => name.clone(),
+                _ => "?".to_string(),
+            }
+        }
+    }
+}
+
+/// Synthesize a `test fn` MVL snippet for a single witness.
+///
+/// Returns the full `test fn` block as a string (no trailing newline).
+fn synthesize_test_fn(
+    fn_name: &str,
+    declared_pred: &str,
+    tighter_pred: &str,
+    witnesses: &[WitnessArg],
+    candidate: &TighteningCandidate,
+) -> String {
+    // Derive a safe identifier from the function name + bound.
+    let safe_name = fn_name.replace(|c: char| !c.is_alphanumeric() && c != '_', "_");
+    let test_name = format!("harden_boundary_{safe_name}");
+
+    // Build parameter list and call expression.
+    let param_strs: Vec<String> = witnesses
+        .iter()
+        .zip(candidate.params.iter())
+        .map(|(w, p)| {
+            let ty = witness_type_str(&w.value, &p.ty);
+            format!("{}: {ty}", w.param_name)
+        })
+        .collect();
+
+    let arg_strs: Vec<String> = witnesses
+        .iter()
+        .map(|w| format_witness_value(&w.value))
+        .collect();
+
+    let mut lines = Vec::new();
+    lines.push(format!("// Boundary witness for: {declared_pred}"));
+    lines.push(format!("// Z3 proved tighter:     {tighter_pred}"));
+    lines.push(format!("test fn {test_name}() -> Unit {{"));
+    if !param_strs.is_empty() {
+        for (w, p) in witnesses.iter().zip(candidate.params.iter()) {
+            let ty = witness_type_str(&w.value, &p.ty);
+            lines.push(format!("    let {}: {ty} = {};", w.param_name, format_witness_value(&w.value)));
+        }
+    }
+    lines.push(format!("    let result: Int = {fn_name}({});", arg_strs.join(", ")));
+    // Emit the tighter postcondition as an assert expression.
+    // tighter_pred looks like "ensures result >= 5" → "result >= 5"
+    if let Some(cond) = tighter_pred.strip_prefix("ensures ") {
+        lines.push(format!("    assert_eq({cond}, true)"));
+    }
+    lines.push("}".to_string());
+    lines.join("\n")
+}
+
+// ── Entry point ────────────────────────────────────────────────────────────────
+
+/// Run `mvl harden` (Axes 1, 2, and 3) over a `.mvl` file or directory.
+pub fn run(path: &str, verbose: bool, json: bool, emit_tests: bool, stdlib_profile: &str, callee_filter: Option<&str>) {
     let files = loader::mvl_files(path, false);
     if files.is_empty() {
         eprintln!("No .mvl files found at: {path}");
@@ -274,6 +394,9 @@ pub fn run(path: &str, verbose: bool, json: bool, stdlib_profile: &str, callee_f
         &project_root,
         &mut std::collections::HashSet::new(),
     ));
+
+    // Build struct field map across all parsed programs for witness synthesis.
+    let struct_fields = build_struct_fields(&parsed);
 
     let mut grand_total_runtime = 0usize;
     let mut grand_total_proven = 0usize;
@@ -448,18 +571,74 @@ pub fn run(path: &str, verbose: bool, json: bool, stdlib_profile: &str, callee_f
             }
         }
 
+        // ── Axis 3: boundary test generation ─────────────────────────────────
+        println!("\n── Axis 3: Boundary Test Generation ─────────────────────────────────");
+        let mut witness_snippets: Vec<String> = Vec::new();
+        let mut witness_use_fns: Vec<String> = Vec::new();
+        for t in &deduped {
+            match synthesize_witness(&t.params, &t.branch_hyps, &struct_fields) {
+                Some(witnesses) if !witnesses.is_empty() => {
+                    let snip = synthesize_test_fn(
+                        &t.fn_name,
+                        &t.declared_pred,
+                        &t.tighter_pred,
+                        &witnesses,
+                        t,
+                    );
+                    println!("\n  Witness for {}:", t.fn_name);
+                    for w in &witnesses {
+                        println!("    {} = {}", w.param_name, format_witness_value(&w.value));
+                    }
+                    if !witness_use_fns.contains(&t.fn_name) {
+                        witness_use_fns.push(t.fn_name.clone());
+                    }
+                    witness_snippets.push(snip);
+                }
+                _ => {
+                    println!("\n  No witness found for {} (non-integer params or Z3 timeout).", t.fn_name);
+                }
+            }
+        }
+
         let pv = fr.proven;
         let rt = fr.runtime;
         let fa = fr.failed;
         let tg = deduped.len();
+        let wc = witness_snippets.len();
         println!(
-            "\n  Summary: {pv} proven, {rt} runtime obligations, {fa} failed, {tg} tightening suggestion(s)\n"
+            "\n  Summary: {pv} proven, {rt} runtime obligations, {fa} failed, {tg} tightening suggestion(s), {wc} witness(es)\n"
         );
         println!("{sep}\n");
-        println!(
-            "  Axis 3 (boundary test generation) is not yet implemented.\n  \
-             See follow-up issue #1931 for Z3 witness infrastructure required.\n"
-        );
+
+        // ── --emit-tests: write boundary test file ────────────────────────────
+        if emit_tests && !witness_snippets.is_empty() {
+            let file_path = Path::new(&fr.file_str);
+            let stem = file_path
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("file");
+            let dir = file_path.parent().unwrap_or_else(|| Path::new("."));
+            let out_path = dir.join(format!("{stem}_boundary_test.mvl"));
+
+            // Derive module name from file stem for use imports.
+            let module_stem = stem;
+            let mut test_lines: Vec<String> = Vec::new();
+            test_lines.push(format!("// Generated by `mvl harden --emit-tests` — do not edit by hand."));
+            test_lines.push(String::new());
+            for fn_name in &witness_use_fns {
+                test_lines.push(format!("use {module_stem}::{fn_name};"));
+            }
+            test_lines.push(String::new());
+            for snip in &witness_snippets {
+                test_lines.push(snip.clone());
+                test_lines.push(String::new());
+            }
+            let content = test_lines.join("\n");
+            match std::fs::write(&out_path, &content) {
+                Ok(()) => println!("  Wrote boundary tests → {}\n", out_path.display()),
+                Err(e) => eprintln!("  warning: could not write {}: {e}", out_path.display()),
+            }
+        }
     }
 
     // Multi-file grand total.

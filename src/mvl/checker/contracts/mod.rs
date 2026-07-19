@@ -1032,6 +1032,8 @@ pub(super) fn check_ensures_for_return(
                         tighter_bound: tight.tighter_bound,
                         take_min,
                         span: ret_span,
+                        params: params.to_vec(),
+                        branch_hyps: branch_hyps.to_vec(),
                     });
                 }
                 ProofOutcome::Proven {

@@ -79,6 +79,7 @@ pub fn print_usage() {
     eprintln!(
         "  mvl harden <file|dir> --callee <fn>       — filter obligations to a specific callee"
     );
+    eprintln!("  mvl harden <file|dir> --emit-tests        — write *_boundary_test.mvl witness test files (Axis 3, #1931)");
     eprintln!("  mvl fmt   <file|dir>               — format MVL source files in place");
     eprintln!(
         "  mvl fmt   <file|dir> --check       — exit 1 if any file is not formatted (CI gate)"

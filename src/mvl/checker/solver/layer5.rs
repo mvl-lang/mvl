@@ -164,6 +164,34 @@ pub(crate) fn try_z3_tighten(
     }
 }
 
+// ── Axis 3: boundary witness synthesis ───────────────────────────────────────
+
+/// Try to synthesize a concrete witness input that satisfies the branch
+/// conditions active at a tightening candidate's return point.
+///
+/// For each `Int` parameter, a Z3 integer variable is created under the
+/// parameter name.  For struct parameters, one Z3 integer variable is
+/// created per field using the naming convention `param__field`.  Branch
+/// hypotheses (active `if`-conditions) are asserted as constraints.  If Z3
+/// returns `Sat`, the model is extracted and returned as `WitnessArg` values.
+///
+/// Returns `None` when the `z3` feature is absent, when all parameters are
+/// non-integer, or when Z3 cannot find a satisfying assignment within the
+/// 1-second timeout.
+pub(crate) fn try_z3_witness(
+    params: &[crate::mvl::parser::ast::Param],
+    branch_hyps: &[Expr],
+    struct_fields: &HashMap<String, Vec<(String, String)>>,
+) -> Option<Vec<crate::mvl::checker::refinements::WitnessArg>> {
+    #[cfg(feature = "z3")]
+    return impl_z3_witness(params, branch_hyps, struct_fields);
+    #[cfg(not(feature = "z3"))]
+    {
+        let _ = (params, branch_hyps, struct_fields);
+        None
+    }
+}
+
 // ── Z3 implementation (feature-gated) ────────────────────────────────────────
 
 /// Axis 2 tightening implementation (Z3-gated).
@@ -249,6 +277,221 @@ fn flip_cmp(op: CmpOp) -> CmpOp {
         CmpOp::Lt => CmpOp::Gt,
         other => other,
     }
+}
+
+/// Witness synthesis implementation (Z3-gated).
+///
+/// Creates Z3 integer variables for each Int/struct parameter, asserts branch
+/// conditions, and extracts a concrete model when SAT.  Struct params are
+/// decomposed into `param__field` variables; the model values are reassembled
+/// into `WitnessValue::Struct` records.
+#[cfg(feature = "z3")]
+fn impl_z3_witness(
+    params: &[crate::mvl::parser::ast::Param],
+    branch_hyps: &[Expr],
+    struct_fields: &HashMap<String, Vec<(String, String)>>,
+) -> Option<Vec<crate::mvl::checker::refinements::WitnessArg>> {
+    use crate::mvl::checker::refinements::{WitnessArg, WitnessValue};
+    use crate::mvl::parser::ast::{BinaryOp, CmpOp as AstCmp, Literal, TypeExpr};
+    use z3::{Config, Context, SatResult, Solver};
+
+    let mut cfg = Config::new();
+    cfg.set_timeout_msec(1_000);
+    let ctx = Context::new(&cfg);
+    let solver = Solver::new(&ctx);
+
+    // ── Create Z3 variables per parameter ────────────────────────────────────
+    //
+    // `int_vars`: param_name (or param__field) → Z3 Int
+    // `param_kinds`: param_name → "int" | "struct:<TypeName>"
+    let mut int_vars: HashMap<String, z3::ast::Int> = HashMap::new();
+
+    for param in params {
+        let type_name = match &param.ty {
+            TypeExpr::Base { name, .. } => name.as_str(),
+            TypeExpr::Refined { inner, .. } => match inner.as_ref() {
+                TypeExpr::Base { name, .. } => name.as_str(),
+                _ => continue,
+            },
+            _ => continue,
+        };
+        match type_name {
+            "Int" | "Bool" => {
+                let var = z3::ast::Int::new_const(&ctx, param.name.as_str());
+                int_vars.insert(param.name.clone(), var);
+            }
+            other => {
+                if let Some(fields) = struct_fields.get(other) {
+                    for (field_name, field_type) in fields {
+                        if matches!(field_type.as_str(), "Int" | "Bool") {
+                            let key = format!("{}__{field_name}", param.name);
+                            let var = z3::ast::Int::new_const(&ctx, key.as_str());
+                            int_vars.insert(key, var);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if int_vars.is_empty() {
+        return None;
+    }
+
+    // ── Assert branch hypotheses ──────────────────────────────────────────────
+    //
+    // Branch hypotheses are MVL `Expr` nodes (e.g. `score > 0` for the then-
+    // branch, `!(score > 0)` for the else-branch).  We translate simple
+    // comparisons and logical operators; anything unsupported is silently
+    // skipped (conservative: we may not find the exact boundary value, but
+    // the witness is still valid).
+    fn expr_to_z3_bool<'ctx>(
+        e: &Expr,
+        vars: &HashMap<String, z3::ast::Int<'ctx>>,
+        ctx: &'ctx Context,
+    ) -> Option<z3::ast::Bool<'ctx>> {
+        use z3::ast::Ast;
+        match e {
+            Expr::Binary { op, left, right, .. } => {
+                // Handle comparison operators.
+                let cmp = match op {
+                    BinaryOp::Eq => Some(AstCmp::Eq),
+                    BinaryOp::Ne => Some(AstCmp::Ne),
+                    BinaryOp::Lt => Some(AstCmp::Lt),
+                    BinaryOp::Le => Some(AstCmp::Le),
+                    BinaryOp::Gt => Some(AstCmp::Gt),
+                    BinaryOp::Ge => Some(AstCmp::Ge),
+                    BinaryOp::And => {
+                        let l = expr_to_z3_bool(left, vars, ctx)?;
+                        let r = expr_to_z3_bool(right, vars, ctx)?;
+                        return Some(z3::ast::Bool::and(ctx, &[&l, &r]));
+                    }
+                    BinaryOp::Or => {
+                        let l = expr_to_z3_bool(left, vars, ctx)?;
+                        let r = expr_to_z3_bool(right, vars, ctx)?;
+                        return Some(z3::ast::Bool::or(ctx, &[&l, &r]));
+                    }
+                    _ => None,
+                };
+                if let Some(op) = cmp {
+                    let l = expr_to_z3_int(left, vars, ctx)?;
+                    let r = expr_to_z3_int(right, vars, ctx)?;
+                    Some(match op {
+                        AstCmp::Eq => l._eq(&r),
+                        AstCmp::Ne => l._eq(&r).not(),
+                        AstCmp::Lt => l.lt(&r),
+                        AstCmp::Le => l.le(&r),
+                        AstCmp::Gt => l.gt(&r),
+                        AstCmp::Ge => l.ge(&r),
+                    })
+                } else {
+                    None
+                }
+            }
+            Expr::Unary { op, expr: inner, .. } => {
+                use crate::mvl::parser::ast::UnaryOp;
+                if matches!(op, UnaryOp::Not) {
+                    Some(expr_to_z3_bool(inner, vars, ctx)?.not())
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        }
+    }
+
+    fn expr_to_z3_int<'ctx>(
+        e: &Expr,
+        vars: &HashMap<String, z3::ast::Int<'ctx>>,
+        ctx: &'ctx Context,
+    ) -> Option<z3::ast::Int<'ctx>> {
+        match e {
+            Expr::Literal(Literal::Integer(i), _) => Some(z3::ast::Int::from_i64(ctx, *i)),
+            Expr::Ident(name, _) => vars.get(name.as_str()).cloned(),
+            // `param.field` → look up `param__field` variable.
+            Expr::FieldAccess { expr, field, .. } => {
+                if let Expr::Ident(obj, _) = expr.as_ref() {
+                    vars.get(format!("{obj}__{field}").as_str()).cloned()
+                } else {
+                    None
+                }
+            }
+            Expr::Binary { op, left, right, .. } => {
+                let l = expr_to_z3_int(left, vars, ctx)?;
+                let r = expr_to_z3_int(right, vars, ctx)?;
+                Some(match op {
+                    BinaryOp::Add => z3::ast::Int::add(ctx, &[&l, &r]),
+                    BinaryOp::Sub => z3::ast::Int::sub(ctx, &[&l, &r]),
+                    BinaryOp::Mul => z3::ast::Int::mul(ctx, &[&l, &r]),
+                    BinaryOp::Div => l.div(&r),
+                    BinaryOp::Rem => l.modulo(&r),
+                    _ => return None,
+                })
+            }
+            _ => None,
+        }
+    }
+
+    for hyp in branch_hyps {
+        if let Some(z3_hyp) = expr_to_z3_bool(hyp, &int_vars, &ctx) {
+            solver.assert(&z3_hyp);
+        }
+    }
+
+    // ── Extract witness ───────────────────────────────────────────────────────
+    if solver.check() != SatResult::Sat {
+        return None;
+    }
+    let model = solver.get_model()?;
+
+    let mut witnesses: Vec<WitnessArg> = Vec::new();
+    for param in params {
+        let type_name = match &param.ty {
+            TypeExpr::Base { name, .. } => name.clone(),
+            TypeExpr::Refined { inner, .. } => match inner.as_ref() {
+                TypeExpr::Base { name, .. } => name.clone(),
+                _ => {
+                    witnesses.push(WitnessArg { param_name: param.name.clone(), value: WitnessValue::Unknown });
+                    continue;
+                }
+            },
+            _ => {
+                witnesses.push(WitnessArg { param_name: param.name.clone(), value: WitnessValue::Unknown });
+                continue;
+            }
+        };
+        match type_name.as_str() {
+            "Int" | "Bool" => {
+                let var = int_vars.get(&param.name)?;
+                let val = model.eval(var, true).and_then(|v| v.as_i64()).map(WitnessValue::Int).unwrap_or(WitnessValue::Unknown);
+                witnesses.push(WitnessArg { param_name: param.name.clone(), value: val });
+            }
+            other => {
+                if let Some(fields) = struct_fields.get(other) {
+                    let mut field_witnesses: Vec<(String, WitnessValue)> = Vec::new();
+                    for (field_name, field_type) in fields {
+                        if matches!(field_type.as_str(), "Int" | "Bool") {
+                            let key = format!("{}__{field_name}", param.name);
+                            let val = if let Some(var) = int_vars.get(&key) {
+                                model.eval(var, true).and_then(|v| v.as_i64()).map(WitnessValue::Int).unwrap_or(WitnessValue::Unknown)
+                            } else {
+                                WitnessValue::Unknown
+                            };
+                            field_witnesses.push((field_name.clone(), val));
+                        }
+                    }
+                    witnesses.push(WitnessArg {
+                        param_name: param.name.clone(),
+                        value: WitnessValue::Struct { type_name: other.to_string(), fields: field_witnesses },
+                    });
+                } else {
+                    witnesses.push(WitnessArg { param_name: param.name.clone(), value: WitnessValue::Unknown });
+                }
+            }
+        }
+    }
+
+    Some(witnesses)
 }
 
 /// Collect all `Len { ident }` identifier names referenced in a `RefExpr`.

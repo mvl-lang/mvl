@@ -118,6 +118,36 @@ pub struct TighteningCandidate {
     pub take_min: bool,
     /// Source location of the return expression that was proven.
     pub span: Span,
+    // ── Axis 3: boundary witness synthesis (#1931) ─────────────────────────
+    /// Function parameters — used by `mvl harden --emit-tests` to synthesize
+    /// call arguments.  Cloned from `FnDecl.params` at contract-check time.
+    pub params: Vec<Param>,
+    /// Branch conditions active at this return point — used as Z3 constraints
+    /// when searching for a witness input that reaches this return path.
+    pub branch_hyps: Vec<Expr>,
+}
+
+// ── Axis 3: boundary witness synthesis (#1931) ────────────────────────────────
+
+/// A concrete value found by Z3 as a witness for a boundary test input.
+#[derive(Debug, Clone)]
+pub enum WitnessValue {
+    /// A concrete integer (covers Int, Bool-as-int, refined Int, etc.).
+    Int(i64),
+    /// A struct constructed from field witnesses.
+    Struct {
+        type_name: String,
+        fields: Vec<(String, WitnessValue)>,
+    },
+    /// Z3 returned unknown or the param type is unsupported.
+    Unknown,
+}
+
+/// A single function parameter bound to a witness value.
+#[derive(Debug, Clone)]
+pub struct WitnessArg {
+    pub param_name: String,
+    pub value: WitnessValue,
 }
 
 // ── Per-call-site proof records (#836) ────────────────────────────────────────
@@ -149,6 +179,18 @@ pub struct ProofSite {
     pub span: Span,
     /// What the solver determined for this site.
     pub outcome: ProofOutcome,
+}
+
+/// Axis 3 witness synthesis — public thin wrapper over the `pub(crate)` layer5 entry point.
+///
+/// Exposed here so the CLI crate (`src/cli/harden.rs`) can call it without
+/// requiring access to the private `checker::solver` module.
+pub fn synthesize_witness(
+    params: &[crate::mvl::parser::ast::Param],
+    branch_hyps: &[crate::mvl::parser::ast::Expr],
+    struct_fields: &std::collections::HashMap<String, Vec<(String, String)>>,
+) -> Option<Vec<WitnessArg>> {
+    crate::mvl::checker::solver::layer5::try_z3_witness(params, branch_hyps, struct_fields)
 }
 
 // ── Entry points ──────────────────────────────────────────────────────────────

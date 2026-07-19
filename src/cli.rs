@@ -220,7 +220,8 @@ pub(super) fn dispatch(args: &[String]) {
             } else {
                 None
             };
-            harden::run(&path, verbose, json, stdlib_profile, callee_filter);
+            let emit_tests = args.iter().any(|a| a == "--emit-tests");
+            harden::run(&path, verbose, json, emit_tests, stdlib_profile, callee_filter);
         }
         "complexity" => {
             use mvl::mvl::passes::complexity;
