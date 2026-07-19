@@ -1290,7 +1290,12 @@ impl<'src> Printer<'src> {
                     self.fmt_ref_expr(body)
                 )
             }
-            RefExpr::StringOp { op, receiver, literal, .. } => {
+            RefExpr::StringOp {
+                op,
+                receiver,
+                literal,
+                ..
+            } => {
                 use crate::mvl::parser::ast::StringOp;
                 let method = match op {
                     StringOp::Contains => "contains",

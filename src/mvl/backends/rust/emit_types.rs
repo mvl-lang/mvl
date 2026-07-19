@@ -768,7 +768,12 @@ fn emit_ref_expr(pred: &RefExpr, binding: &str) -> String {
             )
         }
         RefExpr::BitwiseNot { inner, .. } => format!("(!{})", emit_ref_expr(inner, binding)),
-        RefExpr::StringOp { op, receiver, literal, .. } => {
+        RefExpr::StringOp {
+            op,
+            receiver,
+            literal,
+            ..
+        } => {
             use crate::mvl::parser::ast::StringOp;
             let recv = emit_ref_expr(receiver, binding);
             match op {

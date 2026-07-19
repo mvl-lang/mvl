@@ -1693,7 +1693,12 @@ pub(super) fn display_pred(pred: &RefExpr) -> String {
             format!("{} {op_str} {}", display_pred(left), display_pred(right))
         }
         RefExpr::BitwiseNot { inner, .. } => format!("~{}", display_pred(inner)),
-        RefExpr::StringOp { op, receiver, literal, .. } => {
+        RefExpr::StringOp {
+            op,
+            receiver,
+            literal,
+            ..
+        } => {
             let method = match op {
                 StringOp::Contains => "contains",
                 StringOp::StartsWith => "starts_with",

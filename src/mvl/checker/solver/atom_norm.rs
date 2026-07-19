@@ -294,7 +294,12 @@ fn canon_refexpr(r: &RefExpr) -> String {
         } => {
             format!("∃{var}∈[{lo}..{hi}]. {}", canon_refexpr(body))
         }
-        RefExpr::StringOp { op, receiver, literal, .. } => {
+        RefExpr::StringOp {
+            op,
+            receiver,
+            literal,
+            ..
+        } => {
             use crate::mvl::parser::ast::StringOp;
             let m = match op {
                 StringOp::Contains => "contains",

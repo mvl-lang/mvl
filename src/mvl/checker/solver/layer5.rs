@@ -95,9 +95,7 @@ fn has_string_ops(pred: &RefExpr) -> bool {
         RefExpr::StringOp { .. } => true,
         RefExpr::LogicOp { left, right, .. }
         | RefExpr::Compare { left, right, .. }
-        | RefExpr::ArithOp { left, right, .. } => {
-            has_string_ops(left) || has_string_ops(right)
-        }
+        | RefExpr::ArithOp { left, right, .. } => has_string_ops(left) || has_string_ops(right),
         RefExpr::Not { inner, .. }
         | RefExpr::Grouped { inner, .. }
         | RefExpr::Old { inner, .. } => has_string_ops(inner),
@@ -1253,7 +1251,9 @@ fn str_pred_to_bool<'ctx>(
         }
         RefExpr::Not { inner, .. } => Some(str_pred_to_bool(ctx, inner, self_str)?.not()),
         RefExpr::Grouped { inner, .. } => str_pred_to_bool(ctx, inner, self_str),
-        RefExpr::LogicOp { op, left, right, .. } => {
+        RefExpr::LogicOp {
+            op, left, right, ..
+        } => {
             let l = str_pred_to_bool(ctx, left, self_str)?;
             let r = str_pred_to_bool(ctx, right, self_str)?;
             Some(match op {

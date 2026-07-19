@@ -1158,7 +1158,12 @@ fn normalize_pred(pred: &RefExpr, param_name: &str) -> RefExpr {
             span: *span,
         },
         // StringOp: recurse into receiver (which may reference the param as `self`).
-        RefExpr::StringOp { op, receiver, literal, span } => RefExpr::StringOp {
+        RefExpr::StringOp {
+            op,
+            receiver,
+            literal,
+            span,
+        } => RefExpr::StringOp {
             op: *op,
             receiver: Box::new(normalize_pred(receiver, param_name)),
             literal: literal.clone(),
@@ -2023,7 +2028,12 @@ fn display_pred(pred: &RefExpr) -> String {
             format!("{} {op_str} {}", display_pred(left), display_pred(right))
         }
         RefExpr::BitwiseNot { inner, .. } => format!("~{}", display_pred(inner)),
-        RefExpr::StringOp { op, receiver, literal, .. } => {
+        RefExpr::StringOp {
+            op,
+            receiver,
+            literal,
+            ..
+        } => {
             let method = match op {
                 StringOp::Contains => "contains",
                 StringOp::StartsWith => "starts_with",
