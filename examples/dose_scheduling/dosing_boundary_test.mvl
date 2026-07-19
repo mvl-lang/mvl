@@ -13,9 +13,14 @@ use dosing::combined_dose;
 
 // Boundary witness for: ensures result > 0
 // Z3 proved tighter:     ensures result > 1
+// NOTE: harden --emit-tests originally synthesized (0, 0) here, but that
+// violates dose_a/dose_b's `self > 0` param refinement.  Using the minimum
+// valid inputs (1, 1) — still exercises the tighter bound since 2 > 1.
+// TODO(#1931 follow-up): harden witness synthesis should respect input
+// refinements when emitting boundary tests.
 test fn harden_boundary_combined_dose() -> Unit {
-    let dose_a: Int = 0;
-    let dose_b: Int = 0;
-    let result: Int = combined_dose(0, 0);
+    let dose_a: Int = 1;
+    let dose_b: Int = 1;
+    let result: Int = combined_dose(1, 1);
     assert_eq(result > 1, true)
 }
