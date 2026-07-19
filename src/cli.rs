@@ -271,11 +271,14 @@ pub(super) fn dispatch(args: &[String]) {
             doctor::run();
         }
         "kloc" => {
+            let csv = args.iter().any(|a| a == "--csv");
             let path = args
-                .get(2)
+                .iter()
+                .skip(2)
+                .find(|a| !a.starts_with("--"))
                 .map(|s| s.as_str())
                 .unwrap_or(".");
-            kloc::run(path);
+            kloc::run(path, csv);
         }
         "init" => {
             meta::cmd_init(args);

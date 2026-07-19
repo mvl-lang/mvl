@@ -6,6 +6,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process;
 
+// ── Data model ───────────────────────────────────────────────────────────────
+
 #[derive(Default, Clone)]
 struct FileCounts {
     files: usize,
@@ -37,6 +39,8 @@ impl GroupCounts {
         self.tests.add(&other.tests);
     }
 }
+
+// ── File walking & counting ───────────────────────────────────────────────────
 
 fn is_test_file(path: &Path) -> bool {
     path.file_stem()
@@ -96,17 +100,43 @@ fn collect_mvl_files(dir: &Path) -> Vec<PathBuf> {
     result
 }
 
-// Width: 1 + 32 + 1 + 7 + 1 + 10 + 1 + 10 + 1 + 10 + 1 + 10 = 85
-const WIDTH: usize = 85;
+// ── Formatting helpers ────────────────────────────────────────────────────────
 
-fn row(dir: &str, c: &FileCounts) {
+/// Format a number with comma thousand separators: 1234567 → "1,234,567".
+fn fmt_num(n: usize) -> String {
+    let s = n.to_string();
+    let mut out = String::with_capacity(s.len() + s.len() / 3);
+    for (i, ch) in s.chars().rev().enumerate() {
+        if i > 0 && i % 3 == 0 {
+            out.push(',');
+        }
+        out.push(ch);
+    }
+    out.chars().rev().collect()
+}
+
+// ── Table output ──────────────────────────────────────────────────────────────
+
+// Width: 1 + 32 + 1 + 9 + 1 + 10 + 1 + 10 + 1 + 11 + 1 + 9 = 87
+const WIDTH: usize = 87;
+
+fn table_row(dir: &str, c: &FileCounts) {
     println!(
-        " {:<32} {:>7} {:>10} {:>10} {:>10} {:>10}",
-        dir, c.files, c.lines, c.code, c.comments, c.blanks
+        " {:<32} {:>9} {:>10} {:>10} {:>11} {:>9}",
+        dir,
+        fmt_num(c.files),
+        fmt_num(c.lines),
+        fmt_num(c.code),
+        fmt_num(c.comments),
+        fmt_num(c.blanks),
     );
 }
 
-fn section(title: &str, groups: &BTreeMap<String, GroupCounts>, get: impl Fn(&GroupCounts) -> &FileCounts) {
+fn table_section(
+    title: &str,
+    groups: &BTreeMap<String, GroupCounts>,
+    get: impl Fn(&GroupCounts) -> &FileCounts,
+) {
     let sep = "━".repeat(WIDTH);
     let thin = "─".repeat(WIDTH);
 
@@ -116,21 +146,91 @@ fn section(title: &str, groups: &BTreeMap<String, GroupCounts>, get: impl Fn(&Gr
     }
 
     println!("{sep}");
-    println!(" {:<32} {:>7} {:>10} {:>10} {:>10} {:>10}", title, "Files", "Lines", "Code", "Comments", "Blanks");
+    println!(
+        " {:<32} {:>9} {:>10} {:>10} {:>11} {:>9}",
+        title, "Files", "Lines", "Code", "Comments", "Blanks"
+    );
     println!("{sep}");
 
     let mut subtotal = FileCounts::default();
     for (label, g) in &relevant {
         let c = get(g);
-        row(label, c);
+        table_row(label, c);
         subtotal.add(c);
     }
 
     println!("{thin}");
-    row("Subtotal", &subtotal);
+    table_row("Subtotal", &subtotal);
 }
 
-pub fn run(root: &str) {
+fn print_table(root_label: &str, groups: &BTreeMap<String, GroupCounts>) {
+    table_section("Source", groups, |g| &g.src);
+    table_section("Tests", groups, |g| &g.tests);
+
+    let mut total = GroupCounts::default();
+    for g in groups.values() {
+        total.add(g);
+    }
+    let sep = "━".repeat(WIDTH);
+    println!("{sep}");
+    let mut all = total.src.clone();
+    all.add(&total.tests);
+    table_row(&format!("Total  ({})", root_label), &all);
+    println!("{sep}");
+}
+
+// ── CSV output ────────────────────────────────────────────────────────────────
+
+fn print_csv(groups: &BTreeMap<String, GroupCounts>) {
+    println!("section,directory,files,lines,code,comments,blanks");
+
+    for section_name in &["Source", "Tests"] {
+        let get: Box<dyn Fn(&GroupCounts) -> &FileCounts> = match *section_name {
+            "Source" => Box::new(|g: &GroupCounts| &g.src),
+            _ => Box::new(|g: &GroupCounts| &g.tests),
+        };
+        let mut subtotal = FileCounts::default();
+        for (label, g) in groups {
+            let c = get(g);
+            if c.files == 0 {
+                continue;
+            }
+            let dir_field = if label.contains(',') { format!("\"{label}\"") } else { label.clone() };
+            println!(
+                "{},{},{},{},{},{},{}",
+                section_name, dir_field, c.files, c.lines, c.code, c.comments, c.blanks
+            );
+            subtotal.add(c);
+        }
+        if subtotal.files > 0 {
+            println!(
+                "{},Subtotal,{},{},{},{},{}",
+                section_name,
+                subtotal.files,
+                subtotal.lines,
+                subtotal.code,
+                subtotal.comments,
+                subtotal.blanks,
+            );
+        }
+    }
+
+    // Grand total
+    let mut total = GroupCounts::default();
+    for g in groups.values() {
+        total.add(g);
+    }
+    let mut all = total.src.clone();
+    all.add(&total.tests);
+    println!(
+        "Total,All,{},{},{},{},{}",
+        all.files, all.lines, all.code, all.comments, all.blanks
+    );
+}
+
+// ── Entry point ───────────────────────────────────────────────────────────────
+
+pub fn run(root: &str, csv: bool) {
     let root_path = Path::new(root);
     if !root_path.is_dir() {
         eprintln!("error: '{}' is not a directory", root);
@@ -187,18 +287,9 @@ pub fn run(root: &str) {
         process::exit(0);
     }
 
-    section("Source", &groups, |g| &g.src);
-    section("Tests", &groups, |g| &g.tests);
-
-    // Grand total
-    let mut total = GroupCounts::default();
-    for g in groups.values() {
-        total.add(g);
+    if csv {
+        print_csv(&groups);
+    } else {
+        print_table(&root_label, &groups);
     }
-    let sep = "━".repeat(WIDTH);
-    println!("{sep}");
-    let mut all = total.src.clone();
-    all.add(&total.tests);
-    row("Total", &all);
-    println!("{sep}");
 }
