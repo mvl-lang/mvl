@@ -244,6 +244,25 @@ impl TextEmitter {
         // registered (opaque types).
         match name {
             "path" if args.len() == 1 => return self.emit_path_builtin_tir(&args[0]),
+            "now" if args.is_empty() => {
+                self.ensure_extern("declare ptr @_mvl_time_now()");
+                let r = self.next_reg();
+                self.push_instr(&format!("{r} = call ptr @_mvl_time_now()"));
+                self.fn_ctx.reg_types.insert(r.clone(), "ptr".into());
+                return Ok(Some(r));
+            }
+            // Byte construction: `from_int(n)` and `wrapping_from_int(n)` both
+            // truncate an Int (i64) to a Byte (i8) — no runtime call needed.
+            "from_int" | "wrapping_from_int" if args.len() == 1 => {
+                let v = match self.emit_expr_tir(&args[0])? {
+                    Some(v) => v,
+                    None => return Ok(None),
+                };
+                let r = self.next_reg();
+                self.push_instr(&format!("{r} = trunc i64 {v} to i8"));
+                self.fn_ctx.reg_types.insert(r.clone(), "i8".into());
+                return Ok(Some(r));
+            }
             "format_datetime" if args.len() == 2 => {
                 return self.emit_format_datetime_tir(&args[0], &args[1]);
             }

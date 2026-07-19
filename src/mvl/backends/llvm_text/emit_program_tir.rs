@@ -12,11 +12,145 @@
 //! `Pattern`) re-exported via `crate::mvl::ir`. At the `Ty → TypeExpr`
 //! boundary the helper [`super::emit_stmts::ty_to_type_expr`] is reused.
 
-use crate::mvl::ir::{TirFn, TirProgram, TirTypeBody, TirTypeDecl, TirVariantFields, Ty, TypeExpr};
+use crate::mvl::ir::{
+    TirExpr, TirExprKind, TirFn, TirProgram, TirStmt, TirTypeBody, TirTypeDecl, TirVariantFields,
+    Ty, TypeExpr,
+};
 use crate::mvl::parser::lexer::Span;
+use std::collections::HashSet;
 
 use super::emit_helpers::ty_to_type_expr;
 use super::{TextEmitter, MAIN_RET};
+
+/// Compute the transitive closure of functions that call (directly or indirectly)
+/// any name in `rust_extern_names`. Returns a set of function names to EXCLUDE
+/// from the test crate so lli's eager JIT never encounters unresolvable symbols.
+///
+/// Fixed-point iteration: start with direct callers, then expand to callers of
+/// callers until no new functions are added.
+fn compute_extern_rust_exclusion_set(
+    prog: &TirProgram,
+    rust_extern_names: &HashSet<String>,
+) -> HashSet<String> {
+    let mut excluded: HashSet<String> = HashSet::new();
+    // Seed: direct callers of extern-rust functions.
+    for f in &prog.fns {
+        if fn_calls_any(&f.body.stmts, rust_extern_names) {
+            excluded.insert(f.name.clone());
+        }
+    }
+    // Expand until fixed point.
+    loop {
+        let prev = excluded.len();
+        for f in &prog.fns {
+            if !excluded.contains(&f.name) && fn_calls_any(&f.body.stmts, &excluded) {
+                excluded.insert(f.name.clone());
+            }
+        }
+        if excluded.len() == prev {
+            break;
+        }
+    }
+    excluded
+}
+
+/// Returns true if any statement in `stmts` (or nested exprs) contains a
+/// direct `FnCall` to any name in `targets`. Used to detect production functions
+/// that call extern-rust symbols so they can be excluded from test crates.
+fn fn_calls_any(stmts: &[TirStmt], targets: &HashSet<String>) -> bool {
+    stmts.iter().any(|s| stmt_calls_any(s, targets))
+}
+
+fn else_calls_any(else_: &crate::mvl::ir::TirElseBranch, targets: &HashSet<String>) -> bool {
+    match else_ {
+        crate::mvl::ir::TirElseBranch::Block(b) => fn_calls_any(&b.stmts, targets),
+        crate::mvl::ir::TirElseBranch::If(s) => stmt_calls_any(s, targets),
+    }
+}
+
+fn match_body_calls_any(
+    body: &crate::mvl::ir::TirMatchBody,
+    targets: &HashSet<String>,
+) -> bool {
+    match body {
+        crate::mvl::ir::TirMatchBody::Expr(e) => expr_calls_any(e, targets),
+        crate::mvl::ir::TirMatchBody::Block(b) => fn_calls_any(&b.stmts, targets),
+    }
+}
+
+fn stmt_calls_any(stmt: &TirStmt, targets: &HashSet<String>) -> bool {
+    match stmt {
+        TirStmt::Let { init, .. } => expr_calls_any(init, targets),
+        TirStmt::Assign { value, .. } => expr_calls_any(value, targets),
+        TirStmt::Return { value, .. } => {
+            value.as_ref().map_or(false, |e| expr_calls_any(e, targets))
+        }
+        TirStmt::Expr { expr, .. } => expr_calls_any(expr, targets),
+        TirStmt::If { cond, then, else_, .. } => {
+            expr_calls_any(cond, targets)
+                || fn_calls_any(&then.stmts, targets)
+                || else_.as_ref().map_or(false, |b| else_calls_any(b, targets))
+        }
+        TirStmt::While { cond, body, .. } => {
+            expr_calls_any(cond, targets) || fn_calls_any(&body.stmts, targets)
+        }
+        TirStmt::Match { scrutinee, arms, .. } => {
+            expr_calls_any(scrutinee, targets)
+                || arms.iter().any(|a| match_body_calls_any(&a.body, targets))
+        }
+        TirStmt::For { iter, body, .. } => {
+            expr_calls_any(iter, targets) || fn_calls_any(&body.stmts, targets)
+        }
+    }
+}
+
+fn expr_calls_any(expr: &TirExpr, targets: &HashSet<String>) -> bool {
+    match &expr.kind {
+        TirExprKind::FnCall { name, args, .. } => {
+            targets.contains(name.as_str()) || args.iter().any(|a| expr_calls_any(a, targets))
+        }
+        TirExprKind::MethodCall { receiver, args, .. } => {
+            expr_calls_any(receiver, targets) || args.iter().any(|a| expr_calls_any(a, targets))
+        }
+        TirExprKind::Binary { left, right, .. } => {
+            expr_calls_any(left, targets) || expr_calls_any(right, targets)
+        }
+        TirExprKind::Unary { expr: inner, .. }
+        | TirExprKind::Propagate(inner)
+        | TirExprKind::Consume(inner)
+        | TirExprKind::Borrow { expr: inner, .. }
+        | TirExprKind::FieldAccess { expr: inner, .. }
+        | TirExprKind::Relabel { expr: inner, .. } => expr_calls_any(inner, targets),
+        TirExprKind::Block(block) => fn_calls_any(&block.stmts, targets),
+        TirExprKind::If { cond, then, else_, .. } => {
+            expr_calls_any(cond, targets)
+                || fn_calls_any(&then.stmts, targets)
+                || else_.as_ref().map_or(false, |e| expr_calls_any(e, targets))
+        }
+        TirExprKind::Match { scrutinee, arms, .. } => {
+            expr_calls_any(scrutinee, targets)
+                || arms.iter().any(|a| match_body_calls_any(&a.body, targets))
+        }
+        TirExprKind::Construct { fields, .. } => {
+            fields.iter().any(|(_, e)| expr_calls_any(e, targets))
+        }
+        TirExprKind::List { elems } | TirExprKind::Set { elems } => {
+            elems.iter().any(|e| expr_calls_any(e, targets))
+        }
+        TirExprKind::Map { pairs } => pairs
+            .iter()
+            .any(|(k, v)| expr_calls_any(k, targets) || expr_calls_any(v, targets)),
+        TirExprKind::Spawn { fields, .. } => {
+            fields.iter().any(|(_, e)| expr_calls_any(e, targets))
+        }
+        TirExprKind::Lambda { body, .. } => expr_calls_any(body, targets),
+        TirExprKind::Select { arms } => arms
+            .iter()
+            .any(|a| fn_calls_any(&a.body.stmts, targets)),
+        // Leaf nodes — no nested calls
+        TirExprKind::Literal(_) | TirExprKind::Var(_) | TirExprKind::Quantifier(_) => false,
+    }
+}
 
 /// Convert a [`Ty`] back to a [`TypeExpr`] for use by AST-shaped helpers.
 ///
@@ -142,6 +276,29 @@ impl TextEmitter {
         for td in &prog.types {
             self.register_type_decl_tir(td);
         }
+    }
+
+    /// Emit a sibling module that has `extern "rust"` blocks: type definitions
+    /// are always emitted, and function bodies are emitted only for functions
+    /// that do NOT directly call any extern-rust function.
+    ///
+    /// This lets pure helpers (e.g. `parse_level`) be available to test
+    /// functions while excluding impure callers (e.g. `dispatch`) whose
+    /// unresolvable extern symbols would cause lli JIT to fail.
+    pub(super) fn emit_program_tir_without_extern_rust_callers(
+        &mut self,
+        prog: &TirProgram,
+    ) -> Result<(), String> {
+        let rust_extern_names: HashSet<String> = prog
+            .externs
+            .iter()
+            .filter(|ed| ed.abi == "rust")
+            .flat_map(|ed| ed.fns.iter().map(|ef| ef.name.clone()))
+            .collect();
+        let excluded = compute_extern_rust_exclusion_set(prog, &rust_extern_names);
+        let mut filtered = prog.clone();
+        filtered.fns.retain(|f| !f.is_test && !excluded.contains(&f.name));
+        self.emit_program_tir(&filtered)
     }
 
     pub(super) fn emit_program_tir(&mut self, prog: &TirProgram) -> Result<(), String> {
@@ -412,7 +569,10 @@ impl TextEmitter {
                 if ty_str == "void" {
                     None
                 } else {
-                    Some(format!("{ty_str} %{}", p.name))
+                    // `entry` conflicts with the `entry:` basic block label in LLVM's
+                    // symbol table — rename to `entry_p` in the signature.
+                    let pname = if p.name == "entry" { "entry_p" } else { &p.name };
+                    Some(format!("{ty_str} %{pname}"))
                 }
             })
             .collect();
@@ -434,10 +594,19 @@ impl TextEmitter {
         self.push_line("entry:");
 
         // Bind parameters as SSA locals, track MVL types for downstream lookups.
+        // Guard: if a parameter is named `entry`, it would shadow the `entry:` basic
+        // block label in LLVM's symbol table, producing "unable to create block named
+        // 'entry'" errors. Use `entry_p` as the SSA name in that case; any access to
+        // the binding still goes through `fn_ctx.locals` so it's transparent.
         for p in &f.params {
             let ty_str = self.ty_to_llvm_ctx(&p.ty);
             if ty_str != "void" {
-                let ssa = format!("%{}", p.name);
+                let ssa_name = if p.name == "entry" {
+                    "entry_p".to_string()
+                } else {
+                    p.name.clone()
+                };
+                let ssa = format!("%{ssa_name}");
                 self.fn_ctx.locals.insert(p.name.clone(), ssa.clone());
                 self.fn_ctx.reg_types.insert(ssa, ty_str);
                 self.fn_ctx
@@ -482,17 +651,26 @@ impl TextEmitter {
     /// path (`compile_to_ir_test_crate`) so the dispatch main can call each
     /// test fn by name via `lli <file.ll> <test_name>`.
     pub(super) fn emit_program_tir_test_crate(&mut self, prog: &TirProgram) -> Result<(), String> {
-        // Programs with `extern "rust"` blocks have production functions that
-        // call Rust-ABI symbols not in the test runtime library. Emitting them
-        // causes lli's JIT linker to fail with "symbols not found" even when the
-        // test being run never calls those functions (lli compiles eagerly).
-        // Emit only the test functions themselves — their bodies don't call
-        // extern-rust symbols and run correctly in the test sandbox.
-        // Pure siblings (no rust externs) are unaffected and use the normal path.
-        let has_rust_extern = prog.externs.iter().any(|ed| ed.abi == "rust");
+        // Programs with `extern "rust"` blocks may have production functions that
+        // call Rust-ABI symbols not in the test runtime library. lli's ORC JIT
+        // materializes all functions in the module when the first function is
+        // called, so any unresolvable extern causes the whole module to fail even
+        // when the test being run never calls that extern.
+        //
+        // Filter: keep test functions unconditionally; keep production functions
+        // only if they do NOT directly call any extern-rust function. Pure helpers
+        // like `parse_level` (called by tests) are kept; impure ones like `dispatch`
+        // (which calls `verify_request_auth`) are dropped.
+        let rust_extern_names: HashSet<String> = prog
+            .externs
+            .iter()
+            .filter(|ed| ed.abi == "rust")
+            .flat_map(|ed| ed.fns.iter().map(|ef| ef.name.clone()))
+            .collect();
         let mut test_prog = prog.clone();
-        if has_rust_extern {
-            test_prog.fns.retain(|f| f.is_test);
+        if !rust_extern_names.is_empty() {
+            let excluded = compute_extern_rust_exclusion_set(prog, &rust_extern_names);
+            test_prog.fns.retain(|f| f.is_test || !excluded.contains(&f.name));
         }
         for f in &mut test_prog.fns {
             f.is_test = false;

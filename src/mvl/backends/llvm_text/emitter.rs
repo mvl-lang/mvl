@@ -197,15 +197,15 @@ impl LlvmTextCompiler {
         }
         // Pass 2: emit type definitions and function bodies.
         // - Pure siblings (no extern "rust"): full emit_program_tir.
-        // - Extern-rust siblings: emit type definitions only (no fn bodies).
-        //   Their bodies call Rust-ABI symbols not in the test runtime, so lli
-        //   would fail to JIT them. We still need the struct type definitions
-        //   (%Response, %Request, …) so call sites using those types are valid.
-        //   emit_program_tir re-runs its own type pre-pass — harmless (idempotent).
+        // - Extern-rust siblings: emit type defs + only those function bodies
+        //   that do NOT directly call extern-rust symbols. lli's ORC JIT
+        //   materializes the whole module at once; unresolvable externs cause
+        //   all tests to fail even when the test never calls the impure function.
+        //   Pure helpers (e.g. parse_level) are emitted so tests can call them.
         for sib in siblings {
             let has_rust_extern = sib.externs.iter().any(|ed| ed.abi == "rust");
             if has_rust_extern {
-                emitter.emit_program_tir_type_defs_only(sib);
+                emitter.emit_program_tir_without_extern_rust_callers(sib)?;
             } else {
                 emitter.emit_program_tir(sib)?;
             }
