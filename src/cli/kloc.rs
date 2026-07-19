@@ -174,11 +174,10 @@ fn colors() -> &'static Color {
 // Width: 1 + 30 + 1 + 7 + 1 + 10 + 1 + 10 + 1 + 11 + 1 + 9 + 1 + 8 = 92
 const WIDTH: usize = 92;
 
-fn table_row(c: &Color, prefix: &str, label: &str, fc: &FileCounts) {
+fn table_row(color: &'static str, reset: &'static str, label: &str, fc: &FileCounts) {
     println!(
-        "{}{} {:<30} {:>7} {:>10} {:>10} {:>11} {:>9} {:>8}{}",
-        prefix,
-        c.reset,
+        "{} {:<30} {:>7} {:>10} {:>10} {:>11} {:>9} {:>8}{}",
+        color,
         label,
         fmt_num(fc.files),
         fmt_num(fc.lines),
@@ -186,7 +185,7 @@ fn table_row(c: &Color, prefix: &str, label: &str, fc: &FileCounts) {
         fmt_num(fc.comments),
         fmt_num(fc.blanks),
         fmt_num(fc.test_fns),
-        c.reset,
+        reset,
     );
 }
 
@@ -198,15 +197,7 @@ fn print_table(root_label: &str, groups: &BTreeMap<String, GroupCounts>) {
     println!("{sep}");
     println!(
         "{} {:<30} {:>7} {:>10} {:>10} {:>11} {:>9} {:>8}{}",
-        c.bold,
-        "Directory",
-        "Files",
-        "Lines",
-        "Code",
-        "Comments",
-        "Blanks",
-        "TestFns",
-        c.reset,
+        c.bold, "Directory", "Files", "Lines", "Code", "Comments", "Blanks", "TestFns", c.reset,
     );
     println!("{sep}");
 
@@ -216,15 +207,12 @@ fn print_table(root_label: &str, groups: &BTreeMap<String, GroupCounts>) {
         let total = g.total();
 
         // Directory total row
-        print!("{}", c.cyan_bold);
-        table_row(c, c.cyan_bold, label, &total);
+        table_row(c.cyan_bold, c.reset, label, &total);
 
         // Sub-rows: only when both buckets are non-empty
         if g.src.files > 0 && g.tests.files > 0 {
-            print!("{}", c.dim_green);
-            table_row(c, c.dim_green, "  + source", &g.src);
-            print!("{}", c.dim_yellow);
-            table_row(c, c.dim_yellow, "  * tests", &g.tests);
+            table_row(c.dim_green, c.reset, "  source", &g.src);
+            table_row(c.dim_yellow, c.reset, "  tests", &g.tests);
         }
 
         grand_total.add(g);
@@ -232,8 +220,7 @@ fn print_table(root_label: &str, groups: &BTreeMap<String, GroupCounts>) {
 
     let all = grand_total.total();
     println!("{thin}");
-    print!("{}", c.bold);
-    table_row(c, c.bold, &format!("Total  ({})", root_label), &all);
+    table_row(c.bold, c.reset, &format!("Total  ({})", root_label), &all);
     println!("{sep}");
 }
 
