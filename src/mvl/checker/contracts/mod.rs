@@ -43,6 +43,7 @@ use std::collections::HashMap;
 use crate::mvl::checker::errors::CheckError;
 use crate::mvl::checker::refinements::{
     check_arg_against_pred_counted, ProofEntry, ProofOutcome, ProofSite, RefinementCounts,
+    TighteningCandidate,
 };
 use crate::mvl::checker::solver::{RefResult, SolverMode};
 use crate::mvl::parser::ast::{
@@ -1014,6 +1015,25 @@ pub(super) fn check_ensures_for_return(
                     predicate: format!("ensures {}", display_pred(&ens_pred)),
                     layer,
                 });
+                // Axis 2 (#1931): check whether a strictly tighter bound is also provable.
+                if let Some(tight) = crate::mvl::checker::solver::layer5::try_z3_tighten(
+                    &normalized,
+                    ret_expr,
+                    &var_refs,
+                ) {
+                    use crate::mvl::parser::ast::CmpOp;
+                    let declared = format!("ensures {}", display_pred(&ens_pred));
+                    let tighter = tight.tighter_ensures("result");
+                    let take_min = matches!(tight.op, CmpOp::Ge | CmpOp::Gt);
+                    ctx.counts.tightening_candidates.push(TighteningCandidate {
+                        fn_name: fn_name.to_string(),
+                        declared_pred: declared,
+                        tighter_pred: tighter,
+                        tighter_bound: tight.tighter_bound,
+                        take_min,
+                        span: ret_span,
+                    });
+                }
                 ProofOutcome::Proven {
                     layer,
                     is_bv: matches!(outcome, RefResult::ProvenBv),

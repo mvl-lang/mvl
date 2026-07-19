@@ -86,10 +86,38 @@ pub struct RefinementCounts {
     /// Per-call-site proof records covering ALL outcomes (proven / runtime / failed).
     /// Populated unconditionally; consumed by `mvl prove` (#836) for the breakdown report.
     pub sites: Vec<ProofSite>,
+    /// Axis 2 (#1931): proven `ensures` clauses where a tighter bound is also provable.
+    /// Populated during `check_ensures_for_return`; consumed by `mvl harden`.
+    pub tightening_candidates: Vec<TighteningCandidate>,
     /// Name of the function currently being analyzed (set by `check_refinements` before
     /// each `analyze_block` call so `ProofSite::caller_fn` can be populated without
     /// threading the name through every recursive helper).
     pub current_fn: String,
+}
+
+// ── Axis 2: contract tightening candidates (#1931) ────────────────────────────
+
+/// A proven `ensures` clause where Z3 can prove a strictly tighter bound.
+///
+/// Collected during `check_ensures_for_return` and surfaced by `mvl harden`.
+/// One candidate is emitted per return point (branch); callers should
+/// deduplicate by `(fn_name, declared_pred)` keeping the weakest tighter bound
+/// (min for `>=`/`>`, max for `<=`/`<`) to produce a globally-sound suggestion.
+#[derive(Debug, Clone)]
+pub struct TighteningCandidate {
+    /// Function whose postcondition could be tightened.
+    pub fn_name: String,
+    /// The declared predicate string (e.g. `"ensures result >= 0"`).
+    pub declared_pred: String,
+    /// The tighter predicate Z3 can prove (e.g. `"ensures result >= 5"`).
+    pub tighter_pred: String,
+    /// Raw tighter bound value for deduplication arithmetic.
+    pub tighter_bound: i64,
+    /// Whether to find the min (Ge/Gt) or max (Le/Lt) across branches.
+    /// `true` = take the minimum tighter bound (lower-bound predicates).
+    pub take_min: bool,
+    /// Source location of the return expression that was proven.
+    pub span: Span,
 }
 
 // ── Per-call-site proof records (#836) ────────────────────────────────────────

@@ -34,7 +34,7 @@
 //! See follow-up issue.
 
 use mvl::mvl::checker;
-use mvl::mvl::checker::refinements::ProofOutcome;
+use mvl::mvl::checker::refinements::{ProofOutcome, TighteningCandidate};
 use mvl::mvl::checker::SolverMode;
 use mvl::mvl::loader;
 use mvl::mvl::parser::ast::Program;
@@ -122,14 +122,18 @@ struct HardenSite<'a> {
     hint: HardenHint,
 }
 
-fn print_json(sites: &[HardenSite<'_>], total_proven: usize, total_runtime: usize, total_failed: usize) {
+fn print_json(
+    sites: &[HardenSite<'_>],
+    tightenings: &[&TighteningCandidate],
+    total_proven: usize,
+    total_runtime: usize,
+    total_failed: usize,
+) {
     println!("{{");
-    println!("  \"axis\": 1,");
-    println!("  \"axis_name\": \"runtime_to_static_promotion\",");
     println!("  \"total_proven\": {total_proven},");
     println!("  \"total_runtime\": {total_runtime},");
     println!("  \"total_failed\": {total_failed},");
-    println!("  \"promotion_candidates\": [");
+    println!("  \"axis1_promotion_candidates\": [");
     for (i, s) in sites.iter().enumerate() {
         let comma = if i + 1 < sites.len() { "," } else { "" };
         let hint = s.hint.suggestion().replace('"', "\\\"");
@@ -146,13 +150,62 @@ fn print_json(sites: &[HardenSite<'_>], total_proven: usize, total_runtime: usiz
         println!("      \"suggestion\": \"{hint}\"");
         println!("    }}{comma}");
     }
+    println!("  ],");
+    println!("  \"axis2_tightening_candidates\": [");
+    for (i, t) in tightenings.iter().enumerate() {
+        let comma = if i + 1 < tightenings.len() { "," } else { "" };
+        println!("    {{");
+        println!("      \"fn_name\": \"{}\",", t.fn_name.replace('"', "\\\""));
+        println!("      \"line\": {},", t.span.line);
+        println!(
+            "      \"declared\": \"{}\",",
+            t.declared_pred.replace('"', "\\\"")
+        );
+        println!(
+            "      \"tighter\": \"{}\"",
+            t.tighter_pred.replace('"', "\\\"")
+        );
+        println!("    }}{comma}");
+    }
     println!("  ]");
     println!("}}");
 }
 
+// ── Tightening deduplication ──────────────────────────────────────────────────
+
+/// Deduplicate tightening candidates per `(fn_name, declared_pred)`.
+///
+/// Multiple candidates arise when a function has several return points (branches).
+/// We keep the globally-sound tighter bound: the minimum for lower-bound predicates
+/// (`>=`/`>`), or the maximum for upper-bound predicates (`<=`/`<`).
+fn deduplicate_tightenings(
+    candidates: &[TighteningCandidate],
+) -> Vec<&TighteningCandidate> {
+    // Map (fn_name, declared_pred) → index of the "best" (most conservative) candidate.
+    let mut best: std::collections::HashMap<(&str, &str), usize> =
+        std::collections::HashMap::new();
+    for (idx, c) in candidates.iter().enumerate() {
+        let key = (c.fn_name.as_str(), c.declared_pred.as_str());
+        let keep = best.get(&key).map_or(true, |&prev_idx| {
+            let prev = &candidates[prev_idx];
+            if c.take_min {
+                c.tighter_bound < prev.tighter_bound
+            } else {
+                c.tighter_bound > prev.tighter_bound
+            }
+        });
+        if keep {
+            best.insert(key, idx);
+        }
+    }
+    let mut result: Vec<&TighteningCandidate> = best.values().map(|&i| &candidates[i]).collect();
+    result.sort_by(|a, b| a.span.line.cmp(&b.span.line).then(a.fn_name.cmp(&b.fn_name)));
+    result
+}
+
 // ── Entry point ────────────────────────────────────────────────────────────────
 
-/// Run `mvl harden` (Axis 1) over a `.mvl` file or directory.
+/// Run `mvl harden` (Axes 1 and 2) over a `.mvl` file or directory.
 pub fn run(path: &str, verbose: bool, json: bool, stdlib_profile: &str, callee_filter: Option<&str>) {
     let files = loader::mvl_files(path, false);
     if files.is_empty() {
@@ -230,6 +283,7 @@ pub fn run(path: &str, verbose: bool, json: bool, stdlib_profile: &str, callee_f
     struct FileResult {
         file_str: String,
         sites_data: Vec<(u32, String, String, String, String, HardenHint)>,
+        tightenings: Vec<TighteningCandidate>,
         proven: usize,
         runtime: usize,
         failed: usize,
@@ -282,12 +336,14 @@ pub fn run(path: &str, verbose: bool, json: bool, stdlib_profile: &str, callee_f
             }
         }
 
+        let tightenings = result.refinement_counts.tightening_candidates.clone();
         grand_total_proven += file_proven;
         grand_total_runtime += file_runtime;
         grand_total_failed += file_failed;
         file_results.push(FileResult {
             file_str: file_str.clone(),
             sites_data,
+            tightenings,
             proven: file_proven,
             runtime: file_runtime,
             failed: file_failed,
@@ -295,7 +351,6 @@ pub fn run(path: &str, verbose: bool, json: bool, stdlib_profile: &str, callee_f
     }
 
     if json {
-        // Flatten all sites into the JSON output.
         let mut flat: Vec<HardenSite<'_>> = Vec::new();
         for fr in &file_results {
             for (line, caller, callee, param, pred, hint) in &fr.sites_data {
@@ -310,7 +365,16 @@ pub fn run(path: &str, verbose: bool, json: bool, stdlib_profile: &str, callee_f
                 });
             }
         }
-        print_json(&flat, grand_total_proven, grand_total_runtime, grand_total_failed);
+        let all_raw_tightenings: Vec<TighteningCandidate> =
+            file_results.iter().flat_map(|fr| fr.tightenings.iter().cloned()).collect();
+        let all_tightenings = deduplicate_tightenings(&all_raw_tightenings);
+        print_json(
+            &flat,
+            &all_tightenings,
+            grand_total_proven,
+            grand_total_runtime,
+            grand_total_failed,
+        );
         if grand_total_failed > 0 {
             process::exit(1);
         }
@@ -320,7 +384,6 @@ pub fn run(path: &str, verbose: bool, json: bool, stdlib_profile: &str, callee_f
     // ── Human-readable report ──────────────────────────────────────────────────
 
     let sep = "═".repeat(70);
-    let dash = "─".repeat(70);
 
     for fr in &file_results {
         // Skip files with no refinement sites at all (no contracts to analyse).
@@ -329,16 +392,17 @@ pub fn run(path: &str, verbose: bool, json: bool, stdlib_profile: &str, callee_f
         }
 
         println!("\n{sep}");
-        println!("  HARDEN REPORT (Axis 1 — runtime → static): {}", fr.file_str);
+        println!("  HARDEN REPORT: {}", fr.file_str);
         println!("{sep}");
 
+        // ── Axis 1: runtime → static promotion ────────────────────────────────
+        println!("\n── Axis 1: Runtime → Static Promotion ──────────────────────────────");
         if fr.sites_data.is_empty() {
             println!(
                 "  {} site(s) proven statically — no runtime obligations.",
                 fr.proven
             );
         } else {
-            // Group by caller function.
             let mut by_caller: HashMap<&str, Vec<_>> = HashMap::new();
             for (line, caller, callee, param, pred, hint) in &fr.sites_data {
                 by_caller
@@ -349,15 +413,12 @@ pub fn run(path: &str, verbose: bool, json: bool, stdlib_profile: &str, callee_f
             let mut callers: Vec<&str> = by_caller.keys().copied().collect();
             callers.sort();
 
-            println!("\n── Runtime Obligations (promotion candidates) {dash}");
             let mut counter = 0usize;
             for caller in &callers {
                 let entries = &by_caller[caller];
                 for (line, callee, param, pred, hint) in entries {
                     counter += 1;
-                    println!(
-                        "\n  [{counter:02}] {caller}:{line}  →  {callee}({param})"
-                    );
+                    println!("\n  [{counter:02}] {caller}:{line}  →  {callee}({param})");
                     if verbose {
                         println!("       predicate: {pred}");
                     }
@@ -366,21 +427,49 @@ pub fn run(path: &str, verbose: bool, json: bool, stdlib_profile: &str, callee_f
             }
         }
 
+        // ── Axis 2: contract tightening ───────────────────────────────────────
+        // Deduplicate per (fn_name, declared_pred): keep the weakest tighter bound
+        // that holds across all return branches (min for >=/>; max for <=/< ).
+        let deduped = deduplicate_tightenings(&fr.tightenings);
+        println!("\n── Axis 2: Contract Tightening ──────────────────────────────────────");
+        if deduped.is_empty() {
+            println!("  No tightening opportunities found.");
+        } else {
+            for (i, t) in deduped.iter().enumerate() {
+                println!(
+                    "\n  [{:02}] {}:{}",
+                    i + 1,
+                    t.fn_name,
+                    t.span.line,
+                );
+                println!("       declared: {}", t.declared_pred);
+                println!("       provable: {}", t.tighter_pred);
+                println!("       → Suggest strengthening the postcondition");
+            }
+        }
+
         let pv = fr.proven;
         let rt = fr.runtime;
         let fa = fr.failed;
-        println!("\n  Summary (Axis 1): {pv} proven, {rt} runtime obligations, {fa} failed\n");
+        let tg = deduped.len();
+        println!(
+            "\n  Summary: {pv} proven, {rt} runtime obligations, {fa} failed, {tg} tightening suggestion(s)\n"
+        );
         println!("{sep}\n");
         println!(
-            "  Axes 2 (contract tightening) and 3 (boundary test generation) are not yet\n  \
-             implemented. See follow-up issue for Z3 query infrastructure required.\n"
+            "  Axis 3 (boundary test generation) is not yet implemented.\n  \
+             See follow-up issue #1931 for Z3 witness infrastructure required.\n"
         );
     }
 
     // Multi-file grand total.
     if check_count > 1 {
+        let all_raw: Vec<TighteningCandidate> =
+            file_results.iter().flat_map(|fr| fr.tightenings.iter().cloned()).collect();
+        let grand_deduped = deduplicate_tightenings(&all_raw).len();
         println!(
-            "Total: {grand_total_proven} proven, {grand_total_runtime} runtime obligations, {grand_total_failed} failed"
+            "Total: {grand_total_proven} proven, {grand_total_runtime} runtime obligations, \
+             {grand_total_failed} failed, {grand_deduped} tightening suggestion(s)"
         );
     }
 

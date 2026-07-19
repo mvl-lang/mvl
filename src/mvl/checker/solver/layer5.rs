@@ -48,7 +48,8 @@
 
 use std::collections::HashMap;
 
-use crate::mvl::parser::ast::{Expr, RefExpr};
+use crate::mvl::parser::ast::{CmpOp, Expr, RefExpr};
+use crate::mvl::parser::lexer::Span;
 
 use super::RefResult;
 
@@ -103,7 +104,152 @@ fn has_bitwise_ops(pred: &RefExpr) -> bool {
     }
 }
 
+// ── Axis 2: contract tightening ──────────────────────────────────────────────
+
+/// Result of a tightening binary search.
+#[derive(Debug, Clone)]
+pub(crate) struct TightenResult {
+    pub op: CmpOp,
+    pub tighter_bound: i64,
+}
+
+impl TightenResult {
+    /// Format the tighter predicate as it would appear in an `ensures` clause.
+    pub fn tighter_ensures(&self, prefix: &str) -> String {
+        let op_str = match self.op {
+            CmpOp::Ge => ">=",
+            CmpOp::Gt => ">",
+            CmpOp::Le => "<=",
+            CmpOp::Lt => "<",
+            CmpOp::Eq => "==",
+            CmpOp::Ne => "!=",
+        };
+        format!("ensures {prefix} {op_str} {}", self.tighter_bound)
+    }
+}
+
+/// Build a `self OP bound` RefExpr from parts.
+fn make_self_cmp(op: CmpOp, bound: i64, span: Span) -> RefExpr {
+    RefExpr::Compare {
+        op,
+        left: Box::new(RefExpr::Ident {
+            name: "self".into(),
+            span,
+        }),
+        right: Box::new(RefExpr::Integer { value: bound, span }),
+        span,
+    }
+}
+
+/// Try to find a tighter provable integer bound for a simple `self OP N` predicate.
+///
+/// Called after `check_ensures_for_return` determines that the declared `ensures`
+/// clause is **Proven** — this function asks: is there a strictly tighter bound
+/// that is also provable?  Binary-searches ±1 000 000 around the declared bound.
+///
+/// Returns `Some(TightenResult)` when a strictly tighter bound is found.
+/// Returns `None` when the predicate is not a simple `self OP N` form, when no
+/// improvement exists within the search range, or when the `z3` feature is absent.
+pub(crate) fn try_z3_tighten(
+    pred: &RefExpr,
+    arg: &Expr,
+    var_refs: &HashMap<String, Option<RefExpr>>,
+) -> Option<TightenResult> {
+    #[cfg(feature = "z3")]
+    return impl_z3_tighten(pred, arg, var_refs);
+    #[cfg(not(feature = "z3"))]
+    {
+        let _ = (pred, arg, var_refs);
+        None
+    }
+}
+
 // ── Z3 implementation (feature-gated) ────────────────────────────────────────
+
+/// Axis 2 tightening implementation (Z3-gated).
+///
+/// For `self >= N` predicates: binary-searches UPWARD for the largest N' > N
+/// that is still provable (larger lower bound = tighter).
+/// For `self <= N` predicates: binary-searches DOWNWARD for the smallest N' < N
+/// that is still provable (smaller upper bound = tighter).
+/// `self > N` and `self < N` are handled analogously.
+#[cfg(feature = "z3")]
+fn impl_z3_tighten(
+    pred: &RefExpr,
+    arg: &Expr,
+    var_refs: &HashMap<String, Option<RefExpr>>,
+) -> Option<TightenResult> {
+    use super::dummy_span;
+
+    let (op, current_bound) = extract_simple_self_bound(pred)?;
+
+    // Search range: ±1_000_000 from the current bound.
+    const RANGE: i64 = 1_000_000;
+    let (mut lo, mut hi, upward) = match op {
+        CmpOp::Ge | CmpOp::Gt => (current_bound + 1, current_bound + RANGE, true),
+        CmpOp::Le | CmpOp::Lt => (current_bound - RANGE, current_bound - 1, false),
+        _ => return None,
+    };
+
+    // Guard: if even the first step isn't provable (shouldn't happen for Proven
+    // input, but Z3 may timeout), bail early.
+    if lo > hi {
+        return None;
+    }
+
+    let span = dummy_span();
+    let mut best: Option<i64> = None;
+
+    while lo <= hi {
+        let mid = lo + (hi - lo) / 2;
+        let candidate = make_self_cmp(op, mid, span);
+        let proven = try_z3(&candidate, arg, var_refs) == Some(RefResult::Proven);
+
+        if upward {
+            if proven {
+                best = Some(mid);
+                lo = mid + 1; // try even higher
+            } else {
+                hi = mid - 1; // too tight, back off
+            }
+        } else if proven {
+            best = Some(mid);
+            hi = mid - 1; // try even lower
+        } else {
+            lo = mid + 1; // too tight, back off
+        }
+    }
+
+    best.map(|tighter_bound| TightenResult { op, tighter_bound })
+}
+
+/// Extract `(op, bound)` from a simple `self OP bound` RefExpr.
+#[cfg(feature = "z3")]
+fn extract_simple_self_bound(pred: &RefExpr) -> Option<(CmpOp, i64)> {
+    let RefExpr::Compare { op, left, right, .. } = pred else {
+        return None;
+    };
+    match (left.as_ref(), right.as_ref()) {
+        (RefExpr::Ident { name, .. }, RefExpr::Integer { value, .. }) if name == "self" => {
+            Some((*op, *value))
+        }
+        (RefExpr::Integer { value, .. }, RefExpr::Ident { name, .. }) if name == "self" => {
+            Some((flip_cmp(*op), *value))
+        }
+        _ => None,
+    }
+}
+
+#[cfg(feature = "z3")]
+fn flip_cmp(op: CmpOp) -> CmpOp {
+    match op {
+        CmpOp::Ge => CmpOp::Le,
+        CmpOp::Le => CmpOp::Ge,
+        CmpOp::Gt => CmpOp::Lt,
+        CmpOp::Lt => CmpOp::Gt,
+        other => other,
+    }
+}
 
 /// Collect all `Len { ident }` identifier names referenced in a `RefExpr`.
 ///
