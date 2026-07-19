@@ -147,6 +147,9 @@ build: ## Build the MVL compiler + LLVM runtime (BUILD=debug|release, default de
 # === Test ===
 
 MVL ?= ./target/debug/mvl
+# All test targets use the freshly built dev binary. Prevent it from re-execing
+# to a project-pinned toolchain (see src/main.rs and CLAUDE.md).
+export MVL_NO_REEXEC = 1
 # mvlr — matrix run driver. Prefer the in-tree copy when it exists so a
 # dev checkout always runs the mvlr matching this source (the emitter
 # under test needs the mvlr that knows how to drive it — the installed

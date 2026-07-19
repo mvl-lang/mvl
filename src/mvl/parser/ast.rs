@@ -627,6 +627,26 @@ pub enum RefExpr {
         inner: Box<RefExpr>,
         span: Span,
     },
+    /// `forall x in [lo..hi]. pred` — bounded universal quantifier over an integer range
+    /// (inclusive on both ends). Discharged by L3 expansion into a conjunction of
+    /// instantiated bodies. See #1915.
+    BoundedForall {
+        var: String,
+        lo: i64,
+        hi: i64,
+        body: Box<RefExpr>,
+        span: Span,
+    },
+    /// `exists x in [lo..hi]. pred` — bounded existential quantifier over an integer range
+    /// (inclusive on both ends). Discharged by L3 expansion into a disjunction of
+    /// instantiated bodies. See #1915.
+    BoundedExists {
+        var: String,
+        lo: i64,
+        hi: i64,
+        body: Box<RefExpr>,
+        span: Span,
+    },
 }
 
 /// Bitwise operators supported in refinement predicates (#1928).
@@ -637,6 +657,7 @@ pub enum BitwiseOp {
     Xor,  // bit_xor / ^
     Shl,  // shift_left  / <<
     Shr,  // shift_right / >>
+
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

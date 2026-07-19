@@ -1691,6 +1691,17 @@ pub(crate) fn check_arg_against_pred_counted(
     fn_decls: &HashMap<String, FnDecl>,
     counts: &mut RefinementCounts,
 ) -> RefResult {
+    // L3 bounded-quantifier expansion (#1915): before the layered cascade,
+    // unroll `forall i in [lo..hi]. p(i)` into a conjunction of substituted
+    // instances (and existentials into a disjunction). Each instance is then
+    // dispatched through the full L1..L5 cascade. See ADR-0057.
+    if matches!(
+        pred,
+        RefExpr::BoundedForall { .. } | RefExpr::BoundedExists { .. }
+    ) {
+        return expand_bounded_quantifier(arg, pred, var_refs, fn_decls, counts);
+    }
+
     // Atom normalization (#1805): L2/L4/L5 gate on `Expr::Ident`, which excludes
     // real-world compound atoms like `field.height` or `xs.len()`.  We rewrite
     // those non-arithmetic subtrees to fresh `Ident("__atom_N")` in a single
@@ -1751,6 +1762,125 @@ pub(crate) fn check_arg_against_pred_counted(
     RefResult::RuntimeCheck
 }
 
+// ── L3 bounded-quantifier expansion (#1915) ─────────────────────────────────
+
+/// Maximum number of expanded obligations produced by a single bounded
+/// quantifier before the checker falls back to `RuntimeCheck`. Prevents
+/// pathological blow-up on wide ranges. Same pattern as `MAX_PATHS` in L3.
+const MAX_BOUNDED_EXPANSION: usize = 1000;
+
+/// Expand a bounded quantifier by substituting the bound variable with each
+/// integer in `[lo..hi]` and dispatching each instance through the layered
+/// solver. Aggregates results:
+/// - `forall`: any failure ⇒ failure; all proven ⇒ proven; otherwise runtime.
+/// - `exists`: any proven ⇒ proven; all failed ⇒ failure; otherwise runtime.
+///
+/// Each expanded instance is credited to `by_layer[3]` regardless of which
+/// inner layer discharges it (per #1915 AC): the expansion is the L3 activity.
+fn expand_bounded_quantifier(
+    arg: &Expr,
+    pred: &RefExpr,
+    var_refs: &HashMap<String, Option<RefExpr>>,
+    fn_decls: &HashMap<String, FnDecl>,
+    counts: &mut RefinementCounts,
+) -> RefResult {
+    let (var, lo, hi, body, is_forall) = match pred {
+        RefExpr::BoundedForall {
+            var, lo, hi, body, ..
+        } => (var.clone(), *lo, *hi, body.as_ref(), true),
+        RefExpr::BoundedExists {
+            var, lo, hi, body, ..
+        } => (var.clone(), *lo, *hi, body.as_ref(), false),
+        _ => unreachable!("expand_bounded_quantifier requires a bounded quantifier"),
+    };
+
+    // Range width. Parser has already rejected `lo > hi`; guard defensively.
+    if hi < lo {
+        counts.runtime_checked += 1;
+        return RefResult::RuntimeCheck;
+    }
+    let width = (hi - lo + 1) as usize;
+    if width > MAX_BOUNDED_EXPANSION {
+        // Cap exceeded — record one runtime-check obligation, do not expand.
+        // A follow-up ticket can add an explicit diagnostic here.
+        counts.runtime_checked += 1;
+        return RefResult::RuntimeCheck;
+    }
+
+    let mut all_proven = true;
+    let mut all_failed = true;
+    let mut first_failure: Option<String> = None;
+
+    for k in lo..=hi {
+        let instance_span = dummy_span();
+        let value = RefExpr::Integer {
+            value: k,
+            span: instance_span,
+        };
+        let instance = crate::mvl::checker::contracts::subst_pred_ident(body, &var, &value);
+
+        // Dispatch this instance through the full cascade, but suppress the
+        // inner counting — we credit each instance to L3 below regardless of
+        // which inner layer discharged it (AC #5).
+        let mut inner_counts = RefinementCounts {
+            mode: counts.mode,
+            ..Default::default()
+        };
+        let r = check_arg_against_pred_counted(
+            arg,
+            &instance,
+            var_refs,
+            fn_decls,
+            &mut inner_counts,
+        );
+        counts.by_layer[3] += 1;
+        match r {
+            RefResult::Proven | RefResult::ProvenBv => {
+                counts.proven += 1;
+                all_failed = false;
+                // `exists` short-circuits on first proof.
+                if !is_forall {
+                    return RefResult::Proven;
+                }
+            }
+            RefResult::Failed { counterexample } => {
+                counts.failed += 1;
+                all_proven = false;
+                if is_forall {
+                    // `forall` short-circuits on first refutation.
+                    return RefResult::Failed {
+                        counterexample: counterexample.or_else(|| Some(format!("{var} = {k}"))),
+                    };
+                }
+                if first_failure.is_none() {
+                    first_failure = counterexample;
+                }
+            }
+            RefResult::RuntimeCheck => {
+                counts.runtime_checked += 1;
+                all_proven = false;
+                all_failed = false;
+            }
+        }
+    }
+
+    if is_forall {
+        if all_proven {
+            RefResult::Proven
+        } else {
+            RefResult::RuntimeCheck
+        }
+    } else if all_failed {
+        RefResult::Failed {
+            counterexample: first_failure.or_else(|| {
+                Some(format!("no witness found in [{lo}..{hi}]"))
+            }),
+        }
+    } else {
+        RefResult::RuntimeCheck
+    }
+}
+
 // ── Predicate display ─────────────────────────────────────────────────────────
 
 fn display_pred(pred: &RefExpr) -> String {
@@ -1799,6 +1929,12 @@ fn display_pred(pred: &RefExpr) -> String {
         RefExpr::Len { ident, .. } => format!("len({ident})"),
         RefExpr::Forall { var, body, .. } => format!("forall {var}, {}", display_pred(body)),
         RefExpr::Exists { var, body, .. } => format!("exists {var}, {}", display_pred(body)),
+        RefExpr::BoundedForall {
+            var, lo, hi, body, ..
+        } => format!("forall {var} in [{lo}..{hi}]. {}", display_pred(body)),
+        RefExpr::BoundedExists {
+            var, lo, hi, body, ..
+        } => format!("exists {var} in [{lo}..{hi}]. {}", display_pred(body)),
         RefExpr::FieldAccess { object, field, .. } => {
             format!("{}.{}", display_pred(object), field)
         }

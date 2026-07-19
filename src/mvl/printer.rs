@@ -1268,6 +1268,28 @@ impl<'src> Printer<'src> {
                 )
             }
             RefExpr::BitwiseNot { inner, .. } => format!("~{}", self.fmt_ref_expr(inner)),
+            RefExpr::BoundedForall {
+                var, lo, hi, body, ..
+            } => {
+                format!(
+                    "forall {} in [{}..{}]. {}",
+                    var,
+                    lo,
+                    hi,
+                    self.fmt_ref_expr(body)
+                )
+            }
+            RefExpr::BoundedExists {
+                var, lo, hi, body, ..
+            } => {
+                format!(
+                    "exists {} in [{}..{}]. {}",
+                    var,
+                    lo,
+                    hi,
+                    self.fmt_ref_expr(body)
+                )
+            }
         }
     }
 

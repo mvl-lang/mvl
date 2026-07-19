@@ -1,0 +1,18 @@
+// Solver Layer 3: bounded universal quantifier — L3 expansion (#1915)
+//
+// The requires clause `forall i in [0..9]. i < 10` unrolls into a
+// conjunction of ten instantiated obligations, each of which reduces to
+// a closed integer comparison (`0 < 10`, `1 < 10`, …, `9 < 10`) and is
+// discharged by L1's closed-form evaluator.
+//
+// Expected: no error, no runtime check. Every instance proves.
+
+partial fn bounded_forall_ok() -> Int
+    requires forall i in [0..9]. i < 10
+{
+    0
+}
+
+partial fn main() -> Unit {
+    let _: Int = bounded_forall_ok();
+}

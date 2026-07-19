@@ -1,0 +1,15 @@
+// Solver Layer 3: bounded existential quantifier — L3 expansion (#1915)
+//
+// `exists i in [0..9]. i == 7` unrolls into a disjunction; L3 short-circuits
+// as soon as one instance proves. `i == 7` proves at L1's closed-form
+// evaluator when i has been substituted with 7.
+
+partial fn bounded_exists_ok() -> Int
+    requires exists i in [0..9]. i == 7
+{
+    0
+}
+
+partial fn main() -> Unit {
+    let _: Int = bounded_exists_ok();
+}

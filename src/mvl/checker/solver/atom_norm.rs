@@ -282,6 +282,16 @@ fn canon_refexpr(r: &RefExpr) -> String {
             op, left, right, ..
         } => format!("({} {op:?} {})", canon_refexpr(left), canon_refexpr(right)),
         RefExpr::BitwiseNot { inner, .. } => format!("(~ {})", canon_refexpr(inner)),
+        RefExpr::BoundedForall {
+            var, lo, hi, body, ..
+        } => {
+            format!("∀{var}∈[{lo}..{hi}]. {}", canon_refexpr(body))
+        }
+        RefExpr::BoundedExists {
+            var, lo, hi, body, ..
+        } => {
+            format!("∃{var}∈[{lo}..{hi}]. {}", canon_refexpr(body))
+        }
     }
 }
 
