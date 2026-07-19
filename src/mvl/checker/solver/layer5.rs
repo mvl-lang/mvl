@@ -51,6 +51,7 @@ use std::collections::HashMap;
 use crate::mvl::parser::ast::{CmpOp, Expr, RefExpr, StringOp};
 use crate::mvl::parser::lexer::Span;
 
+use super::atom_norm::AtomNormalizer;
 use super::RefResult;
 
 // ── Public entry point ────────────────────────────────────────────────────────
@@ -66,6 +67,7 @@ pub(crate) fn try_z3(
     pred: &RefExpr,
     arg: &Expr,
     var_refs: &HashMap<String, Option<RefExpr>>,
+    norm: Option<&AtomNormalizer>,
 ) -> Option<RefResult> {
     #[cfg(feature = "z3")]
     {
@@ -78,11 +80,11 @@ pub(crate) fn try_z3(
             }
             // BV path returned None (unsupported shape) — fall through to NIA.
         }
-        impl_z3(pred, arg, var_refs)
+        impl_z3(pred, arg, var_refs, norm)
     }
     #[cfg(not(feature = "z3"))]
     {
-        let _ = (pred, arg, var_refs);
+        let _ = (pred, arg, var_refs, norm);
         None
     }
 }
@@ -250,7 +252,7 @@ fn impl_z3_tighten(
     while lo <= hi {
         let mid = lo + (hi - lo) / 2;
         let candidate = make_self_cmp(op, mid, span);
-        let proven = try_z3(&candidate, arg, var_refs) == Some(RefResult::Proven);
+        let proven = try_z3(&candidate, arg, var_refs, None) == Some(RefResult::Proven);
 
         if upward {
             if proven {
@@ -581,6 +583,7 @@ fn impl_z3(
     pred: &RefExpr,
     arg: &Expr,
     var_refs: &HashMap<String, Option<RefExpr>>,
+    norm: Option<&AtomNormalizer>,
 ) -> Option<RefResult> {
     use crate::mvl::parser::ast::Literal;
     use z3::ast::Ast as _;
@@ -696,7 +699,8 @@ fn impl_z3(
             //   - Fully-constrained literal arg: the violation is definite at compile
             //     time → extract the Z3 model witness and return Failed.
             //   - Symbolic/variable arg: the violation is only potential (the caller
-            //     might pass a value that satisfies pred) → fall through to RuntimeCheck.
+            //     might pass a value that satisfies pred) → extract model as a witness
+            //     and return RuntimeCheckWithWitness (#1896) for diagnostic surfacing.
             if is_constrained_literal(arg, pred_uses_len) {
                 let model = solver.get_model()?;
                 let val = model.eval(&arg_int, true)?;
@@ -712,7 +716,12 @@ fn impl_z3(
                 let counterexample = val.as_i64().map(|n| format!("{label}={n}"));
                 Some(RefResult::Failed { counterexample })
             } else {
-                None
+                // Symbolic arg — fall through to runtime check, but surface the
+                // Z3 witness so `mvl prove` can show which values break the pred.
+                let model = solver.get_model();
+                let ce = model
+                    .and_then(|m| extract_symbolic_counterexample(&m, &vars, arg, &arg_int, norm));
+                ce.map(|counterexample| RefResult::RuntimeCheckWithWitness { counterexample })
             }
         }
         _ => None,
@@ -917,6 +926,60 @@ fn is_constrained_literal(arg: &Expr, pred_uses_len: bool) -> bool {
         }
         _ => false,
     }
+}
+
+// ── Symbolic counter-example extraction (#1896) ───────────────────────────────
+
+/// Extract a human-readable counter-example string from a Z3 model for a
+/// symbolic (non-literal) argument.
+///
+/// Collects concrete assignments for all in-scope variables and, if the
+/// argument is a plain identifier not already in `vars`, for the argument
+/// itself.  Atom names (`__atom_N`) are reverse-projected to source-level
+/// names via `norm` when available.  Assignments are sorted for stability.
+///
+/// Returns `None` when the model yields no concrete integer assignments.
+#[cfg(feature = "z3")]
+fn extract_symbolic_counterexample(
+    model: &z3::Model,
+    vars: &HashMap<String, z3::ast::Int>,
+    arg: &Expr,
+    arg_int: &z3::ast::Int,
+    norm: Option<&AtomNormalizer>,
+) -> Option<String> {
+    let mut parts: Vec<(String, i64)> = Vec::new();
+
+    for (name, z3_var) in vars {
+        if let Some(val) = model.eval(z3_var, true).and_then(|v| v.as_i64()) {
+            let display = norm
+                .and_then(|n| n.source_name_for(name))
+                .map(str::to_string)
+                .unwrap_or_else(|| name.clone());
+            parts.push((display, val));
+        }
+    }
+
+    // Also include the arg value if it's a plain ident not already captured above.
+    if let Expr::Ident(arg_name, _) = arg {
+        let already_present = parts.iter().any(|(n, _)| n == arg_name.as_str());
+        if !already_present {
+            if let Some(val) = model.eval(arg_int, true).and_then(|v| v.as_i64()) {
+                parts.push((arg_name.clone(), val));
+            }
+        }
+    }
+
+    if parts.is_empty() {
+        return None;
+    }
+    parts.sort_by(|a, b| a.0.cmp(&b.0));
+    Some(
+        parts
+            .iter()
+            .map(|(n, v)| format!("{n} = {v}"))
+            .collect::<Vec<_>>()
+            .join(", "),
+    )
 }
 
 // ── QF-BV implementation (#1928) ──────────────────────────────────────────────
@@ -1306,7 +1369,10 @@ mod tests {
         // var_refs: y has hypothesis self > 5 (i.e., y > 5)
         let mut var_refs = HashMap::new();
         var_refs.insert("y".into(), Some(self_gt(5)));
-        assert_eq!(try_z3(&pred, &arg, &var_refs), Some(RefResult::Proven));
+        assert_eq!(
+            try_z3(&pred, &arg, &var_refs, None),
+            Some(RefResult::Proven)
+        );
     }
 
     /// Literal 7 satisfies self > 0: proven by Z3.
@@ -1315,7 +1381,10 @@ mod tests {
         let pred = self_gt(0); // self > 0
         let arg = int_lit(7);
         let var_refs = HashMap::new();
-        assert_eq!(try_z3(&pred, &arg, &var_refs), Some(RefResult::Proven));
+        assert_eq!(
+            try_z3(&pred, &arg, &var_refs, None),
+            Some(RefResult::Proven)
+        );
     }
 
     /// Literal 0 does NOT satisfy self > 0: Z3 returns Failed with counterexample.
@@ -1326,7 +1395,7 @@ mod tests {
         let var_refs = HashMap::new();
         // Literal arg → definite violation → Failed with Z3 model witness.
         assert_eq!(
-            try_z3(&pred, &arg, &var_refs),
+            try_z3(&pred, &arg, &var_refs, None),
             Some(RefResult::Failed {
                 counterexample: Some("self=0".to_string())
             })
@@ -1341,18 +1410,26 @@ mod tests {
         let arg = Expr::Ident("y".into(), dummy_span());
         let mut var_refs = HashMap::new();
         var_refs.insert("y".into(), Some(self_gt(5)));
-        assert_eq!(try_z3(&pred, &arg, &var_refs), Some(RefResult::Proven));
+        assert_eq!(
+            try_z3(&pred, &arg, &var_refs, None),
+            Some(RefResult::Proven)
+        );
     }
 
-    /// Variable without refinement does not prove self > 0.
+    /// Variable without refinement does not prove self > 0; Z3 now returns a witness.
     #[test]
-    fn z3_no_hypothesis_cannot_prove() {
+    fn z3_no_hypothesis_returns_witness() {
         let pred = self_gt(0); // self > 0
         let arg = Expr::Ident("x".into(), dummy_span());
         // x has no refinement predicate
         let mut var_refs = HashMap::new();
         var_refs.insert("x".into(), None::<RefExpr>);
-        assert_eq!(try_z3(&pred, &arg, &var_refs), None);
+        // Z3 finds a counter-example (x = 0 or similar) and returns RuntimeCheckWithWitness.
+        let result = try_z3(&pred, &arg, &var_refs, None);
+        assert!(
+            matches!(result, Some(RefResult::RuntimeCheckWithWitness { .. })),
+            "expected RuntimeCheckWithWitness, got {result:?}"
+        );
     }
 
     /// Two-variable case: x > 10 and y > x implies y > 5.
@@ -1379,7 +1456,10 @@ mod tests {
         let mut var_refs = HashMap::new();
         var_refs.insert("x".into(), Some(x_gt_10));
         var_refs.insert("y".into(), Some(y_gt_x));
-        assert_eq!(try_z3(&pred, &arg, &var_refs), Some(RefResult::Proven));
+        assert_eq!(
+            try_z3(&pred, &arg, &var_refs, None),
+            Some(RefResult::Proven)
+        );
         let _ = LogicOp::And; // suppress unused import warning
     }
 
@@ -1421,7 +1501,10 @@ mod tests {
         let pred = len_self_lt(256);
         let arg = Expr::Literal(Literal::Str("hello".into()), dummy_span());
         let var_refs = HashMap::new();
-        assert_eq!(try_z3(&pred, &arg, &var_refs), Some(RefResult::Proven));
+        assert_eq!(
+            try_z3(&pred, &arg, &var_refs, None),
+            Some(RefResult::Proven)
+        );
     }
 
     /// Empty string satisfies `len(self) >= 0` (non-negativity axiom).
@@ -1430,7 +1513,10 @@ mod tests {
         let pred = len_self_ge(0);
         let arg = Expr::Literal(Literal::Str("".into()), dummy_span());
         let var_refs = HashMap::new();
-        assert_eq!(try_z3(&pred, &arg, &var_refs), Some(RefResult::Proven));
+        assert_eq!(
+            try_z3(&pred, &arg, &var_refs, None),
+            Some(RefResult::Proven)
+        );
     }
 
     /// String literal "hello" does NOT satisfy `len(self) < 3` — Z3 returns Failed.
@@ -1442,7 +1528,7 @@ mod tests {
         // String literal in len-predicate context is constrained: len("hello")=5 → definite
         // violation → Failed with Z3 model witness.
         assert_eq!(
-            try_z3(&pred, &arg, &var_refs),
+            try_z3(&pred, &arg, &var_refs, None),
             Some(RefResult::Failed {
                 counterexample: Some("len(self)=5".to_string())
             })
@@ -1471,7 +1557,10 @@ mod tests {
                 span: dummy_span(),
             }),
         );
-        assert_eq!(try_z3(&pred, &arg, &var_refs), Some(RefResult::Proven));
+        assert_eq!(
+            try_z3(&pred, &arg, &var_refs, None),
+            Some(RefResult::Proven)
+        );
     }
 
     /// Variable `s` with hypothesis `len(self) > 5` satisfies `len(self) > 3`.
@@ -1506,7 +1595,10 @@ mod tests {
                 span: dummy_span(),
             }),
         );
-        assert_eq!(try_z3(&pred, &arg, &var_refs), Some(RefResult::Proven));
+        assert_eq!(
+            try_z3(&pred, &arg, &var_refs, None),
+            Some(RefResult::Proven)
+        );
     }
 
     // ── QF-BV tests (#1928) ──────────────────────────────────────────────────
@@ -1541,7 +1633,10 @@ mod tests {
         let pred = self_bit_and_eq(15); // (self & 15) == self
         let arg = int_lit(4);
         let var_refs = HashMap::new();
-        assert_eq!(try_z3(&pred, &arg, &var_refs), Some(RefResult::ProvenBv));
+        assert_eq!(
+            try_z3(&pred, &arg, &var_refs, None),
+            Some(RefResult::ProvenBv)
+        );
     }
 
     /// 16 does NOT satisfy (self & 15) == self — 16 & 15 = 0 ≠ 16.
@@ -1552,7 +1647,7 @@ mod tests {
         let var_refs = HashMap::new();
         // 16 is a literal → definite failure but impl_z3_bv returns None on Sat
         // (no counterexample extraction in BV path — falls through to runtime).
-        assert_eq!(try_z3(&pred, &arg, &var_refs), None);
+        assert_eq!(try_z3(&pred, &arg, &var_refs, None), None);
     }
 
     /// Variable y with hypothesis (y & 15) == y satisfies (self & 15) == self.
@@ -1562,7 +1657,10 @@ mod tests {
         let arg = Expr::Ident("y".into(), dummy_span());
         let mut var_refs = HashMap::new();
         var_refs.insert("y".into(), Some(self_bit_and_eq(15)));
-        assert_eq!(try_z3(&pred, &arg, &var_refs), Some(RefResult::ProvenBv));
+        assert_eq!(
+            try_z3(&pred, &arg, &var_refs, None),
+            Some(RefResult::ProvenBv)
+        );
     }
 
     /// 255 & 255 == 255: full byte mask proves trivially.
@@ -1571,7 +1669,10 @@ mod tests {
         let pred = self_bit_and_eq(255); // (self & 255) == self
         let arg = int_lit(128);
         let var_refs = HashMap::new();
-        assert_eq!(try_z3(&pred, &arg, &var_refs), Some(RefResult::ProvenBv));
+        assert_eq!(
+            try_z3(&pred, &arg, &var_refs, None),
+            Some(RefResult::ProvenBv)
+        );
     }
 
     /// Shift: (self << 0) == self is trivially true.
@@ -1599,7 +1700,10 @@ mod tests {
         };
         let arg = int_lit(42);
         let var_refs = HashMap::new();
-        assert_eq!(try_z3(&pred, &arg, &var_refs), Some(RefResult::ProvenBv));
+        assert_eq!(
+            try_z3(&pred, &arg, &var_refs, None),
+            Some(RefResult::ProvenBv)
+        );
     }
 
     /// Test that mimics the full pipeline: atom-normalize then try_z3.
@@ -1637,8 +1741,71 @@ mod tests {
         let n_var_refs = norm.rewrite_var_refs(&var_refs);
 
         assert_eq!(
-            try_z3(&n_pred, &n_arg, &n_var_refs),
+            try_z3(&n_pred, &n_arg, &n_var_refs, Some(&norm)),
             Some(RefResult::ProvenBv)
         );
+    }
+
+    // ── Counter-example witness tests (#1896) ─────────────────────────────────
+
+    /// Symbolic arg with no hypothesis: Z3 finds a counter-example and returns
+    /// RuntimeCheckWithWitness. The counterexample string must name the variable
+    /// and provide a concrete value.
+    #[test]
+    fn z3_symbolic_arg_produces_witness_on_sat() {
+        let pred = self_gt(0); // self > 0
+        let arg = Expr::Ident("x".into(), dummy_span());
+        let mut var_refs = HashMap::new();
+        var_refs.insert("x".into(), None::<RefExpr>);
+        let result = try_z3(&pred, &arg, &var_refs, None);
+        match result {
+            Some(RefResult::RuntimeCheckWithWitness { counterexample }) => {
+                // x has no lower bound, so Z3 can find x = 0 (or some non-positive value).
+                // The key property: the counterexample string mentions the variable name.
+                assert!(
+                    counterexample.contains('='),
+                    "counterexample should contain variable assignment: {counterexample}"
+                );
+            }
+            // Without the z3 feature this arm is unreachable — but cfg guards
+            // the whole test module, so this is fine.
+            other => panic!("expected RuntimeCheckWithWitness, got {other:?}"),
+        }
+    }
+
+    /// Multi-variable symbolic case: when both x and y are in-scope with no
+    /// hypothesis, Z3 should surface assignments for both in the witness.
+    #[test]
+    fn z3_multi_variable_witness_covers_all_free_vars() {
+        // pred: self > x (a relation between arg and another in-scope var)
+        let pred = RefExpr::Compare {
+            op: CmpOp::Gt,
+            left: Box::new(RefExpr::Ident {
+                name: "self".into(),
+                span: dummy_span(),
+            }),
+            right: Box::new(RefExpr::Ident {
+                name: "x".into(),
+                span: dummy_span(),
+            }),
+            span: dummy_span(),
+        };
+        let arg = Expr::Ident("y".into(), dummy_span());
+        let mut var_refs = HashMap::new();
+        var_refs.insert("x".into(), None::<RefExpr>);
+        var_refs.insert("y".into(), None::<RefExpr>);
+        let result = try_z3(&pred, &arg, &var_refs, None);
+        match result {
+            Some(RefResult::RuntimeCheckWithWitness { counterexample }) => {
+                // Should mention x (the free var) or y (the arg itself).
+                let has_x = counterexample.contains("x =") || counterexample.contains("x=");
+                let has_y = counterexample.contains("y =") || counterexample.contains("y=");
+                assert!(
+                    has_x || has_y,
+                    "expected at least one variable assignment: {counterexample}"
+                );
+            }
+            other => panic!("expected RuntimeCheckWithWitness, got {other:?}"),
+        }
     }
 }

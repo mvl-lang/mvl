@@ -452,7 +452,9 @@ pub fn run(
                 ProofOutcome::Proven { .. } if matches_filter => {
                     file_proven += 1;
                 }
-                ProofOutcome::RuntimeCheck if matches_filter => {
+                ProofOutcome::RuntimeCheck | ProofOutcome::RuntimeCheckWithWitness { .. }
+                    if matches_filter =>
+                {
                     file_runtime += 1;
                     let hint = HardenHint::classify(&site.predicate);
                     sites_data.push((

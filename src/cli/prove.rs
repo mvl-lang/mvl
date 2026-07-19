@@ -175,6 +175,7 @@ pub fn run(path: &str, verbose: bool, stdlib_profile: &str, callee_filter: Optio
                     }
                 }
                 ProofOutcome::RuntimeCheck => "(runtime)".len(),
+                ProofOutcome::RuntimeCheckWithWitness { .. } => "(runtime)".len(),
                 ProofOutcome::Failed => "(FAILED)".len(),
             })
             .max()
@@ -206,6 +207,9 @@ pub fn run(path: &str, verbose: bool, stdlib_profile: &str, callee_filter: Optio
                     }
                 }
                 ProofOutcome::RuntimeCheck => "(runtime)".to_string(),
+                ProofOutcome::RuntimeCheckWithWitness { counterexample } => {
+                    format!("(runtime: counter-example: {counterexample})")
+                }
                 ProofOutcome::Failed => "(FAILED)".to_string(),
             };
             if verbose {
@@ -241,7 +245,9 @@ pub fn run(path: &str, verbose: bool, stdlib_profile: &str, callee_filter: Optio
                     file_proven += 1;
                     file_by_layer[*layer] += 1;
                 }
-                ProofOutcome::RuntimeCheck => file_runtime += 1,
+                ProofOutcome::RuntimeCheck | ProofOutcome::RuntimeCheckWithWitness { .. } => {
+                    file_runtime += 1
+                }
                 ProofOutcome::Failed => file_failed += 1,
             }
         }

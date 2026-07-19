@@ -188,7 +188,9 @@ fn check_invariant_at_entry(
                 is_bv: false,
             },
             RefResult::ProvenBv => ProofOutcome::Proven { layer, is_bv: true },
-            RefResult::RuntimeCheck => ProofOutcome::RuntimeCheck,
+            RefResult::RuntimeCheck | RefResult::RuntimeCheckWithWitness { .. } => {
+                ProofOutcome::RuntimeCheck
+            }
             RefResult::Failed { counterexample } => {
                 ctx.errors.push(CheckError::InvariantViolated {
                     fn_name: fn_name.to_string(),
@@ -690,7 +692,9 @@ fn check_spawn_at_site(
                         is_bv: false,
                     },
                     RefResult::ProvenBv => ProofOutcome::Proven { layer, is_bv: true },
-                    RefResult::RuntimeCheck => ProofOutcome::RuntimeCheck,
+                    RefResult::RuntimeCheck | RefResult::RuntimeCheckWithWitness { .. } => {
+                        ProofOutcome::RuntimeCheck
+                    }
                     RefResult::Failed { counterexample } => {
                         ctx.errors.push(CheckError::RefinementViolated {
                             pred: format!("{actor_type}.{init_name}: {}", display_pred(pred)),
@@ -870,7 +874,9 @@ fn check_construct_at_site(
                         is_bv: false,
                     },
                     RefResult::ProvenBv => ProofOutcome::Proven { layer, is_bv: true },
-                    RefResult::RuntimeCheck => ProofOutcome::RuntimeCheck,
+                    RefResult::RuntimeCheck | RefResult::RuntimeCheckWithWitness { .. } => {
+                        ProofOutcome::RuntimeCheck
+                    }
                     RefResult::Failed { counterexample } => {
                         ctx.errors.push(CheckError::RefinementViolated {
                             pred: format!("{name}.{init_name}: {}", display_pred(pred)),

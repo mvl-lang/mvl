@@ -160,6 +160,9 @@ pub enum ProofOutcome {
     Proven { layer: usize, is_bv: bool },
     /// Could not prove statically; a runtime assertion will be emitted.
     RuntimeCheck,
+    /// Could not prove statically, but Z3 found a concrete counter-example
+    /// showing how the predicate can fail (#1896).
+    RuntimeCheckWithWitness { counterexample: String },
     /// Statically violated — the argument provably breaks the predicate.
     Failed,
 }
@@ -1512,7 +1515,9 @@ impl<'a, 'ast> Visit<'ast> for RefinementAnalyzer<'a, 'ast> {
                     );
                     match outcome {
                         RefResult::Proven | RefResult::ProvenBv => self.counts.proven += 1,
-                        RefResult::RuntimeCheck => self.counts.runtime_checked += 1,
+                        RefResult::RuntimeCheck | RefResult::RuntimeCheckWithWitness { .. } => {
+                            self.counts.runtime_checked += 1
+                        }
                         RefResult::Failed { counterexample } => {
                             self.counts.failed += 1;
                             self.errors.push(CheckError::RefinementViolated {
@@ -1711,6 +1716,11 @@ fn check_call_site(
                 }
             }
             RefResult::RuntimeCheck => ProofOutcome::RuntimeCheck,
+            RefResult::RuntimeCheckWithWitness { counterexample } => {
+                ProofOutcome::RuntimeCheckWithWitness {
+                    counterexample: counterexample.clone(),
+                }
+            }
             RefResult::Failed { counterexample } => {
                 errors.push(CheckError::RefinementViolated {
                     pred: format!(
@@ -1753,7 +1763,7 @@ fn record(n: usize, r: RefResult, counts: &mut RefinementCounts) -> RefResult {
             counts.by_layer[n] += 1;
             counts.proven += 1;
         }
-        RefResult::RuntimeCheck => {
+        RefResult::RuntimeCheck | RefResult::RuntimeCheckWithWitness { .. } => {
             counts.runtime_checked += 1;
         }
         RefResult::Failed { .. } => {
@@ -1791,8 +1801,12 @@ pub(crate) fn check_arg_against_pred_counted(
     // and 3 receive the *original* inputs — L1 relies on structural shape
     // equality, and L3 dispatches on `Expr::FnCall` which normalization does
     // not rewrite anyway (but keeping originals avoids any accidental drift).
-    let normalize = || {
-        let mut norm = AtomNormalizer::new();
+    //
+    // The normalizer is preserved (not wrapped in a closure) so that try_z3
+    // can use it to project __atom_N names back to source-level names in
+    // counter-example witnesses (#1896).
+    let mut norm = AtomNormalizer::new();
+    let make_normalized = |norm: &mut AtomNormalizer| {
         let n_arg = norm.rewrite_expr(arg);
         let n_pred = norm.rewrite_refexpr(pred);
         let n_var_refs = norm.rewrite_var_refs(var_refs);
@@ -1801,8 +1815,8 @@ pub(crate) fn check_arg_against_pred_counted(
 
     match counts.mode {
         SolverMode::Z3Only => {
-            let (n_arg, n_pred, n_var_refs) = normalize();
-            if let Some(r) = try_z3(&n_pred, &n_arg, &n_var_refs) {
+            let (n_arg, n_pred, n_var_refs) = make_normalized(&mut norm);
+            if let Some(r) = try_z3(&n_pred, &n_arg, &n_var_refs, Some(&norm)) {
                 return record(5, r, counts);
             }
         }
@@ -1810,7 +1824,7 @@ pub(crate) fn check_arg_against_pred_counted(
             if let Some(r) = try_trivial(pred, arg, var_refs, fn_decls) {
                 return record(1, r, counts);
             }
-            let (n_arg, n_pred, n_var_refs) = normalize();
+            let (n_arg, n_pred, n_var_refs) = make_normalized(&mut norm);
             if let Some(r) = try_interval(&n_pred, &n_arg, &n_var_refs) {
                 return record(2, r, counts);
             }
@@ -1819,7 +1833,7 @@ pub(crate) fn check_arg_against_pred_counted(
             if let Some(r) = try_trivial(pred, arg, var_refs, fn_decls) {
                 return record(1, r, counts);
             }
-            let (n_arg, n_pred, n_var_refs) = normalize();
+            let (n_arg, n_pred, n_var_refs) = make_normalized(&mut norm);
             if let Some(r) = try_interval(&n_pred, &n_arg, &n_var_refs) {
                 return record(2, r, counts);
             }
@@ -1833,7 +1847,7 @@ pub(crate) fn check_arg_against_pred_counted(
             if let Some(r) = try_cooper(&n_pred, &n_arg, &n_var_refs) {
                 return record(4, r, counts);
             }
-            if let Some(r) = try_z3(&n_pred, &n_arg, &n_var_refs) {
+            if let Some(r) = try_z3(&n_pred, &n_arg, &n_var_refs, Some(&norm)) {
                 return record(5, r, counts);
             }
         }
@@ -1933,7 +1947,7 @@ fn expand_bounded_quantifier(
                     first_failure = counterexample;
                 }
             }
-            RefResult::RuntimeCheck => {
+            RefResult::RuntimeCheck | RefResult::RuntimeCheckWithWitness { .. } => {
                 counts.runtime_checked += 1;
                 all_proven = false;
                 all_failed = false;
@@ -2136,7 +2150,7 @@ mod tests {
         // With Z3 feature: Proven (by_layer[5] = 1). Without: RuntimeCheck.
         match result {
             RefResult::Proven | RefResult::ProvenBv => assert_eq!(counts.by_layer[5], 1),
-            RefResult::RuntimeCheck => {} // z3 feature not enabled
+            RefResult::RuntimeCheck | RefResult::RuntimeCheckWithWitness { .. } => {} // z3 feature not enabled
             RefResult::Failed { .. } => panic!("unexpected Failed"),
         }
         // Layers 1–4 must NOT have been credited.
