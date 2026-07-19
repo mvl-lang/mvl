@@ -2041,6 +2041,9 @@ fn display_pred(pred: &RefExpr) -> String {
             };
             format!("{}.{}({:?})", display_pred(receiver), method, literal)
         }
+        RefExpr::ArrayGet { list, index, .. } => {
+            format!("{}.get({})", display_pred(list), display_pred(index))
+        }
     }
 }
 

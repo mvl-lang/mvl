@@ -1304,6 +1304,13 @@ impl<'src> Printer<'src> {
                 };
                 format!("{}.{}({:?})", self.fmt_ref_expr(receiver), method, literal)
             }
+            RefExpr::ArrayGet { list, index, .. } => {
+                format!(
+                    "{}.get({})",
+                    self.fmt_ref_expr(list),
+                    self.fmt_ref_expr(index)
+                )
+            }
         }
     }
 
