@@ -79,9 +79,7 @@ fn stmt_calls_any(stmt: &TirStmt, targets: &HashSet<String>) -> bool {
     match stmt {
         TirStmt::Let { init, .. } => expr_calls_any(init, targets),
         TirStmt::Assign { value, .. } => expr_calls_any(value, targets),
-        TirStmt::Return { value, .. } => {
-            value.as_ref().is_some_and(|e| expr_calls_any(e, targets))
-        }
+        TirStmt::Return { value, .. } => value.as_ref().is_some_and(|e| expr_calls_any(e, targets)),
         TirStmt::Expr { expr, .. } => expr_calls_any(expr, targets),
         TirStmt::If {
             cond, then, else_, ..
