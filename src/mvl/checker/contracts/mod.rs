@@ -1269,6 +1269,20 @@ pub(super) fn normalize_pred(pred: &RefExpr, old_name: &str) -> RefExpr {
             pattern: pattern.clone(),
             span: *span,
         },
+        RefExpr::Abs { inner, span } => RefExpr::Abs {
+            inner: Box::new(normalize_pred(inner, old_name)),
+            span: *span,
+        },
+        RefExpr::Min { left, right, span } => RefExpr::Min {
+            left: Box::new(normalize_pred(left, old_name)),
+            right: Box::new(normalize_pred(right, old_name)),
+            span: *span,
+        },
+        RefExpr::Max { left, right, span } => RefExpr::Max {
+            left: Box::new(normalize_pred(left, old_name)),
+            right: Box::new(normalize_pred(right, old_name)),
+            span: *span,
+        },
         // Leaves unchanged.
         RefExpr::Integer { .. }
         | RefExpr::Float { .. }
@@ -1486,6 +1500,20 @@ pub(super) fn subst_pred_ident(pred: &RefExpr, old_name: &str, new_val: &RefExpr
             pattern: pattern.clone(),
             span: *span,
         },
+        RefExpr::Abs { inner, span } => RefExpr::Abs {
+            inner: Box::new(subst_pred_ident(inner, old_name, new_val)),
+            span: *span,
+        },
+        RefExpr::Min { left, right, span } => RefExpr::Min {
+            left: Box::new(subst_pred_ident(left, old_name, new_val)),
+            right: Box::new(subst_pred_ident(right, old_name, new_val)),
+            span: *span,
+        },
+        RefExpr::Max { left, right, span } => RefExpr::Max {
+            left: Box::new(subst_pred_ident(left, old_name, new_val)),
+            right: Box::new(subst_pred_ident(right, old_name, new_val)),
+            span: *span,
+        },
         RefExpr::Integer { .. }
         | RefExpr::Float { .. }
         | RefExpr::Bool { .. }
@@ -1667,6 +1695,11 @@ pub(super) fn collect_idents_inner(pred: &RefExpr, names: &mut Vec<String>) {
             collect_idents_inner(index, names);
         }
         RefExpr::RegexMatch { receiver, .. } => collect_idents_inner(receiver, names),
+        RefExpr::Abs { inner, .. } => collect_idents_inner(inner, names),
+        RefExpr::Min { left, right, .. } | RefExpr::Max { left, right, .. } => {
+            collect_idents_inner(left, names);
+            collect_idents_inner(right, names);
+        }
     }
 }
 
@@ -1760,6 +1793,13 @@ pub(super) fn display_pred(pred: &RefExpr) -> String {
             receiver, pattern, ..
         } => {
             format!("{}.matches({:?})", display_pred(receiver), pattern)
+        }
+        RefExpr::Abs { inner, .. } => format!("abs({})", display_pred(inner)),
+        RefExpr::Min { left, right, .. } => {
+            format!("min({}, {})", display_pred(left), display_pred(right))
+        }
+        RefExpr::Max { left, right, .. } => {
+            format!("max({}, {})", display_pred(left), display_pred(right))
         }
     }
 }

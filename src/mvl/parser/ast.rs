@@ -676,6 +676,25 @@ pub enum RefExpr {
         pattern: String,
         span: Span,
     },
+    /// `abs(x)` or `x.abs()` — absolute value in a refinement predicate (#1936).
+    /// Accepted in both function-call and method-call forms; desugared to this
+    /// node so downstream layers are uniform.
+    Abs {
+        inner: Box<RefExpr>,
+        span: Span,
+    },
+    /// `min(x, y)` or `x.min(y)` — minimum of two values (#1936).
+    Min {
+        left: Box<RefExpr>,
+        right: Box<RefExpr>,
+        span: Span,
+    },
+    /// `max(x, y)` or `x.max(y)` — maximum of two values (#1936).
+    Max {
+        left: Box<RefExpr>,
+        right: Box<RefExpr>,
+        span: Span,
+    },
 }
 
 /// String-content operations supported in refinement predicates (#1919).

@@ -340,6 +340,13 @@ impl TypeChecker {
             RefExpr::RegexMatch { receiver, .. } => {
                 self.check_guard_ref_expr(receiver);
             }
+            RefExpr::Abs { inner, .. } => {
+                self.check_guard_ref_expr(inner);
+            }
+            RefExpr::Min { left, right, .. } | RefExpr::Max { left, right, .. } => {
+                self.check_guard_ref_expr(left);
+                self.check_guard_ref_expr(right);
+            }
         }
     }
 
