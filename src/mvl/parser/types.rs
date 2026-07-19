@@ -1801,4 +1801,117 @@ mod tests {
         let is_session = matches!(&td.body, TypeBody::Alias(te) if matches!(te.as_ref(), TypeExpr::Session { .. }));
         assert!(is_session, "expected session type alias, got {:?}", td.body);
     }
+
+    // ── Requirement: bitwise ops in refinement predicates (#1941) ─────────────
+
+    #[test]
+    fn parse_ref_bit_and_method_call() {
+        // self.bit_and(15) == self — #1941 regression guard
+        let re = ref_expr_direct("self.bit_and(15) == self").expect("parse ok");
+        assert!(
+            matches!(
+                re,
+                RefExpr::Compare {
+                    op: CmpOp::Eq,
+                    ref left,
+                    ..
+                } if matches!(**left, RefExpr::BitwiseOp { op: BitwiseOp::And, .. })
+            ),
+            "expected Compare(Eq, BitwiseOp(And, ..), ..), got {:?}",
+            re
+        );
+    }
+
+    #[test]
+    fn parse_ref_bit_or_method_call() {
+        let re = ref_expr_direct("self.bit_or(1) == self").expect("parse ok");
+        assert!(
+            matches!(
+                re,
+                RefExpr::Compare { ref left, .. }
+                if matches!(**left, RefExpr::BitwiseOp { op: BitwiseOp::Or, .. })
+            ),
+            "expected BitwiseOp(Or, ..), got {:?}",
+            re
+        );
+    }
+
+    #[test]
+    fn parse_ref_bit_xor_method_call() {
+        let re = ref_expr_direct("self.bit_xor(255) == 255").expect("parse ok");
+        assert!(
+            matches!(
+                re,
+                RefExpr::Compare { ref left, .. }
+                if matches!(**left, RefExpr::BitwiseOp { op: BitwiseOp::Xor, .. })
+            ),
+            "expected BitwiseOp(Xor, ..), got {:?}",
+            re
+        );
+    }
+
+    #[test]
+    fn parse_ref_shift_left_method_call() {
+        let re = ref_expr_direct("self.shift_left(4) == 0").expect("parse ok");
+        assert!(
+            matches!(
+                re,
+                RefExpr::Compare { ref left, .. }
+                if matches!(**left, RefExpr::BitwiseOp { op: BitwiseOp::Shl, .. })
+            ),
+            "expected BitwiseOp(Shl, ..), got {:?}",
+            re
+        );
+    }
+
+    #[test]
+    fn parse_ref_shift_right_method_call() {
+        let re = ref_expr_direct("self.shift_right(2) == 0").expect("parse ok");
+        assert!(
+            matches!(
+                re,
+                RefExpr::Compare { ref left, .. }
+                if matches!(**left, RefExpr::BitwiseOp { op: BitwiseOp::Shr, .. })
+            ),
+            "expected BitwiseOp(Shr, ..), got {:?}",
+            re
+        );
+    }
+
+    #[test]
+    fn parse_ref_bit_not_method_call() {
+        let re = ref_expr_direct("self.bit_not() == 0").expect("parse ok");
+        assert!(
+            matches!(
+                re,
+                RefExpr::Compare { ref left, .. }
+                if matches!(**left, RefExpr::BitwiseNot { .. })
+            ),
+            "expected BitwiseNot in Compare, got {:?}",
+            re
+        );
+    }
+
+    #[test]
+    fn parse_type_alias_with_bit_and_refinement() {
+        // type-alias-body position: #1941 regression guard
+        let td = type_decl("type Nibble = Int where self.bit_and(15) == self");
+        assert_eq!(td.name, "Nibble");
+        assert!(
+            matches!(&td.body, TypeBody::Alias(te) if matches!(te.as_ref(), TypeExpr::Refined { .. })),
+            "expected Refined alias, got {:?}",
+            td.body
+        );
+    }
+
+    #[test]
+    fn parse_type_alias_with_bit_not_refinement() {
+        let td = type_decl("type AllOnes = Int where self.bit_not() == 0");
+        assert_eq!(td.name, "AllOnes");
+        assert!(
+            matches!(&td.body, TypeBody::Alias(te) if matches!(te.as_ref(), TypeExpr::Refined { .. })),
+            "expected Refined alias, got {:?}",
+            td.body
+        );
+    }
 }
