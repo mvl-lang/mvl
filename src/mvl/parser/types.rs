@@ -735,7 +735,9 @@ impl Parser {
         let kind = self.peek_kind().clone();
         match kind {
             // abs(x) — absolute value, function-call form (#1936)
-            TokenKind::Ident(ref s) if s == "abs" => {
+            TokenKind::Ident(ref s)
+                if s == "abs" && matches!(self.peek_kind_at(1), TokenKind::LParen) =>
+            {
                 self.advance();
                 let lp = self.expect(&TokenKind::LParen);
                 self.require(lp)?;
@@ -749,7 +751,9 @@ impl Parser {
                 })
             }
             // min(x, y) — minimum, function-call form (#1936)
-            TokenKind::Ident(ref s) if s == "min" => {
+            TokenKind::Ident(ref s)
+                if s == "min" && matches!(self.peek_kind_at(1), TokenKind::LParen) =>
+            {
                 self.advance();
                 let lp = self.expect(&TokenKind::LParen);
                 self.require(lp)?;
@@ -767,7 +771,9 @@ impl Parser {
                 })
             }
             // max(x, y) — maximum, function-call form (#1936)
-            TokenKind::Ident(ref s) if s == "max" => {
+            TokenKind::Ident(ref s)
+                if s == "max" && matches!(self.peek_kind_at(1), TokenKind::LParen) =>
+            {
                 self.advance();
                 let lp = self.expect(&TokenKind::LParen);
                 self.require(lp)?;
@@ -785,7 +791,9 @@ impl Parser {
                 })
             }
             // len(ident) or len(a.b.c) — field-access paths allowed (#726)
-            TokenKind::Ident(ref s) if s == "len" => {
+            TokenKind::Ident(ref s)
+                if s == "len" && matches!(self.peek_kind_at(1), TokenKind::LParen) =>
+            {
                 self.advance();
                 let lp = self.expect(&TokenKind::LParen);
                 self.require(lp)?;
@@ -1062,9 +1070,21 @@ impl Parser {
                         // Unknown method call in refinement position (#1936).
                         // Give a targeted diagnostic pointing at the known built-ins.
                         const KNOWN: &[&str] = &[
-                            "len", "abs", "min", "max",
-                            "bit_and", "bit_or", "bit_xor", "shift_left", "shift_right",
-                            "bit_not", "contains", "starts_with", "ends_with", "get", "matches",
+                            "len",
+                            "abs",
+                            "min",
+                            "max",
+                            "bit_and",
+                            "bit_or",
+                            "bit_xor",
+                            "shift_left",
+                            "shift_right",
+                            "bit_not",
+                            "contains",
+                            "starts_with",
+                            "ends_with",
+                            "get",
+                            "matches",
                         ];
                         let suggestion = KNOWN
                             .iter()
@@ -1092,12 +1112,7 @@ impl Parser {
                                 diff + (shorter.len() - si) <= 1
                             })
                             .map(|k| format!("; did you mean `.{k}()`?"))
-                            .unwrap_or_else(|| {
-                                format!(
-                                    "; known built-ins: {}",
-                                    KNOWN.join(", ")
-                                )
-                            });
+                            .unwrap_or_else(|| format!("; known built-ins: {}", KNOWN.join(", ")));
                         self.push_error(ParseError {
                             message: format!(
                                 "unknown method `.{method_or_field}()` in refinement predicate{suggestion}"
@@ -2208,8 +2223,14 @@ mod tests {
         let operands = |e: &RefExpr| match e {
             RefExpr::Compare { left, .. } => match left.as_ref() {
                 RefExpr::Min { left, right, .. } => (
-                    match left.as_ref() { RefExpr::Ident { name, .. } => name.clone(), x => panic!("{x:?}") },
-                    match right.as_ref() { RefExpr::Ident { name, .. } => name.clone(), x => panic!("{x:?}") },
+                    match left.as_ref() {
+                        RefExpr::Ident { name, .. } => name.clone(),
+                        x => panic!("{x:?}"),
+                    },
+                    match right.as_ref() {
+                        RefExpr::Ident { name, .. } => name.clone(),
+                        x => panic!("{x:?}"),
+                    },
                 ),
                 other => panic!("expected Min, got {other:?}"),
             },
@@ -2248,8 +2269,14 @@ mod tests {
         let operands = |e: &RefExpr| match e {
             RefExpr::Compare { left, .. } => match left.as_ref() {
                 RefExpr::Max { left, right, .. } => (
-                    match left.as_ref() { RefExpr::Ident { name, .. } => name.clone(), x => panic!("{x:?}") },
-                    match right.as_ref() { RefExpr::Ident { name, .. } => name.clone(), x => panic!("{x:?}") },
+                    match left.as_ref() {
+                        RefExpr::Ident { name, .. } => name.clone(),
+                        x => panic!("{x:?}"),
+                    },
+                    match right.as_ref() {
+                        RefExpr::Ident { name, .. } => name.clone(),
+                        x => panic!("{x:?}"),
+                    },
                 ),
                 other => panic!("expected Max, got {other:?}"),
             },

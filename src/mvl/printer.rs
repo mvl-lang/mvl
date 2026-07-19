@@ -1318,10 +1318,18 @@ impl<'src> Printer<'src> {
             }
             RefExpr::Abs { inner, .. } => format!("abs({})", self.fmt_ref_expr(inner)),
             RefExpr::Min { left, right, .. } => {
-                format!("min({}, {})", self.fmt_ref_expr(left), self.fmt_ref_expr(right))
+                format!(
+                    "min({}, {})",
+                    self.fmt_ref_expr(left),
+                    self.fmt_ref_expr(right)
+                )
             }
             RefExpr::Max { left, right, .. } => {
-                format!("max({}, {})", self.fmt_ref_expr(left), self.fmt_ref_expr(right))
+                format!(
+                    "max({}, {})",
+                    self.fmt_ref_expr(left),
+                    self.fmt_ref_expr(right)
+                )
             }
         }
     }
