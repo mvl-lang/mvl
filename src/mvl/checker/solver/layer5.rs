@@ -75,7 +75,7 @@ pub(crate) fn try_z3(
             }
             // BV path returned None (unsupported shape) — fall through to NIA.
         }
-        return impl_z3(pred, arg, var_refs);
+        impl_z3(pred, arg, var_refs)
     }
     #[cfg(not(feature = "z3"))]
     {
@@ -252,7 +252,10 @@ fn impl_z3_tighten(
 /// Extract `(op, bound)` from a simple `self OP bound` RefExpr.
 #[cfg(feature = "z3")]
 fn extract_simple_self_bound(pred: &RefExpr) -> Option<(CmpOp, i64)> {
-    let RefExpr::Compare { op, left, right, .. } = pred else {
+    let RefExpr::Compare {
+        op, left, right, ..
+    } = pred
+    else {
         return None;
     };
     match (left.as_ref(), right.as_ref()) {
@@ -350,7 +353,9 @@ fn impl_z3_witness(
     ) -> Option<z3::ast::Bool<'ctx>> {
         use z3::ast::Ast;
         match e {
-            Expr::Binary { op, left, right, .. } => {
+            Expr::Binary {
+                op, left, right, ..
+            } => {
                 // Handle comparison operators.
                 let cmp = match op {
                     BinaryOp::Eq => Some(AstCmp::Eq),
@@ -386,7 +391,9 @@ fn impl_z3_witness(
                     None
                 }
             }
-            Expr::Unary { op, expr: inner, .. } => {
+            Expr::Unary {
+                op, expr: inner, ..
+            } => {
                 use crate::mvl::parser::ast::UnaryOp;
                 if matches!(op, UnaryOp::Not) {
                     Some(expr_to_z3_bool(inner, vars, ctx)?.not())
@@ -414,7 +421,9 @@ fn impl_z3_witness(
                     None
                 }
             }
-            Expr::Binary { op, left, right, .. } => {
+            Expr::Binary {
+                op, left, right, ..
+            } => {
                 let l = expr_to_z3_int(left, vars, ctx)?;
                 let r = expr_to_z3_int(right, vars, ctx)?;
                 Some(match op {
@@ -449,20 +458,33 @@ fn impl_z3_witness(
             TypeExpr::Refined { inner, .. } => match inner.as_ref() {
                 TypeExpr::Base { name, .. } => name.clone(),
                 _ => {
-                    witnesses.push(WitnessArg { param_name: param.name.clone(), value: WitnessValue::Unknown });
+                    witnesses.push(WitnessArg {
+                        param_name: param.name.clone(),
+                        value: WitnessValue::Unknown,
+                    });
                     continue;
                 }
             },
             _ => {
-                witnesses.push(WitnessArg { param_name: param.name.clone(), value: WitnessValue::Unknown });
+                witnesses.push(WitnessArg {
+                    param_name: param.name.clone(),
+                    value: WitnessValue::Unknown,
+                });
                 continue;
             }
         };
         match type_name.as_str() {
             "Int" | "Bool" => {
                 let var = int_vars.get(&param.name)?;
-                let val = model.eval(var, true).and_then(|v| v.as_i64()).map(WitnessValue::Int).unwrap_or(WitnessValue::Unknown);
-                witnesses.push(WitnessArg { param_name: param.name.clone(), value: val });
+                let val = model
+                    .eval(var, true)
+                    .and_then(|v| v.as_i64())
+                    .map(WitnessValue::Int)
+                    .unwrap_or(WitnessValue::Unknown);
+                witnesses.push(WitnessArg {
+                    param_name: param.name.clone(),
+                    value: val,
+                });
             }
             other => {
                 if let Some(fields) = struct_fields.get(other) {
@@ -471,7 +493,11 @@ fn impl_z3_witness(
                         if matches!(field_type.as_str(), "Int" | "Bool") {
                             let key = format!("{}__{field_name}", param.name);
                             let val = if let Some(var) = int_vars.get(&key) {
-                                model.eval(var, true).and_then(|v| v.as_i64()).map(WitnessValue::Int).unwrap_or(WitnessValue::Unknown)
+                                model
+                                    .eval(var, true)
+                                    .and_then(|v| v.as_i64())
+                                    .map(WitnessValue::Int)
+                                    .unwrap_or(WitnessValue::Unknown)
                             } else {
                                 WitnessValue::Unknown
                             };
@@ -480,10 +506,16 @@ fn impl_z3_witness(
                     }
                     witnesses.push(WitnessArg {
                         param_name: param.name.clone(),
-                        value: WitnessValue::Struct { type_name: other.to_string(), fields: field_witnesses },
+                        value: WitnessValue::Struct {
+                            type_name: other.to_string(),
+                            fields: field_witnesses,
+                        },
                     });
                 } else {
-                    witnesses.push(WitnessArg { param_name: param.name.clone(), value: WitnessValue::Unknown });
+                    witnesses.push(WitnessArg {
+                        param_name: param.name.clone(),
+                        value: WitnessValue::Unknown,
+                    });
                 }
             }
         }

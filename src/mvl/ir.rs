@@ -38,8 +38,8 @@ pub use crate::mvl::checker::types::Ty;
 // `TypeExpr` fields — they are structural primitives reused unchanged through
 // the pipeline.
 pub use crate::mvl::parser::ast::{
-    ArithOp, BinaryOp, Capability, CmpOp, Constraint, Effect, EffectDecl, GenericParam, LValue,
-    LabelDecl, LetKind, Literal, LogicOp, MailboxConfig, MailboxPolicy, Pattern, RefExpr,
+    ArithOp, BinaryOp, BitwiseOp, Capability, CmpOp, Constraint, Effect, EffectDecl, GenericParam,
+    LValue, LabelDecl, LetKind, Literal, LogicOp, MailboxConfig, MailboxPolicy, Pattern, RefExpr,
     RelabelDecl, Totality, TypeExpr, UnaryOp, UseDecl,
 };
 use crate::mvl::parser::lexer::Span;

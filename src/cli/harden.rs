@@ -79,9 +79,7 @@ impl HardenHint {
             return HardenHint::LengthPredicate;
         }
         // Nonlinear: multiplication or division present (but not inside len/old).
-        let stripped = predicate
-            .replace("old(", "")
-            .replace("len(", "");
+        let stripped = predicate.replace("old(", "").replace("len(", "");
         if stripped.contains('*') || stripped.contains('/') {
             return HardenHint::NonlinearPredicate;
         }
@@ -178,15 +176,12 @@ fn print_json(
 /// Multiple candidates arise when a function has several return points (branches).
 /// We keep the globally-sound tighter bound: the minimum for lower-bound predicates
 /// (`>=`/`>`), or the maximum for upper-bound predicates (`<=`/`<`).
-fn deduplicate_tightenings(
-    candidates: &[TighteningCandidate],
-) -> Vec<&TighteningCandidate> {
+fn deduplicate_tightenings(candidates: &[TighteningCandidate]) -> Vec<&TighteningCandidate> {
     // Map (fn_name, declared_pred) → index of the "best" (most conservative) candidate.
-    let mut best: std::collections::HashMap<(&str, &str), usize> =
-        std::collections::HashMap::new();
+    let mut best: std::collections::HashMap<(&str, &str), usize> = std::collections::HashMap::new();
     for (idx, c) in candidates.iter().enumerate() {
         let key = (c.fn_name.as_str(), c.declared_pred.as_str());
-        let keep = best.get(&key).map_or(true, |&prev_idx| {
+        let keep = best.get(&key).is_none_or(|&prev_idx| {
             let prev = &candidates[prev_idx];
             if c.take_min {
                 c.tighter_bound < prev.tighter_bound
@@ -199,7 +194,12 @@ fn deduplicate_tightenings(
         }
     }
     let mut result: Vec<&TighteningCandidate> = best.values().map(|&i| &candidates[i]).collect();
-    result.sort_by(|a, b| a.span.line.cmp(&b.span.line).then(a.fn_name.cmp(&b.fn_name)));
+    result.sort_by(|a, b| {
+        a.span
+            .line
+            .cmp(&b.span.line)
+            .then(a.fn_name.cmp(&b.fn_name))
+    });
     result
 }
 
@@ -310,10 +310,17 @@ fn synthesize_test_fn(
     if !param_strs.is_empty() {
         for (w, p) in witnesses.iter().zip(candidate.params.iter()) {
             let ty = witness_type_str(&w.value, &p.ty);
-            lines.push(format!("    let {}: {ty} = {};", w.param_name, format_witness_value(&w.value)));
+            lines.push(format!(
+                "    let {}: {ty} = {};",
+                w.param_name,
+                format_witness_value(&w.value)
+            ));
         }
     }
-    lines.push(format!("    let result: Int = {fn_name}({});", arg_strs.join(", ")));
+    lines.push(format!(
+        "    let result: Int = {fn_name}({});",
+        arg_strs.join(", ")
+    ));
     // Emit the tighter postcondition as an assert expression.
     // tighter_pred looks like "ensures result >= 5" → "result >= 5"
     if let Some(cond) = tighter_pred.strip_prefix("ensures ") {
@@ -326,7 +333,14 @@ fn synthesize_test_fn(
 // ── Entry point ────────────────────────────────────────────────────────────────
 
 /// Run `mvl harden` (Axes 1, 2, and 3) over a `.mvl` file or directory.
-pub fn run(path: &str, verbose: bool, json: bool, emit_tests: bool, stdlib_profile: &str, callee_filter: Option<&str>) {
+pub fn run(
+    path: &str,
+    verbose: bool,
+    json: bool,
+    emit_tests: bool,
+    stdlib_profile: &str,
+    callee_filter: Option<&str>,
+) {
     let files = loader::mvl_files(path, false);
     if files.is_empty() {
         eprintln!("No .mvl files found at: {path}");
@@ -433,9 +447,7 @@ pub fn run(path: &str, verbose: bool, json: bool, emit_tests: bool, stdlib_profi
         // Collect runtime sites (count proven/failed) for this file.
         let mut sites_data: Vec<(u32, String, String, String, String, HardenHint)> = Vec::new();
         for site in all_sites {
-            let matches_filter = callee_filter
-                .map(|f| site.fn_name == f)
-                .unwrap_or(true);
+            let matches_filter = callee_filter.map(|f| site.fn_name == f).unwrap_or(true);
             match &site.outcome {
                 ProofOutcome::Proven { .. } if matches_filter => {
                     file_proven += 1;
@@ -488,8 +500,10 @@ pub fn run(path: &str, verbose: bool, json: bool, emit_tests: bool, stdlib_profi
                 });
             }
         }
-        let all_raw_tightenings: Vec<TighteningCandidate> =
-            file_results.iter().flat_map(|fr| fr.tightenings.iter().cloned()).collect();
+        let all_raw_tightenings: Vec<TighteningCandidate> = file_results
+            .iter()
+            .flat_map(|fr| fr.tightenings.iter().cloned())
+            .collect();
         let all_tightenings = deduplicate_tightenings(&all_raw_tightenings);
         print_json(
             &flat,
@@ -559,12 +573,7 @@ pub fn run(path: &str, verbose: bool, json: bool, emit_tests: bool, stdlib_profi
             println!("  No tightening opportunities found.");
         } else {
             for (i, t) in deduped.iter().enumerate() {
-                println!(
-                    "\n  [{:02}] {}:{}",
-                    i + 1,
-                    t.fn_name,
-                    t.span.line,
-                );
+                println!("\n  [{:02}] {}:{}", i + 1, t.fn_name, t.span.line,);
                 println!("       declared: {}", t.declared_pred);
                 println!("       provable: {}", t.tighter_pred);
                 println!("       → Suggest strengthening the postcondition");
@@ -595,7 +604,10 @@ pub fn run(path: &str, verbose: bool, json: bool, emit_tests: bool, stdlib_profi
                     witness_snippets.push(snip);
                 }
                 _ => {
-                    println!("\n  No witness found for {} (non-integer params or Z3 timeout).", t.fn_name);
+                    println!(
+                        "\n  No witness found for {} (non-integer params or Z3 timeout).",
+                        t.fn_name
+                    );
                 }
             }
         }
@@ -623,7 +635,9 @@ pub fn run(path: &str, verbose: bool, json: bool, emit_tests: bool, stdlib_profi
             // Derive module name from file stem for use imports.
             let module_stem = stem;
             let mut test_lines: Vec<String> = Vec::new();
-            test_lines.push(format!("// Generated by `mvl harden --emit-tests` — do not edit by hand."));
+            test_lines.push(
+                "// Generated by `mvl harden --emit-tests` — do not edit by hand.".to_string(),
+            );
             test_lines.push(String::new());
             for fn_name in &witness_use_fns {
                 test_lines.push(format!("use {module_stem}::{fn_name};"));
@@ -643,8 +657,10 @@ pub fn run(path: &str, verbose: bool, json: bool, emit_tests: bool, stdlib_profi
 
     // Multi-file grand total.
     if check_count > 1 {
-        let all_raw: Vec<TighteningCandidate> =
-            file_results.iter().flat_map(|fr| fr.tightenings.iter().cloned()).collect();
+        let all_raw: Vec<TighteningCandidate> = file_results
+            .iter()
+            .flat_map(|fr| fr.tightenings.iter().cloned())
+            .collect();
         let grand_deduped = deduplicate_tightenings(&all_raw).len();
         println!(
             "Total: {grand_total_proven} proven, {grand_total_runtime} runtime obligations, \
