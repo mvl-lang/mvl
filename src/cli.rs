@@ -15,6 +15,7 @@ pub mod meta;
 pub mod mutate;
 #[cfg(feature = "openapi")]
 pub mod openapi;
+pub mod harden;
 pub mod prove;
 pub mod test;
 pub mod tir;
@@ -201,6 +202,26 @@ pub(super) fn dispatch(args: &[String]) {
                 None
             };
             prove::run(&path, verbose, stdlib_profile, callee_filter);
+        }
+        "harden" => {
+            let path = args::require_path_arg(args, "harden");
+            let verbose = args.iter().any(|a| a == "--verbose" || a == "-v");
+            let json = args.iter().any(|a| a == "--json");
+            let stdlib_profile = args::parse_stdlib_profile(args);
+            let callee_filter = if let Some(pos) = args.iter().position(|a| a == "--callee") {
+                match args.get(pos + 1).map(|s| s.as_str()) {
+                    Some(name) if !name.starts_with("--") => Some(name),
+                    _ => {
+                        eprintln!("error: --callee requires a function name argument");
+                        eprintln!("usage: mvl harden <file|dir> --callee <fn>");
+                        process::exit(1);
+                    }
+                }
+            } else {
+                None
+            };
+            let emit_tests = args.iter().any(|a| a == "--emit-tests");
+            harden::run(&path, verbose, json, emit_tests, stdlib_profile, callee_filter);
         }
         "complexity" => {
             use mvl::mvl::passes::complexity;

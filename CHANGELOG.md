@@ -4,9 +4,14 @@
 
 ## [1.6.0] - 2026-07-19
 
-### Added — #1915, #1901
+### Added — #1915, #1901, #1913, #1931
 
 - **Bounded-quantifier refinement predicates via L3 expansion (#1915).** New syntax `forall x in [lo..hi]. pred` and `exists x in [lo..hi]. pred` for universal/existential quantifiers over literal integer ranges. Discharged by symbolic expansion at Layer 3: unrolled into conjunctions (forall) or disjunctions (exists) of instantiated bodies, each dispatched through the full L1–L5 solver cascade. Layer 1 gained a closed-form evaluator that proves parameter-free predicates like `0 < 10` as tautologies. Requires clauses that reference no parameters are now dispatched through a dedicated `check_closed_requires` path (previously silently dropped). Expansion is capped at `MAX_BOUNDED_EXPANSION = 1000` obligations; wider ranges fall back to `RuntimeCheck`. Unbounded `forall x: T, pred` form is now rejected at parse time with a targeted diagnostic. Prerequisite for #1916 (array-index refinements) and #1910 (CBTC train-presence case study). ADR-0056 documents the design.
+- **`mvl harden`** — contract strengthening command with three axes of proof feedback (#1913, #1931):
+  - **Axis 1**: identifies `RuntimeCheck` obligations and classifies why static proof failed (nonlinear, length, `old()`, quantifier, complex) with fix hints
+  - **Axis 2**: binary-searches Z3 to find the tightest provable bound for each proven `ensures` clause and suggests strengthening the declared postcondition
+  - **Axis 3**: synthesizes concrete Z3 witness inputs for each boundary return point; `--emit-tests` writes `*_boundary_test.mvl` files with `test fn` blocks
+  - Flags: `--verbose`, `--json`, `--callee <fn>`, `--stdlib=<profile>`, `--emit-tests`
 - Linter gained `test-shadow` rule detecting shadow declarations in `*_test.mvl` files (#1901): any `type` declaration in a test file, or any `fn`/`total fn`/`partial fn` whose name collides with a `pub` fn in a sibling production `.mvl` file. Enforces pattern 006 at lint time rather than just in CI. Configurable via `test_shadow = false` in `.mvllintrc` (defaults on).
 
 ### Changed

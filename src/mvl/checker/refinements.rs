@@ -86,10 +86,68 @@ pub struct RefinementCounts {
     /// Per-call-site proof records covering ALL outcomes (proven / runtime / failed).
     /// Populated unconditionally; consumed by `mvl prove` (#836) for the breakdown report.
     pub sites: Vec<ProofSite>,
+    /// Axis 2 (#1931): proven `ensures` clauses where a tighter bound is also provable.
+    /// Populated during `check_ensures_for_return`; consumed by `mvl harden`.
+    pub tightening_candidates: Vec<TighteningCandidate>,
     /// Name of the function currently being analyzed (set by `check_refinements` before
     /// each `analyze_block` call so `ProofSite::caller_fn` can be populated without
     /// threading the name through every recursive helper).
     pub current_fn: String,
+}
+
+// ── Axis 2: contract tightening candidates (#1931) ────────────────────────────
+
+/// A proven `ensures` clause where Z3 can prove a strictly tighter bound.
+///
+/// Collected during `check_ensures_for_return` and surfaced by `mvl harden`.
+/// One candidate is emitted per return point (branch); callers should
+/// deduplicate by `(fn_name, declared_pred)` keeping the weakest tighter bound
+/// (min for `>=`/`>`, max for `<=`/`<`) to produce a globally-sound suggestion.
+#[derive(Debug, Clone)]
+pub struct TighteningCandidate {
+    /// Function whose postcondition could be tightened.
+    pub fn_name: String,
+    /// The declared predicate string (e.g. `"ensures result >= 0"`).
+    pub declared_pred: String,
+    /// The tighter predicate Z3 can prove (e.g. `"ensures result >= 5"`).
+    pub tighter_pred: String,
+    /// Raw tighter bound value for deduplication arithmetic.
+    pub tighter_bound: i64,
+    /// Whether to find the min (Ge/Gt) or max (Le/Lt) across branches.
+    /// `true` = take the minimum tighter bound (lower-bound predicates).
+    pub take_min: bool,
+    /// Source location of the return expression that was proven.
+    pub span: Span,
+    // ── Axis 3: boundary witness synthesis (#1931) ─────────────────────────
+    /// Function parameters — used by `mvl harden --emit-tests` to synthesize
+    /// call arguments.  Cloned from `FnDecl.params` at contract-check time.
+    pub params: Vec<Param>,
+    /// Branch conditions active at this return point — used as Z3 constraints
+    /// when searching for a witness input that reaches this return path.
+    pub branch_hyps: Vec<Expr>,
+}
+
+// ── Axis 3: boundary witness synthesis (#1931) ────────────────────────────────
+
+/// A concrete value found by Z3 as a witness for a boundary test input.
+#[derive(Debug, Clone)]
+pub enum WitnessValue {
+    /// A concrete integer (covers Int, Bool-as-int, refined Int, etc.).
+    Int(i64),
+    /// A struct constructed from field witnesses.
+    Struct {
+        type_name: String,
+        fields: Vec<(String, WitnessValue)>,
+    },
+    /// Z3 returned unknown or the param type is unsupported.
+    Unknown,
+}
+
+/// A single function parameter bound to a witness value.
+#[derive(Debug, Clone)]
+pub struct WitnessArg {
+    pub param_name: String,
+    pub value: WitnessValue,
 }
 
 // ── Per-call-site proof records (#836) ────────────────────────────────────────
@@ -121,6 +179,18 @@ pub struct ProofSite {
     pub span: Span,
     /// What the solver determined for this site.
     pub outcome: ProofOutcome,
+}
+
+/// Axis 3 witness synthesis — public thin wrapper over the `pub(crate)` layer5 entry point.
+///
+/// Exposed here so the CLI crate (`src/cli/harden.rs`) can call it without
+/// requiring access to the private `checker::solver` module.
+pub fn synthesize_witness(
+    params: &[crate::mvl::parser::ast::Param],
+    branch_hyps: &[crate::mvl::parser::ast::Expr],
+    struct_fields: &std::collections::HashMap<String, Vec<(String, String)>>,
+) -> Option<Vec<WitnessArg>> {
+    crate::mvl::checker::solver::layer5::try_z3_witness(params, branch_hyps, struct_fields)
 }
 
 // ── Entry points ──────────────────────────────────────────────────────────────
