@@ -734,6 +734,56 @@ impl Parser {
         let start = self.peek_span();
         let kind = self.peek_kind().clone();
         match kind {
+            // abs(x) — absolute value, function-call form (#1936)
+            TokenKind::Ident(ref s) if s == "abs" => {
+                self.advance();
+                let lp = self.expect(&TokenKind::LParen);
+                self.require(lp)?;
+                let inner = self.parse_ref_expr()?;
+                let rp = self.expect(&TokenKind::RParen);
+                self.require(rp)?;
+                let span = self.span_from(start);
+                Ok(RefExpr::Abs {
+                    inner: Box::new(inner),
+                    span,
+                })
+            }
+            // min(x, y) — minimum, function-call form (#1936)
+            TokenKind::Ident(ref s) if s == "min" => {
+                self.advance();
+                let lp = self.expect(&TokenKind::LParen);
+                self.require(lp)?;
+                let left = self.parse_ref_expr()?;
+                let comma = self.expect(&TokenKind::Comma);
+                self.require(comma)?;
+                let right = self.parse_ref_expr()?;
+                let rp = self.expect(&TokenKind::RParen);
+                self.require(rp)?;
+                let span = self.span_from(start);
+                Ok(RefExpr::Min {
+                    left: Box::new(left),
+                    right: Box::new(right),
+                    span,
+                })
+            }
+            // max(x, y) — maximum, function-call form (#1936)
+            TokenKind::Ident(ref s) if s == "max" => {
+                self.advance();
+                let lp = self.expect(&TokenKind::LParen);
+                self.require(lp)?;
+                let left = self.parse_ref_expr()?;
+                let comma = self.expect(&TokenKind::Comma);
+                self.require(comma)?;
+                let right = self.parse_ref_expr()?;
+                let rp = self.expect(&TokenKind::RParen);
+                self.require(rp)?;
+                let span = self.span_from(start);
+                Ok(RefExpr::Max {
+                    left: Box::new(left),
+                    right: Box::new(right),
+                    span,
+                })
+            }
             // len(ident) or len(a.b.c) — field-access paths allowed (#726)
             TokenKind::Ident(ref s) if s == "len" => {
                 self.advance();
@@ -902,6 +952,73 @@ impl Parser {
                             span,
                         };
                     } else if matches!(self.peek_kind(), TokenKind::LParen)
+                        && method_or_field == "len"
+                    {
+                        // xs.len() — method-call sugar for len(xs) (#1936).
+                        // Reconstruct the dotted-path string from the receiver expr.
+                        fn to_dotted_path(e: &RefExpr) -> Option<String> {
+                            match e {
+                                RefExpr::Ident { name, .. } => Some(name.clone()),
+                                RefExpr::FieldAccess { object, field, .. } => {
+                                    to_dotted_path(object).map(|p| format!("{p}.{field}"))
+                                }
+                                _ => None,
+                            }
+                        }
+                        self.advance(); // consume '('
+                        let rp = self.expect(&TokenKind::RParen);
+                        self.require(rp)?;
+                        let span = self.span_from(start);
+                        if let Some(ident) = to_dotted_path(&expr) {
+                            expr = RefExpr::Len { ident, span };
+                        } else {
+                            self.push_error(ParseError {
+                                message: "receiver of `.len()` in refinement predicate must be an identifier or field path".to_string(),
+                                span,
+                            });
+                            return Err(());
+                        }
+                    } else if matches!(self.peek_kind(), TokenKind::LParen)
+                        && method_or_field == "abs"
+                    {
+                        // x.abs() — method-call sugar for abs(x) (#1936).
+                        self.advance(); // consume '('
+                        let rp = self.expect(&TokenKind::RParen);
+                        self.require(rp)?;
+                        let span = self.span_from(start);
+                        expr = RefExpr::Abs {
+                            inner: Box::new(expr),
+                            span,
+                        };
+                    } else if matches!(self.peek_kind(), TokenKind::LParen)
+                        && method_or_field == "min"
+                    {
+                        // x.min(y) — method-call sugar for min(x, y) (#1936).
+                        self.advance(); // consume '('
+                        let right = self.parse_ref_expr()?;
+                        let rp = self.expect(&TokenKind::RParen);
+                        self.require(rp)?;
+                        let span = self.span_from(start);
+                        expr = RefExpr::Min {
+                            left: Box::new(expr),
+                            right: Box::new(right),
+                            span,
+                        };
+                    } else if matches!(self.peek_kind(), TokenKind::LParen)
+                        && method_or_field == "max"
+                    {
+                        // x.max(y) — method-call sugar for max(x, y) (#1936).
+                        self.advance(); // consume '('
+                        let right = self.parse_ref_expr()?;
+                        let rp = self.expect(&TokenKind::RParen);
+                        self.require(rp)?;
+                        let span = self.span_from(start);
+                        expr = RefExpr::Max {
+                            left: Box::new(expr),
+                            right: Box::new(right),
+                            span,
+                        };
+                    } else if matches!(self.peek_kind(), TokenKind::LParen)
                         && method_or_field == "matches"
                     {
                         // Regex-membership predicate: receiver.matches("pattern") (#1921)
@@ -941,8 +1058,55 @@ impl Parser {
                             pattern,
                             span,
                         };
+                    } else if matches!(self.peek_kind(), TokenKind::LParen) {
+                        // Unknown method call in refinement position (#1936).
+                        // Give a targeted diagnostic pointing at the known built-ins.
+                        const KNOWN: &[&str] = &[
+                            "len", "abs", "min", "max",
+                            "bit_and", "bit_or", "bit_xor", "shift_left", "shift_right",
+                            "bit_not", "contains", "starts_with", "ends_with", "get", "matches",
+                        ];
+                        let suggestion = KNOWN
+                            .iter()
+                            .find(|&&k| {
+                                // simple Levenshtein-1 check: one char different
+                                let a: Vec<char> = method_or_field.chars().collect();
+                                let b: Vec<char> = k.chars().collect();
+                                if a.len().abs_diff(b.len()) > 1 {
+                                    return false;
+                                }
+                                let (shorter, longer) = if a.len() <= b.len() {
+                                    (a.as_slice(), b.as_slice())
+                                } else {
+                                    (b.as_slice(), a.as_slice())
+                                };
+                                let mut diff = 0usize;
+                                let mut si = 0;
+                                for li in 0..longer.len() {
+                                    if si < shorter.len() && shorter[si] == longer[li] {
+                                        si += 1;
+                                    } else {
+                                        diff += 1;
+                                    }
+                                }
+                                diff + (shorter.len() - si) <= 1
+                            })
+                            .map(|k| format!("; did you mean `.{k}()`?"))
+                            .unwrap_or_else(|| {
+                                format!(
+                                    "; known built-ins: {}",
+                                    KNOWN.join(", ")
+                                )
+                            });
+                        self.push_error(ParseError {
+                            message: format!(
+                                "unknown method `.{method_or_field}()` in refinement predicate{suggestion}"
+                            ),
+                            span,
+                        });
+                        return Err(());
                     } else {
-                        // Regular field access.
+                        // Regular field access (no parentheses).
                         expr = RefExpr::FieldAccess {
                             object: Box::new(expr),
                             field: method_or_field,
@@ -1912,6 +2076,196 @@ mod tests {
             matches!(&td.body, TypeBody::Alias(te) if matches!(te.as_ref(), TypeExpr::Refined { .. })),
             "expected Refined alias, got {:?}",
             td.body
+        );
+    }
+
+    // ── Method-call sugar for refinement built-ins (#1936) ────────────────────
+
+    // len
+
+    #[test]
+    fn parse_ref_len_method_call() {
+        // xs.len() should produce the same Len node as len(xs)
+        let re = ref_expr_direct("xs.len() > 0").expect("parse ok");
+        assert!(
+            matches!(
+                re,
+                RefExpr::Compare {
+                    ref left,
+                    ..
+                } if matches!(**left, RefExpr::Len { ref ident, .. } if ident == "xs")
+            ),
+            "expected Compare(Gt, Len(xs), 0), got {:?}",
+            re
+        );
+    }
+
+    #[test]
+    fn parse_ref_len_method_call_field_path() {
+        // a.b.len() should produce Len { ident: "a.b" }
+        let re = ref_expr_direct("a.b.len() == 0").expect("parse ok");
+        assert!(
+            matches!(
+                re,
+                RefExpr::Compare {
+                    ref left,
+                    ..
+                } if matches!(**left, RefExpr::Len { ref ident, .. } if ident == "a.b")
+            ),
+            "expected Len(a.b), got {:?}",
+            re
+        );
+    }
+
+    #[test]
+    fn parse_ref_len_method_call_same_ast_as_function_form() {
+        // xs.len() must produce the same Len { ident: "xs" } as len(xs).
+        // Spans differ (8 vs 7 chars) — only check the ident string.
+        let method = ref_expr_direct("xs.len() > 0").expect("parse ok");
+        let function = ref_expr_direct("len(xs) > 0").expect("parse ok");
+        let ident_of = |e: &RefExpr| match e {
+            RefExpr::Compare { left, .. } => match left.as_ref() {
+                RefExpr::Len { ident, .. } => ident.clone(),
+                other => panic!("expected Len, got {other:?}"),
+            },
+            other => panic!("expected Compare, got {other:?}"),
+        };
+        assert_eq!(
+            ident_of(&method),
+            ident_of(&function),
+            "method and function forms must produce the same Len ident"
+        );
+    }
+
+    // abs
+
+    #[test]
+    fn parse_ref_abs_function_call() {
+        let re = ref_expr_direct("abs(self) < 100").expect("parse ok");
+        assert!(
+            matches!(re, RefExpr::Compare { ref left, .. } if matches!(**left, RefExpr::Abs { .. })),
+            "expected Compare(Lt, Abs(..), 100), got {:?}",
+            re
+        );
+    }
+
+    #[test]
+    fn parse_ref_abs_method_call() {
+        let re = ref_expr_direct("self.abs() < 100").expect("parse ok");
+        assert!(
+            matches!(re, RefExpr::Compare { ref left, .. } if matches!(**left, RefExpr::Abs { .. })),
+            "expected Compare(Lt, Abs(..), 100), got {:?}",
+            re
+        );
+    }
+
+    #[test]
+    fn parse_ref_abs_method_and_function_same_ast() {
+        // Both forms must produce Abs { inner: Ident("self") }.
+        // Spans differ — check the inner ident.
+        let method = ref_expr_direct("self.abs() < 100").expect("parse ok");
+        let func = ref_expr_direct("abs(self) < 100").expect("parse ok");
+        let inner_name = |e: &RefExpr| match e {
+            RefExpr::Compare { left, .. } => match left.as_ref() {
+                RefExpr::Abs { inner, .. } => match inner.as_ref() {
+                    RefExpr::Ident { name, .. } => name.clone(),
+                    other => panic!("expected Ident, got {other:?}"),
+                },
+                other => panic!("expected Abs, got {other:?}"),
+            },
+            other => panic!("expected Compare, got {other:?}"),
+        };
+        assert_eq!(inner_name(&method), inner_name(&func));
+    }
+
+    // min
+
+    #[test]
+    fn parse_ref_min_function_call() {
+        let re = ref_expr_direct("min(a, b) > 0").expect("parse ok");
+        assert!(
+            matches!(re, RefExpr::Compare { ref left, .. } if matches!(**left, RefExpr::Min { .. })),
+            "expected Min(..), got {:?}",
+            re
+        );
+    }
+
+    #[test]
+    fn parse_ref_min_method_call() {
+        let re = ref_expr_direct("a.min(b) > 0").expect("parse ok");
+        assert!(
+            matches!(re, RefExpr::Compare { ref left, .. } if matches!(**left, RefExpr::Min { .. })),
+            "expected Min(..), got {:?}",
+            re
+        );
+    }
+
+    #[test]
+    fn parse_ref_min_method_and_function_same_ast() {
+        // Both forms must produce Min { left: Ident("a"), right: Ident("b") }.
+        let method = ref_expr_direct("a.min(b) > 0").expect("parse ok");
+        let func = ref_expr_direct("min(a, b) > 0").expect("parse ok");
+        let operands = |e: &RefExpr| match e {
+            RefExpr::Compare { left, .. } => match left.as_ref() {
+                RefExpr::Min { left, right, .. } => (
+                    match left.as_ref() { RefExpr::Ident { name, .. } => name.clone(), x => panic!("{x:?}") },
+                    match right.as_ref() { RefExpr::Ident { name, .. } => name.clone(), x => panic!("{x:?}") },
+                ),
+                other => panic!("expected Min, got {other:?}"),
+            },
+            other => panic!("expected Compare, got {other:?}"),
+        };
+        assert_eq!(operands(&method), operands(&func));
+    }
+
+    // max
+
+    #[test]
+    fn parse_ref_max_function_call() {
+        let re = ref_expr_direct("max(a, b) < 100").expect("parse ok");
+        assert!(
+            matches!(re, RefExpr::Compare { ref left, .. } if matches!(**left, RefExpr::Max { .. })),
+            "expected Max(..), got {:?}",
+            re
+        );
+    }
+
+    #[test]
+    fn parse_ref_max_method_call() {
+        let re = ref_expr_direct("a.max(b) < 100").expect("parse ok");
+        assert!(
+            matches!(re, RefExpr::Compare { ref left, .. } if matches!(**left, RefExpr::Max { .. })),
+            "expected Max(..), got {:?}",
+            re
+        );
+    }
+
+    #[test]
+    fn parse_ref_max_method_and_function_same_ast() {
+        // Both forms must produce Max { left: Ident("a"), right: Ident("b") }.
+        let method = ref_expr_direct("a.max(b) < 100").expect("parse ok");
+        let func = ref_expr_direct("max(a, b) < 100").expect("parse ok");
+        let operands = |e: &RefExpr| match e {
+            RefExpr::Compare { left, .. } => match left.as_ref() {
+                RefExpr::Max { left, right, .. } => (
+                    match left.as_ref() { RefExpr::Ident { name, .. } => name.clone(), x => panic!("{x:?}") },
+                    match right.as_ref() { RefExpr::Ident { name, .. } => name.clone(), x => panic!("{x:?}") },
+                ),
+                other => panic!("expected Max, got {other:?}"),
+            },
+            other => panic!("expected Compare, got {other:?}"),
+        };
+        assert_eq!(operands(&method), operands(&func));
+    }
+
+    // unknown method call — negative test
+
+    #[test]
+    fn reject_unknown_method_call_in_refinement() {
+        let result = ref_expr_direct("self.sqrt() > 0");
+        assert!(
+            result.is_err(),
+            "unknown method `.sqrt()` in refinement should produce a parse error"
         );
     }
 }

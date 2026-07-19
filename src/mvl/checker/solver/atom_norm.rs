@@ -335,6 +335,13 @@ fn canon_refexpr(r: &RefExpr) -> String {
         } => {
             format!("{}.matches({pattern:?})", canon_refexpr(receiver))
         }
+        RefExpr::Abs { inner, .. } => format!("abs({})", canon_refexpr(inner)),
+        RefExpr::Min { left, right, .. } => {
+            format!("min({}, {})", canon_refexpr(left), canon_refexpr(right))
+        }
+        RefExpr::Max { left, right, .. } => {
+            format!("max({}, {})", canon_refexpr(left), canon_refexpr(right))
+        }
     }
 }
 

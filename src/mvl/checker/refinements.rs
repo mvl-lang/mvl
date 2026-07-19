@@ -2073,6 +2073,13 @@ fn display_pred(pred: &RefExpr) -> String {
         } => {
             format!("{}.matches({:?})", display_pred(receiver), pattern)
         }
+        RefExpr::Abs { inner, .. } => format!("abs({})", display_pred(inner)),
+        RefExpr::Min { left, right, .. } => {
+            format!("min({}, {})", display_pred(left), display_pred(right))
+        }
+        RefExpr::Max { left, right, .. } => {
+            format!("max({}, {})", display_pred(left), display_pred(right))
+        }
     }
 }
 

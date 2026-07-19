@@ -653,6 +653,10 @@ pub fn is_runtime_checkable(pred: &RefExpr) -> bool {
         // and Rust's Vec::get returns Option<&T> which can't be directly compared. (#1916)
         RefExpr::ArrayGet { .. } => false,
         RefExpr::RegexMatch { receiver, .. } => is_runtime_checkable(receiver),
+        RefExpr::Abs { inner, .. } => is_runtime_checkable(inner),
+        RefExpr::Min { left, right, .. } | RefExpr::Max { left, right, .. } => {
+            is_runtime_checkable(left) && is_runtime_checkable(right)
+        }
     }
 }
 
@@ -794,6 +798,23 @@ fn emit_ref_expr(pred: &RefExpr, binding: &str) -> String {
         } => {
             let recv = emit_ref_expr(receiver, binding);
             format!("::mvl_runtime::refine::mvl_regex_matches(&{recv}, {pattern:?})")
+        }
+        RefExpr::Abs { inner, .. } => {
+            format!("{}.abs()", emit_ref_expr(inner, binding))
+        }
+        RefExpr::Min { left, right, .. } => {
+            format!(
+                "{}.min({})",
+                emit_ref_expr(left, binding),
+                emit_ref_expr(right, binding)
+            )
+        }
+        RefExpr::Max { left, right, .. } => {
+            format!(
+                "{}.max({})",
+                emit_ref_expr(left, binding),
+                emit_ref_expr(right, binding)
+            )
         }
     }
 }

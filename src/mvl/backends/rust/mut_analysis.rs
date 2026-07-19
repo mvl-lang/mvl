@@ -468,6 +468,11 @@ impl MutTracker {
                 self.visit_refexpr(index);
             }
             RefExpr::RegexMatch { receiver, .. } => self.visit_refexpr(receiver),
+            RefExpr::Abs { inner, .. } => self.visit_refexpr(inner),
+            RefExpr::Min { left, right, .. } | RefExpr::Max { left, right, .. } => {
+                self.visit_refexpr(left);
+                self.visit_refexpr(right);
+            }
         }
     }
 
