@@ -45,8 +45,10 @@ total fn s2_or_1_equals_1_payload() -> String {
 
 total fn s3_stacked_query_dropping_table() -> String {
     // `; DROP TABLE users --` — semicolon-stacked payload from an
-    // untrusted origin.
-    describe_outcome(false, true, false, false)
+    // untrusted origin that also presents an override token.
+    // Rejected via UntrustedOrigin regardless of the bypass flag:
+    // untrusted-zone rejection is not waivable by override alone.
+    describe_outcome(false, true, false, true)
 }
 
 total fn s4_length_bomb() -> String {

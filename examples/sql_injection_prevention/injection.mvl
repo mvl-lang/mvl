@@ -197,6 +197,10 @@ pub total fn should_reject_input(
 
 /// Compute the rejection reason.  Priority order: length before content
 /// (cheap check first), origin before override (defence in depth).
+///
+/// Precondition: must only be called when `should_reject_input` returns
+/// `true` for the same arguments.  The final `else` branch is unreachable
+/// under correct usage (clean input is never a rejection).
 pub total fn input_reject_reason(
     length_exceeded: Bool,
     contains_metachar: Bool,

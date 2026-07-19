@@ -6,7 +6,7 @@
 // decisions).  This file adds end-to-end scenario tests that exercise
 // input attack vectors and the IFC boundary.
 
-use injection.{declassify_user_input, should_reject_input, input_reject_reason, into_safe_param, into_sql_identifier, into_escaped_param, into_bounded_input, remaining_param_slots, build_sql_query}
+use injection.{declassify_user_input, should_reject_input, input_reject_reason, remaining_param_slots, build_sql_query}
 use model.{SafeSqlParam, BoundedInput, SqlIdentifier, EscapedSqlParam, SqlQuery, InputRejectReason}
 
 // ── Scenario 1 — canonical attack payloads are rejected ───────────────
