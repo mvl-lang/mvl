@@ -14,8 +14,8 @@
 use super::emitter::RustEmitter;
 use crate::mvl::checker::types::ARRAY_SIZE_UNKNOWN;
 use crate::mvl::ir::{
-    ArithOp, CmpOp, GenericParam, LogicOp, RefExpr, TirExternDecl, TirFieldDecl, TirTypeBody,
-    TirTypeDecl, TirVariant, TirVariantFields, Ty, TypeExpr,
+    ArithOp, CmpOp, GenericParam, LogicOp, RefExpr, StringOp, TirExternDecl, TirFieldDecl,
+    TirTypeBody, TirTypeDecl, TirVariant, TirVariantFields, Ty, TypeExpr,
 };
 
 // ── Security label preamble ───────────────────────────────────────────────
@@ -774,7 +774,6 @@ fn emit_ref_expr(pred: &RefExpr, binding: &str) -> String {
             literal,
             ..
         } => {
-            use crate::mvl::parser::ast::StringOp;
             let recv = emit_ref_expr(receiver, binding);
             match op {
                 StringOp::Contains => format!("{recv}.contains({literal:?})"),
