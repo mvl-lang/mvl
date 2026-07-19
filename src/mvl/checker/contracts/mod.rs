@@ -48,7 +48,7 @@ use crate::mvl::checker::refinements::{
 use crate::mvl::checker::solver::{RefResult, SolverMode};
 use crate::mvl::parser::ast::{
     expr_to_ref_expr_ext, ArithOp, Block, CmpOp, Decl, ElseBranch, Expr, FnDecl, Literal, LogicOp,
-    MatchBody, Param, Program, RefExpr, Stmt,
+    MatchBody, Param, Program, RefExpr, Stmt, StringOp,
 };
 use crate::mvl::parser::lexer::Span;
 use crate::mvl::parser::visit::{walk_expr as ast_walk_expr, Visit};
@@ -1233,6 +1233,17 @@ pub(super) fn normalize_pred(pred: &RefExpr, old_name: &str) -> RefExpr {
             inner: Box::new(normalize_pred(inner, old_name)),
             span: *span,
         },
+        RefExpr::StringOp {
+            op,
+            receiver,
+            literal,
+            span,
+        } => RefExpr::StringOp {
+            op: *op,
+            receiver: Box::new(normalize_pred(receiver, old_name)),
+            literal: literal.clone(),
+            span: *span,
+        },
         // Leaves unchanged.
         RefExpr::Integer { .. }
         | RefExpr::Float { .. }
@@ -1422,6 +1433,19 @@ pub(super) fn subst_pred_ident(pred: &RefExpr, old_name: &str, new_val: &RefExpr
             inner: Box::new(subst_pred_ident(inner, old_name, new_val)),
             span: *span,
         },
+        // StringOp: substitute inside the receiver; the literal arg is a compile-time
+        // constant and never contains a variable name.
+        RefExpr::StringOp {
+            op,
+            receiver,
+            literal,
+            span,
+        } => RefExpr::StringOp {
+            op: *op,
+            receiver: Box::new(subst_pred_ident(receiver, old_name, new_val)),
+            literal: literal.clone(),
+            span: *span,
+        },
         RefExpr::Integer { .. }
         | RefExpr::Float { .. }
         | RefExpr::Bool { .. }
@@ -1595,6 +1619,7 @@ pub(super) fn collect_idents_inner(pred: &RefExpr, names: &mut Vec<String>) {
             collect_idents_inner(right, names);
         }
         RefExpr::BitwiseNot { inner, .. } => collect_idents_inner(inner, names),
+        RefExpr::StringOp { receiver, .. } => collect_idents_inner(receiver, names),
     }
 }
 
@@ -1668,5 +1693,18 @@ pub(super) fn display_pred(pred: &RefExpr) -> String {
             format!("{} {op_str} {}", display_pred(left), display_pred(right))
         }
         RefExpr::BitwiseNot { inner, .. } => format!("~{}", display_pred(inner)),
+        RefExpr::StringOp {
+            op,
+            receiver,
+            literal,
+            ..
+        } => {
+            let method = match op {
+                StringOp::Contains => "contains",
+                StringOp::StartsWith => "starts_with",
+                StringOp::EndsWith => "ends_with",
+            };
+            format!("{}.{}({:?})", display_pred(receiver), method, literal)
+        }
     }
 }

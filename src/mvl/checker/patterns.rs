@@ -330,6 +330,9 @@ impl TypeChecker {
             RefExpr::BitwiseNot { inner, .. } => {
                 self.check_guard_ref_expr(inner);
             }
+            RefExpr::StringOp { receiver, .. } => {
+                self.check_guard_ref_expr(receiver);
+            }
         }
     }
 

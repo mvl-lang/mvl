@@ -12,7 +12,7 @@
 
 use crate::mvl::parser::ast::{
     ArithOp, BitwiseOp, Capability, CmpOp, Effect, FieldDecl, GenericParam, LogicOp, RefExpr,
-    SessionOp, TypeBody, TypeDecl, TypeExpr, Variant, VariantFields,
+    SessionOp, StringOp, TypeBody, TypeDecl, TypeExpr, Variant, VariantFields,
 };
 use crate::mvl::parser::lexer::{Span, TokenKind};
 use crate::mvl::parser::{ParseError, Parser};
@@ -847,6 +847,44 @@ impl Parser {
                         let span = self.span_from(start);
                         expr = RefExpr::BitwiseNot {
                             inner: Box::new(expr),
+                            span,
+                        };
+                    } else if matches!(self.peek_kind(), TokenKind::LParen)
+                        && matches!(
+                            method_or_field.as_str(),
+                            "contains" | "starts_with" | "ends_with"
+                        )
+                    {
+                        // String-content predicate: receiver.contains("lit") etc. (#1919)
+                        // The argument must be a compile-time string literal.
+                        self.advance(); // consume '('
+                        let lit_tok = self.advance();
+                        let literal = match lit_tok.kind {
+                            TokenKind::Str(s) => s,
+                            _ => {
+                                self.push_error(ParseError {
+                                    message: format!(
+                                        "expected string literal as argument to `{method_or_field}`, found `{:?}`",
+                                        lit_tok.kind
+                                    ),
+                                    span: lit_tok.span,
+                                });
+                                return Err(());
+                            }
+                        };
+                        let rp = self.expect(&TokenKind::RParen);
+                        self.require(rp)?;
+                        let span = self.span_from(start);
+                        let op = match method_or_field.as_str() {
+                            "contains" => StringOp::Contains,
+                            "starts_with" => StringOp::StartsWith,
+                            "ends_with" => StringOp::EndsWith,
+                            _ => unreachable!(),
+                        };
+                        expr = RefExpr::StringOp {
+                            op,
+                            receiver: Box::new(expr),
+                            literal,
                             span,
                         };
                     } else {

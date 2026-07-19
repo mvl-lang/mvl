@@ -37,7 +37,7 @@ use crate::mvl::checker::solver::{
 };
 use crate::mvl::parser::ast::{
     ArithOp, BinaryOp, CmpOp, Decl, ElseBranch, Expr, FnDecl, LValue, Literal, LogicOp, MatchArm,
-    MatchBody, Param, Pattern, Program, RefExpr, Stmt, TypeBody, TypeExpr,
+    MatchBody, Param, Pattern, Program, RefExpr, Stmt, StringOp, TypeBody, TypeExpr,
 };
 use crate::mvl::parser::lexer::Span;
 use crate::mvl::parser::visit::{walk_expr, walk_stmt, Visit};
@@ -1157,6 +1157,18 @@ fn normalize_pred(pred: &RefExpr, param_name: &str) -> RefExpr {
             field: field.clone(),
             span: *span,
         },
+        // StringOp: recurse into receiver (which may reference the param as `self`).
+        RefExpr::StringOp {
+            op,
+            receiver,
+            literal,
+            span,
+        } => RefExpr::StringOp {
+            op: *op,
+            receiver: Box::new(normalize_pred(receiver, param_name)),
+            literal: literal.clone(),
+            span: *span,
+        },
         // Literals and Len don't contain the param name.
         other => other.clone(),
     }
@@ -2016,6 +2028,19 @@ fn display_pred(pred: &RefExpr) -> String {
             format!("{} {op_str} {}", display_pred(left), display_pred(right))
         }
         RefExpr::BitwiseNot { inner, .. } => format!("~{}", display_pred(inner)),
+        RefExpr::StringOp {
+            op,
+            receiver,
+            literal,
+            ..
+        } => {
+            let method = match op {
+                StringOp::Contains => "contains",
+                StringOp::StartsWith => "starts_with",
+                StringOp::EndsWith => "ends_with",
+            };
+            format!("{}.{}({:?})", display_pred(receiver), method, literal)
+        }
     }
 }
 

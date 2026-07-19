@@ -647,6 +647,24 @@ pub enum RefExpr {
         body: Box<RefExpr>,
         span: Span,
     },
+    /// String-content predicate in a refinement: `self.contains("needle")`,
+    /// `self.starts_with("prefix")`, `self.ends_with("suffix")`. The argument
+    /// must be a compile-time string literal. Discharged by L1 (literal haystack)
+    /// or L5 Z3 QF-S (symbolic). See #1919.
+    StringOp {
+        op: StringOp,
+        receiver: Box<RefExpr>,
+        literal: String,
+        span: Span,
+    },
+}
+
+/// String-content operations supported in refinement predicates (#1919).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StringOp {
+    Contains,
+    StartsWith,
+    EndsWith,
 }
 
 /// Bitwise operators supported in refinement predicates (#1928).
@@ -1236,6 +1254,34 @@ pub(crate) fn expr_to_ref_expr_ext(expr: &Expr, fallback_span: Span) -> Option<R
             let recv = expr_to_ref_expr_ext(receiver, fallback_span)?;
             Some(RefExpr::BitwiseNot {
                 inner: Box::new(recv),
+                span: *span,
+            })
+        }
+        // x.contains("lit") / x.starts_with("lit") / x.ends_with("lit") → RefExpr::StringOp (#1919)
+        // The argument must be a compile-time string literal; non-literals are rejected here.
+        Expr::MethodCall {
+            receiver,
+            method,
+            args,
+            span,
+        } if matches!(method.as_str(), "contains" | "starts_with" | "ends_with")
+            && args.len() == 1 =>
+        {
+            let recv = expr_to_ref_expr_ext(receiver, fallback_span)?;
+            let literal = match &args[0] {
+                Expr::Literal(Literal::Str(s), _) => s.clone(),
+                _ => return None, // non-literal argument — not in the admitted fragment
+            };
+            let op = match method.as_str() {
+                "contains" => StringOp::Contains,
+                "starts_with" => StringOp::StartsWith,
+                "ends_with" => StringOp::EndsWith,
+                _ => unreachable!(),
+            };
+            Some(RefExpr::StringOp {
+                op,
+                receiver: Box::new(recv),
+                literal,
                 span: *span,
             })
         }

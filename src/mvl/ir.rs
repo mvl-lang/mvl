@@ -40,7 +40,7 @@ pub use crate::mvl::checker::types::Ty;
 pub use crate::mvl::parser::ast::{
     ArithOp, BinaryOp, BitwiseOp, Capability, CmpOp, Constraint, Effect, EffectDecl, GenericParam,
     LValue, LabelDecl, LetKind, Literal, LogicOp, MailboxConfig, MailboxPolicy, Pattern, RefExpr,
-    RelabelDecl, Totality, TypeExpr, UnaryOp, UseDecl,
+    RelabelDecl, StringOp, Totality, TypeExpr, UnaryOp, UseDecl,
 };
 use crate::mvl::parser::lexer::Span;
 
