@@ -80,7 +80,7 @@ fn stmt_calls_any(stmt: &TirStmt, targets: &HashSet<String>) -> bool {
         TirStmt::Let { init, .. } => expr_calls_any(init, targets),
         TirStmt::Assign { value, .. } => expr_calls_any(value, targets),
         TirStmt::Return { value, .. } => {
-            value.as_ref().map_or(false, |e| expr_calls_any(e, targets))
+            value.as_ref().is_some_and(|e| expr_calls_any(e, targets))
         }
         TirStmt::Expr { expr, .. } => expr_calls_any(expr, targets),
         TirStmt::If {
@@ -88,7 +88,7 @@ fn stmt_calls_any(stmt: &TirStmt, targets: &HashSet<String>) -> bool {
         } => {
             expr_calls_any(cond, targets)
                 || fn_calls_any(&then.stmts, targets)
-                || else_.as_ref().map_or(false, |b| else_calls_any(b, targets))
+                || else_.as_ref().is_some_and(|b| else_calls_any(b, targets))
         }
         TirStmt::While { cond, body, .. } => {
             expr_calls_any(cond, targets) || fn_calls_any(&body.stmts, targets)
@@ -128,7 +128,7 @@ fn expr_calls_any(expr: &TirExpr, targets: &HashSet<String>) -> bool {
         } => {
             expr_calls_any(cond, targets)
                 || fn_calls_any(&then.stmts, targets)
-                || else_.as_ref().map_or(false, |e| expr_calls_any(e, targets))
+                || else_.as_ref().is_some_and(|e| expr_calls_any(e, targets))
         }
         TirExprKind::Match {
             scrutinee, arms, ..
