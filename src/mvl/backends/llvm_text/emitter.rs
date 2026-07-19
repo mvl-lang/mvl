@@ -134,51 +134,8 @@ impl LlvmTextCompiler {
         self.compile_to_ir_test_crate_with_siblings(prelude, &[], prog, module_name)
     }
 
-    /// Compile a multi-file test crate to LLVM IR, including sibling modules (#1880).
-    ///
-    /// Identical to `compile_to_ir_test_crate` but emits sibling module functions
-    /// before the entry file, exactly as `compile_to_ir_with_siblings_tir` does for
-    /// non-test builds.  Required for multi-file projects (e.g. pong) where test
-    /// files import types and functions from sibling source files.
-    pub fn compile_to_ir_test_crate_with_siblings(
-        &self,
-        prelude: &[TirProgram],
-        siblings: &[TirProgram],
-        prog: &TirProgram,
-        module_name: &str,
-    ) -> Result<(String, Vec<String>), String> {
-        let test_names: Vec<String> = prog
-            .fns
-            .iter()
-            .filter(|f| f.is_test && !f.is_builtin && f.type_params.is_empty())
-            .map(|f| f.name.clone())
-            .collect();
-
-        // Emit all functions, including test fns (is_test filter removed).
-        let mut emitter =
-            TextEmitter::new_with_builtins(module_name, &self.target_triple, &self.builtin_symbols);
-        for p in prelude {
-            let stripped = strip_prelude_extension_methods_tir(p);
-            for f in &p.fns {
-                if stripped.fns.iter().all(|sf| sf.name != f.name) && f.type_params.is_empty() {
-                    emitter.register_fn_tir_sig(f);
-                }
-            }
-            emitter.emit_program_tir(&stripped)?;
-        }
-        for sib in siblings {
-            emitter.emit_program_tir(sib)?;
-        }
-        emitter.emit_program_tir_test_crate(prog)?;
-
-        // Emit the dispatch main.
-        emitter.emit_test_dispatch_main(&test_names);
-
-        Ok((emitter.finish(), test_names))
-    }
-
     /// Like [`compile_to_ir_test_crate`] but also emits sibling modules before
-    /// the test file so cross-module imports resolve at runtime (#1821).
+    /// the test file so cross-module imports resolve at runtime (#1821, #1880).
     pub fn compile_to_ir_test_crate_with_siblings(
         &self,
         prelude: &[TirProgram],
