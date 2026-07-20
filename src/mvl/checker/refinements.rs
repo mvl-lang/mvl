@@ -136,6 +136,8 @@ pub enum WitnessValue {
     Int(i64),
     /// A concrete float synthesized from a Z3 Real model (#1957).
     Float(f64),
+    /// A concrete string extracted from Z3 String theory (#1955).
+    Str(String),
     /// A struct constructed from field witnesses.
     Struct {
         type_name: String,

@@ -302,6 +302,7 @@ fn format_witness_value(val: &WitnessValue) -> String {
     match val {
         WitnessValue::Int(n) => n.to_string(),
         WitnessValue::Float(f) => format!("{f}"),
+        WitnessValue::Str(s) => escape_mvl_string_literal(s),
         WitnessValue::Struct { type_name, fields } => {
             if fields.is_empty() {
                 return format!("{type_name} {{}}");
@@ -316,11 +317,30 @@ fn format_witness_value(val: &WitnessValue) -> String {
     }
 }
 
+/// Render a Rust string as an MVL string literal, escaping quotes and backslashes.
+fn escape_mvl_string_literal(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 2);
+    out.push('"');
+    for c in s.chars() {
+        match c {
+            '\\' => out.push_str("\\\\"),
+            '"' => out.push_str("\\\""),
+            '\n' => out.push_str("\\n"),
+            '\t' => out.push_str("\\t"),
+            '\r' => out.push_str("\\r"),
+            _ => out.push(c),
+        }
+    }
+    out.push('"');
+    out
+}
+
 /// Derive a MVL type expression string for a `WitnessValue`.
 fn witness_type_str(val: &WitnessValue, param_type: &TypeExpr) -> String {
     match val {
         WitnessValue::Int(_) => "Int".to_string(),
         WitnessValue::Float(_) => "Float".to_string(),
+        WitnessValue::Str(_) => "String".to_string(),
         WitnessValue::Struct { type_name, .. } => type_name.clone(),
         WitnessValue::Unknown => {
             // Fall back to the declared parameter type.
@@ -1548,7 +1568,7 @@ fn params_supported_for_mcdc(
             },
             _ => return false,
         };
-        if matches!(name, "Int" | "Bool") {
+        if matches!(name, "Int" | "Bool" | "String") {
             continue;
         }
         if let Some(fields) = struct_fields.get(name) {
@@ -1583,7 +1603,10 @@ fn witnesses_to_env(ws: &[WitnessArg]) -> HashMap<String, i64> {
                     }
                 }
             }
-            WitnessValue::Unknown => {}
+            WitnessValue::Str(_) | WitnessValue::Unknown => {
+                // Strings aren't in the integer eval domain; clauses referencing
+                // them fall through to a best-effort skip in the caller.
+            }
         }
     }
     env
@@ -1716,6 +1739,7 @@ fn expr_to_short_str(e: &Expr) -> String {
         Expr::Ident(name, _) => name.clone(),
         Expr::Literal(Literal::Bool(b), _) => b.to_string(),
         Expr::Literal(Literal::Integer(n), _) => n.to_string(),
+        Expr::Literal(Literal::Str(s), _) => format!("\"{s}\""),
         Expr::FieldAccess { expr, field, .. } => {
             format!("{}.{field}", expr_to_short_str(expr))
         }
@@ -1742,6 +1766,19 @@ fn expr_to_short_str(e: &Expr) -> String {
                 "{} {op_str} {}",
                 expr_to_short_str(left),
                 expr_to_short_str(right)
+            )
+        }
+        Expr::MethodCall {
+            receiver,
+            method,
+            args,
+            ..
+        } => {
+            let arg_strs: Vec<String> = args.iter().map(expr_to_short_str).collect();
+            format!(
+                "{}.{method}({})",
+                expr_to_short_str(receiver),
+                arg_strs.join(", ")
             )
         }
         _ => "?".to_string(),
@@ -1971,8 +2008,9 @@ mod tests {
     }
 
     #[test]
-    fn params_supported_rejects_string() {
-        let prog = parse_prog("fn f(s: String) -> Int { 0 }");
+    fn params_supported_rejects_float() {
+        // Float remains unsupported until Z3 Real theory lands (#1957).
+        let prog = parse_prog("fn f(x: Float) -> Int { 0 }");
         let params = match &prog.declarations[0] {
             Decl::Fn(fd) => fd.params.clone(),
             _ => unreachable!(),
@@ -2003,6 +2041,53 @@ mod tests {
     }
 
     // ── JSON escape: string content stays valid JSON ──────────────────────
+
+    // ── Commit 3: String clause support ───────────────────────────────────
+
+    #[test]
+    fn escape_mvl_string_literal_wraps_and_escapes() {
+        assert_eq!(escape_mvl_string_literal("hello"), "\"hello\"");
+        assert_eq!(
+            escape_mvl_string_literal("with \"quote\""),
+            "\"with \\\"quote\\\"\""
+        );
+        assert_eq!(escape_mvl_string_literal("a\\b"), "\"a\\\\b\"");
+        assert_eq!(escape_mvl_string_literal("a\nb"), "\"a\\nb\"");
+    }
+
+    #[test]
+    fn params_supported_accepts_string() {
+        let prog = parse_prog("fn f(s: String, n: Int) -> Int { 0 }");
+        let params = match &prog.declarations[0] {
+            Decl::Fn(fd) => fd.params.clone(),
+            _ => unreachable!(),
+        };
+        assert!(params_supported_for_mcdc(&params, &HashMap::new()));
+    }
+
+    #[test]
+    fn format_witness_value_typed_renders_string() {
+        let ty = TypeExpr::Base {
+            name: "String".to_string(),
+            args: vec![],
+            span: Span::default(),
+        };
+        let v = WitnessValue::Str("hello".to_string());
+        assert_eq!(format_witness_value_typed(&v, &ty), "\"hello\"");
+    }
+
+    #[test]
+    fn expr_to_short_str_renders_method_call() {
+        let recv = Expr::Ident("s".to_string(), Span::default());
+        let lit = Expr::Literal(Literal::Str("/api/".to_string()), Span::default());
+        let call = Expr::MethodCall {
+            receiver: Box::new(recv),
+            method: "starts_with".to_string(),
+            args: vec![lit],
+            span: Span::default(),
+        };
+        assert_eq!(expr_to_short_str(&call), "s.starts_with(\"/api/\")");
+    }
 
     // ── Commit 2: MatchGuard support ──────────────────────────────────────
 
