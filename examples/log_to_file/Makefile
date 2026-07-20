@@ -1,6 +1,6 @@
 # log_to_file example — structured logging with IFC and refinement types.
 # Run from this directory: make check, make test, etc.
-.PHONY: help guard-mvl lint check prove test-solver test assurance smoke run clean
+.PHONY: help guard-mvl lint check prove test-solver test test-llvm assurance smoke run clean
 
 .DEFAULT_GOAL := help
 
@@ -50,6 +50,9 @@ test-solver: guard-mvl ## Show solver statistics for main.mvl
 
 test: guard-mvl ## Run all unit tests in main_test.mvl (4 tests)
 	cd $(REPO_ROOT) && $(abspath $(MVL)) test $(DIR)
+
+test-llvm: guard-mvl ## Run unit tests via LLVM backend
+	cd $(REPO_ROOT) && $(abspath $(MVL)) test $(DIR) --backend=llvm
 
 assurance: guard-mvl ## Full assurance: check + unit tests + assurance report
 	cd $(REPO_ROOT) && $(abspath $(MVL)) check $(DIR)
