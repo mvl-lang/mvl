@@ -550,9 +550,7 @@ impl TextEmitter {
             "i32" => (4, 4),
             "i64" | "double" | "ptr" => (8, 8),
             super::RESULT_LLVM_TY => (16, 8),
-            _ if ty.starts_with('%') => {
-                (self.alloc_size_for_llvm_ty(ty), 8)
-            }
+            _ if ty.starts_with('%') => (self.alloc_size_for_llvm_ty(ty), 8),
             _ => (8, 8),
         }
     }
