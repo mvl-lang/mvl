@@ -285,7 +285,10 @@ fn impl_z3_tighten(
         }
     }
 
-    best.map(|tighter_bound| TightenResult { op, tighter_bound: tighter_bound as f64 })
+    best.map(|tighter_bound| TightenResult {
+        op,
+        tighter_bound: tighter_bound as f64,
+    })
 }
 
 /// Extract `(op, bound)` from a simple `self OP bound` RefExpr.
@@ -1530,7 +1533,9 @@ fn impl_z3_real(
         SatResult::Unsat => Some(RefResult::Proven),
         SatResult::Sat => {
             if is_constrained_float_literal(arg) {
-                Some(RefResult::Failed { counterexample: None })
+                Some(RefResult::Failed {
+                    counterexample: None,
+                })
             } else {
                 None // symbolic arg — fall to RuntimeCheck
             }
@@ -1603,9 +1608,7 @@ fn ref_to_bool_real<'ctx>(
                 LogicOp::Or => z3::ast::Bool::or(ctx, &[&l, &r]),
             })
         }
-        RefExpr::Not { inner, .. } => {
-            Some(ref_to_bool_real(ctx, inner, self_term, vars)?.not())
-        }
+        RefExpr::Not { inner, .. } => Some(ref_to_bool_real(ctx, inner, self_term, vars)?.not()),
         RefExpr::Grouped { inner, .. } => ref_to_bool_real(ctx, inner, self_term, vars),
         _ => None,
     }
@@ -1628,9 +1631,7 @@ fn ref_to_real<'ctx>(
 
     match expr {
         RefExpr::Float { value, .. } => f64_to_z3_real(ctx, *value),
-        RefExpr::Integer { value, .. } => {
-            Some(z3::ast::Real::from_real(ctx, *value as i32, 1))
-        }
+        RefExpr::Integer { value, .. } => Some(z3::ast::Real::from_real(ctx, *value as i32, 1)),
         RefExpr::Ident { name, .. } => {
             if name == "self" {
                 Some(self_term.clone())
@@ -1671,9 +1672,7 @@ fn expr_to_real<'ctx>(
 
     match expr {
         Expr::Literal(Literal::Float(f), _) => f64_to_z3_real(ctx, *f),
-        Expr::Literal(Literal::Integer(i), _) => {
-            Some(z3::ast::Real::from_real(ctx, *i as i32, 1))
-        }
+        Expr::Literal(Literal::Integer(i), _) => Some(z3::ast::Real::from_real(ctx, *i as i32, 1)),
         Expr::Ident(name, _) => vars.get(name).cloned(),
         Expr::Unary {
             op: UnaryOp::Neg,
@@ -2379,8 +2378,14 @@ mod tests {
     fn self_ge_float(f: f64) -> RefExpr {
         RefExpr::Compare {
             op: CmpOp::Ge,
-            left: Box::new(RefExpr::Ident { name: "self".into(), span: dummy_span() }),
-            right: Box::new(RefExpr::Float { value: f, span: dummy_span() }),
+            left: Box::new(RefExpr::Ident {
+                name: "self".into(),
+                span: dummy_span(),
+            }),
+            right: Box::new(RefExpr::Float {
+                value: f,
+                span: dummy_span(),
+            }),
             span: dummy_span(),
         }
     }
@@ -2388,8 +2393,14 @@ mod tests {
     fn self_le_float(f: f64) -> RefExpr {
         RefExpr::Compare {
             op: CmpOp::Le,
-            left: Box::new(RefExpr::Ident { name: "self".into(), span: dummy_span() }),
-            right: Box::new(RefExpr::Float { value: f, span: dummy_span() }),
+            left: Box::new(RefExpr::Ident {
+                name: "self".into(),
+                span: dummy_span(),
+            }),
+            right: Box::new(RefExpr::Float {
+                value: f,
+                span: dummy_span(),
+            }),
             span: dummy_span(),
         }
     }
@@ -2423,7 +2434,9 @@ mod tests {
         let var_refs = HashMap::new();
         assert_eq!(
             try_z3(&pred, &arg, &var_refs, None),
-            Some(RefResult::Failed { counterexample: None })
+            Some(RefResult::Failed {
+                counterexample: None
+            })
         );
     }
 
@@ -2473,7 +2486,10 @@ mod tests {
     #[test]
     fn has_float_ops_detects_float_nodes() {
         assert!(has_float_ops(&self_ge_float(0.0)));
-        assert!(has_float_ops(&logic_and(self_ge_float(0.0), self_le_float(1.0))));
+        assert!(has_float_ops(&logic_and(
+            self_ge_float(0.0),
+            self_le_float(1.0)
+        )));
         assert!(!has_float_ops(&self_gt(0)));
     }
 
