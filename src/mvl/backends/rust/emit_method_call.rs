@@ -11,6 +11,68 @@ use crate::mvl::backends::{
     STRING_LABEL_PRESERVING_METHODS,
 };
 use crate::mvl::ir::{TirExpr, TirExprKind, Ty};
+use crate::mvl::parser::ast::{CmpOp, LogicOp, RefExpr};
+
+/// Returns true when `pred` syntactically implies `self >= 0`.
+///
+/// Covers the common cases produced by type alias and inline refinement syntax:
+/// `self >= 0`, `self > 0`, `self > -1`, `self >= N` (N > 0),
+/// and AND-conjunctions where at least one conjunct implies it.
+/// Conservative: returns false for anything not in this set.
+fn pred_implies_non_negative(pred: &RefExpr) -> bool {
+    match pred {
+        RefExpr::Grouped { inner, .. } => pred_implies_non_negative(inner),
+        RefExpr::LogicOp {
+            op: LogicOp::And,
+            left,
+            right,
+            ..
+        } => pred_implies_non_negative(left) || pred_implies_non_negative(right),
+        // self >= N where N >= 0  →  self >= 0
+        RefExpr::Compare {
+            op: CmpOp::Ge,
+            left,
+            right,
+            ..
+        } => {
+            matches!(left.as_ref(), RefExpr::Ident { name, .. } if name == "self")
+                && matches!(right.as_ref(), RefExpr::Integer { value, .. } if *value >= 0)
+        }
+        // self > N where N >= -1  →  self >= 0
+        RefExpr::Compare {
+            op: CmpOp::Gt,
+            left,
+            right,
+            ..
+        } => {
+            matches!(left.as_ref(), RefExpr::Ident { name, .. } if name == "self")
+                && matches!(right.as_ref(), RefExpr::Integer { value, .. } if *value >= -1)
+        }
+        _ => false,
+    }
+}
+
+/// Returns true when the type guarantees the value is >= 0 at compile time.
+///
+/// Handles two cases:
+/// - Named refined type aliases (e.g. `NonNegativeIndex`) — the predicate is
+///   looked up from the emitter's `refined_alias_predicates` registry.
+/// - Inline refinements (`Ty::Refined`) — the predicate is embedded in the type.
+fn ty_is_non_negative(
+    ty: &Ty,
+    refined_alias_predicates: &std::collections::HashMap<String, crate::mvl::parser::ast::RefExpr>,
+) -> bool {
+    match ty {
+        Ty::Refined(inner, pred) => {
+            matches!(inner.base(), Ty::Int) && pred_implies_non_negative(pred)
+        }
+        Ty::Named(name, _) => refined_alias_predicates
+            .get(name.as_str())
+            .is_some_and(pred_implies_non_negative),
+        Ty::Labeled(_, inner) => ty_is_non_negative(inner, refined_alias_predicates),
+        _ => false,
+    }
+}
 
 /// Map a receiver `Ty` to the string key used in the `BUILTINS` table
 /// (`"String"`, `"List"`, `"Map"`, `"Set"`).  Returns `None` for types that
@@ -522,11 +584,28 @@ impl RustEmitter {
                     self.emit_expr(&args[0]);
                     self.push(").clone()).cloned()");
                 } else if is_list_or_set {
+                    // Named refined-alias arguments (e.g. `NonNegativeIndex`) lower to
+                    // Rust newtypes; we must unwrap `.0` before comparison or cast (#1891).
+                    let needs_unwrap = self.refined_alias_base(&args[0].ty).is_some();
+                    // ty_is_non_negative matches only Ty::Refined (inline refinements),
+                    // which are plain i64 in Rust — no newtype, no .0 needed.
+                    let skip_neg_check = self.optimize_proved
+                        && ty_is_non_negative(&args[0].ty, &self.refined_alias_predicates);
                     self.push("{ let __mvl_i = ");
                     self.emit_expr(&args[0]);
-                    self.push("; if __mvl_i < 0 { None } else { ");
-                    self.emit_method_receiver(receiver);
-                    self.push(".get(__mvl_i as usize).cloned() } }");
+                    if needs_unwrap {
+                        self.push(".0");
+                    }
+                    if skip_neg_check {
+                        // Prover certified argument is >= 0; elide the guard (#1891).
+                        self.push("; ");
+                        self.emit_method_receiver(receiver);
+                        self.push(".get(__mvl_i as usize).cloned() }");
+                    } else {
+                        self.push("; if __mvl_i < 0 { None } else { ");
+                        self.emit_method_receiver(receiver);
+                        self.push(".get(__mvl_i as usize).cloned() } }");
+                    }
                 } else {
                     // User-defined type with a custom .get() method — emit as
                     // a regular method call, not List indexing semantics.
@@ -938,5 +1017,149 @@ impl RustEmitter {
         self.push(";let _mvl_hi=");
         self.emit_expr(high);
         self.push(";if _mvl_lo>_mvl_hi{_mvl_n}else{_mvl_n.clamp(_mvl_lo,_mvl_hi)}}");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{pred_implies_non_negative, ty_is_non_negative};
+    use crate::mvl::ir::Ty;
+    use crate::mvl::parser::ast::{CmpOp, RefExpr};
+    use crate::mvl::parser::lexer::Span;
+    use std::collections::HashMap;
+
+    fn dummy_span() -> Span {
+        Span {
+            line: 0,
+            col: 0,
+            offset: 0,
+            len: 0,
+        }
+    }
+
+    fn ident(name: &str) -> RefExpr {
+        RefExpr::Ident {
+            name: name.to_string(),
+            span: dummy_span(),
+        }
+    }
+
+    fn int_lit(v: i64) -> RefExpr {
+        RefExpr::Integer {
+            value: v,
+            span: dummy_span(),
+        }
+    }
+
+    fn cmp(op: CmpOp, left: RefExpr, right: RefExpr) -> RefExpr {
+        RefExpr::Compare {
+            op,
+            left: Box::new(left),
+            right: Box::new(right),
+            span: dummy_span(),
+        }
+    }
+
+    fn refined_int(pred: RefExpr) -> Ty {
+        Ty::Refined(Box::new(Ty::Int), Box::new(pred))
+    }
+
+    #[test]
+    fn pred_self_ge_zero() {
+        assert!(pred_implies_non_negative(&cmp(
+            CmpOp::Ge,
+            ident("self"),
+            int_lit(0)
+        )));
+    }
+
+    #[test]
+    fn pred_self_ge_positive() {
+        assert!(pred_implies_non_negative(&cmp(
+            CmpOp::Ge,
+            ident("self"),
+            int_lit(1)
+        )));
+    }
+
+    #[test]
+    fn pred_self_gt_neg_one() {
+        assert!(pred_implies_non_negative(&cmp(
+            CmpOp::Gt,
+            ident("self"),
+            int_lit(-1)
+        )));
+    }
+
+    #[test]
+    fn pred_self_gt_zero() {
+        assert!(pred_implies_non_negative(&cmp(
+            CmpOp::Gt,
+            ident("self"),
+            int_lit(0)
+        )));
+    }
+
+    #[test]
+    fn pred_self_lt_ten_not_nonneg() {
+        assert!(!pred_implies_non_negative(&cmp(
+            CmpOp::Lt,
+            ident("self"),
+            int_lit(10)
+        )));
+    }
+
+    #[test]
+    fn pred_x_ge_zero_not_self() {
+        assert!(!pred_implies_non_negative(&cmp(
+            CmpOp::Ge,
+            ident("x"),
+            int_lit(0)
+        )));
+    }
+
+    #[test]
+    fn ty_refined_int_ge_zero_is_nonneg() {
+        let ty = refined_int(cmp(CmpOp::Ge, ident("self"), int_lit(0)));
+        assert!(ty_is_non_negative(&ty, &HashMap::new()));
+    }
+
+    #[test]
+    fn ty_plain_int_is_not_nonneg() {
+        assert!(!ty_is_non_negative(&Ty::Int, &HashMap::new()));
+    }
+
+    #[test]
+    fn ty_refined_int_lt_ten_is_not_nonneg() {
+        let ty = refined_int(cmp(CmpOp::Lt, ident("self"), int_lit(10)));
+        assert!(!ty_is_non_negative(&ty, &HashMap::new()));
+    }
+
+    #[test]
+    fn ty_named_alias_with_nonneg_pred_is_nonneg() {
+        let mut preds = HashMap::new();
+        preds.insert(
+            "NonNeg".to_string(),
+            cmp(CmpOp::Ge, ident("self"), int_lit(0)),
+        );
+        let ty = Ty::Named("NonNeg".to_string(), vec![]);
+        assert!(ty_is_non_negative(&ty, &preds));
+    }
+
+    #[test]
+    fn ty_named_alias_without_pred_is_not_nonneg() {
+        let ty = Ty::Named("SomeType".to_string(), vec![]);
+        assert!(!ty_is_non_negative(&ty, &HashMap::new()));
+    }
+
+    #[test]
+    fn ty_named_alias_with_lt_pred_is_not_nonneg() {
+        let mut preds = HashMap::new();
+        preds.insert(
+            "BoundedInt".to_string(),
+            cmp(CmpOp::Lt, ident("self"), int_lit(100)),
+        );
+        let ty = Ty::Named("BoundedInt".to_string(), vec![]);
+        assert!(!ty_is_non_negative(&ty, &preds));
     }
 }
