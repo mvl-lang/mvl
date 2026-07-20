@@ -222,6 +222,7 @@ pub(super) fn dispatch(args: &[String]) {
                 None
             };
             let emit_tests = args.iter().any(|a| a == "--emit-tests");
+            let mcdc = args.iter().any(|a| a == "--mcdc");
             harden::run(
                 &path,
                 verbose,
@@ -229,6 +230,7 @@ pub(super) fn dispatch(args: &[String]) {
                 emit_tests,
                 stdlib_profile,
                 callee_filter,
+                mcdc,
             );
         }
         "complexity" => {
