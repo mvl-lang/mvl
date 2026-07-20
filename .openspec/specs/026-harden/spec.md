@@ -1,7 +1,7 @@
 ---
 domain: toolchain
-version: 0.1.0
-status: draft
+version: 0.2.0
+status: active
 date: 2026-07-20
 ---
 
@@ -223,11 +223,31 @@ For each clause the outcome is one of:
 Parameter types in scope for this axis:
 - `Int` — direct Z3 Int variable
 - `Bool` — encoded as Z3 Int in `{0, 1}`
+- `String` — Z3 String variable; predicates supported are equality
+  (`s == "lit"`, `s != "lit"`), `s.contains("lit")`, `s.starts_with("lit")`,
+  `s.ends_with("lit")`
 - Structs whose fields are `Int`/`Bool` — via `build_struct_fields` map
 
-Other parameter types (`String`, `Float`, `List`, `Map`) MUST be reported as
-"unsupported clause type" and skipped. A follow-up ticket will extend
-coverage to strings.
+Other parameter types (`Float`, `List`, `Map`) MUST be reported as
+"unsupported clause type" and skipped. `Float` support depends on Z3 Real
+theory being added to Layer 5 (tracked in #1957).
+
+**Unique-Cause caveat for mixed decisions.** The "other clauses pinned to
+their Q1 truth values" step uses a purely-integer structural evaluator.
+String and struct clauses fall through as `None` and are silently skipped
+from pinning. Decisions mixing Int/Bool + String clauses therefore land in
+masking-MC/DC rather than strict Unique-Cause for their String clauses;
+outcomes still differ correctly, but non-target String clauses may take
+different values between t1 and t2.
+
+**Decision kinds covered by axis 4:**
+- Compound `if` conditions (statement and expression forms)
+- Compound `while` conditions
+- Compound match-arm guards (`n if a && b => …`) — guards using `RefExpr`
+  are converted to `Expr` via `refexpr_to_expr` for the shared pipeline
+- **Not** covered: match arms as independent outcomes (see #1958 —
+  distinct semantics; requires `SingleWitness` outcome and pattern-to-predicate
+  encoding), guards that reference pattern-bound identifiers
 
 `requires` clauses on the enclosing function MUST be added as preconditions
 to both t1 and t2 — reusing the branch-hypothesis threading pattern from
@@ -266,11 +286,24 @@ test fn harden_mcdc_<fn>_c<i>_f() -> Unit { ... clause evaluates false ... }
 - WHEN axis 4 runs
 - THEN every generated witness satisfies `x > 0` (the requires clause)
 
+#### Scenario: String clause type generates independence pair
+
+- GIVEN `fn route(path: String, admin: Bool) -> Int { if path.starts_with("/api/") && admin { 1 } else { 0 } }`
+- WHEN `mvl harden route.mvl --mcdc` is run
+- THEN clause 0 (`path.starts_with("/api/")`) yields a pair where t1's `path` matches the prefix and t2's does not
+- AND clause 1 (`admin`) yields a pair where t1's `admin = true` and t2's `admin = false`
+
+#### Scenario: match-arm compound guard generates independence pair
+
+- GIVEN `fn f(a: Bool, b: Bool, x: Int) -> Int { match x { n if a && b => n, _ => 0 } }`
+- WHEN `mvl harden f.mvl --mcdc` is run
+- THEN one MatchGuard decision is emitted with two independence pairs (one per clause)
+
 #### Scenario: unsupported parameter type is skipped
 
-- GIVEN a decision whose clauses reference a `String` parameter
+- GIVEN a decision whose clauses reference a `Float` parameter
 - WHEN axis 4 runs
-- THEN the decision is reported with "unsupported clause type — String" and no witness is attempted
+- THEN the decision is reported with "unsupported clause type" and no witness is attempted (until #1957 lands)
 
 #### Scenario: --emit-tests writes compilable MC/DC gap test file
 
@@ -321,23 +354,57 @@ grand total.
 
 `--verbose` MUST additionally print predicate text for each axis-1 site.
 
-`--json` MUST replace the human report with a single JSON object:
+`--json` MUST replace the human report with a single JSON object. All five
+top-level array fields MUST be present (empty arrays when nothing to report):
 
 ```json
 {
   "total_proven": N,
   "total_runtime": N,
   "total_failed": N,
-  "axis1_promotion_candidates": [...],
-  "axis2_tightening_candidates": [...],
-  "axis3_witnesses": [...],
-  "axis4_mcdc_pairs": [...]
+  "axis1_promotion_candidates": [
+    { "file": "...", "line": N, "caller": "...", "callee": "...", "param": "...", "predicate": "...", "suggestion": "..." }
+  ],
+  "axis2_tightening_candidates": [
+    { "fn_name": "...", "line": N, "declared": "...", "tighter": "..." }
+  ],
+  "axis3_boundary_witnesses": [
+    { "fn_name": "...", "line": N, "declared": "...", "tighter": "...",
+      "args": [{ "name": "...", "type": "...", "value": "..." }] }
+  ],
+  "axis4_mcdc_pairs": [
+    { "fn_name": "...", "line": N, "clause_idx": N, "clause_text": "...",
+      "outcome": "pair",
+      "t1": [{ "name": "...", "type": "...", "value": "..." }],
+      "t2": [{ "name": "...", "type": "...", "value": "..." }] },
+    { "fn_name": "...", "line": N, "clause_idx": N, "clause_text": "...",
+      "outcome": "coupled" },
+    { "fn_name": "...", "line": N, "clause_idx": N, "clause_text": "...",
+      "outcome": "unsupported", "reason": "..." }
+  ]
 }
 ```
 
-**Implementation:** `src/cli/harden.rs::print_json`, `src/cli/harden.rs::run`
+`axis4_mcdc_pairs[*].outcome` MUST be one of `"pair"`, `"coupled"`, or
+`"unsupported"`. `t1`/`t2` MUST be present only for `"pair"` outcomes.
+`reason` MUST be present only for `"unsupported"` outcomes.
 
-**Tests:** `src/cli/harden.rs::tests::json_output_is_valid` (structural check)
+Value strings (in `axis3_boundary_witnesses[*].args[*].value` and
+`axis4_mcdc_pairs[*].{t1,t2}[*].value`) MUST be pre-rendered MVL literals —
+`"true"`/`"false"` for Bool, decimal integers for Int, and quoted-and-escaped
+strings for String. Consumers can paste them directly into generated code.
+
+The JSON emitter MUST escape backslashes (`\\`) and double-quotes (`\"`) in
+all string values.
+
+**Implementation:** `src/cli/harden.rs::print_json`, `src/cli/harden.rs::compute_axis3_witnesses`, `src/cli/harden.rs::compute_axis4_results`
+
+#### Scenario: JSON round-trip
+
+- GIVEN any input file with axis 4 findings
+- WHEN `mvl harden <file> --mcdc --json` is run
+- THEN the output parses successfully as JSON and contains all five
+  top-level array fields
 
 ---
 
