@@ -32,8 +32,8 @@ use mvl::mvl::checker::refinements::{
 use mvl::mvl::checker::SolverMode;
 use mvl::mvl::loader;
 use mvl::mvl::parser::ast::{
-    BinaryOp, Block, Decl, ElseBranch, Expr, FnDecl, Literal, MatchBody, Param, Program, Stmt,
-    TypeBody, TypeExpr, UnaryOp,
+    ArithOp, BinaryOp, Block, CmpOp, Decl, ElseBranch, Expr, FnDecl, Literal, LogicOp, MatchArm,
+    MatchBody, Param, Program, RefExpr, Stmt, TypeBody, TypeExpr, UnaryOp,
 };
 use mvl::mvl::parser::lexer::Span;
 use mvl::mvl::passes::mcdc::analysis::{collect_clauses, count_clauses};
@@ -1062,9 +1062,12 @@ enum McdcClauseOutcome {
     Unsupported,
 }
 
-/// Walk `prog` and collect every compound if/while decision inside non-test functions.
+/// Walk `prog` and collect every compound if/while decision — plus compound
+/// match-arm guards (#1955) — inside non-test functions.
 ///
-/// Match, MatchGuard, and Bool-return decisions are out of scope for axis 4 (v1).
+/// Match arms themselves (as independent outcomes) and Bool-return decisions
+/// remain out of scope for axis 4 (v1); see follow-up ticket for arm
+/// reachability witnesses.
 fn collect_mcdc_decisions(prog: &Program) -> Vec<McdcDecision> {
     let mut out = Vec::new();
     for decl in &prog.declarations {
@@ -1110,6 +1113,7 @@ fn collect_decisions_from_stmt(stmt: &Stmt, fd: &FnDecl, out: &mut Vec<McdcDecis
         Stmt::For { body, .. } => collect_decisions_from_block(body, fd, out),
         Stmt::Match { arms, .. } => {
             for arm in arms {
+                maybe_push_match_guard(arm, fd, out);
                 match &arm.body {
                     MatchBody::Block(b) => collect_decisions_from_block(b, fd, out),
                     MatchBody::Expr(e) => collect_decisions_from_expr(e, fd, out),
@@ -1183,6 +1187,205 @@ fn maybe_push_decision(cond: &Expr, line: u32, fd: &FnDecl, out: &mut Vec<McdcDe
         decision_expr: cond.clone(),
         clauses,
     });
+}
+
+/// Push a MatchGuard decision when an arm has a compound (`&&`/`||`) guard
+/// whose atomic clauses can be converted to `Expr` and only reference
+/// function parameters (#1955).
+///
+/// Guards that reference pattern-bound identifiers or use unsupported
+/// `RefExpr` forms (Old, Forall, StringOp, ArrayGet, RegexMatch, quantifiers)
+/// are silently skipped — the `mvl mcdc` command still tracks them as
+/// obligations, but harden can't synthesize an independence pair here.
+fn maybe_push_match_guard(arm: &MatchArm, fd: &FnDecl, out: &mut Vec<McdcDecision>) {
+    let Some(guard) = &arm.guard else {
+        return;
+    };
+    // Guards with a single atomic clause carry no MC/DC obligation.
+    let clause_refs = collect_clauses_ref(guard);
+    if clause_refs.len() <= 1 {
+        return;
+    }
+    // Convert the full guard and each clause to `Expr` form for the existing
+    // pair-synthesis pipeline. Any conversion failure aborts this arm.
+    let Some(decision_expr) = refexpr_to_expr(guard) else {
+        return;
+    };
+    let mut clauses: Vec<Expr> = Vec::new();
+    for c in &clause_refs {
+        let Some(e) = refexpr_to_expr(c) else {
+            return;
+        };
+        clauses.push(e);
+    }
+    // Only accept guards whose free identifiers are all function parameters.
+    // Guards that reference pattern bindings (`n if n > 0 && …`) would need
+    // extra binding infrastructure and are deferred.
+    let param_names: std::collections::HashSet<&str> =
+        fd.params.iter().map(|p| p.name.as_str()).collect();
+    let mut free: std::collections::HashSet<String> = std::collections::HashSet::new();
+    refexpr_free_vars(guard, &mut free);
+    if !free.iter().all(|n| param_names.contains(n.as_str())) {
+        return;
+    }
+    out.push(McdcDecision {
+        fn_name: fd.name.clone(),
+        fn_params: fd.params.clone(),
+        requires: fd.requires.clone(),
+        is_effectful: !fd.effects.is_empty(),
+        line: arm.span.line,
+        decision_expr,
+        clauses,
+    });
+}
+
+/// Split a compound `RefExpr` guard into its atomic leaf clauses (left-to-right).
+///
+/// Mirrors `passes::mcdc::analysis::collect_clauses` for the `Expr` domain.
+/// `Grouped` nodes are transparently unwrapped.
+fn collect_clauses_ref(guard: &RefExpr) -> Vec<&RefExpr> {
+    let mut out = Vec::new();
+    fn walk<'a>(e: &'a RefExpr, out: &mut Vec<&'a RefExpr>) {
+        match e {
+            RefExpr::LogicOp {
+                op: LogicOp::And | LogicOp::Or,
+                left,
+                right,
+                ..
+            } => {
+                walk(left, out);
+                walk(right, out);
+            }
+            RefExpr::Grouped { inner, .. } => walk(inner, out),
+            _ => out.push(e),
+        }
+    }
+    walk(guard, &mut out);
+    out
+}
+
+/// Partial conversion from `RefExpr` (predicate) to `Expr` (general expression),
+/// covering the subset used in match guards.
+///
+/// Returns `None` when the `RefExpr` uses forms that don't fit into `Expr`
+/// (`Old`, `Forall`, `Exists`, `Len`, `StringOp`, `ArrayGet`, `RegexMatch`,
+/// `Float`, bounded quantifiers, bitwise ops).  Those cause the guard to be
+/// skipped, which is the correct conservative behavior.
+fn refexpr_to_expr(e: &RefExpr) -> Option<Expr> {
+    let s = refexpr_span(e);
+    match e {
+        RefExpr::Integer { value, .. } => Some(Expr::Literal(Literal::Integer(*value), s)),
+        RefExpr::Bool { value, .. } => Some(Expr::Literal(Literal::Bool(*value), s)),
+        RefExpr::Ident { name, .. } => Some(Expr::Ident(name.clone(), s)),
+        RefExpr::FieldAccess { object, field, .. } => Some(Expr::FieldAccess {
+            expr: Box::new(refexpr_to_expr(object)?),
+            field: field.clone(),
+            span: s,
+        }),
+        RefExpr::Not { inner, .. } => Some(Expr::Unary {
+            op: UnaryOp::Not,
+            expr: Box::new(refexpr_to_expr(inner)?),
+            span: s,
+        }),
+        RefExpr::Compare {
+            op, left, right, ..
+        } => {
+            let l = refexpr_to_expr(left)?;
+            let r = refexpr_to_expr(right)?;
+            let bop = match op {
+                CmpOp::Eq => BinaryOp::Eq,
+                CmpOp::Ne => BinaryOp::Ne,
+                CmpOp::Lt => BinaryOp::Lt,
+                CmpOp::Le => BinaryOp::Le,
+                CmpOp::Gt => BinaryOp::Gt,
+                CmpOp::Ge => BinaryOp::Ge,
+            };
+            Some(binop(bop, l, r))
+        }
+        RefExpr::ArithOp {
+            op, left, right, ..
+        } => {
+            let l = refexpr_to_expr(left)?;
+            let r = refexpr_to_expr(right)?;
+            let bop = match op {
+                ArithOp::Add => BinaryOp::Add,
+                ArithOp::Sub => BinaryOp::Sub,
+                ArithOp::Mul => BinaryOp::Mul,
+                ArithOp::Div => BinaryOp::Div,
+                ArithOp::Rem => BinaryOp::Rem,
+            };
+            Some(binop(bop, l, r))
+        }
+        RefExpr::LogicOp {
+            op, left, right, ..
+        } => {
+            let l = refexpr_to_expr(left)?;
+            let r = refexpr_to_expr(right)?;
+            let bop = match op {
+                LogicOp::And => BinaryOp::And,
+                LogicOp::Or => BinaryOp::Or,
+            };
+            Some(binop(bop, l, r))
+        }
+        RefExpr::Grouped { inner, .. } => refexpr_to_expr(inner),
+        // Unsupported in guards for axis 4: Old, Forall, Exists, Len,
+        // StringOp, ArrayGet, RegexMatch, Float, bounded quantifiers,
+        // bitwise ops. Skip the whole guard.
+        _ => None,
+    }
+}
+
+/// Extract the source span of a `RefExpr` — `RefExpr` doesn't have an inherent
+/// `.span()` accessor, so we destructure per variant.  We only need this for
+/// the variants `refexpr_to_expr` produces (all others are handled by the
+/// `None` fallback there anyway).
+fn refexpr_span(e: &RefExpr) -> Span {
+    match e {
+        RefExpr::Integer { span, .. }
+        | RefExpr::Bool { span, .. }
+        | RefExpr::Float { span, .. }
+        | RefExpr::Ident { span, .. }
+        | RefExpr::FieldAccess { span, .. }
+        | RefExpr::Not { span, .. }
+        | RefExpr::Compare { span, .. }
+        | RefExpr::ArithOp { span, .. }
+        | RefExpr::LogicOp { span, .. }
+        | RefExpr::Grouped { span, .. }
+        | RefExpr::Len { span, .. }
+        | RefExpr::Old { span, .. }
+        | RefExpr::Forall { span, .. }
+        | RefExpr::Exists { span, .. }
+        | RefExpr::BitwiseOp { span, .. }
+        | RefExpr::BitwiseNot { span, .. }
+        | RefExpr::BoundedForall { span, .. }
+        | RefExpr::BoundedExists { span, .. }
+        | RefExpr::StringOp { span, .. }
+        | RefExpr::ArrayGet { span, .. }
+        | RefExpr::RegexMatch { span, .. }
+        | RefExpr::Abs { span, .. }
+        | RefExpr::Min { span, .. }
+        | RefExpr::Max { span, .. } => *span,
+    }
+}
+
+/// Collect all identifier names referenced in a `RefExpr` into `out`.
+fn refexpr_free_vars(e: &RefExpr, out: &mut std::collections::HashSet<String>) {
+    match e {
+        RefExpr::Ident { name, .. } => {
+            out.insert(name.clone());
+        }
+        RefExpr::FieldAccess { object, .. } => refexpr_free_vars(object, out),
+        RefExpr::Not { inner, .. } | RefExpr::Grouped { inner, .. } => {
+            refexpr_free_vars(inner, out)
+        }
+        RefExpr::Compare { left, right, .. }
+        | RefExpr::ArithOp { left, right, .. }
+        | RefExpr::LogicOp { left, right, .. } => {
+            refexpr_free_vars(left, out);
+            refexpr_free_vars(right, out);
+        }
+        _ => {}
+    }
 }
 
 /// Two-query Z3 pair synthesis for target clause `i` in a decision.
@@ -1800,6 +2003,86 @@ mod tests {
     }
 
     // ── JSON escape: string content stays valid JSON ──────────────────────
+
+    // ── Commit 2: MatchGuard support ──────────────────────────────────────
+
+    #[test]
+    fn match_guard_compound_condition_becomes_decision() {
+        let prog = parse_prog(
+            "fn f(a: Bool, b: Bool, x: Int) -> Int { match x { n if a && b => n, _ => 0 } }",
+        );
+        let decisions = collect_mcdc_decisions(&prog);
+        assert_eq!(decisions.len(), 1, "expected one MatchGuard decision");
+        assert_eq!(decisions[0].clauses.len(), 2);
+        assert_eq!(decisions[0].fn_name, "f");
+    }
+
+    #[test]
+    fn match_guard_single_clause_not_tracked() {
+        let prog = parse_prog("fn f(a: Bool, x: Int) -> Int { match x { n if a => n, _ => 0 } }");
+        let decisions = collect_mcdc_decisions(&prog);
+        assert_eq!(decisions.len(), 0);
+    }
+
+    #[test]
+    fn match_guard_referencing_pattern_binding_is_skipped() {
+        // Guard `n > 0 && n < 100` references `n` which is bound by the arm's
+        // pattern — not a fn param.  Harden can't synthesize a witness cleanly,
+        // so the guard is skipped (mvl mcdc still tracks it as an obligation).
+        let prog =
+            parse_prog("fn f(x: Int) -> Int { match x { n if n > 0 && n < 100 => n, _ => 0 } }");
+        let decisions = collect_mcdc_decisions(&prog);
+        assert_eq!(decisions.len(), 0);
+    }
+
+    #[test]
+    fn refexpr_to_expr_converts_logic_op() {
+        let prog = parse_prog(
+            "fn f(a: Bool, b: Bool, x: Int) -> Int { match x { n if a || b => n, _ => 0 } }",
+        );
+        let decisions = collect_mcdc_decisions(&prog);
+        assert_eq!(decisions.len(), 1);
+        // Decision expr should be a LogicOp::Or, converted to BinaryOp::Or.
+        assert!(matches!(
+            &decisions[0].decision_expr,
+            Expr::Binary {
+                op: BinaryOp::Or,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn collect_clauses_ref_splits_on_and() {
+        // Build `a && b && c` refexpr and check we get 3 leaves.
+        let span = Span::default();
+        let a = RefExpr::Ident {
+            name: "a".into(),
+            span,
+        };
+        let b = RefExpr::Ident {
+            name: "b".into(),
+            span,
+        };
+        let c = RefExpr::Ident {
+            name: "c".into(),
+            span,
+        };
+        let ab = RefExpr::LogicOp {
+            op: LogicOp::And,
+            left: Box::new(a),
+            right: Box::new(b),
+            span,
+        };
+        let abc = RefExpr::LogicOp {
+            op: LogicOp::And,
+            left: Box::new(ab),
+            right: Box::new(c),
+            span,
+        };
+        let leaves = collect_clauses_ref(&abc);
+        assert_eq!(leaves.len(), 3);
+    }
 
     #[test]
     fn axis4_result_pair_snippet_absent_when_witness_unknown() {
