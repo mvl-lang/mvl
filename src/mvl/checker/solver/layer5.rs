@@ -192,7 +192,7 @@ pub(crate) fn try_z3_tighten(
         if has_float_ops(pred) {
             return impl_z3_tighten_real(pred, arg, var_refs);
         }
-        return impl_z3_tighten(pred, arg, var_refs);
+        impl_z3_tighten(pred, arg, var_refs)
     }
     #[cfg(not(feature = "z3"))]
     {

@@ -795,7 +795,7 @@ pub fn run(path: &str, quiet: bool, verbose: bool, masking: bool, json: bool) {
                     let col_w = 4usize;
                     let widths: Vec<usize> =
                         std::iter::once(3usize) // "#"
-                            .chain(std::iter::repeat(col_w).take(n))
+                            .chain(std::iter::repeat_n(col_w, n))
                             .chain(std::iter::once(6usize)) // "Result"
                             .collect();
                     let sep_row: String = widths
@@ -808,7 +808,7 @@ pub fn run(path: &str, quiet: bool, verbose: bool, masking: bool, json: bool) {
                         .map(|w| "─".repeat(w + 2))
                         .collect::<Vec<_>>()
                         .join("┴");
-                    print!("    observations ({} recorded):\n", obs.len());
+                    println!("    observations ({} recorded):", obs.len());
                     // Header row
                     print!("    │ {:>3} │", "#");
                     for c in 0..n {
