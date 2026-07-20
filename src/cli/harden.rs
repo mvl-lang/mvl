@@ -1,35 +1,29 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Schuberg Philis
 
-//! `mvl harden` — contract strengthening via proof feedback (#1913).
+//! `mvl harden` — contract strengthening via proof feedback (#1913, #1950).
 //!
-//! # Design
+//! See `.openspec/specs/026-harden/spec.md` for the full requirements.
 //!
-//! This command implements three axes of contract hardening.
-//!
-//! ## Axis 1 (this file): Runtime → Static Promotion
-//!
-//! Identifies call-site refinement obligations that fell back to a runtime
-//! assertion (`ProofOutcome::RuntimeCheck`) and reports them with the
-//! predicate, source location, and a heuristic explanation of *why* the
-//! solver could not discharge the obligation statically.
-//!
-//! The data comes from `RefinementCounts.sites` populated by
-//! `check_call_site()` in `src/mvl/checker/refinements.rs` — the same
-//! source used by `mvl prove`.  No new solver infrastructure is needed.
+//! ## Axis 1: Runtime → Static Promotion
+//! Consumes `RefinementCounts.sites` from `check_call_site` and classifies
+//! `RuntimeCheck` sites with heuristic fix hints.
 //!
 //! ## Axis 2: Contract Tightening
-//!
-//! Binary-searches over Z3 to find the tightest provable bound for each
-//! `ensures` clause and suggests strengthening the declared postcondition.
-//! See `src/mvl/checker/solver/layer5.rs::try_z3_tighten`.
+//! Binary-searches Z3 for the tightest provable bound on each `ensures` clause.
+//! See `layer5.rs::try_z3_tighten`.
 //!
 //! ## Axis 3: Boundary Test Generation
+//! Queries Z3 for witness inputs that reach each return branch; with
+//! `--emit-tests`, writes `*_boundary_test.mvl` files.
+//! See `layer5.rs::try_z3_witness`.
 //!
-//! Queries Z3 for concrete witness inputs that reach each return branch and
-//! satisfy the tighter postcondition.  With `--emit-tests`, synthesizes and
-//! writes `*_boundary_test.mvl` files containing `test fn` blocks.
-//! See `try_z3_witness` in `layer5.rs`.
+//! ## Axis 4: MC/DC Gap Synthesis (`--mcdc`, #1950)
+//! For every compound if/while decision, runs a two-query Z3 search per
+//! clause: Q1 solves for parameter values making the clause true and the
+//! decision true; Q2 solves for the opposite, pinning other clauses to
+//! their Q1 truth values (Unique-Cause MC/DC).  SAT → emit test pair;
+//! UNSAT → clause is coupled.
 
 use mvl::mvl::checker;
 use mvl::mvl::checker::refinements::{
@@ -37,7 +31,12 @@ use mvl::mvl::checker::refinements::{
 };
 use mvl::mvl::checker::SolverMode;
 use mvl::mvl::loader;
-use mvl::mvl::parser::ast::{Decl, Program, TypeBody, TypeExpr};
+use mvl::mvl::parser::ast::{
+    BinaryOp, Block, Decl, ElseBranch, Expr, FnDecl, Literal, MatchBody, Param, Program, Stmt,
+    TypeBody, TypeExpr, UnaryOp,
+};
+use mvl::mvl::parser::lexer::Span;
+use mvl::mvl::passes::mcdc::analysis::{collect_clauses, count_clauses};
 use mvl::mvl::pipeline::{load_full_prelude, PreludeMode};
 use mvl::mvl::resolver;
 use mvl::mvl::stdlib;
@@ -332,7 +331,7 @@ fn synthesize_test_fn(
 
 // ── Entry point ────────────────────────────────────────────────────────────────
 
-/// Run `mvl harden` (Axes 1, 2, and 3) over a `.mvl` file or directory.
+/// Run `mvl harden` (Axes 1, 2, 3, and optionally 4) over a `.mvl` file or directory.
 pub fn run(
     path: &str,
     verbose: bool,
@@ -340,6 +339,7 @@ pub fn run(
     emit_tests: bool,
     stdlib_profile: &str,
     callee_filter: Option<&str>,
+    mcdc: bool,
 ) {
     let files = loader::mvl_files(path, false);
     if files.is_empty() {
@@ -424,6 +424,8 @@ pub fn run(
         proven: usize,
         runtime: usize,
         failed: usize,
+        /// Axis 4 (#1950): compound if/while decisions in this file (populated only when `mcdc` is set).
+        mcdc_decisions: Vec<McdcDecision>,
     }
     let mut file_results: Vec<FileResult> = Vec::new();
 
@@ -477,6 +479,11 @@ pub fn run(
         grand_total_proven += file_proven;
         grand_total_runtime += file_runtime;
         grand_total_failed += file_failed;
+        let mcdc_decisions = if mcdc {
+            collect_mcdc_decisions(prog)
+        } else {
+            Vec::new()
+        };
         file_results.push(FileResult {
             file_str: file_str.clone(),
             sites_data,
@@ -484,6 +491,7 @@ pub fn run(
             proven: file_proven,
             runtime: file_runtime,
             failed: file_failed,
+            mcdc_decisions,
         });
     }
 
@@ -525,8 +533,8 @@ pub fn run(
     let sep = "═".repeat(70);
 
     for fr in &file_results {
-        // Skip files with no refinement sites at all (no contracts to analyse).
-        if fr.proven == 0 && fr.runtime == 0 && fr.failed == 0 {
+        // Skip files with no refinement sites AND no MC/DC decisions to analyse.
+        if fr.proven == 0 && fr.runtime == 0 && fr.failed == 0 && fr.mcdc_decisions.is_empty() {
             continue;
         }
 
@@ -614,13 +622,81 @@ pub fn run(
             }
         }
 
+        // ── Axis 4: MC/DC gap synthesis (#1950) ──────────────────────────────
+        let mut mcdc_snippets: Vec<String> = Vec::new();
+        let mut mcdc_use_fns: Vec<String> = Vec::new();
+        let mut mcdc_pairs = 0usize;
+        let mut mcdc_coupled = 0usize;
+        if mcdc {
+            println!("── Axis 4: MC/DC Gap Synthesis ──────────────────────────────────────");
+            if fr.mcdc_decisions.is_empty() {
+                println!("  No compound if/while decisions found.");
+            } else {
+                for dec in &fr.mcdc_decisions {
+                    if dec.is_effectful {
+                        continue;
+                    }
+                    println!(
+                        "\n  Decision {}:{} ({} clauses):",
+                        dec.fn_name,
+                        dec.line,
+                        dec.clauses.len()
+                    );
+                    for (i, clause) in dec.clauses.iter().enumerate() {
+                        let clause_str = expr_to_short_str(clause);
+                        match synthesize_mcdc_pair(
+                            &dec.fn_params,
+                            &dec.requires,
+                            &dec.clauses,
+                            i,
+                            &dec.decision_expr,
+                            &struct_fields,
+                        ) {
+                            McdcClauseOutcome::Pair { t1, t2 } => {
+                                mcdc_pairs += 1;
+                                println!("    clause {i} ({clause_str}): pair generated");
+                                if !mcdc_use_fns.contains(&dec.fn_name) {
+                                    mcdc_use_fns.push(dec.fn_name.clone());
+                                }
+                                if let Some(snip) = synthesize_mcdc_test_pair(
+                                    &dec.fn_name,
+                                    dec.line,
+                                    i,
+                                    &clause_str,
+                                    &dec.fn_params,
+                                    &t1,
+                                    &t2,
+                                ) {
+                                    mcdc_snippets.push(snip);
+                                }
+                            }
+                            McdcClauseOutcome::Coupled => {
+                                mcdc_coupled += 1;
+                                println!(
+                                    "    clause {i} ({clause_str}): coupled — masking MC/DC required"
+                                );
+                            }
+                            McdcClauseOutcome::Unsupported => {
+                                println!("    clause {i} ({clause_str}): unsupported clause type");
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         let pv = fr.proven;
         let rt = fr.runtime;
         let fa = fr.failed;
         let tg = deduped.len();
         let wc = witness_snippets.len();
+        let mcdc_tail = if mcdc {
+            format!(", {mcdc_pairs} MC/DC pair(s), {mcdc_coupled} coupled")
+        } else {
+            String::new()
+        };
         println!(
-            "\n  Summary: {pv} proven, {rt} runtime obligations, {fa} failed, {tg} tightening suggestion(s), {wc} witness(es)\n"
+            "\n  Summary: {pv} proven, {rt} runtime obligations, {fa} failed, {tg} tightening suggestion(s), {wc} witness(es){mcdc_tail}\n"
         );
         println!("{sep}\n");
 
@@ -650,10 +726,36 @@ pub fn run(
                 test_lines.push(String::new());
             }
             let content = test_lines.join("\n");
-            match std::fs::write(&out_path, &content) {
-                Ok(()) => println!("  Wrote boundary tests → {}\n", out_path.display()),
-                Err(e) => eprintln!("  warning: could not write {}: {e}", out_path.display()),
+            write_generated_test_file(&out_path, &content);
+        }
+
+        // ── --emit-tests + --mcdc: write MC/DC gap test file ─────────────────
+        if emit_tests && mcdc && !mcdc_snippets.is_empty() {
+            let file_path = Path::new(&fr.file_str);
+            let stem = file_path
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("file");
+            let dir = file_path.parent().unwrap_or_else(|| Path::new("."));
+            let out_path = dir.join(format!("{stem}_mcdc_gap_test.mvl"));
+
+            let module_stem = stem;
+            let mut test_lines: Vec<String> = Vec::new();
+            test_lines.push(
+                "// Generated by `mvl harden --emit-tests --mcdc` — do not edit by hand."
+                    .to_string(),
+            );
+            test_lines.push(String::new());
+            for fn_name in &mcdc_use_fns {
+                test_lines.push(format!("use {module_stem}::{fn_name};"));
             }
+            test_lines.push(String::new());
+            for snip in &mcdc_snippets {
+                test_lines.push(snip.clone());
+                test_lines.push(String::new());
+            }
+            let content = test_lines.join("\n");
+            write_generated_test_file(&out_path, &content);
         }
     }
 
@@ -672,5 +774,778 @@ pub fn run(
 
     if grand_total_failed > 0 {
         process::exit(1);
+    }
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+//  Axis 4: MC/DC gap synthesis (#1950)
+// ══════════════════════════════════════════════════════════════════════════════
+
+/// A single compound `if`/`while` decision found in a non-test function,
+/// carrying everything axis 4 needs to synthesize independence pairs.
+#[derive(Debug, Clone)]
+struct McdcDecision {
+    fn_name: String,
+    /// Enclosing function parameters — used as Z3 witness inputs.
+    fn_params: Vec<Param>,
+    /// Enclosing function `requires` clauses — threaded as preconditions.
+    requires: Vec<Expr>,
+    /// Effectful functions are excluded from MC/DC obligations (see spec 010).
+    is_effectful: bool,
+    /// Source line of the decision.
+    line: u32,
+    /// The full compound cond expression, e.g. `a && b`.
+    decision_expr: Expr,
+    /// Atomic leaf expressions (left-to-right).
+    clauses: Vec<Expr>,
+}
+
+/// Outcome of Z3 pair synthesis for a single target clause.
+enum McdcClauseOutcome {
+    /// Both t1 (clause true, decision true) and t2 (clause false, decision false) are SAT.
+    Pair {
+        t1: Vec<WitnessArg>,
+        t2: Vec<WitnessArg>,
+    },
+    /// One of the two queries returned UNSAT — the clause cannot independently affect the outcome.
+    Coupled,
+    /// The enclosing function has a parameter type Z3 witness synthesis does not support.
+    Unsupported,
+}
+
+/// Walk `prog` and collect every compound if/while decision inside non-test functions.
+///
+/// Match, MatchGuard, and Bool-return decisions are out of scope for axis 4 (v1).
+fn collect_mcdc_decisions(prog: &Program) -> Vec<McdcDecision> {
+    let mut out = Vec::new();
+    for decl in &prog.declarations {
+        if let Decl::Fn(fd) = decl {
+            if fd.is_test || fd.is_builtin {
+                continue;
+            }
+            collect_decisions_from_block(&fd.body, fd, &mut out);
+        }
+    }
+    out
+}
+
+fn collect_decisions_from_block(block: &Block, fd: &FnDecl, out: &mut Vec<McdcDecision>) {
+    for stmt in &block.stmts {
+        collect_decisions_from_stmt(stmt, fd, out);
+    }
+}
+
+fn collect_decisions_from_stmt(stmt: &Stmt, fd: &FnDecl, out: &mut Vec<McdcDecision>) {
+    match stmt {
+        Stmt::If {
+            cond,
+            then,
+            else_,
+            span,
+        } => {
+            maybe_push_decision(cond, span.line, fd, out);
+            collect_decisions_from_block(then, fd, out);
+            if let Some(else_branch) = else_ {
+                match else_branch {
+                    ElseBranch::Block(b) => collect_decisions_from_block(b, fd, out),
+                    ElseBranch::If(s) => collect_decisions_from_stmt(s, fd, out),
+                }
+            }
+        }
+        Stmt::While {
+            cond, body, span, ..
+        } => {
+            maybe_push_decision(cond, span.line, fd, out);
+            collect_decisions_from_block(body, fd, out);
+        }
+        Stmt::For { body, .. } => collect_decisions_from_block(body, fd, out),
+        Stmt::Match { arms, .. } => {
+            for arm in arms {
+                match &arm.body {
+                    MatchBody::Block(b) => collect_decisions_from_block(b, fd, out),
+                    MatchBody::Expr(e) => collect_decisions_from_expr(e, fd, out),
+                }
+            }
+        }
+        Stmt::Let { init, .. } => collect_decisions_from_expr(init, fd, out),
+        Stmt::Assign { value, .. } => collect_decisions_from_expr(value, fd, out),
+        Stmt::Expr { expr, .. } => collect_decisions_from_expr(expr, fd, out),
+        Stmt::Return { value: Some(v), .. } => collect_decisions_from_expr(v, fd, out),
+        _ => {}
+    }
+}
+
+fn collect_decisions_from_expr(expr: &Expr, fd: &FnDecl, out: &mut Vec<McdcDecision>) {
+    match expr {
+        Expr::If {
+            cond,
+            then,
+            else_,
+            span,
+        } => {
+            maybe_push_decision(cond, span.line, fd, out);
+            collect_decisions_from_block(then, fd, out);
+            if let Some(e) = else_ {
+                collect_decisions_from_expr(e, fd, out);
+            }
+        }
+        Expr::Block(b) => collect_decisions_from_block(b, fd, out),
+        Expr::Match { arms, .. } => {
+            for arm in arms {
+                match &arm.body {
+                    MatchBody::Block(b) => collect_decisions_from_block(b, fd, out),
+                    MatchBody::Expr(e) => collect_decisions_from_expr(e, fd, out),
+                }
+            }
+        }
+        Expr::Binary { left, right, .. } => {
+            collect_decisions_from_expr(left, fd, out);
+            collect_decisions_from_expr(right, fd, out);
+        }
+        Expr::Unary { expr, .. } => collect_decisions_from_expr(expr, fd, out),
+        Expr::FnCall { args, .. } => {
+            for a in args {
+                collect_decisions_from_expr(a, fd, out);
+            }
+        }
+        Expr::MethodCall { receiver, args, .. } => {
+            collect_decisions_from_expr(receiver, fd, out);
+            for a in args {
+                collect_decisions_from_expr(a, fd, out);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn maybe_push_decision(cond: &Expr, line: u32, fd: &FnDecl, out: &mut Vec<McdcDecision>) {
+    if count_clauses(cond) <= 1 {
+        return;
+    }
+    let mut leaves: Vec<&Expr> = Vec::new();
+    collect_clauses(cond, &mut leaves);
+    let clauses: Vec<Expr> = leaves.into_iter().cloned().collect();
+    out.push(McdcDecision {
+        fn_name: fd.name.clone(),
+        fn_params: fd.params.clone(),
+        requires: fd.requires.clone(),
+        is_effectful: !fd.effects.is_empty(),
+        line,
+        decision_expr: cond.clone(),
+        clauses,
+    });
+}
+
+/// Two-query Z3 pair synthesis for target clause `i` in a decision.
+///
+/// Algorithm (spec 026 R5):
+///   Q1: solve for parameter values where `clauses[i]` is TRUE and `decision` is TRUE.
+///   Q2: solve for parameter values where `clauses[i]` is FALSE and `decision` is FALSE,
+///       AND each other clause takes the SAME truth value it had in Q1 (Unique-Cause).
+///
+/// If either Q1 or Q2 is UNSAT (or the witness call returns None), the clause is coupled.
+fn synthesize_mcdc_pair(
+    params: &[Param],
+    requires: &[Expr],
+    clauses: &[Expr],
+    target: usize,
+    decision_expr: &Expr,
+    struct_fields: &HashMap<String, Vec<(String, String)>>,
+) -> McdcClauseOutcome {
+    if !params_supported_for_mcdc(params, struct_fields) {
+        return McdcClauseOutcome::Unsupported;
+    }
+
+    // Bare Bool identifiers (`x`) and unary-not (`!x`) are not valid Z3 boolean
+    // predicates as-is — the Z3 backend expects a comparison expression.
+    // Normalise everything to `x != 0` / `x == 0` form before threading.
+    let normalized_decision = normalize_bool_clause(decision_expr);
+    let normalized_clauses: Vec<Expr> = clauses.iter().map(normalize_bool_clause).collect();
+
+    // Q1: clause[target] AND decision.
+    let mut t1_hyps: Vec<Expr> = requires.iter().map(normalize_bool_clause).collect();
+    t1_hyps.push(normalized_clauses[target].clone());
+    t1_hyps.push(normalized_decision.clone());
+    let t1 = match synthesize_witness(params, &t1_hyps, struct_fields) {
+        Some(ws) if !ws.is_empty() => ws,
+        _ => return McdcClauseOutcome::Coupled,
+    };
+
+    // Structurally evaluate every other clause at t1's model to pin them in Q2.
+    let env = witnesses_to_env(&t1);
+    let mut t2_hyps: Vec<Expr> = requires.iter().map(normalize_bool_clause).collect();
+    t2_hyps.push(negate_normalized(&normalized_clauses[target]));
+    t2_hyps.push(negate_normalized(&normalized_decision));
+    for (j, cj) in normalized_clauses.iter().enumerate() {
+        if j == target {
+            continue;
+        }
+        match eval_bool_expr(cj, &env) {
+            Some(true) => t2_hyps.push(cj.clone()),
+            Some(false) => t2_hyps.push(negate_normalized(cj)),
+            None => {} // Best-effort: skip clauses we can't statically evaluate.
+        }
+    }
+    let t2 = match synthesize_witness(params, &t2_hyps, struct_fields) {
+        Some(ws) if !ws.is_empty() => ws,
+        _ => return McdcClauseOutcome::Coupled,
+    };
+    McdcClauseOutcome::Pair { t1, t2 }
+}
+
+/// Rewrite a boolean expression into a form the Z3 witness backend can consume.
+///
+/// The backend's `expr_to_z3_bool` only recognises comparison/logical/unary
+/// forms.  Bare Bool identifiers (`x`), field accesses (`s.f`), and
+/// `Literal::Bool` need to be re-expressed as integer comparisons because
+/// each param maps to a Z3 Int variable (Bool encoded as 0/1).
+fn normalize_bool_clause(e: &Expr) -> Expr {
+    match e {
+        Expr::Literal(Literal::Bool(b), _) => {
+            let lhs = Expr::Literal(Literal::Integer(if *b { 1 } else { 0 }), Span::default());
+            let rhs = Expr::Literal(Literal::Integer(1), Span::default());
+            binop(BinaryOp::Eq, lhs, rhs)
+        }
+        Expr::Ident(_, _) | Expr::FieldAccess { .. } => binop(
+            BinaryOp::Ne,
+            e.clone(),
+            Expr::Literal(Literal::Integer(0), Span::default()),
+        ),
+        Expr::Unary {
+            op: UnaryOp::Not,
+            expr,
+            ..
+        } => negate_normalized(&normalize_bool_clause(expr)),
+        Expr::Binary {
+            op: BinaryOp::And,
+            left,
+            right,
+            span,
+        } => Expr::Binary {
+            op: BinaryOp::And,
+            left: Box::new(normalize_bool_clause(left)),
+            right: Box::new(normalize_bool_clause(right)),
+            span: *span,
+        },
+        Expr::Binary {
+            op: BinaryOp::Or,
+            left,
+            right,
+            span,
+        } => Expr::Binary {
+            op: BinaryOp::Or,
+            left: Box::new(normalize_bool_clause(left)),
+            right: Box::new(normalize_bool_clause(right)),
+            span: *span,
+        },
+        // Already a proper Bool predicate (Eq/Ne/Lt/Le/Gt/Ge or unsupported op).
+        _ => e.clone(),
+    }
+}
+
+/// Logical negation of a normalized clause. Prefers pushing `!` inward for
+/// simple comparisons to keep the resulting expression Z3-friendly.
+fn negate_normalized(e: &Expr) -> Expr {
+    match e {
+        Expr::Binary {
+            op, left, right, ..
+        } => {
+            let flipped = match op {
+                BinaryOp::Eq => Some(BinaryOp::Ne),
+                BinaryOp::Ne => Some(BinaryOp::Eq),
+                BinaryOp::Lt => Some(BinaryOp::Ge),
+                BinaryOp::Le => Some(BinaryOp::Gt),
+                BinaryOp::Gt => Some(BinaryOp::Le),
+                BinaryOp::Ge => Some(BinaryOp::Lt),
+                _ => None,
+            };
+            if let Some(f) = flipped {
+                return binop(f, (**left).clone(), (**right).clone());
+            }
+            wrap_not(e)
+        }
+        Expr::Unary {
+            op: UnaryOp::Not,
+            expr,
+            ..
+        } => (**expr).clone(),
+        _ => wrap_not(e),
+    }
+}
+
+fn binop(op: BinaryOp, left: Expr, right: Expr) -> Expr {
+    Expr::Binary {
+        op,
+        left: Box::new(left),
+        right: Box::new(right),
+        span: Span::default(),
+    }
+}
+
+/// Are all params types Int/Bool or structs with Int/Bool fields (per struct_fields map)?
+fn params_supported_for_mcdc(
+    params: &[Param],
+    struct_fields: &HashMap<String, Vec<(String, String)>>,
+) -> bool {
+    for p in params {
+        let name = match &p.ty {
+            TypeExpr::Base { name, .. } => name.as_str(),
+            TypeExpr::Refined { inner, .. } => match inner.as_ref() {
+                TypeExpr::Base { name, .. } => name.as_str(),
+                _ => return false,
+            },
+            _ => return false,
+        };
+        if matches!(name, "Int" | "Bool") {
+            continue;
+        }
+        if let Some(fields) = struct_fields.get(name) {
+            if fields
+                .iter()
+                .all(|(_, t)| matches!(t.as_str(), "Int" | "Bool"))
+            {
+                continue;
+            }
+        }
+        return false;
+    }
+    !params.is_empty()
+}
+
+/// Convert a witness list into a `param_name → i64` map for structural clause evaluation.
+///
+/// Struct witnesses are flattened as `param__field` keys, matching the Z3 variable
+/// naming convention used by `try_z3_witness`.
+fn witnesses_to_env(ws: &[WitnessArg]) -> HashMap<String, i64> {
+    let mut env: HashMap<String, i64> = HashMap::new();
+    for w in ws {
+        match &w.value {
+            WitnessValue::Int(n) => {
+                env.insert(w.param_name.clone(), *n);
+            }
+            WitnessValue::Struct { fields, .. } => {
+                for (fname, fv) in fields {
+                    if let WitnessValue::Int(n) = fv {
+                        env.insert(format!("{}__{fname}", w.param_name), *n);
+                    }
+                }
+            }
+            WitnessValue::Unknown => {}
+        }
+    }
+    env
+}
+
+/// Structurally evaluate a boolean expression under an integer environment.
+/// Returns `None` for expressions we can't decide (unknown vars, unsupported ops).
+fn eval_bool_expr(e: &Expr, env: &HashMap<String, i64>) -> Option<bool> {
+    match e {
+        Expr::Literal(Literal::Bool(b), _) => Some(*b),
+        Expr::Ident(name, _) => env.get(name).map(|v| *v != 0),
+        Expr::FieldAccess { expr, field, .. } => {
+            if let Expr::Ident(obj, _) = expr.as_ref() {
+                env.get(&format!("{obj}__{field}")).map(|v| *v != 0)
+            } else {
+                None
+            }
+        }
+        Expr::Unary {
+            op: UnaryOp::Not,
+            expr,
+            ..
+        } => eval_bool_expr(expr, env).map(|b| !b),
+        Expr::Binary {
+            op, left, right, ..
+        } => match op {
+            BinaryOp::And => Some(eval_bool_expr(left, env)? && eval_bool_expr(right, env)?),
+            BinaryOp::Or => Some(eval_bool_expr(left, env)? || eval_bool_expr(right, env)?),
+            BinaryOp::Eq => Some(eval_int_expr(left, env)? == eval_int_expr(right, env)?),
+            BinaryOp::Ne => Some(eval_int_expr(left, env)? != eval_int_expr(right, env)?),
+            BinaryOp::Lt => Some(eval_int_expr(left, env)? < eval_int_expr(right, env)?),
+            BinaryOp::Le => Some(eval_int_expr(left, env)? <= eval_int_expr(right, env)?),
+            BinaryOp::Gt => Some(eval_int_expr(left, env)? > eval_int_expr(right, env)?),
+            BinaryOp::Ge => Some(eval_int_expr(left, env)? >= eval_int_expr(right, env)?),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// Structurally evaluate an integer expression under an integer environment.
+fn eval_int_expr(e: &Expr, env: &HashMap<String, i64>) -> Option<i64> {
+    match e {
+        Expr::Literal(Literal::Integer(n), _) => Some(*n),
+        Expr::Literal(Literal::Bool(b), _) => Some(if *b { 1 } else { 0 }),
+        Expr::Ident(name, _) => env.get(name).copied(),
+        Expr::FieldAccess { expr, field, .. } => {
+            if let Expr::Ident(obj, _) = expr.as_ref() {
+                env.get(&format!("{obj}__{field}")).copied()
+            } else {
+                None
+            }
+        }
+        Expr::Unary {
+            op: UnaryOp::Neg,
+            expr,
+            ..
+        } => eval_int_expr(expr, env).map(|n| -n),
+        Expr::Binary {
+            op, left, right, ..
+        } => {
+            let l = eval_int_expr(left, env)?;
+            let r = eval_int_expr(right, env)?;
+            match op {
+                BinaryOp::Add => Some(l + r),
+                BinaryOp::Sub => Some(l - r),
+                BinaryOp::Mul => Some(l * r),
+                BinaryOp::Div if r != 0 => Some(l / r),
+                BinaryOp::Rem if r != 0 => Some(l % r),
+                _ => None,
+            }
+        }
+        _ => None,
+    }
+}
+
+/// Wrap an expression in `Expr::Unary { op: Not, ... }`.
+fn wrap_not(e: &Expr) -> Expr {
+    Expr::Unary {
+        op: UnaryOp::Not,
+        expr: Box::new(e.clone()),
+        span: Span::default(),
+    }
+}
+
+/// Render a parameter's declared type as an MVL type string.
+///
+/// Prefers the source declaration over any refinement wrapper — refinements
+/// are dropped in the test file (they're re-checked by the checker anyway).
+fn declared_type_str(ty: &TypeExpr) -> String {
+    match ty {
+        TypeExpr::Base { name, .. } => name.clone(),
+        TypeExpr::Refined { inner, .. } => match inner.as_ref() {
+            TypeExpr::Base { name, .. } => name.clone(),
+            other => declared_type_str(other),
+        },
+        _ => "?".to_string(),
+    }
+}
+
+/// Format a witness value using the declared parameter type — Bool params emit `true`/`false`.
+fn format_witness_value_typed(val: &WitnessValue, param_type: &TypeExpr) -> String {
+    let base_name = declared_type_str(param_type);
+    match (val, base_name.as_str()) {
+        (WitnessValue::Int(n), "Bool") => {
+            if *n != 0 {
+                "true".to_string()
+            } else {
+                "false".to_string()
+            }
+        }
+        (WitnessValue::Struct { type_name, fields }, _) => {
+            let field_strs: Vec<String> = fields
+                .iter()
+                .map(|(name, v)| format!("{name}: {}", format_witness_value(v)))
+                .collect();
+            if field_strs.is_empty() {
+                format!("{type_name} {{}}")
+            } else {
+                format!("{type_name} {{ {} }}", field_strs.join(", "))
+            }
+        }
+        _ => format_witness_value(val),
+    }
+}
+
+/// One-line human-readable rendering of a clause expression.
+fn expr_to_short_str(e: &Expr) -> String {
+    match e {
+        Expr::Ident(name, _) => name.clone(),
+        Expr::Literal(Literal::Bool(b), _) => b.to_string(),
+        Expr::Literal(Literal::Integer(n), _) => n.to_string(),
+        Expr::FieldAccess { expr, field, .. } => {
+            format!("{}.{field}", expr_to_short_str(expr))
+        }
+        Expr::Unary {
+            op: UnaryOp::Not,
+            expr,
+            ..
+        } => format!("!{}", expr_to_short_str(expr)),
+        Expr::Binary {
+            op, left, right, ..
+        } => {
+            let op_str = match op {
+                BinaryOp::Eq => "==",
+                BinaryOp::Ne => "!=",
+                BinaryOp::Lt => "<",
+                BinaryOp::Le => "<=",
+                BinaryOp::Gt => ">",
+                BinaryOp::Ge => ">=",
+                BinaryOp::And => "&&",
+                BinaryOp::Or => "||",
+                _ => "?",
+            };
+            format!(
+                "{} {op_str} {}",
+                expr_to_short_str(left),
+                expr_to_short_str(right)
+            )
+        }
+        _ => "?".to_string(),
+    }
+}
+
+/// Synthesize the `test fn` pair for an MC/DC independence pair.
+///
+/// Returns `None` when any witness value is `Unknown` (can't emit a valid literal).
+fn synthesize_mcdc_test_pair(
+    fn_name: &str,
+    line: u32,
+    clause_idx: usize,
+    clause_str: &str,
+    fn_params: &[Param],
+    t1: &[WitnessArg],
+    t2: &[WitnessArg],
+) -> Option<String> {
+    if t1.iter().any(|w| matches!(w.value, WitnessValue::Unknown))
+        || t2.iter().any(|w| matches!(w.value, WitnessValue::Unknown))
+    {
+        return None;
+    }
+    let safe_name = fn_name.replace(|c: char| !c.is_alphanumeric() && c != '_', "_");
+    let t1_name = format!("harden_mcdc_{safe_name}_c{clause_idx}_t");
+    let t2_name = format!("harden_mcdc_{safe_name}_c{clause_idx}_f");
+
+    let render = |witnesses: &[WitnessArg]| -> String {
+        let mut lines = Vec::new();
+        for (w, p) in witnesses.iter().zip(fn_params.iter()) {
+            let ty = declared_type_str(&p.ty);
+            lines.push(format!(
+                "    let {}: {ty} = {};",
+                w.param_name,
+                format_witness_value_typed(&w.value, &p.ty)
+            ));
+        }
+        let args: Vec<String> = witnesses
+            .iter()
+            .zip(fn_params.iter())
+            .map(|(w, p)| format_witness_value_typed(&w.value, &p.ty))
+            .collect();
+        lines.push(format!("    {fn_name}({});", args.join(", ")));
+        lines.join("\n")
+    };
+
+    let mut buf = Vec::new();
+    buf.push(format!(
+        "// MC/DC independence pair for {fn_name}:{line} clause {clause_idx} ({clause_str})"
+    ));
+    buf.push(format!("test fn {t1_name}() -> Unit {{"));
+    buf.push(render(t1));
+    buf.push("}".to_string());
+    buf.push(String::new());
+    buf.push(format!("test fn {t2_name}() -> Unit {{"));
+    buf.push(render(t2));
+    buf.push("}".to_string());
+    Some(buf.join("\n"))
+}
+
+/// Write a generated test file, refusing to overwrite user-authored files (spec 026 R7).
+fn write_generated_test_file(out_path: &Path, content: &str) {
+    let marker = "Generated by `mvl harden";
+    if let Ok(existing) = std::fs::read_to_string(out_path) {
+        if !existing.contains(marker) {
+            eprintln!(
+                "  warning: refusing to overwrite user-authored file {}",
+                out_path.display()
+            );
+            return;
+        }
+    }
+    match std::fs::write(out_path, content) {
+        Ok(()) => println!("  Wrote generated tests → {}\n", out_path.display()),
+        Err(e) => eprintln!("  warning: could not write {}: {e}", out_path.display()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use mvl::mvl::parser::Parser;
+
+    fn parse_prog(src: &str) -> Program {
+        let (mut p, _) = Parser::new(src);
+        let prog = p.parse_program();
+        assert!(p.errors().is_empty(), "parse errors: {:?}", p.errors());
+        prog
+    }
+
+    // ── Axis 1: HardenHint classification ─────────────────────────────────
+
+    #[test]
+    fn hint_classifies_length_predicate_not_as_nonlinear() {
+        // `len(self)` contains no `*` or `/` but must not be misclassified.
+        assert_eq!(
+            HardenHint::classify("len(self) > 0"),
+            HardenHint::LengthPredicate
+        );
+    }
+
+    #[test]
+    fn hint_classifies_nonlinear() {
+        assert_eq!(
+            HardenHint::classify("self * 2 <= max"),
+            HardenHint::NonlinearPredicate
+        );
+    }
+
+    // ── Axis 4: decision collection ───────────────────────────────────────
+
+    #[test]
+    fn collect_mcdc_finds_compound_if() {
+        let prog = parse_prog("fn f(a: Bool, b: Bool) -> Int { if a && b { 1 } else { 0 } }");
+        let decisions = collect_mcdc_decisions(&prog);
+        assert_eq!(decisions.len(), 1);
+        assert_eq!(decisions[0].fn_name, "f");
+        assert_eq!(decisions[0].clauses.len(), 2);
+    }
+
+    #[test]
+    fn collect_mcdc_skips_single_clause_if() {
+        let prog = parse_prog("fn f(x: Int) -> Int { if x > 0 { 1 } else { 0 } }");
+        let decisions = collect_mcdc_decisions(&prog);
+        assert_eq!(decisions.len(), 0);
+    }
+
+    #[test]
+    fn collect_mcdc_skips_test_fns() {
+        let prog =
+            parse_prog("test fn t(a: Bool, b: Bool) -> Bool { if a && b { true } else { false } }");
+        let decisions = collect_mcdc_decisions(&prog);
+        assert_eq!(decisions.len(), 0);
+    }
+
+    #[test]
+    fn collect_mcdc_captures_requires_clauses() {
+        let prog = parse_prog(
+            "fn f(x: Int, y: Int) -> Int requires x > 0 { if x > y && y >= 0 { 1 } else { 0 } }",
+        );
+        let decisions = collect_mcdc_decisions(&prog);
+        assert_eq!(decisions.len(), 1);
+        assert_eq!(decisions[0].requires.len(), 1);
+    }
+
+    // ── Axis 4: bool clause normalization ─────────────────────────────────
+
+    #[test]
+    fn normalize_bare_ident_becomes_ne_zero() {
+        let e = Expr::Ident("x".to_string(), Span::default());
+        let n = normalize_bool_clause(&e);
+        match n {
+            Expr::Binary {
+                op: BinaryOp::Ne,
+                left,
+                right,
+                ..
+            } => {
+                assert!(matches!(*left, Expr::Ident(ref s, _) if s == "x"));
+                assert!(matches!(*right, Expr::Literal(Literal::Integer(0), _)));
+            }
+            other => panic!("expected Ne binop, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn normalize_unary_not_folds_into_eq_zero() {
+        let x = Expr::Ident("x".to_string(), Span::default());
+        let not_x = Expr::Unary {
+            op: UnaryOp::Not,
+            expr: Box::new(x),
+            span: Span::default(),
+        };
+        let n = normalize_bool_clause(&not_x);
+        // !x → normalize(x) → x != 0 → negate → x == 0
+        match n {
+            Expr::Binary { op, .. } => assert_eq!(op, BinaryOp::Eq),
+            other => panic!("expected Eq binop, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn negate_flips_comparison_operators() {
+        let x = Expr::Ident("x".to_string(), Span::default());
+        let five = Expr::Literal(Literal::Integer(5), Span::default());
+        let lt = binop(BinaryOp::Lt, x, five);
+        match negate_normalized(&lt) {
+            Expr::Binary { op, .. } => assert_eq!(op, BinaryOp::Ge),
+            other => panic!("expected Ge, got {other:?}"),
+        }
+    }
+
+    // ── Axis 4: env-based clause evaluation ───────────────────────────────
+
+    #[test]
+    fn eval_bool_expr_bare_ident() {
+        let mut env = HashMap::new();
+        env.insert("x".to_string(), 1i64);
+        let e = normalize_bool_clause(&Expr::Ident("x".to_string(), Span::default()));
+        assert_eq!(eval_bool_expr(&e, &env), Some(true));
+        env.insert("x".to_string(), 0);
+        assert_eq!(eval_bool_expr(&e, &env), Some(false));
+    }
+
+    #[test]
+    fn eval_bool_expr_integer_comparison() {
+        let mut env = HashMap::new();
+        env.insert("x".to_string(), 5i64);
+        let e = binop(
+            BinaryOp::Gt,
+            Expr::Ident("x".to_string(), Span::default()),
+            Expr::Literal(Literal::Integer(0), Span::default()),
+        );
+        assert_eq!(eval_bool_expr(&e, &env), Some(true));
+    }
+
+    // ── Axis 4: param support classification ──────────────────────────────
+
+    #[test]
+    fn params_supported_accepts_int_and_bool() {
+        let prog = parse_prog("fn f(a: Bool, x: Int) -> Int { 0 }");
+        let params = match &prog.declarations[0] {
+            Decl::Fn(fd) => fd.params.clone(),
+            _ => unreachable!(),
+        };
+        assert!(params_supported_for_mcdc(&params, &HashMap::new()));
+    }
+
+    #[test]
+    fn params_supported_rejects_string() {
+        let prog = parse_prog("fn f(s: String) -> Int { 0 }");
+        let params = match &prog.declarations[0] {
+            Decl::Fn(fd) => fd.params.clone(),
+            _ => unreachable!(),
+        };
+        assert!(!params_supported_for_mcdc(&params, &HashMap::new()));
+    }
+
+    // ── Test file generation refuses to overwrite user files (R7) ─────────
+
+    #[test]
+    fn write_generated_test_file_refuses_to_overwrite_user_file() {
+        let tmp = std::env::temp_dir().join("mvl_harden_r7_user.mvl");
+        std::fs::write(&tmp, "// user-authored test\ntest fn t() {}\n").unwrap();
+        write_generated_test_file(&tmp, "// Generated by `mvl harden` — new content");
+        let after = std::fs::read_to_string(&tmp).unwrap();
+        assert!(after.starts_with("// user-authored test"));
+        let _ = std::fs::remove_file(&tmp);
+    }
+
+    #[test]
+    fn write_generated_test_file_overwrites_previously_generated() {
+        let tmp = std::env::temp_dir().join("mvl_harden_r7_gen.mvl");
+        std::fs::write(&tmp, "// Generated by `mvl harden` — old\n").unwrap();
+        write_generated_test_file(&tmp, "// Generated by `mvl harden` — new\n");
+        let after = std::fs::read_to_string(&tmp).unwrap();
+        assert!(after.contains("new"));
+        let _ = std::fs::remove_file(&tmp);
     }
 }
