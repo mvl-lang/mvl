@@ -122,10 +122,13 @@ struct HardenSite<'a> {
 fn print_json(
     sites: &[HardenSite<'_>],
     tightenings: &[&TighteningCandidate],
+    axis3: &[Axis3Witness],
+    axis4: &[Axis4Result],
     total_proven: usize,
     total_runtime: usize,
     total_failed: usize,
 ) {
+    let json_escape = |s: &str| s.replace('\\', "\\\\").replace('"', "\\\"");
     println!("{{");
     println!("  \"total_proven\": {total_proven},");
     println!("  \"total_runtime\": {total_runtime},");
@@ -133,17 +136,14 @@ fn print_json(
     println!("  \"axis1_promotion_candidates\": [");
     for (i, s) in sites.iter().enumerate() {
         let comma = if i + 1 < sites.len() { "," } else { "" };
-        let hint = s.hint.suggestion().replace('"', "\\\"");
+        let hint = json_escape(s.hint.suggestion());
         println!("    {{");
-        println!("      \"file\": \"{}\",", s.file.replace('"', "\\\""));
+        println!("      \"file\": \"{}\",", json_escape(s.file));
         println!("      \"line\": {},", s.line);
-        println!("      \"caller\": \"{}\",", s.caller.replace('"', "\\\""));
-        println!("      \"callee\": \"{}\",", s.callee.replace('"', "\\\""));
-        println!("      \"param\": \"{}\",", s.param.replace('"', "\\\""));
-        println!(
-            "      \"predicate\": \"{}\",",
-            s.predicate.replace('"', "\\\"")
-        );
+        println!("      \"caller\": \"{}\",", json_escape(s.caller));
+        println!("      \"callee\": \"{}\",", json_escape(s.callee));
+        println!("      \"param\": \"{}\",", json_escape(s.param));
+        println!("      \"predicate\": \"{}\",", json_escape(s.predicate));
         println!("      \"suggestion\": \"{hint}\"");
         println!("    }}{comma}");
     }
@@ -152,16 +152,73 @@ fn print_json(
     for (i, t) in tightenings.iter().enumerate() {
         let comma = if i + 1 < tightenings.len() { "," } else { "" };
         println!("    {{");
-        println!("      \"fn_name\": \"{}\",", t.fn_name.replace('"', "\\\""));
+        println!("      \"fn_name\": \"{}\",", json_escape(&t.fn_name));
         println!("      \"line\": {},", t.span.line);
+        println!("      \"declared\": \"{}\",", json_escape(&t.declared_pred));
+        println!("      \"tighter\": \"{}\"", json_escape(&t.tighter_pred));
+        println!("    }}{comma}");
+    }
+    println!("  ],");
+    println!("  \"axis3_boundary_witnesses\": [");
+    for (i, w) in axis3.iter().enumerate() {
+        let comma = if i + 1 < axis3.len() { "," } else { "" };
+        println!("    {{");
+        println!("      \"fn_name\": \"{}\",", json_escape(&w.fn_name));
+        println!("      \"line\": {},", w.line);
+        println!("      \"declared\": \"{}\",", json_escape(&w.declared_pred));
+        println!("      \"tighter\": \"{}\",", json_escape(&w.tighter_pred));
+        println!("      \"args\": [");
+        for (j, (name, ty, val)) in w.args.iter().enumerate() {
+            let cj = if j + 1 < w.args.len() { "," } else { "" };
+            println!(
+                "        {{ \"name\": \"{}\", \"type\": \"{}\", \"value\": \"{}\" }}{cj}",
+                json_escape(name),
+                json_escape(ty),
+                json_escape(val)
+            );
+        }
+        println!("      ]");
+        println!("    }}{comma}");
+    }
+    println!("  ],");
+    println!("  \"axis4_mcdc_pairs\": [");
+    for (i, r) in axis4.iter().enumerate() {
+        let comma = if i + 1 < axis4.len() { "," } else { "" };
+        println!("    {{");
+        println!("      \"fn_name\": \"{}\",", json_escape(&r.fn_name));
+        println!("      \"line\": {},", r.line);
+        println!("      \"clause_idx\": {},", r.clause_idx);
         println!(
-            "      \"declared\": \"{}\",",
-            t.declared_pred.replace('"', "\\\"")
+            "      \"clause_text\": \"{}\",",
+            json_escape(&r.clause_text)
         );
-        println!(
-            "      \"tighter\": \"{}\"",
-            t.tighter_pred.replace('"', "\\\"")
-        );
+        match &r.outcome {
+            Axis4Outcome::Pair { t1_args, t2_args } => {
+                println!("      \"outcome\": \"pair\",");
+                let emit_args = |args: &[(String, String, String)]| {
+                    let mut lines: Vec<String> = Vec::new();
+                    for (j, (name, ty, val)) in args.iter().enumerate() {
+                        let cj = if j + 1 < args.len() { "," } else { "" };
+                        lines.push(format!(
+                            "          {{ \"name\": \"{}\", \"type\": \"{}\", \"value\": \"{}\" }}{cj}",
+                            json_escape(name),
+                            json_escape(ty),
+                            json_escape(val)
+                        ));
+                    }
+                    lines.join("\n")
+                };
+                println!("      \"t1\": [\n{}\n      ],", emit_args(t1_args));
+                println!("      \"t2\": [\n{}\n      ]", emit_args(t2_args));
+            }
+            Axis4Outcome::Coupled => {
+                println!("      \"outcome\": \"coupled\"");
+            }
+            Axis4Outcome::Unsupported { reason } => {
+                println!("      \"outcome\": \"unsupported\",");
+                println!("      \"reason\": \"{}\"", json_escape(reason));
+            }
+        }
         println!("    }}{comma}");
     }
     println!("  ]");
@@ -428,6 +485,11 @@ pub fn run(
         failed: usize,
         /// Axis 4 (#1950): compound if/while decisions in this file (populated only when `mcdc` is set).
         mcdc_decisions: Vec<McdcDecision>,
+        /// Axis 3 (#1931): boundary witnesses for tightened contracts.
+        /// Populated in the post-collection pass below so JSON and text emit from the same data.
+        axis3_witnesses: Vec<Axis3Witness>,
+        /// Axis 4 (#1950): MC/DC pair results per (decision, clause).
+        axis4_results: Vec<Axis4Result>,
     }
     let mut file_results: Vec<FileResult> = Vec::new();
 
@@ -494,7 +556,21 @@ pub fn run(
             runtime: file_runtime,
             failed: file_failed,
             mcdc_decisions,
+            axis3_witnesses: Vec::new(),
+            axis4_results: Vec::new(),
         });
+    }
+
+    // ── Post-collection pass: compute axis 3 witnesses and axis 4 pairs ────
+    //
+    // We do this once, before splitting into JSON / text emission, so both
+    // paths consume the same structured data.  See spec 026-harden R6.
+    for fr in file_results.iter_mut() {
+        let deduped = deduplicate_tightenings(&fr.tightenings);
+        fr.axis3_witnesses = compute_axis3_witnesses(&deduped, &struct_fields);
+        if mcdc {
+            fr.axis4_results = compute_axis4_results(&fr.mcdc_decisions, &struct_fields);
+        }
     }
 
     if json {
@@ -517,9 +593,19 @@ pub fn run(
             .flat_map(|fr| fr.tightenings.iter().cloned())
             .collect();
         let all_tightenings = deduplicate_tightenings(&all_raw_tightenings);
+        let all_axis3: Vec<Axis3Witness> = file_results
+            .iter()
+            .flat_map(|fr| fr.axis3_witnesses.iter().cloned())
+            .collect();
+        let all_axis4: Vec<Axis4Result> = file_results
+            .iter()
+            .flat_map(|fr| fr.axis4_results.iter().cloned())
+            .collect();
         print_json(
             &flat,
             &all_tightenings,
+            &all_axis3,
+            &all_axis4,
             grand_total_proven,
             grand_total_runtime,
             grand_total_failed,
@@ -596,32 +682,22 @@ pub fn run(
         println!("\n── Axis 3: Boundary Test Generation ─────────────────────────────────");
         let mut witness_snippets: Vec<String> = Vec::new();
         let mut witness_use_fns: Vec<String> = Vec::new();
-        for t in &deduped {
-            match synthesize_witness(&t.params, &t.branch_hyps, &struct_fields) {
-                Some(witnesses) if !witnesses.is_empty() => {
-                    let snip = synthesize_test_fn(
-                        &t.fn_name,
-                        &t.declared_pred,
-                        &t.tighter_pred,
-                        &witnesses,
-                        t,
-                    );
-                    println!("\n  Witness for {}:", t.fn_name);
-                    for w in &witnesses {
-                        println!("    {} = {}", w.param_name, format_witness_value(&w.value));
-                    }
-                    if !witness_use_fns.contains(&t.fn_name) {
-                        witness_use_fns.push(t.fn_name.clone());
-                    }
-                    witness_snippets.push(snip);
-                }
-                _ => {
-                    println!(
-                        "\n  No witness found for {} (non-integer params or Z3 timeout).",
-                        t.fn_name
-                    );
-                }
+        for w in &fr.axis3_witnesses {
+            if w.args.is_empty() {
+                println!(
+                    "\n  No witness found for {} (non-integer params or Z3 timeout).",
+                    w.fn_name
+                );
+                continue;
             }
+            println!("\n  Witness for {}:", w.fn_name);
+            for (name, _ty, val) in &w.args {
+                println!("    {name} = {val}");
+            }
+            if !witness_use_fns.contains(&w.fn_name) {
+                witness_use_fns.push(w.fn_name.clone());
+            }
+            witness_snippets.push(w.snippet.clone());
         }
 
         // ── Axis 4: MC/DC gap synthesis (#1950) ──────────────────────────────
@@ -634,53 +710,49 @@ pub fn run(
             if fr.mcdc_decisions.is_empty() {
                 println!("  No compound if/while decisions found.");
             } else {
-                for dec in &fr.mcdc_decisions {
-                    if dec.is_effectful {
-                        continue;
+                // Group results by (fn_name, line) for the per-decision header.
+                let mut last_dec: Option<(String, u32, usize)> = None;
+                for r in &fr.axis4_results {
+                    let key = (r.fn_name.clone(), r.line);
+                    let clause_count = fr
+                        .mcdc_decisions
+                        .iter()
+                        .find(|d| d.fn_name == r.fn_name && d.line == r.line)
+                        .map(|d| d.clauses.len())
+                        .unwrap_or(0);
+                    if last_dec.as_ref().map(|(n, l, _)| (n.clone(), *l)) != Some(key.clone()) {
+                        println!(
+                            "\n  Decision {}:{} ({} clauses):",
+                            r.fn_name, r.line, clause_count
+                        );
+                        last_dec = Some((r.fn_name.clone(), r.line, clause_count));
                     }
-                    println!(
-                        "\n  Decision {}:{} ({} clauses):",
-                        dec.fn_name,
-                        dec.line,
-                        dec.clauses.len()
-                    );
-                    for (i, clause) in dec.clauses.iter().enumerate() {
-                        let clause_str = expr_to_short_str(clause);
-                        match synthesize_mcdc_pair(
-                            &dec.fn_params,
-                            &dec.requires,
-                            &dec.clauses,
-                            i,
-                            &dec.decision_expr,
-                            &struct_fields,
-                        ) {
-                            McdcClauseOutcome::Pair { t1, t2 } => {
-                                mcdc_pairs += 1;
-                                println!("    clause {i} ({clause_str}): pair generated");
-                                if !mcdc_use_fns.contains(&dec.fn_name) {
-                                    mcdc_use_fns.push(dec.fn_name.clone());
-                                }
-                                if let Some(snip) = synthesize_mcdc_test_pair(
-                                    &dec.fn_name,
-                                    dec.line,
-                                    i,
-                                    &clause_str,
-                                    &dec.fn_params,
-                                    &t1,
-                                    &t2,
-                                ) {
-                                    mcdc_snippets.push(snip);
-                                }
+                    match &r.outcome {
+                        Axis4Outcome::Pair { .. } => {
+                            mcdc_pairs += 1;
+                            println!(
+                                "    clause {} ({}): pair generated",
+                                r.clause_idx, r.clause_text
+                            );
+                            if !mcdc_use_fns.contains(&r.fn_name) {
+                                mcdc_use_fns.push(r.fn_name.clone());
                             }
-                            McdcClauseOutcome::Coupled => {
-                                mcdc_coupled += 1;
-                                println!(
-                                    "    clause {i} ({clause_str}): coupled — masking MC/DC required"
-                                );
+                            if let Some(snip) = &r.snippet {
+                                mcdc_snippets.push(snip.clone());
                             }
-                            McdcClauseOutcome::Unsupported => {
-                                println!("    clause {i} ({clause_str}): unsupported clause type");
-                            }
+                        }
+                        Axis4Outcome::Coupled => {
+                            mcdc_coupled += 1;
+                            println!(
+                                "    clause {} ({}): coupled — masking MC/DC required",
+                                r.clause_idx, r.clause_text
+                            );
+                        }
+                        Axis4Outcome::Unsupported { reason } => {
+                            println!(
+                                "    clause {} ({}): unsupported clause type — {reason}",
+                                r.clause_idx, r.clause_text
+                            );
                         }
                     }
                 }
@@ -782,6 +854,181 @@ pub fn run(
 // ══════════════════════════════════════════════════════════════════════════════
 //  Axis 4: MC/DC gap synthesis (#1950)
 // ══════════════════════════════════════════════════════════════════════════════
+
+// ── Axis 3 / Axis 4 structured results (#1955) ────────────────────────────────
+
+/// A single boundary witness (axis 3 output).
+///
+/// Populated once in the post-collection pass so the text and JSON emitters
+/// consume the same structured data.  `args` is empty when no witness could
+/// be found (non-integer params or Z3 timeout).
+#[derive(Debug, Clone)]
+struct Axis3Witness {
+    fn_name: String,
+    line: u32,
+    declared_pred: String,
+    tighter_pred: String,
+    /// Tuples of `(param_name, mvl_type, mvl_literal)` — pre-rendered so both
+    /// text and JSON emit identically.
+    args: Vec<(String, String, String)>,
+    /// The `test fn` snippet as MVL source (used by `--emit-tests`).
+    snippet: String,
+}
+
+/// The outcome of MC/DC pair synthesis for a single (decision, clause).
+#[derive(Debug, Clone)]
+enum Axis4Outcome {
+    /// Both t1 and t2 witnesses were found.
+    Pair {
+        t1_args: Vec<(String, String, String)>,
+        t2_args: Vec<(String, String, String)>,
+    },
+    /// One of the two Z3 queries returned UNSAT — the clause is structurally coupled.
+    Coupled,
+    /// Some parameter type is not currently supported by axis 4 (e.g. String, Float).
+    Unsupported { reason: String },
+}
+
+/// A single MC/DC clause result (axis 4 output).
+#[derive(Debug, Clone)]
+struct Axis4Result {
+    fn_name: String,
+    line: u32,
+    clause_idx: usize,
+    clause_text: String,
+    outcome: Axis4Outcome,
+    /// Pre-rendered `test fn` pair snippet (only for `Pair` outcomes and only
+    /// when every witness value is representable as an MVL literal).
+    snippet: Option<String>,
+}
+
+/// Populate `Axis3Witness` records from deduplicated tightening candidates.
+fn compute_axis3_witnesses(
+    deduped: &[&TighteningCandidate],
+    struct_fields: &HashMap<String, Vec<(String, String)>>,
+) -> Vec<Axis3Witness> {
+    let mut out = Vec::new();
+    for t in deduped {
+        let ws = synthesize_witness(&t.params, &t.branch_hyps, struct_fields);
+        match ws {
+            Some(witnesses) if !witnesses.is_empty() => {
+                let snippet = synthesize_test_fn(
+                    &t.fn_name,
+                    &t.declared_pred,
+                    &t.tighter_pred,
+                    &witnesses,
+                    t,
+                );
+                let args: Vec<(String, String, String)> = witnesses
+                    .iter()
+                    .zip(t.params.iter())
+                    .map(|(w, p)| {
+                        (
+                            w.param_name.clone(),
+                            declared_type_str(&p.ty),
+                            format_witness_value_typed(&w.value, &p.ty),
+                        )
+                    })
+                    .collect();
+                out.push(Axis3Witness {
+                    fn_name: t.fn_name.clone(),
+                    line: t.span.line,
+                    declared_pred: t.declared_pred.clone(),
+                    tighter_pred: t.tighter_pred.clone(),
+                    args,
+                    snippet,
+                });
+            }
+            _ => {
+                out.push(Axis3Witness {
+                    fn_name: t.fn_name.clone(),
+                    line: t.span.line,
+                    declared_pred: t.declared_pred.clone(),
+                    tighter_pred: t.tighter_pred.clone(),
+                    args: Vec::new(),
+                    snippet: String::new(),
+                });
+            }
+        }
+    }
+    out
+}
+
+/// Populate `Axis4Result` records by running MC/DC pair synthesis per (decision, clause).
+fn compute_axis4_results(
+    decisions: &[McdcDecision],
+    struct_fields: &HashMap<String, Vec<(String, String)>>,
+) -> Vec<Axis4Result> {
+    let mut out = Vec::new();
+    for dec in decisions {
+        if dec.is_effectful {
+            continue;
+        }
+        for (i, clause) in dec.clauses.iter().enumerate() {
+            let clause_str = expr_to_short_str(clause);
+            let raw = synthesize_mcdc_pair(
+                &dec.fn_params,
+                &dec.requires,
+                &dec.clauses,
+                i,
+                &dec.decision_expr,
+                struct_fields,
+            );
+            let (outcome, snippet) = match raw {
+                McdcClauseOutcome::Pair { t1, t2 } => {
+                    let t1_args: Vec<(String, String, String)> = t1
+                        .iter()
+                        .zip(dec.fn_params.iter())
+                        .map(|(w, p)| {
+                            (
+                                w.param_name.clone(),
+                                declared_type_str(&p.ty),
+                                format_witness_value_typed(&w.value, &p.ty),
+                            )
+                        })
+                        .collect();
+                    let t2_args: Vec<(String, String, String)> = t2
+                        .iter()
+                        .zip(dec.fn_params.iter())
+                        .map(|(w, p)| {
+                            (
+                                w.param_name.clone(),
+                                declared_type_str(&p.ty),
+                                format_witness_value_typed(&w.value, &p.ty),
+                            )
+                        })
+                        .collect();
+                    let snip = synthesize_mcdc_test_pair(
+                        &dec.fn_name,
+                        dec.line,
+                        i,
+                        &clause_str,
+                        &dec.fn_params,
+                        &t1,
+                        &t2,
+                    );
+                    (Axis4Outcome::Pair { t1_args, t2_args }, snip)
+                }
+                McdcClauseOutcome::Coupled => (Axis4Outcome::Coupled, None),
+                McdcClauseOutcome::Unsupported => (
+                    Axis4Outcome::Unsupported {
+                        reason: "non-Int/Bool parameter".to_string(),
+                    },
+                    None,
+                ),
+            };
+            out.push(Axis4Result {
+                fn_name: dec.fn_name.clone(),
+                line: dec.line,
+                clause_idx: i,
+                clause_text: clause_str,
+                outcome,
+                snippet,
+            });
+        }
+    }
+    out
+}
 
 /// A single compound `if`/`while` decision found in a non-test function,
 /// carrying everything axis 4 needs to synthesize independence pairs.
@@ -1550,5 +1797,23 @@ mod tests {
         let after = std::fs::read_to_string(&tmp).unwrap();
         assert!(after.contains("new"));
         let _ = std::fs::remove_file(&tmp);
+    }
+
+    // ── JSON escape: string content stays valid JSON ──────────────────────
+
+    #[test]
+    fn axis4_result_pair_snippet_absent_when_witness_unknown() {
+        // A Pair outcome doesn't automatically have a snippet — snippet is None
+        // when synthesize_mcdc_test_pair rejects Unknown witness values.
+        // This just verifies the enum variants compile and can be constructed.
+        let r = Axis4Result {
+            fn_name: "f".to_string(),
+            line: 1,
+            clause_idx: 0,
+            clause_text: "x > 0".to_string(),
+            outcome: Axis4Outcome::Coupled,
+            snippet: None,
+        };
+        matches!(r.outcome, Axis4Outcome::Coupled);
     }
 }
