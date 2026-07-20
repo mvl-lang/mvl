@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [1.6.1] - 2026-07-20
+
+### Fixed
+
+- **LLVM backend**: Result/Option constructors (`Ok`, `Err`, `Some`) now heap-allocate payload slots via `_mvl_alloc` instead of using stack `alloca`. The previous approach inserted a stack pointer into the `{ i8, ptr }` tagged union; when the value was returned from a function the pointer dangled, causing `lli` crashes. `exclude_returned_value_tir` is now called on the payload argument so heap-tracked locals (e.g. String function parameters) are not double-freed at function exit. `emit_none_constructor` now uses a `null` payload pointer (the None match arm never dereferences it). Fixes `log_to_file` LLVM tests (4/4 passing), gains 6 tests in `snake_game` and 2 in `bzip`. All 283 corpus LLVM tests remain green. (#1952)
+
 ### Added — #1936
 
 - **Method-call syntax for built-in refinement functions.** `abs`, `min`, `max`, `len`, `contains`, `starts_with`, `ends_with`, `get`, `matches`, `bit_and`, `bit_or`, `bit_xor`, `bit_not`, `shift_left`, `shift_right` can now be written in either form: `len(s)` / `s.len()`, `min(a, b)` / `a.min(b)`, etc. Both forms lower to the same AST node; the parser accepts them interchangeably in all refinement predicate positions (type aliases, struct fields, function parameter `where` clauses, `requires`/`ensures`). Unknown method names in refinement position produce a diagnostic with a Levenshtein-1 spelling suggestion.
