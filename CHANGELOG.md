@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [1.6.2] - 2026-07-20
+
+### Fixed
+
+- **Rust backend**: `from_int` and `wrapping_from_int` now emit precedence-aware parenthesization. Previously they emitted `((arg) as i64 as u8)` with a defensive outer paren wrap, triggering 12 `unused_parens` warnings in generated Rust across statement/argument/return positions. Now they emit `(arg) as i64 as u8` without outer wrap and register `Prec::As` in the precedence system so `emit_method_receiver` adds parens only when needed — at method-chain positions like `from_int(0).to_string()` which correctly emit `((0) as i64 as u8).to_string()`. Follows the precedence-aware pattern from c4b664f9 (#1659). All 986 stdlib tests pass, build warning-free.
+
 ## [1.6.1] - 2026-07-20
 
 ### Fixed

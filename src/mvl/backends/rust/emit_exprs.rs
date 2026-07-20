@@ -78,6 +78,15 @@ fn expr_own_prec(e: &TirExpr) -> Prec {
             ("len" | "to_int" | "to_float", 0) => Prec::As,
             _ => Prec::Suffix,
         },
+        // from_int / wrapping_from_int emit `(arg) as i64 as u8` — an `as`
+        // cast.  Report Prec::As so emit_method_receiver wraps the result in
+        // parens when it is used as a method receiver, e.g.
+        // `from_int(0).to_string()` → `((0) as i64 as u8).to_string()`.
+        TirExprKind::FnCall { name, .. }
+            if matches!(name.as_str(), "from_int" | "wrapping_from_int") =>
+        {
+            Prec::As
+        }
         // Everything else — literals, variables, method chains, field
         // access, function/method calls, construct, propagate, borrow,
         // relabel, consume — is Suffix or Atom and never needs outer
@@ -326,15 +335,19 @@ impl RustEmitter {
                     self.push("std::collections::HashMap::new()");
                 } else if name.as_str() == "from_int" || name.as_str() == "wrapping_from_int" {
                     // from_int: safe (prover enforces 0–255); wrapping_from_int: intentional truncation.
-                    // Both emit identical Rust: ((arg) as i64 as u8).
+                    // Both emit identical Rust: (arg) as i64 as u8.
                     // Cast through i64 so negative literals work: (-1 as i64 as u8) is valid,
                     // but (-1 as u8) triggers E0600 (cannot negate u8).
+                    // No outer parens here — expr_own_prec returns Prec::As for this
+                    // FnCall so emit_method_receiver/emit_operand_left add parens when
+                    // the result is used as a method receiver or low-precedence operand
+                    // (e.g. `((n) as i64 as u8).to_string()`).
                     debug_assert_eq!(args.len(), 1, "{} requires exactly one argument", name);
-                    self.push("((");
+                    self.push("(");
                     if let Some(arg) = args.first() {
                         self.emit_expr(arg);
                     }
-                    self.push(") as i64 as u8)");
+                    self.push(") as i64 as u8");
                 } else if name.as_str() == "float_checked_to_int" {
                     // Checked Float→Int: returns None for NaN, ±Inf, out-of-range.
                     debug_assert_eq!(
