@@ -780,7 +780,10 @@ pub fn run(path: &str, quiet: bool, verbose: bool, masking: bool, json: bool) {
 
             if matches!(decision.kind, TransformKind::Match) {
                 // Match arms: just list which were hit.
-                println!("    arms covered: {}", clause_results.iter().filter(|&&ok| ok).count());
+                println!(
+                    "    arms covered: {}",
+                    clause_results.iter().filter(|&&ok| ok).count()
+                );
             } else {
                 let n = decision.clause_count;
 
@@ -822,7 +825,11 @@ pub fn run(path: &str, quiet: bool, verbose: bool, masking: bool, json: bool) {
                             let evaled = (enc >> (eval_shift + c)) & 1 == 1;
                             let val = (enc >> c) & 1 == 1;
                             let cell = if evaled {
-                                if val { "T" } else { "F" }
+                                if val {
+                                    "T"
+                                } else {
+                                    "F"
+                                }
                             } else {
                                 "?"
                             };
@@ -855,11 +862,7 @@ pub fn run(path: &str, quiet: bool, verbose: bool, masking: bool, json: bool) {
                 for clause_bit in 0..n {
                     let pair = find_independence_pair(n, clause_bit, obs);
                     let (pair_a, pair_b, status_str) = match pair {
-                        Some((a, b)) => (
-                            fmt_obs(n, a),
-                            fmt_obs(n, b),
-                            "✓".to_string(),
-                        ),
+                        Some((a, b)) => (fmt_obs(n, a), fmt_obs(n, b), "✓".to_string()),
                         None => ("—".to_string(), "—".to_string(), "✗ MISSED".to_string()),
                     };
                     println!(
@@ -895,7 +898,11 @@ pub fn run(path: &str, quiet: bool, verbose: bool, masking: bool, json: bool) {
                         );
                         println!(
                             "      unique-cause independence structurally impossible{}",
-                            if masking { " — exempt (--masking)" } else { "" }
+                            if masking {
+                                " — exempt (--masking)"
+                            } else {
+                                ""
+                            }
                         );
                     } else {
                         println!("    C{clause_bit}: MISSED — no independence pair found in observations");
