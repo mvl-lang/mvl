@@ -147,7 +147,7 @@ pub struct RustEmitter {
     /// time.  Populated from `TirTypeBody::Alias(Ty::Refined(inner, pred))` entries
     /// in `emit_program_core` alongside `refined_aliases`.
     pub refined_alias_predicates:
-        std::collections::HashMap<String, crate::mvl::parser::ast::RefExpr>,
+        std::collections::HashMap<String, crate::mvl::ir::RefExpr>,
     /// Names of all methods (pub fn and fn) in the actor currently being emitted.
     ///
     /// Set by `emit_actor_decl` before emitting method bodies; cleared after.
@@ -631,7 +631,7 @@ impl RustEmitter {
         // Maps alias name → base type for refined aliases (emitted as newtypes).
         // Also populate `refined_alias_predicates` for --optimize-proved (#1891).
         let mut register_refined_alias =
-            |name: String, inner: &crate::mvl::ir::Ty, pred: &crate::mvl::parser::ast::RefExpr| {
+            |name: String, inner: &crate::mvl::ir::Ty, pred: &crate::mvl::ir::RefExpr| {
                 self.refined_aliases.insert(name.clone(), inner.clone());
                 self.refined_alias_predicates.insert(name, pred.clone());
             };

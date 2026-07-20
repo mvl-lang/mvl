@@ -10,8 +10,7 @@ use crate::mvl::backends::{
     is_stdlib_method, is_stdlib_ufcs_method, is_stdlib_ufcs_method_for, rust_emit_for,
     STRING_LABEL_PRESERVING_METHODS,
 };
-use crate::mvl::ir::{TirExpr, TirExprKind, Ty};
-use crate::mvl::parser::ast::{CmpOp, LogicOp, RefExpr};
+use crate::mvl::ir::{CmpOp, LogicOp, RefExpr, TirExpr, TirExprKind, Ty};
 
 /// Returns true when `pred` syntactically implies `self >= 0`.
 ///
@@ -60,7 +59,7 @@ fn pred_implies_non_negative(pred: &RefExpr) -> bool {
 /// - Inline refinements (`Ty::Refined`) — the predicate is embedded in the type.
 fn ty_is_non_negative(
     ty: &Ty,
-    refined_alias_predicates: &std::collections::HashMap<String, crate::mvl::parser::ast::RefExpr>,
+    refined_alias_predicates: &std::collections::HashMap<String, RefExpr>,
 ) -> bool {
     match ty {
         Ty::Refined(inner, pred) => {
@@ -1023,8 +1022,7 @@ impl RustEmitter {
 #[cfg(test)]
 mod tests {
     use super::{pred_implies_non_negative, ty_is_non_negative};
-    use crate::mvl::ir::Ty;
-    use crate::mvl::parser::ast::{CmpOp, RefExpr};
+    use crate::mvl::ir::{CmpOp, RefExpr, Ty};
     use crate::mvl::parser::lexer::Span;
     use std::collections::HashMap;
 
