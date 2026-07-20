@@ -146,8 +146,7 @@ pub struct RustEmitter {
     /// predicate so `--optimize-proved` can elide bounds checks certified at type-check
     /// time.  Populated from `TirTypeBody::Alias(Ty::Refined(inner, pred))` entries
     /// in `emit_program_core` alongside `refined_aliases`.
-    pub refined_alias_predicates:
-        std::collections::HashMap<String, crate::mvl::ir::RefExpr>,
+    pub refined_alias_predicates: std::collections::HashMap<String, crate::mvl::ir::RefExpr>,
     /// Names of all methods (pub fn and fn) in the actor currently being emitted.
     ///
     /// Set by `emit_actor_decl` before emitting method bodies; cleared after.
