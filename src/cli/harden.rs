@@ -244,6 +244,7 @@ fn build_struct_fields(programs: &[(String, Program)]) -> HashMap<String, Vec<(S
 fn format_witness_value(val: &WitnessValue) -> String {
     match val {
         WitnessValue::Int(n) => n.to_string(),
+        WitnessValue::Float(f) => format!("{f}"),
         WitnessValue::Struct { type_name, fields } => {
             if fields.is_empty() {
                 return format!("{type_name} {{}}");
@@ -262,6 +263,7 @@ fn format_witness_value(val: &WitnessValue) -> String {
 fn witness_type_str(val: &WitnessValue, param_type: &TypeExpr) -> String {
     match val {
         WitnessValue::Int(_) => "Int".to_string(),
+        WitnessValue::Float(_) => "Float".to_string(),
         WitnessValue::Struct { type_name, .. } => type_name.clone(),
         WitnessValue::Unknown => {
             // Fall back to the declared parameter type.
@@ -1123,6 +1125,7 @@ fn witnesses_to_env(ws: &[WitnessArg]) -> HashMap<String, i64> {
             WitnessValue::Int(n) => {
                 env.insert(w.param_name.clone(), *n);
             }
+            WitnessValue::Float(_) => {} // Float witnesses handled separately
             WitnessValue::Struct { fields, .. } => {
                 for (fname, fv) in fields {
                     if let WitnessValue::Int(n) = fv {

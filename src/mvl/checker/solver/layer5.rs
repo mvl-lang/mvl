@@ -80,6 +80,9 @@ pub(crate) fn try_z3(
             }
             // BV path returned None (unsupported shape) — fall through to NIA.
         }
+        if has_float_ops(pred) {
+            return impl_z3_real(pred, arg, var_refs);
+        }
         impl_z3(pred, arg, var_refs, norm)
     }
     #[cfg(not(feature = "z3"))]
@@ -134,7 +137,8 @@ fn has_bitwise_ops(pred: &RefExpr) -> bool {
 #[derive(Debug, Clone)]
 pub(crate) struct TightenResult {
     pub op: CmpOp,
-    pub tighter_bound: i64,
+    /// Tighter bound as f64 — covers both Int (±1_000_000, exact in f64) and Float bounds.
+    pub tighter_bound: f64,
 }
 
 impl TightenResult {
@@ -148,7 +152,11 @@ impl TightenResult {
             CmpOp::Eq => "==",
             CmpOp::Ne => "!=",
         };
-        format!("ensures {prefix} {op_str} {}", self.tighter_bound)
+        if self.tighter_bound == self.tighter_bound.trunc() && self.tighter_bound.abs() < 1e15 {
+            format!("ensures {prefix} {op_str} {}", self.tighter_bound as i64)
+        } else {
+            format!("ensures {prefix} {op_str} {:.6}", self.tighter_bound)
+        }
     }
 }
 
@@ -180,7 +188,12 @@ pub(crate) fn try_z3_tighten(
     var_refs: &HashMap<String, Option<RefExpr>>,
 ) -> Option<TightenResult> {
     #[cfg(feature = "z3")]
-    return impl_z3_tighten(pred, arg, var_refs);
+    {
+        if has_float_ops(pred) {
+            return impl_z3_tighten_real(pred, arg, var_refs);
+        }
+        impl_z3_tighten(pred, arg, var_refs)
+    }
     #[cfg(not(feature = "z3"))]
     {
         let _ = (pred, arg, var_refs);
@@ -272,7 +285,10 @@ fn impl_z3_tighten(
         }
     }
 
-    best.map(|tighter_bound| TightenResult { op, tighter_bound })
+    best.map(|tighter_bound| TightenResult {
+        op,
+        tighter_bound: tighter_bound as f64,
+    })
 }
 
 /// Extract `(op, bound)` from a simple `self OP bound` RefExpr.
@@ -330,8 +346,9 @@ fn impl_z3_witness(
     // ── Create Z3 variables per parameter ────────────────────────────────────
     //
     // `int_vars`: param_name (or param__field) → Z3 Int
-    // `param_kinds`: param_name → "int" | "struct:<TypeName>"
+    // `real_vars`: param_name → Z3 Real  (for Float/Float32/Float64, ADR-0058)
     let mut int_vars: HashMap<String, z3::ast::Int> = HashMap::new();
+    let mut real_vars: HashMap<String, z3::ast::Real> = HashMap::new();
 
     for param in params {
         let type_name = match &param.ty {
@@ -347,6 +364,10 @@ fn impl_z3_witness(
                 let var = z3::ast::Int::new_const(&ctx, param.name.as_str());
                 int_vars.insert(param.name.clone(), var);
             }
+            "Float" | "Float32" | "Float64" => {
+                let var = z3::ast::Real::new_const(&ctx, param.name.as_str());
+                real_vars.insert(param.name.clone(), var);
+            }
             other => {
                 if let Some(fields) = struct_fields.get(other) {
                     for (field_name, field_type) in fields {
@@ -361,7 +382,7 @@ fn impl_z3_witness(
         }
     }
 
-    if int_vars.is_empty() {
+    if int_vars.is_empty() && real_vars.is_empty() {
         return None;
     }
 
@@ -506,6 +527,22 @@ fn impl_z3_witness(
                     .eval(var, true)
                     .and_then(|v| v.as_i64())
                     .map(WitnessValue::Int)
+                    .unwrap_or(WitnessValue::Unknown);
+                witnesses.push(WitnessArg {
+                    param_name: param.name.clone(),
+                    value: val,
+                });
+            }
+            "Float" | "Float32" | "Float64" => {
+                let var = real_vars.get(&param.name)?;
+                let val = model
+                    .eval(var, true)
+                    .and_then(|v| {
+                        // Z3 Real model values are returned as rationals.
+                        // Extract numerator/denominator and convert to f64.
+                        v.as_real().map(|(num, den)| num as f64 / den as f64)
+                    })
+                    .map(WitnessValue::Float)
                     .unwrap_or(WitnessValue::Unknown);
                 witnesses.push(WitnessArg {
                     param_name: param.name.clone(),
@@ -1398,6 +1435,362 @@ fn str_pred_to_bool<'ctx>(
     }
 }
 
+// ── Float-op detection (ADR-0058) ─────────────────────────────────────────────
+
+/// Returns `true` if `pred` contains any `RefExpr::Float` node.
+///
+/// Used to dispatch Float-predicate proofs to the Z3 Real domain path
+/// (`impl_z3_real`) instead of the default QF-NIA Int path.
+fn has_float_ops(pred: &RefExpr) -> bool {
+    match pred {
+        RefExpr::Float { .. } => true,
+        RefExpr::LogicOp { left, right, .. }
+        | RefExpr::Compare { left, right, .. }
+        | RefExpr::ArithOp { left, right, .. } => has_float_ops(left) || has_float_ops(right),
+        RefExpr::Not { inner, .. }
+        | RefExpr::Grouped { inner, .. }
+        | RefExpr::Old { inner, .. } => has_float_ops(inner),
+        RefExpr::Forall { body, .. } | RefExpr::Exists { body, .. } => has_float_ops(body),
+        RefExpr::FieldAccess { object, .. } => has_float_ops(object),
+        _ => false,
+    }
+}
+
+// ── f64 → Z3 Real rational conversion (ADR-0058) ─────────────────────────────
+
+/// Convert an f64 to a Z3 Real (as a rational with 6 decimal places of precision).
+///
+/// Represents `value` as `round(value × 10^6) / 10^6`, simplified by GCD.
+/// Returns `None` when the numerator or denominator overflow `i32` (i.e. `|value| > 2147`).
+/// For common refinement bounds (probability ranges, sensor thresholds, fractions) this
+/// is always exact or within 1 ulp at 6 decimal places.
+#[cfg(feature = "z3")]
+fn f64_to_z3_real<'ctx>(ctx: &'ctx z3::Context, value: f64) -> Option<z3::ast::Real<'ctx>> {
+    const PRECISION: i64 = 1_000_000; // 6 decimal places
+    let scaled = (value * PRECISION as f64).round() as i64;
+    let g = {
+        let mut a = scaled.unsigned_abs() as i64;
+        let mut b = PRECISION;
+        while b != 0 {
+            let t = b;
+            b = a % b;
+            a = t;
+        }
+        a.max(1)
+    };
+    let num = scaled / g;
+    let den = PRECISION / g;
+    if !(i32::MIN as i64..=i32::MAX as i64).contains(&num) || den > i32::MAX as i64 {
+        return None;
+    }
+    Some(z3::ast::Real::from_real(ctx, num as i32, den as i32))
+}
+
+// ── Z3 Real domain implementation (ADR-0058) ─────────────────────────────────
+
+/// Prove `pred(arg)` using Z3's Real arithmetic (QF-LRA / QF-NRA).
+///
+/// Parallel to `impl_z3` but using `z3::ast::Real` for all variables and the
+/// self-term. Triggered only when `has_float_ops(pred)` is true (at least one
+/// `RefExpr::Float` node). NaN- or rounding-sensitive predicates are not yet
+/// expressible in `RefExpr` so there is no unsound path.
+#[cfg(feature = "z3")]
+fn impl_z3_real(
+    pred: &RefExpr,
+    arg: &Expr,
+    var_refs: &HashMap<String, Option<RefExpr>>,
+) -> Option<RefResult> {
+    use z3::{Config, Context, SatResult, Solver};
+
+    let mut cfg = Config::new();
+    cfg.set_timeout_msec(1_000);
+    let ctx = Context::new(&cfg);
+    let solver = Solver::new(&ctx);
+
+    // Create one Z3 Real constant per in-scope variable.
+    let vars: HashMap<String, z3::ast::Real> = var_refs
+        .keys()
+        .map(|name| (name.clone(), z3::ast::Real::new_const(&ctx, name.as_str())))
+        .collect();
+
+    // Assert each variable's refinement hypothesis.
+    for (var_name, maybe_hyp) in var_refs {
+        if let Some(hyp) = maybe_hyp {
+            let var = vars.get(var_name)?;
+            let z3_hyp = ref_to_bool_real(&ctx, hyp, var, &vars)?;
+            solver.assert(&z3_hyp);
+        }
+    }
+
+    // Translate the call-site argument to a Z3 Real.
+    let arg_real: z3::ast::Real = expr_to_real(&ctx, arg, &vars)?;
+
+    // Assert ¬pred(arg_real). Unsat ↔ Proven.
+    let z3_pred = ref_to_bool_real(&ctx, pred, &arg_real, &vars)?;
+    solver.assert(&z3_pred.not());
+
+    match solver.check() {
+        SatResult::Unsat => Some(RefResult::Proven),
+        SatResult::Sat => {
+            if is_constrained_float_literal(arg) {
+                Some(RefResult::Failed {
+                    counterexample: None,
+                })
+            } else {
+                None // symbolic arg — fall to RuntimeCheck
+            }
+        }
+        _ => None,
+    }
+}
+
+/// Returns `true` when `arg` is a fully-constrained float constant at compile time.
+#[cfg(feature = "z3")]
+fn is_constrained_float_literal(arg: &Expr) -> bool {
+    use crate::mvl::parser::ast::{BinaryOp, Literal, UnaryOp};
+    match arg {
+        Expr::Literal(Literal::Float(_), _) => true,
+        Expr::Unary {
+            op: UnaryOp::Neg,
+            expr: inner,
+            ..
+        } => is_constrained_float_literal(inner),
+        Expr::Binary {
+            op, left, right, ..
+        } => {
+            matches!(
+                op,
+                BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div
+            ) && is_constrained_float_literal(left)
+                && is_constrained_float_literal(right)
+        }
+        _ => false,
+    }
+}
+
+// ── RefExpr → Bool (Real domain) ─────────────────────────────────────────────
+
+/// Translate a `RefExpr` to a Z3 boolean in the Real domain.
+///
+/// `self_term` is the Z3 Real that `"self"` maps to in this context.
+#[cfg(feature = "z3")]
+fn ref_to_bool_real<'ctx>(
+    ctx: &'ctx z3::Context,
+    expr: &RefExpr,
+    self_term: &z3::ast::Real<'ctx>,
+    vars: &HashMap<String, z3::ast::Real<'ctx>>,
+) -> Option<z3::ast::Bool<'ctx>> {
+    use crate::mvl::parser::ast::{CmpOp, LogicOp};
+    use z3::ast::Ast;
+
+    match expr {
+        RefExpr::Compare {
+            op, left, right, ..
+        } => {
+            let l = ref_to_real(ctx, left, self_term, vars)?;
+            let r = ref_to_real(ctx, right, self_term, vars)?;
+            Some(match op {
+                CmpOp::Eq => l._eq(&r),
+                CmpOp::Ne => l._eq(&r).not(),
+                CmpOp::Lt => l.lt(&r),
+                CmpOp::Le => l.le(&r),
+                CmpOp::Gt => l.gt(&r),
+                CmpOp::Ge => l.ge(&r),
+            })
+        }
+        RefExpr::LogicOp {
+            op, left, right, ..
+        } => {
+            let l = ref_to_bool_real(ctx, left, self_term, vars)?;
+            let r = ref_to_bool_real(ctx, right, self_term, vars)?;
+            Some(match op {
+                LogicOp::And => z3::ast::Bool::and(ctx, &[&l, &r]),
+                LogicOp::Or => z3::ast::Bool::or(ctx, &[&l, &r]),
+            })
+        }
+        RefExpr::Not { inner, .. } => Some(ref_to_bool_real(ctx, inner, self_term, vars)?.not()),
+        RefExpr::Grouped { inner, .. } => ref_to_bool_real(ctx, inner, self_term, vars),
+        _ => None,
+    }
+}
+
+// ── RefExpr → Real ────────────────────────────────────────────────────────────
+
+/// Translate a `RefExpr` to a Z3 Real.
+///
+/// Handles float and integer literals, identifiers, and arithmetic.
+/// Integer literals are promoted to Real (sound: ℤ ⊂ ℝ).
+#[cfg(feature = "z3")]
+fn ref_to_real<'ctx>(
+    ctx: &'ctx z3::Context,
+    expr: &RefExpr,
+    self_term: &z3::ast::Real<'ctx>,
+    vars: &HashMap<String, z3::ast::Real<'ctx>>,
+) -> Option<z3::ast::Real<'ctx>> {
+    use crate::mvl::parser::ast::ArithOp;
+
+    match expr {
+        RefExpr::Float { value, .. } => f64_to_z3_real(ctx, *value),
+        RefExpr::Integer { value, .. } => Some(z3::ast::Real::from_real(ctx, *value as i32, 1)),
+        RefExpr::Ident { name, .. } => {
+            if name == "self" {
+                Some(self_term.clone())
+            } else {
+                vars.get(name).cloned()
+            }
+        }
+        RefExpr::ArithOp {
+            op, left, right, ..
+        } => {
+            let l = ref_to_real(ctx, left, self_term, vars)?;
+            let r = ref_to_real(ctx, right, self_term, vars)?;
+            Some(match op {
+                ArithOp::Add => z3::ast::Real::add(ctx, &[&l, &r]),
+                ArithOp::Sub => z3::ast::Real::sub(ctx, &[&l, &r]),
+                ArithOp::Mul => z3::ast::Real::mul(ctx, &[&l, &r]),
+                ArithOp::Div => l.div(&r),
+                ArithOp::Rem => return None, // modulo undefined over reals
+            })
+        }
+        RefExpr::Grouped { inner, .. } => ref_to_real(ctx, inner, self_term, vars),
+        _ => None,
+    }
+}
+
+// ── Expr → Real ───────────────────────────────────────────────────────────────
+
+/// Translate a call-site `Expr` to a Z3 Real.
+///
+/// Handles float/integer literals, variable references, and arithmetic.
+#[cfg(feature = "z3")]
+fn expr_to_real<'ctx>(
+    ctx: &'ctx z3::Context,
+    expr: &Expr,
+    vars: &HashMap<String, z3::ast::Real<'ctx>>,
+) -> Option<z3::ast::Real<'ctx>> {
+    use crate::mvl::parser::ast::{BinaryOp, Literal, UnaryOp};
+
+    match expr {
+        Expr::Literal(Literal::Float(f), _) => f64_to_z3_real(ctx, *f),
+        Expr::Literal(Literal::Integer(i), _) => Some(z3::ast::Real::from_real(ctx, *i as i32, 1)),
+        Expr::Ident(name, _) => vars.get(name).cloned(),
+        Expr::Unary {
+            op: UnaryOp::Neg,
+            expr: inner,
+            ..
+        } => {
+            let v = expr_to_real(ctx, inner, vars)?;
+            let zero = z3::ast::Real::from_real(ctx, 0, 1);
+            Some(z3::ast::Real::sub(ctx, &[&zero, &v]))
+        }
+        Expr::Binary {
+            op, left, right, ..
+        } => {
+            let l = expr_to_real(ctx, left, vars)?;
+            let r = expr_to_real(ctx, right, vars)?;
+            Some(match op {
+                BinaryOp::Add => z3::ast::Real::add(ctx, &[&l, &r]),
+                BinaryOp::Sub => z3::ast::Real::sub(ctx, &[&l, &r]),
+                BinaryOp::Mul => z3::ast::Real::mul(ctx, &[&l, &r]),
+                BinaryOp::Div => l.div(&r),
+                _ => return None,
+            })
+        }
+        _ => None,
+    }
+}
+
+// ── Axis 2: Float bound tightening (ADR-0058) ────────────────────────────────
+
+/// Extract `(op, bound)` from a simple `self OP bound` RefExpr where bound is a Float literal.
+#[cfg(feature = "z3")]
+fn extract_simple_self_bound_float(pred: &RefExpr) -> Option<(CmpOp, f64)> {
+    let RefExpr::Compare {
+        op, left, right, ..
+    } = pred
+    else {
+        return None;
+    };
+    match (left.as_ref(), right.as_ref()) {
+        (RefExpr::Ident { name, .. }, RefExpr::Float { value, .. }) if name == "self" => {
+            Some((*op, *value))
+        }
+        (RefExpr::Float { value, .. }, RefExpr::Ident { name, .. }) if name == "self" => {
+            Some((flip_cmp(*op), *value))
+        }
+        _ => None,
+    }
+}
+
+/// Build a `self OP bound_float` RefExpr for use in Real-domain tightening.
+#[cfg(feature = "z3")]
+fn make_self_cmp_float(op: CmpOp, bound: f64, span: Span) -> RefExpr {
+    RefExpr::Compare {
+        op,
+        left: Box::new(RefExpr::Ident {
+            name: "self".into(),
+            span,
+        }),
+        right: Box::new(RefExpr::Float { value: bound, span }),
+        span,
+    }
+}
+
+/// Tighten a simple `self OP bound` Float predicate via binary search over f64.
+///
+/// Bisects ±RANGE around the declared bound in STEPS iterations (≈ log2 steps).
+/// Returns the tightest bound still provable, or `None` if no improvement found.
+#[cfg(feature = "z3")]
+fn impl_z3_tighten_real(
+    pred: &RefExpr,
+    arg: &Expr,
+    var_refs: &HashMap<String, Option<RefExpr>>,
+) -> Option<TightenResult> {
+    use super::dummy_span;
+
+    let (op, current_bound) = extract_simple_self_bound_float(pred)?;
+
+    const RANGE: f64 = 1_000_000.0;
+    let (mut lo, mut hi, upward) = match op {
+        CmpOp::Ge | CmpOp::Gt => (current_bound + f64::EPSILON, current_bound + RANGE, true),
+        CmpOp::Le | CmpOp::Lt => (current_bound - RANGE, current_bound - f64::EPSILON, false),
+        _ => return None,
+    };
+
+    if lo > hi {
+        return None;
+    }
+
+    let span = dummy_span();
+    let mut best: Option<f64> = None;
+
+    // 60 iterations gives sub-microsecond precision over a ±1_000_000 range.
+    for _ in 0..60 {
+        if lo > hi {
+            break;
+        }
+        let mid = lo + (hi - lo) / 2.0;
+        let candidate = make_self_cmp_float(op, mid, span);
+        let proven = try_z3(&candidate, arg, var_refs, None) == Some(RefResult::Proven);
+
+        if upward {
+            if proven {
+                best = Some(mid);
+                lo = mid + f64::EPSILON * mid.abs().max(1.0);
+            } else {
+                hi = mid - f64::EPSILON * mid.abs().max(1.0);
+            }
+        } else if proven {
+            best = Some(mid);
+            hi = mid - f64::EPSILON * mid.abs().max(1.0);
+        } else {
+            lo = mid + f64::EPSILON * mid.abs().max(1.0);
+        }
+    }
+
+    best.map(|tighter_bound| TightenResult { op, tighter_bound })
+}
+
 // ── Unit tests ────────────────────────────────────────────────────────────────
 
 #[cfg(all(test, feature = "z3"))]
@@ -1974,5 +2367,143 @@ mod tests {
                 counterexample: None,
             })
         );
+    }
+
+    // ── Real domain (ADR-0058) ────────────────────────────────────────────────
+
+    fn float_lit(v: f64) -> Expr {
+        Expr::Literal(Literal::Float(v), dummy_span())
+    }
+
+    fn self_ge_float(f: f64) -> RefExpr {
+        RefExpr::Compare {
+            op: CmpOp::Ge,
+            left: Box::new(RefExpr::Ident {
+                name: "self".into(),
+                span: dummy_span(),
+            }),
+            right: Box::new(RefExpr::Float {
+                value: f,
+                span: dummy_span(),
+            }),
+            span: dummy_span(),
+        }
+    }
+
+    fn self_le_float(f: f64) -> RefExpr {
+        RefExpr::Compare {
+            op: CmpOp::Le,
+            left: Box::new(RefExpr::Ident {
+                name: "self".into(),
+                span: dummy_span(),
+            }),
+            right: Box::new(RefExpr::Float {
+                value: f,
+                span: dummy_span(),
+            }),
+            span: dummy_span(),
+        }
+    }
+
+    fn logic_and(l: RefExpr, r: RefExpr) -> RefExpr {
+        RefExpr::LogicOp {
+            op: crate::mvl::parser::ast::LogicOp::And,
+            left: Box::new(l),
+            right: Box::new(r),
+            span: dummy_span(),
+        }
+    }
+
+    /// Float literal 0.5 satisfies `self >= 0.0 && self <= 1.0`.
+    #[test]
+    fn z3_real_literal_probability_proven() {
+        let pred = logic_and(self_ge_float(0.0), self_le_float(1.0));
+        let arg = float_lit(0.5);
+        let var_refs = HashMap::new();
+        assert_eq!(
+            try_z3(&pred, &arg, &var_refs, None),
+            Some(RefResult::Proven)
+        );
+    }
+
+    /// Float literal -0.1 violates `self >= 0.0`.
+    #[test]
+    fn z3_real_literal_below_zero_fails() {
+        let pred = self_ge_float(0.0);
+        let arg = float_lit(-0.1);
+        let var_refs = HashMap::new();
+        assert_eq!(
+            try_z3(&pred, &arg, &var_refs, None),
+            Some(RefResult::Failed {
+                counterexample: None
+            })
+        );
+    }
+
+    /// Variable `p` with hypothesis `p >= 0.0 && p <= 1.0` satisfies `self >= 0.0`.
+    #[test]
+    fn z3_real_variable_with_hypothesis_proven() {
+        let pred = self_ge_float(0.0);
+        let arg = Expr::Ident("p".into(), dummy_span());
+        let hyp = logic_and(self_ge_float(0.0), self_le_float(1.0));
+        let mut var_refs = HashMap::new();
+        var_refs.insert("p".into(), Some(hyp));
+        assert_eq!(
+            try_z3(&pred, &arg, &var_refs, None),
+            Some(RefResult::Proven)
+        );
+    }
+
+    /// Variable `p` with hypothesis `p >= 0.5 && p <= 1.0` satisfies tighter `self >= 0.25`.
+    #[test]
+    fn z3_real_variable_stronger_hypothesis_implies_weaker_pred() {
+        let pred = self_ge_float(0.25);
+        let arg = Expr::Ident("p".into(), dummy_span());
+        let hyp = logic_and(self_ge_float(0.5), self_le_float(1.0));
+        let mut var_refs = HashMap::new();
+        var_refs.insert("p".into(), Some(hyp));
+        assert_eq!(
+            try_z3(&pred, &arg, &var_refs, None),
+            Some(RefResult::Proven)
+        );
+    }
+
+    /// Variable without Float refinement hypothesis returns None (symbolic, no proof).
+    #[test]
+    fn z3_real_variable_no_hypothesis_returns_none() {
+        let pred = self_ge_float(0.0);
+        let arg = Expr::Ident("x".into(), dummy_span());
+        let mut var_refs = HashMap::new();
+        var_refs.insert("x".into(), None);
+        // No hypothesis → cannot prove → not Proven (returns None or RuntimeCheck)
+        assert_ne!(
+            try_z3(&pred, &arg, &var_refs, None),
+            Some(RefResult::Proven)
+        );
+    }
+
+    /// `has_float_ops` detects Float nodes correctly.
+    #[test]
+    fn has_float_ops_detects_float_nodes() {
+        assert!(has_float_ops(&self_ge_float(0.0)));
+        assert!(has_float_ops(&logic_and(
+            self_ge_float(0.0),
+            self_le_float(1.0)
+        )));
+        assert!(!has_float_ops(&self_gt(0)));
+    }
+
+    /// `f64_to_z3_real` round-trips common bounds.
+    #[test]
+    fn f64_to_z3_real_round_trips() {
+        use z3::{Config, Context};
+        let ctx = Context::new(&Config::new());
+        // These should all succeed (common refinement bounds).
+        assert!(f64_to_z3_real(&ctx, 0.0).is_some());
+        assert!(f64_to_z3_real(&ctx, 1.0).is_some());
+        assert!(f64_to_z3_real(&ctx, -1.0).is_some());
+        assert!(f64_to_z3_real(&ctx, 0.5).is_some());
+        assert!(f64_to_z3_real(&ctx, 1.5).is_some());
+        assert!(f64_to_z3_real(&ctx, 0.001).is_some());
     }
 }

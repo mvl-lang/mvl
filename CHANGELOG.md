@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added — #1957
+
+- **Z3 Real theory for Float refinements.** Layer 5 now proves Float-typed refinement predicates (e.g. `type Probability = Float where self >= 0.0 && self <= 1.0`) for non-literal arguments via Z3's Real arithmetic (QF-LRA/QF-NRA). Previously all non-literal Float arguments fell to `RuntimeCheck`; now `mvl prove` reports them as `(5:z3)` when Z3 can discharge the constraint. `mvl harden` axes 2 (tightening), 3 (boundary witnesses), and 4 (MC/DC synthesis) gain Float support. `WitnessValue::Float(f64)` variant added for boundary test generation. `TightenResult.tighter_bound` changed from `i64` to `f64` to accommodate Float bounds. ADR-0058 documents the Z3 Real vs QF-FP trade-off and NaN caveat. (also: fix negative-float-literal codegen bug in Rust backend where `-100.0` in refinement predicates emitted `(0 - 100.0)` — a Rust type error; corrected to `(-100.0)`)
+
 ## [1.6.2] - 2026-07-20
 
 ### Fixed

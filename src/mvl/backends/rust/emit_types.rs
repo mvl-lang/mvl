@@ -660,6 +660,26 @@ pub fn is_runtime_checkable(pred: &RefExpr) -> bool {
     }
 }
 
+/// Returns `true` if any leaf of `expr` is a `RefExpr::Float` node.
+///
+/// Used to detect when a `0 - x` subtraction arises from unary-minus desugaring
+/// of a float literal, so we can emit `(-x)` instead of `(0 - x)` to avoid
+/// a Rust type error ({integer} - {float}).
+fn ref_expr_has_float_leaf(expr: &RefExpr) -> bool {
+    match expr {
+        RefExpr::Float { .. } => true,
+        RefExpr::ArithOp { left, right, .. }
+        | RefExpr::Compare { left, right, .. }
+        | RefExpr::LogicOp { left, right, .. } => {
+            ref_expr_has_float_leaf(left) || ref_expr_has_float_leaf(right)
+        }
+        RefExpr::Not { inner, .. } | RefExpr::Grouped { inner, .. } => {
+            ref_expr_has_float_leaf(inner)
+        }
+        _ => false,
+    }
+}
+
 /// Emit a refinement predicate as a Rust boolean expression suitable for
 /// use inside `assert!(…)`.  The binding name `self` is replaced with
 /// `binding`.
@@ -705,6 +725,15 @@ fn emit_ref_expr(pred: &RefExpr, binding: &str) -> String {
         RefExpr::ArithOp {
             op, left, right, ..
         } => {
+            // Unary-minus desugaring (#1777): `-x` is lowered to `0 - x` in the parser.
+            // When `x` is a Float node, emit `-x_str` directly to avoid `(0 - 100.0)`
+            // which produces a Rust type error ({integer} - {float}).
+            if matches!(op, ArithOp::Sub)
+                && matches!(left.as_ref(), RefExpr::Integer { value: 0, .. })
+                && ref_expr_has_float_leaf(right)
+            {
+                return format!("(-{})", emit_ref_expr(right, binding));
+            }
             let op_str = match op {
                 ArithOp::Add => "+",
                 ArithOp::Sub => "-",

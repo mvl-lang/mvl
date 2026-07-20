@@ -1,0 +1,151 @@
+// 09_refinements/float_refinement_test.mvl — Float refinement types via Z3 Real theory (#1957).
+//
+// Verifies that Float-typed refinement predicates parse, type-check, and accept
+// concrete Float literal arguments in both:
+//   (a) type-alias-body position: `type Probability = Float where self >= 0.0 && self <= 1.0`
+//   (b) function-parameter position: `fn f(x: Float where self > 0.0) -> Float`
+//
+// Concrete Float literals are proved by Layer 1 (eval_pred_float).
+// Non-literal Float arguments (variables) are proved by Layer 5 Z3 Real theory (ADR-0058).
+//
+// Rust-backend note: refined aliases lower to Rust newtype structs, so both sides
+// of assert_eq must carry the same refined type via a typed local.
+
+// ── Type-alias-body forms ─────────────────────────────────────────────────────
+
+/// Probability: 0.0 ≤ self ≤ 1.0
+pub type Probability = Float where self >= 0.0 && self <= 1.0
+
+/// Positive float: strictly greater than zero.
+pub type PositiveFloat = Float where self > 0.0
+
+/// Non-negative float: zero or positive.
+pub type NonNegativeFloat = Float where self >= 0.0
+
+/// Sensor reading: -100.0 ≤ self ≤ 100.0
+pub type SensorReading = Float where self >= -100.0 && self <= 100.0
+
+/// Unit interval half-open: 0.0 ≤ self < 1.0
+pub type UnitHalfOpen = Float where self >= 0.0 && self < 1.0
+
+// ── Identity helpers (enforce the refined type round-trips) ───────────────────
+
+fn identity_probability(p: Probability) -> Probability { p }
+fn identity_positive(x: PositiveFloat) -> PositiveFloat { x }
+fn identity_nonneg(x: NonNegativeFloat) -> NonNegativeFloat { x }
+fn identity_sensor(s: SensorReading) -> SensorReading { s }
+fn identity_half_open(x: UnitHalfOpen) -> UnitHalfOpen { x }
+
+// ── Function-parameter-position forms ────────────────────────────────────────
+
+/// Positive float parameter: argument must satisfy `self > 0.0`.
+pub fn positive_float_param(x: Float where self > 0.0) -> Float { x }
+
+/// Non-negative float parameter: argument must satisfy `self >= 0.0`.
+pub fn nonneg_float_param(x: Float where self >= 0.0) -> Float { x }
+
+/// Clamped float parameter: must satisfy `self >= 0.0 && self <= 1.0`.
+pub fn clamped_float_param(x: Float where self >= 0.0 && self <= 1.0) -> Float { x }
+
+/// Negative float parameter: must satisfy `self < 0.0`.
+pub fn negative_float_param(x: Float where self < 0.0) -> Float { x }
+
+// ── Tests: type-alias-body forms ─────────────────────────────────────────────
+
+test fn probability_zero() -> Unit {
+    let p: Probability = 0.0;
+    let expected: Probability = 0.0;
+    assert_eq(identity_probability(p), expected)
+}
+
+test fn probability_one() -> Unit {
+    let p: Probability = 1.0;
+    let expected: Probability = 1.0;
+    assert_eq(identity_probability(p), expected)
+}
+
+test fn probability_half() -> Unit {
+    let p: Probability = 0.5;
+    let expected: Probability = 0.5;
+    assert_eq(identity_probability(p), expected)
+}
+
+test fn positive_float_small() -> Unit {
+    let x: PositiveFloat = 0.001;
+    let expected: PositiveFloat = 0.001;
+    assert_eq(identity_positive(x), expected)
+}
+
+test fn positive_float_large() -> Unit {
+    let x: PositiveFloat = 42.0;
+    let expected: PositiveFloat = 42.0;
+    assert_eq(identity_positive(x), expected)
+}
+
+test fn nonneg_float_zero() -> Unit {
+    let x: NonNegativeFloat = 0.0;
+    let expected: NonNegativeFloat = 0.0;
+    assert_eq(identity_nonneg(x), expected)
+}
+
+test fn nonneg_float_positive() -> Unit {
+    let x: NonNegativeFloat = 3.14;
+    let expected: NonNegativeFloat = 3.14;
+    assert_eq(identity_nonneg(x), expected)
+}
+
+test fn sensor_reading_min() -> Unit {
+    let s: SensorReading = -100.0;
+    let expected: SensorReading = -100.0;
+    assert_eq(identity_sensor(s), expected)
+}
+
+test fn sensor_reading_max() -> Unit {
+    let s: SensorReading = 100.0;
+    let expected: SensorReading = 100.0;
+    assert_eq(identity_sensor(s), expected)
+}
+
+test fn sensor_reading_zero() -> Unit {
+    let s: SensorReading = 0.0;
+    let expected: SensorReading = 0.0;
+    assert_eq(identity_sensor(s), expected)
+}
+
+test fn unit_half_open_zero() -> Unit {
+    let x: UnitHalfOpen = 0.0;
+    let expected: UnitHalfOpen = 0.0;
+    assert_eq(identity_half_open(x), expected)
+}
+
+test fn unit_half_open_almost_one() -> Unit {
+    let x: UnitHalfOpen = 0.999;
+    let expected: UnitHalfOpen = 0.999;
+    assert_eq(identity_half_open(x), expected)
+}
+
+// ── Tests: function-parameter-position forms ──────────────────────────────────
+
+test fn positive_param_roundtrip() -> Unit {
+    let result: Float = positive_float_param(2.5);
+    let expected: Float = 2.5;
+    assert_eq(result, expected)
+}
+
+test fn nonneg_param_roundtrip_zero() -> Unit {
+    let result: Float = nonneg_float_param(0.0);
+    let expected: Float = 0.0;
+    assert_eq(result, expected)
+}
+
+test fn clamped_param_roundtrip() -> Unit {
+    let result: Float = clamped_float_param(0.75);
+    let expected: Float = 0.75;
+    assert_eq(result, expected)
+}
+
+test fn negative_param_roundtrip() -> Unit {
+    let result: Float = negative_float_param(-1.5);
+    let expected: Float = -1.5;
+    assert_eq(result, expected)
+}
