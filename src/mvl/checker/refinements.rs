@@ -111,8 +111,8 @@ pub struct TighteningCandidate {
     pub declared_pred: String,
     /// The tighter predicate Z3 can prove (e.g. `"ensures result >= 5"`).
     pub tighter_pred: String,
-    /// Raw tighter bound value for deduplication arithmetic.
-    pub tighter_bound: i64,
+    /// Raw tighter bound value for deduplication arithmetic (f64 covers both Int and Float bounds).
+    pub tighter_bound: f64,
     /// Whether to find the min (Ge/Gt) or max (Le/Lt) across branches.
     /// `true` = take the minimum tighter bound (lower-bound predicates).
     pub take_min: bool,
@@ -134,6 +134,8 @@ pub struct TighteningCandidate {
 pub enum WitnessValue {
     /// A concrete integer (covers Int, Bool-as-int, refined Int, etc.).
     Int(i64),
+    /// A concrete float synthesized from a Z3 Real model (#1957).
+    Float(f64),
     /// A struct constructed from field witnesses.
     Struct {
         type_name: String,
