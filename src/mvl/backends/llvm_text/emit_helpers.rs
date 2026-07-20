@@ -509,6 +509,68 @@ impl TextEmitter {
 
     // ── Result/Option aggregate builders ──────────────────────────────────
 
+    /// Compute the heap-allocation size (in bytes) for an LLVM type string.
+    ///
+    /// Used by Result/Option constructors to replace stack `alloca` with
+    /// `_mvl_alloc`, so that payload pointers remain valid after the
+    /// constructor function returns.
+    pub(super) fn alloc_size_for_llvm_ty(&self, ty: &str) -> u64 {
+        match ty {
+            "i1" | "i8" => 1,
+            "i32" => 4,
+            "i64" | "double" | "ptr" => 8,
+            super::RESULT_LLVM_TY => 16, // { i8, ptr } — 1-byte disc + 7 pad + 8-byte ptr
+            _ if ty.starts_with('%') => {
+                // Named struct: compute size using natural alignment.
+                let struct_name = &ty[1..];
+                if let Some(fields) = self.module.struct_fields.get(struct_name) {
+                    let mut offset: u64 = 0;
+                    let mut max_align: u64 = 1;
+                    for (_, fte) in fields {
+                        let ft = self.llvm_ty_ctx(fte);
+                        let (fsz, falign) = self.llvm_type_size_align(&ft);
+                        offset = (offset + falign - 1) & !(falign - 1);
+                        offset += fsz;
+                        max_align = max_align.max(falign);
+                    }
+                    (offset + max_align - 1) & !(max_align - 1)
+                } else {
+                    8 // unknown struct — conservative fallback
+                }
+            }
+            _ => 8,
+        }
+    }
+
+    /// Returns (size_bytes, align_bytes) for a primitive or well-known
+    /// composite LLVM type.  Used by [`alloc_size_for_llvm_ty`].
+    fn llvm_type_size_align(&self, ty: &str) -> (u64, u64) {
+        match ty {
+            "i1" | "i8" => (1, 1),
+            "i32" => (4, 4),
+            "i64" | "double" | "ptr" => (8, 8),
+            super::RESULT_LLVM_TY => (16, 8),
+            _ if ty.starts_with('%') => {
+                (self.alloc_size_for_llvm_ty(ty), 8)
+            }
+            _ => (8, 8),
+        }
+    }
+
+    /// Emit `_mvl_alloc(size)` for a heap-allocated payload slot of the given
+    /// LLVM type, then store `value` into it.  Returns the allocated pointer
+    /// register.  This replaces the old `alloca T; store T value, ptr alloca`
+    /// pattern, which produced dangling pointers when the Result/Option
+    /// escaped the constructing function's stack frame.
+    pub(super) fn emit_heap_slot(&mut self, ty: &str, value: &str) -> String {
+        let sz = self.alloc_size_for_llvm_ty(ty);
+        self.ensure_extern("declare ptr @_mvl_alloc(i64)");
+        let slot = self.next_reg();
+        self.push_instr(&format!("{slot} = call ptr @_mvl_alloc(i64 {sz})"));
+        self.push_instr(&format!("store {ty} {value}, ptr {slot}"));
+        slot
+    }
+
     /// Build a `{ i8, ptr }` Result aggregate from a discriminant byte and a
     /// payload slot pointer.
     ///
@@ -534,11 +596,10 @@ impl TextEmitter {
     }
 
     /// Emit `None` — builds a `{ i8, ptr }` tagged union with disc=1 and
-    /// null payload.
+    /// null payload.  No allocation needed: the None match arm never
+    /// dereferences the payload pointer.
     pub(super) fn emit_none_constructor(&mut self) -> Result<Option<String>, String> {
-        let slot = self.next_reg();
-        self.push_instr(&format!("{slot} = alloca i8"));
-        let r1 = self.wrap_result_pair("1", &slot);
+        let r1 = self.wrap_result_pair("1", "null");
         Ok(Some(r1))
     }
 

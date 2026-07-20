@@ -653,9 +653,10 @@ impl TextEmitter {
                     // `load %T, ptr payload` in the match arm.
                     self.wrap_result_pair(&disc, &raw_payload)
                 } else {
-                    let slot = self.next_reg();
-                    self.push_instr(&format!("{slot} = alloca ptr"));
-                    self.push_instr(&format!("store ptr {raw_payload}, ptr {slot}"));
+                    // Wrap the C-ABI payload pointer in a heap-allocated slot so
+                    // the pointer survives if the caller returns this Result/Option
+                    // (stack alloca would dangle across the return boundary).
+                    let slot = self.emit_heap_slot("ptr", &raw_payload);
                     self.wrap_result_pair(&disc, &slot)
                 };
                 return Ok(Some(r1));
@@ -1929,20 +1930,29 @@ impl TextEmitter {
             let inferred_ty = self.ty_to_llvm_ctx(&arg.ty);
             if inferred_ty == "void" {
                 let _ = self.emit_expr_tir(arg)?;
+                // Unit payload — heap-allocate a 1-byte sentinel so the ptr
+                // field is non-null (the match arm never loads it for unit Ok).
+                self.ensure_extern("declare ptr @_mvl_alloc(i64)");
                 slot = self.next_reg();
-                self.push_instr(&format!("{slot} = alloca i8"));
+                self.push_instr(&format!("{slot} = call ptr @_mvl_alloc(i64 1)"));
             } else {
                 let arg_val = match self.emit_expr_tir(arg)? {
                     Some(v) => v,
                     None => return Ok(None),
                 };
-                slot = self.next_reg();
-                self.push_instr(&format!("{slot} = alloca {inferred_ty}"));
-                self.push_instr(&format!("store {inferred_ty} {arg_val}, ptr {slot}"));
+                // Transfer ownership: if the argument is a heap-tracked local,
+                // remove it from heap_locals so it isn't dropped at function
+                // exit — the caller owns it through the Result payload.
+                self.exclude_returned_value_tir(arg);
+                // Heap-allocate the payload so the pointer survives after this
+                // function returns (stack alloca would dangle).
+                slot = self.emit_heap_slot(&inferred_ty, &arg_val);
             }
         } else {
+            // No argument (e.g. bare Ok() — treat as unit payload).
+            self.ensure_extern("declare ptr @_mvl_alloc(i64)");
             slot = self.next_reg();
-            self.push_instr(&format!("{slot} = alloca i8"));
+            self.push_instr(&format!("{slot} = call ptr @_mvl_alloc(i64 1)"));
         };
         let r1 = self.wrap_result_pair(&disc.to_string(), &slot);
         Ok(Some(r1))
@@ -1959,9 +1969,11 @@ impl TextEmitter {
             Some(v) => v,
             None => return Ok(None),
         };
-        let slot = self.next_reg();
-        self.push_instr(&format!("{slot} = alloca {arg_ty}"));
-        self.push_instr(&format!("store {arg_ty} {arg_val}, ptr {slot}"));
+        // Transfer ownership of any heap-tracked local to the caller.
+        self.exclude_returned_value_tir(arg);
+        // Heap-allocate so the payload pointer survives if this Option escapes
+        // the current function's stack frame.
+        let slot = self.emit_heap_slot(&arg_ty, &arg_val);
         let r1 = self.wrap_result_pair("0", &slot);
         Ok(Some(r1))
     }
