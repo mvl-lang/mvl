@@ -644,8 +644,10 @@ impl RustEmitter {
         }
         for pt in prelude_tirs {
             for td in &pt.types {
-                if let crate::mvl::ir::TirTypeBody::Alias(crate::mvl::ir::Ty::Refined(inner, pred)) =
-                    &td.body
+                if let crate::mvl::ir::TirTypeBody::Alias(crate::mvl::ir::Ty::Refined(
+                    inner,
+                    pred,
+                )) = &td.body
                 {
                     register_refined_alias(td.name.clone(), inner.as_ref(), pred.as_ref());
                 }
@@ -658,8 +660,10 @@ impl RustEmitter {
         // string-method calls on the newtype fail to compile (#1911 smoke test).
         for st in sibling_tirs {
             for td in &st.types {
-                if let crate::mvl::ir::TirTypeBody::Alias(crate::mvl::ir::Ty::Refined(inner, pred)) =
-                    &td.body
+                if let crate::mvl::ir::TirTypeBody::Alias(crate::mvl::ir::Ty::Refined(
+                    inner,
+                    pred,
+                )) = &td.body
                 {
                     register_refined_alias(td.name.clone(), inner.as_ref(), pred.as_ref());
                 }
