@@ -523,7 +523,9 @@ fn emit_ref_val_wasm(
             };
             out.push_str(&format!("    local.get {local}\n"));
         }
-        RefExpr::ArithOp { op, left, right, .. } => {
+        RefExpr::ArithOp {
+            op, left, right, ..
+        } => {
             emit_ref_val_wasm(out, left, binding, binding_ty, params);
             emit_ref_val_wasm(out, right, binding, binding_ty, params);
             let ty = ref_expr_wasm_ty(left, binding_ty, params);
@@ -565,7 +567,9 @@ fn emit_ref_expr_wasm(
     params: &[TirParam],
 ) {
     match pred {
-        RefExpr::Compare { op, left, right, .. } => {
+        RefExpr::Compare {
+            op, left, right, ..
+        } => {
             let ty = ref_expr_wasm_ty(left, binding_ty, params);
             emit_ref_val_wasm(out, left, binding, binding_ty, params);
             emit_ref_val_wasm(out, right, binding, binding_ty, params);
@@ -598,7 +602,9 @@ fn emit_ref_expr_wasm(
             };
             out.push_str(&format!("    {instr}\n"));
         }
-        RefExpr::LogicOp { op, left, right, .. } => {
+        RefExpr::LogicOp {
+            op, left, right, ..
+        } => {
             // Short-circuit semantics would require blocks; emit eager and/or instead.
             // Sufficient for corpus predicates which have no side effects.
             emit_ref_expr_wasm(out, left, binding, binding_ty, params);
