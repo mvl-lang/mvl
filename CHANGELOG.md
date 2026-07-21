@@ -2,21 +2,31 @@
 
 ## [1.7.0] - 2026-07-21
 
+### Added — #1821 (WASM phase 4)
+
+- **WASM backend gains structs, payload enums, `Result[T, E]`, match, and `?` propagation.** The WAT emitter now handles the full algebraic-type surface:
+  - **Structs** — `StructLayout` computes linear-memory field offsets with alignment; `_mvl_struct_alloc(size) -> i32` in `runtime/wasm/` bump-allocates the region. `emit_struct_construct` stores fields with type-directed opcodes; `emit_field_access` loads them, unpacking `*MvlString` fields to the split `(ptr, len)` form.
+  - **Payload enums** — `PayloadEnumInfo` / `PayloadVariant` describe the `{discriminant: i32, payload_ptr: i32}` header plus per-variant field layout. `emit_enum_variant_construct` handles both call syntax (`Shape::Circle(5)`) and struct-init syntax; match arms use `Pattern::TupleStruct` for exhaustive dispatch.
+  - **Result[T, E]** — new `MvlResult { tag, rc, ok_value: i64, err_ptr: i32 }` runtime with typed `_mvl_result_ok_i64` / `_mvl_result_ok_i32` constructors, `_mvl_result_err_str` for String errors, `_mvl_result_tag`, `_mvl_result_value_{i64,i32}`, and refcounted `_mvl_result_drop`. `Pattern::Ok(inner)` binds the payload via `result_ops_for_ok`; `Pattern::Err` reports the tag.
+  - **`expr?` propagation** — `emit_propagate` emits an inline tag check that returns the Result directly on Err and unwraps the Ok payload on the success path.
+  - **String param/return ABI** — String function parameters are now split into two i32 WASM params (`$name_ptr`, `$name_len`); String returns emit `(result i32 i32)` multi-value. `emit_expr` for `Var` with `Ty::String` reads both split locals. String equality routes through `_mvl_string_eq`.
+  - **Block-type inference** — `if_stmt_result_ty` / `match_arms_result_ty` compare WASM types (not MVL types) so `Result[Int, Unknown]` and `Result[Unknown, String]` unify at the `i32` slot; if/match expressions returning String emit `(result i32 i32)`.
+  - Corpus adds `04_types/struct_test.mvl`, `04_types/enum_payload_test.mvl`, `04_types/option_result_test.mvl` to `WASM_CORPUS`.
+
 ### Added — #1955
 
 - **`mvl harden --mcdc` extensions:** axis-4 MC/DC gap synthesis now covers three new areas.
   - **String clause types.** `try_z3_witness` now allocates Z3 String variables for `String` parameters and translates equality (`s == "lit"`), `contains`, `starts_with`, and `ends_with` predicates. `WitnessValue::Str(String)` added; witnesses render as MVL string literals with proper quote/backslash/newline escaping.
   - **Compound match-arm guards.** The axis-4 walker now visits match arms and treats compound guards (`n if a && b => …`) as MC/DC decisions, converting the guard's `RefExpr` to `Expr` for the shared pair-synthesis pipeline. Guards that reference pattern-bound identifiers are silently skipped (tracked separately by `mvl mcdc`).
   - **JSON output for axes 3 and 4.** `mvl harden --json` gains `axis3_boundary_witnesses` and `axis4_mcdc_pairs` sections. Axis-4 entries carry an `outcome` field (`"pair"` / `"coupled"` / `"unsupported"`); `pair` outcomes include `t1`/`t2` arrays with pre-rendered MVL-literal `value` strings. Backslash escaping added to the emitter.
-- **Match-arm reachability tracked as follow-up (#1958)** — distinct semantics from Unique-Cause pair synthesis; needs pattern-to-predicate encoding and a `SingleWitness` outcome variant.
-
-### Added — #1958
-
-- **Match arm reachability witnesses in `mvl harden --mcdc`.** Every `match x { … }` with N ≥ 2 arms inside a non-effectful function is now treated as an axis-4 decision with N outcomes. For each arm, a Z3 witness is synthesized proving the arm can be reached — a scrutinee value that matches this arm's pattern AND does not match any earlier arm. Supported patterns: `Wildcard`, `Ident` (binding-only — encoded as `Wildcard`), `Literal(Integer)`, `Literal(Bool)`. Scrutinee must be a bare parameter identifier. Non-`Ident` scrutinees or any unsupported arm pattern taint the whole match to `Unsupported` with a reason. Arms provably unreachable (e.g. after a preceding `Wildcard`) report `Coupled`. New `Axis4Outcome::SingleWitness { args }` variant; JSON emits `"outcome": "single"` with a single `args` array. `--emit-tests` writes `test fn harden_mcdc_<fn>_arm<i>()` blocks. MatchGuard (#1955) obligations continue to emit `Pair` outcomes and coexist with arm-reachability obligations on the same arm.
 
 ### Added — #1957
 
 - **Z3 Real theory for Float refinements.** Layer 5 now proves Float-typed refinement predicates (e.g. `type Probability = Float where self >= 0.0 && self <= 1.0`) for non-literal arguments via Z3's Real arithmetic (QF-LRA/QF-NRA). Previously all non-literal Float arguments fell to `RuntimeCheck`; now `mvl prove` reports them as `(5:z3)` when Z3 can discharge the constraint. `mvl harden` axes 2 (tightening), 3 (boundary witnesses), and 4 (MC/DC synthesis) gain Float support. `WitnessValue::Float(f64)` variant added for boundary test generation. `TightenResult.tighter_bound` changed from `i64` to `f64` to accommodate Float bounds. ADR-0058 documents the Z3 Real vs QF-FP trade-off and NaN caveat. (also: fix negative-float-literal codegen bug in Rust backend where `-100.0` in refinement predicates emitted `(0 - 100.0)` — a Rust type error; corrected to `(-100.0)`)
+
+### Added — #1958
+
+- **Match arm reachability witnesses in `mvl harden --mcdc`.** Every `match x { … }` with N ≥ 2 arms inside a non-effectful function is now treated as an axis-4 decision with N outcomes. For each arm, a Z3 witness is synthesized proving the arm can be reached — a scrutinee value that matches this arm's pattern AND does not match any earlier arm. Supported patterns: `Wildcard`, `Ident` (binding-only — encoded as `Wildcard`), `Literal(Integer)`, `Literal(Bool)`. Scrutinee must be a bare parameter identifier. Non-`Ident` scrutinees or any unsupported arm pattern taint the whole match to `Unsupported` with a reason. Arms provably unreachable (e.g. after a preceding `Wildcard`) report `Coupled`. New `Axis4Outcome::SingleWitness { args }` variant; JSON emits `"outcome": "single"` with a single `args` array. `--emit-tests` writes `test fn harden_mcdc_<fn>_arm<i>()` blocks. MatchGuard (#1955) obligations continue to emit `Pair` outcomes and coexist with arm-reachability obligations on the same arm.
 
 ## [1.6.2] - 2026-07-20
 
