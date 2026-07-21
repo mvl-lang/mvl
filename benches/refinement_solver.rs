@@ -83,13 +83,14 @@ total fn clamp_add(x: Int where x >= 0 && x <= 100,
 
 // ── Corpus programs ───────────────────────────────────────────────────────────
 
-const CORPUS_FULLY_PROVEN: &str =
-    include_str!("../tests/corpus_old/09_refinements/refinements_fully_proven.mvl");
+const CORPUS_REFINEMENTS_TYPE_ALIAS: &str =
+    include_str!("../tests/corpus/09_refinements/type_alias_test.mvl");
 
-const CORPUS_REFINEMENTS_VALID: &str =
-    include_str!("../tests/corpus_old/09_refinements/refinements_valid.mvl");
+const CORPUS_REFINEMENTS_STRUCT: &str =
+    include_str!("../tests/corpus/09_refinements/struct_invariant_test.mvl");
 
-const CORPUS_CONTRACTS: &str = include_str!("../tests/corpus_old/11_contracts/basic_contracts.mvl");
+const CORPUS_CONTRACTS_REQUIRES: &str =
+    include_str!("../tests/corpus/11_contracts/requires_test.mvl");
 
 // ── Benchmark: micro per-layer ────────────────────────────────────────────────
 
@@ -122,9 +123,9 @@ fn bench_modes(c: &mut Criterion) {
     ];
 
     let cases: &[(&str, &str)] = &[
-        ("fully_proven", CORPUS_FULLY_PROVEN),
-        ("refinements_valid", CORPUS_REFINEMENTS_VALID),
-        ("contracts_basic", CORPUS_CONTRACTS),
+        ("type_alias", CORPUS_REFINEMENTS_TYPE_ALIAS),
+        ("struct_invariant", CORPUS_REFINEMENTS_STRUCT),
+        ("contracts_requires", CORPUS_CONTRACTS_REQUIRES),
     ];
 
     let mut group = c.benchmark_group("mode");
@@ -143,9 +144,9 @@ fn bench_modes(c: &mut Criterion) {
 
 fn bench_corpus(c: &mut Criterion) {
     let sources: &[(&str, &str)] = &[
-        ("fully_proven", CORPUS_FULLY_PROVEN),
-        ("refinements_valid", CORPUS_REFINEMENTS_VALID),
-        ("contracts_basic", CORPUS_CONTRACTS),
+        ("type_alias", CORPUS_REFINEMENTS_TYPE_ALIAS),
+        ("struct_invariant", CORPUS_REFINEMENTS_STRUCT),
+        ("contracts_requires", CORPUS_CONTRACTS_REQUIRES),
     ];
 
     let mut group = c.benchmark_group("corpus");
