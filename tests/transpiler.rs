@@ -3313,6 +3313,7 @@ pub partial fn status_reason(healthy: Bool) -> Bool {
         expr_types,
         vec![],
         Default::default(),
+        false,
         &pkg_names,
     );
 
@@ -3364,6 +3365,7 @@ fn main() -> Unit { }
         expr_types,
         vec![],
         Default::default(),
+        false,
         &pkg_names,
     );
 
@@ -3408,6 +3410,7 @@ pub partial fn greet(n: Int) -> Int {
         expr_types,
         vec![],
         Default::default(),
+        false,
         &pkg_names,
     );
 
