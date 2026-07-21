@@ -657,20 +657,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "mvl_runtime_core"
+version = "0.1.0"
+
+[[package]]
 name = "mvl_runtime_llvm"
-version = "0.197.2"
+version = "0.197.3"
 dependencies = [
  "crossbeam-deque",
  "libc",
+ "mvl_runtime_core",
  "mvl_runtime_rust",
 ]
 
 [[package]]
 name = "mvl_runtime_rust"
-version = "1.0.2"
+version = "1.0.3"
 dependencies = [
  "getrandom 0.2.17",
  "hex",
+ "mvl_runtime_core",
  "regex",
  "sha2",
 ]
@@ -685,7 +691,10 @@ dependencies = [
 
 [[package]]
 name = "mvl_runtime_wasm"
-version = "0.1.1"
+version = "0.1.2"
+dependencies = [
+ "mvl_runtime_core",
+]
 
 [[package]]
 name = "nom"
