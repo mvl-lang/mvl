@@ -10,7 +10,7 @@
 
 use mvl::mvl::backends::llvm_text::lli;
 use mvl::mvl::backends::wasm_text::WasmTextCompiler;
-use mvl::mvl::backends::Backend;
+use mvl::mvl::backends::{AssertMode, Backend};
 use mvl::mvl::checker;
 use mvl::mvl::loader;
 use mvl::mvl::parser::ast::Program;
@@ -21,7 +21,7 @@ use std::path::{Path, PathBuf};
 use std::process;
 
 /// Lower `prog` (with prelude) to TIR and emit a WAT string.
-fn compile_wat(prog: &Program, module_name: &str) -> String {
+fn compile_wat(prog: &Program, module_name: &str, assert_mode: AssertMode) -> String {
     let mut prelude = loader::load_implicit_prelude();
     prelude.extend(load_full_prelude(
         std::iter::once(prog),
@@ -44,15 +44,16 @@ fn compile_wat(prog: &Program, module_name: &str) -> String {
     let mono = mvl::mvl::passes::mono::monomorphize(prog, &all_fns, &expr_types);
     let entry_tir = mvl::mvl::ir::lower::lower(prog, &mono, &expr_types);
 
-    let compiler = WasmTextCompiler::new();
+    let mut compiler = WasmTextCompiler::new();
+    compiler.assert_mode = assert_mode;
     compiler.emit_program(&entry_tir, module_name)
 }
 
 /// `mvl build --backend=wasm <file>` — write `<stem>.wat`.
-pub(super) fn build_project_wasm(path: &str) {
+pub(super) fn build_project_wasm(path: &str, assert_mode: AssertMode) {
     let (prog, _src) = super::parse_or_exit(path);
     let module_name = loader::stem(path);
-    let wat = compile_wat(&prog, &module_name);
+    let wat = compile_wat(&prog, &module_name, assert_mode);
     let out_path = format!("{module_name}.wat");
     fs::write(&out_path, &wat).unwrap_or_else(|e| {
         eprintln!("error: cannot write {out_path}: {e}");
@@ -111,7 +112,7 @@ fn run_one_case(
         };
     }
 
-    let wat = compile_wat(&prog, &module_name);
+    let wat = compile_wat(&prog, &module_name, AssertMode::Always);
 
     let wat_tmp = match tempfile::NamedTempFile::with_suffix(".wat") {
         Ok(t) => t,

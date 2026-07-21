@@ -98,7 +98,7 @@ pub(super) fn dispatch(args: &[String]) {
             if backend == "llvm" {
                 llvm_text::build_project_llvm_text(&path);
             } else if backend == "wasm" {
-                wasm_text::build_project_wasm(&path);
+                wasm_text::build_project_wasm(&path, assert_mode);
             } else {
                 build::run(
                     &path,
