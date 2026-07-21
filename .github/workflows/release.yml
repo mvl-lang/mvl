@@ -128,8 +128,10 @@ jobs:
         run: |
           ASSET="mvl-runtime-${{ steps.runtime_version.outputs.version }}.tar.gz"
           tar czf "${ASSET}" \
-            --transform 's|^runtime/rust|rust|' \
+            --transform 's|^runtime/core|core|' \
             --transform 's|^runtime/rust-tokio|rust-tokio|' \
+            --transform 's|^runtime/rust|rust|' \
+            runtime/core \
             runtime/rust \
             runtime/rust-tokio
           echo "RUNTIME_ASSET=${ASSET}" >> "$GITHUB_ENV"
