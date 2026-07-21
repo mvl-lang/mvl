@@ -196,8 +196,16 @@ pub unsafe extern "C" fn _mvl_string_concat(
     a: *const MvlString,
     b: *const MvlString,
 ) -> *mut MvlString {
-    let a_bytes = if a.is_null() { &[] } else { std::slice::from_raw_parts((*a).ptr, (*a).len as usize) };
-    let b_bytes = if b.is_null() { &[] } else { std::slice::from_raw_parts((*b).ptr, (*b).len as usize) };
+    let a_bytes = if a.is_null() {
+        &[]
+    } else {
+        std::slice::from_raw_parts((*a).ptr, (*a).len as usize)
+    };
+    let b_bytes = if b.is_null() {
+        &[]
+    } else {
+        std::slice::from_raw_parts((*b).ptr, (*b).len as usize)
+    };
     let mut merged = mvl_runtime_core::concat_bytes(a_bytes, b_bytes);
     merged.push(0); // null terminator
     let total = merged.len() - 1;
@@ -745,10 +753,22 @@ pub unsafe extern "C" fn _mvl_list_concat(a: *const MvlArray, b: *const MvlArray
         (true, true) => return _mvl_array_new(8, 0),
         (false, true) => ((*a).elem_size as usize, (*a).len as usize, 0usize),
         (true, false) => ((*b).elem_size as usize, 0usize, (*b).len as usize),
-        (false, false) => ((*a).elem_size as usize, (*a).len as usize, (*b).len as usize),
+        (false, false) => (
+            (*a).elem_size as usize,
+            (*a).len as usize,
+            (*b).len as usize,
+        ),
     };
-    let a_bytes = if a.is_null() || la == 0 { &[] as &[u8] } else { std::slice::from_raw_parts((*a).ptr, la * es) };
-    let b_bytes = if b.is_null() || lb == 0 { &[] as &[u8] } else { std::slice::from_raw_parts((*b).ptr, lb * es) };
+    let a_bytes = if a.is_null() || la == 0 {
+        &[] as &[u8]
+    } else {
+        std::slice::from_raw_parts((*a).ptr, la * es)
+    };
+    let b_bytes = if b.is_null() || lb == 0 {
+        &[] as &[u8]
+    } else {
+        std::slice::from_raw_parts((*b).ptr, lb * es)
+    };
     let merged = mvl_runtime_core::concat_bytes(a_bytes, b_bytes);
     let total = la + lb;
     let out = _mvl_array_new(es, total.max(1));
