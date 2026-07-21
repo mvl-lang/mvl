@@ -33,6 +33,7 @@ pub struct Pipeline {
     mcdc: bool,
     mutation: bool,
     assert_mode: AssertMode,
+    optimize_proved: bool,
 }
 
 /// Result of a [`Pipeline::check`] call — one entry per checked program.
@@ -61,6 +62,7 @@ impl Pipeline {
             mcdc: false,
             mutation: false,
             assert_mode: AssertMode::Always,
+            optimize_proved: false,
         }
     }
 
@@ -85,6 +87,12 @@ impl Pipeline {
     /// Set the assert mode for refinement predicate emission.
     pub fn with_assert_mode(mut self, mode: AssertMode) -> Self {
         self.assert_mode = mode;
+        self
+    }
+
+    /// Elide runtime bounds checks certified by the prover (#1891).
+    pub fn with_optimize_proved(mut self) -> Self {
+        self.optimize_proved = true;
         self
     }
 
@@ -127,6 +135,9 @@ impl Pipeline {
             config = config.with_mutation();
         }
         config = config.with_assert_mode(self.assert_mode);
+        if self.optimize_proved {
+            config = config.with_optimize_proved();
+        }
         let all_fns =
             crate::mvl::passes::mono::collect_fns(std::iter::once(prog).chain(prelude.iter()));
         let mono = crate::mvl::passes::mono::monomorphize(prog, &all_fns, &expr_types);
@@ -162,6 +173,7 @@ impl Pipeline {
             expr_types,
             &sibling_expr_types,
             self.assert_mode,
+            self.optimize_proved,
             false,
             &[],
         )
@@ -365,6 +377,7 @@ pub fn transpile_project(
         &sibling_expr_types,
         assert_mode,
         false,
+        false,
         &[],
     )
 }
@@ -381,6 +394,7 @@ pub fn transpile_project_with_pkg_names(
         std::collections::HashMap<crate::mvl::parser::lexer::Span, crate::mvl::ir::Ty>,
     >,
     assert_mode: AssertMode,
+    optimize_proved: bool,
     prelude_pkg_names: &[Option<String>],
 ) -> ProjectOutput {
     transpile_project_with_options(
@@ -391,6 +405,7 @@ pub fn transpile_project_with_pkg_names(
         expr_types,
         &sibling_expr_types,
         assert_mode,
+        optimize_proved,
         false,
         prelude_pkg_names,
     )
@@ -409,6 +424,7 @@ pub fn transpile_project_with_options(
         crate::mvl::ir::Ty,
     >],
     assert_mode: AssertMode,
+    optimize_proved: bool,
     extern_stubs: bool,
     prelude_pkg_names: &[Option<String>],
 ) -> ProjectOutput {
@@ -454,6 +470,7 @@ pub fn transpile_project_with_options(
 
     let mut cg = RustEmitter::new();
     cg.assert_mode = assert_mode;
+    cg.optimize_proved = optimize_proved;
     cg.test_extern_stubs = extern_stubs;
     cg.emit_program_with_mods_and_siblings(
         &entry_tir,
@@ -487,6 +504,7 @@ pub fn transpile_project_with_options(
                 .collect();
             let mut cg = RustEmitter::new();
             cg.assert_mode = assert_mode;
+            cg.optimize_proved = optimize_proved;
             cg.test_extern_stubs = extern_stubs;
             if entry_uses_runtime {
                 cg.emit_sibling_module(sib_tir, &peer_names_vec, &peer_tirs, &prelude_tirs);

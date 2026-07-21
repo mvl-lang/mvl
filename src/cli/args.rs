@@ -141,6 +141,11 @@ pub(super) fn parse_error_limit(args: &[String]) -> usize {
         .unwrap_or(10)
 }
 
+/// Parse `--optimize-proved` flag; defaults to false.
+pub(super) fn parse_optimize_proved(args: &[String]) -> bool {
+    args.iter().any(|a| a == "--optimize-proved")
+}
+
 /// Parse `--assert-mode=<mode>` from args; defaults to `AssertMode::Always`.
 pub(super) fn parse_assert_mode_or_exit(args: &[String]) -> AssertMode {
     let mode_str = args
