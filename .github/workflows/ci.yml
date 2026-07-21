@@ -350,7 +350,7 @@ jobs:
       - name: Run benchmarks
         run: |
           cargo bench --bench refinement_solver \
-            -- --output-format bencher 2>&1 | tee bench-results.txt
+            -- --output-format bencher | tee bench-results.txt
 
       - name: Store and compare benchmark results
         uses: benchmark-action/github-action-benchmark@52576c92bccf6ac60c8223ec7eb2565637cae9ba  # v1.22.1
