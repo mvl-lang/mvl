@@ -232,6 +232,10 @@ jobs:
         if: needs.changes.outputs.rust == 'true'
         run: cargo test --lib --test type_checker --test parser --test requirements
 
+      - name: Set up runtime for integration tests
+        if: needs.changes.outputs.rust == 'true' && github.event_name == 'push'
+        run: make install-runtime
+
       - name: Test (full — integration)
         if: needs.changes.outputs.rust == 'true' && github.event_name == 'push'
         run: cargo test --test compile_and_run --test stdlib
