@@ -770,11 +770,7 @@ fn emit_fn(out: &mut String, f: &TirFn, ctx: &Ctx) {
     if has_checkable_ensures {
         let ret_wasm = wasm_ty(&f.ret_ty, ctx);
         body.push_str("    local.set $__result_CONTRACT\n");
-        for pred in f
-            .ensures
-            .iter()
-            .chain(f.return_refinement.as_ref())
-        {
+        for pred in f.ensures.iter().chain(f.return_refinement.as_ref()) {
             emit_contract_check(
                 &mut body,
                 pred,
