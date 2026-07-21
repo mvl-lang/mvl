@@ -1,6 +1,6 @@
 [package]
 name = "mvl_runtime_wasm"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 description = "MVL runtime for the WASM backend — Rust source compiled to wasm32-wasip1, loaded by wasmtime via --preload (#1819)"
 license = "Apache-2.0"

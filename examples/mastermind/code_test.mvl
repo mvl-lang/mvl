@@ -1,0 +1,114 @@
+// code_test.mvl — Unit tests for pure Mastermind logic.
+//
+// Assurance note: 0 extern blocks.
+
+use code::Feedback;
+use code::color_name;
+use code::parse_guess;
+use code::render_code;
+use code::render_feedback;
+use code::score_guess;
+
+// ── Tests: scoring — blacks ───────────────────────────────────────────────────
+
+test fn perfect_guess_scores_four_blacks() -> Unit {
+    let fb: Feedback = score_guess([1, 2, 3, 4], [1, 2, 3, 4]);
+    assert_eq(fb.blacks, 4);
+    assert_eq(fb.whites, 0)
+}
+
+test fn no_colors_in_common_scores_zero() -> Unit {
+    let fb: Feedback = score_guess([1, 1, 1, 1], [2, 2, 2, 2]);
+    assert_eq(fb.blacks, 0);
+    assert_eq(fb.whites, 0)
+}
+
+test fn full_permutation_scores_four_whites() -> Unit {
+    let fb: Feedback = score_guess([1, 2, 3, 4], [4, 3, 2, 1]);
+    assert_eq(fb.blacks, 0);
+    assert_eq(fb.whites, 4)
+}
+
+test fn mixed_hits_score_blacks_and_whites() -> Unit {
+    // positions 0 and 2 match exactly; the other two colors are swapped
+    let fb: Feedback = score_guess([1, 1, 2, 2], [1, 2, 2, 1]);
+    assert_eq(fb.blacks, 2);
+    assert_eq(fb.whites, 2)
+}
+
+// ── Tests: scoring — no double-counting ───────────────────────────────────────
+
+test fn repeated_guess_color_does_not_inflate_whites() -> Unit {
+    // only one 2 sits at a mismatched position in the secret; the three 2s
+    // in the guess must not produce extra white pegs
+    let fb: Feedback = score_guess([1, 1, 1, 2], [1, 2, 2, 2]);
+    assert_eq(fb.blacks, 2);
+    assert_eq(fb.whites, 0)
+}
+
+test fn repeated_guess_hits_only_count_once() -> Unit {
+    // the single 1 in the secret is already a black peg; the other 1s score nothing
+    let fb: Feedback = score_guess([1, 2, 3, 4], [1, 1, 1, 1]);
+    assert_eq(fb.blacks, 1);
+    assert_eq(fb.whites, 0)
+}
+
+test fn repeated_secret_colors_score_exactly() -> Unit {
+    let fb: Feedback = score_guess([6, 6, 6, 6], [6, 1, 6, 1]);
+    assert_eq(fb.blacks, 2);
+    assert_eq(fb.whites, 0)
+}
+
+// ── Tests: parsing ────────────────────────────────────────────────────────────
+
+test fn parse_accepts_valid_guess() -> Unit {
+    assert(parse_guess("1 2 3 4").is_some())
+}
+
+test fn parse_reads_guess_values() -> Unit {
+    let code: List[Int] = parse_guess("4 3 2 1").unwrap_or([]);
+    assert_eq(code.len(), 4);
+    assert_eq(code.get(0).unwrap_or(0), 4);
+    assert_eq(code.get(3).unwrap_or(0), 1)
+}
+
+test fn parse_tolerates_extra_whitespace() -> Unit {
+    assert(parse_guess("  1   2  3   4  ").is_some())
+}
+
+test fn parse_rejects_too_few_numbers() -> Unit {
+    assert(parse_guess("1 2 3").is_none())
+}
+
+test fn parse_rejects_too_many_numbers() -> Unit {
+    assert(parse_guess("1 2 3 4 5").is_none())
+}
+
+test fn parse_rejects_color_out_of_range() -> Unit {
+    assert(parse_guess("1 2 3 7").is_none());
+    assert(parse_guess("0 1 2 3").is_none())
+}
+
+test fn parse_rejects_non_numbers() -> Unit {
+    assert(parse_guess("a b c d").is_none())
+}
+
+test fn parse_rejects_empty_input() -> Unit {
+    assert(parse_guess("").is_none())
+}
+
+// ── Tests: display ────────────────────────────────────────────────────────────
+
+test fn color_names_are_stable() -> Unit {
+    assert_eq(color_name(1), "red");
+    assert_eq(color_name(6), "purple");
+    assert_eq(color_name(0), "?")
+}
+
+test fn render_code_joins_names_with_spaces() -> Unit {
+    assert_eq(render_code([1, 2, 3, 4]), "red green blue yellow")
+}
+
+test fn render_feedback_shows_both_counts() -> Unit {
+    assert_eq(render_feedback(Feedback { blacks: 2, whites: 1 }), "blacks: 2  whites: 1")
+}

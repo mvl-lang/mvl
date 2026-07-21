@@ -1,0 +1,127 @@
+// code.mvl — PURE Mastermind game logic.
+//
+// No effects, no extern, no I/O. Fully testable without a terminal.
+// Demonstrates:
+//   1. Req 1  (ADTs):     Feedback struct, GuessResult enum
+//   2. Req 3  (Totality): scoring and parsing are total fn — bounded loops only
+//   3. Req 4  (Null):     Option[List[Int]] for unparseable input
+//   4. Req 7  (Effects):  zero effect annotations — enforced by compiler
+//
+// Game rules: the secret is a code of 4 pegs, each a color 1–6 (repeats
+// allowed). A guess scores one black peg per color in the right position,
+// plus one white peg per right color in a wrong position (no double-counting).
+//
+// Assurance note: 0 extern blocks.
+
+// ── Types ─────────────────────────────────────────────────────────────────────
+
+/// Scoring result for one guess.
+/// blacks: pegs with the right color in the right position.
+/// whites: pegs with the right color in the wrong position.
+pub type Feedback = struct {
+    blacks: Int,
+    whites: Int,
+}
+
+/// Outcome of reading one line of player input.
+pub type GuessResult = enum {
+    Guess(List[Int]),
+    Invalid,
+    Eof,
+}
+
+// ── Scoring ───────────────────────────────────────────────────────────────────
+
+// Count positions where guess matches secret exactly.
+total fn count_blacks(secret: List[Int], guess: List[Int]) -> Int {
+    let n:   ref Int = 0;
+    let i:   ref Int = 0;
+    let len: Int     = secret.len();
+    while i < len decreases len - i {
+        // Distinct defaults so out-of-range slots can never compare equal.
+        let s: Int = secret.get(i).unwrap_or(-1);
+        let g: Int = guess.get(i).unwrap_or(-2);
+        if s == g {
+            n = n + 1
+        }
+        i = i + 1
+    }
+    n
+}
+
+// Count occurrences of `color` in `xs`, restricted to positions where `xs`
+// and `other` differ. Applied to both sides of the white-peg tally so that
+// black-peg positions are never counted twice.
+total fn count_color_at_mismatch(xs: List[Int], other: List[Int], color: Int) -> Int {
+    let n:   ref Int = 0;
+    let i:   ref Int = 0;
+    let len: Int     = xs.len();
+    while i < len decreases len - i {
+        let x: Int = xs.get(i).unwrap_or(-1);
+        let o: Int = other.get(i).unwrap_or(-2);
+        if x == color && x != o {
+            n = n + 1
+        }
+        i = i + 1
+    }
+    n
+}
+
+/// Score `guess` against `secret` (classic Mastermind rules).
+/// Both lists are expected to hold 4 values in 1..=6 (parse_guess enforces
+/// this for player input); the indexed tally is safe on any input anyway.
+pub total fn score_guess(secret: List[Int], guess: List[Int]) -> Feedback {
+    let blacks: Int = count_blacks(secret, guess);
+    let whites: ref Int = 0;
+    for color in [1, 2, 3, 4, 5, 6] {
+        let in_secret: Int = count_color_at_mismatch(secret, guess, color);
+        let in_guess:  Int = count_color_at_mismatch(guess, secret, color);
+        let shared:    Int = if in_secret < in_guess { in_secret } else { in_guess };
+        whites = whites + shared
+    }
+    Feedback { blacks: blacks, whites: whites }
+}
+
+// ── Parsing ───────────────────────────────────────────────────────────────────
+
+/// Parse a guess line like "1 2 3 4" into a code.
+/// Returns None unless the input holds exactly four numbers in 1..=6.
+pub total fn parse_guess(input: String) -> Option[List[Int]] {
+    let parts: List[String] = input.trim().split(" ").filter(|s: String| !s.is_empty());
+    if parts.len() != 4 {
+        None
+    } else {
+        let code: ref List[Int] = [];
+        let ok:   ref Bool      = true;
+        for part in parts {
+            // Err maps to -1, which is outside 1..=6 — one check covers both.
+            let n: Int = part.parse_int().unwrap_or(-1);
+            if n >= 1 && n <= 6 { code.push(n) } else { ok = false }
+        }
+        if ok { Some(code) } else { None }
+    }
+}
+
+// ── Display ───────────────────────────────────────────────────────────────────
+
+/// Display name for a color number (1–6).
+pub total fn color_name(n: Int) -> String {
+    if      n == 1 { "red"    }
+    else if n == 2 { "green"  }
+    else if n == 3 { "blue"   }
+    else if n == 4 { "yellow" }
+    else if n == 5 { "orange" }
+    else if n == 6 { "purple" }
+    else           { "?"      }
+}
+
+/// Render a code as e.g. "red green blue yellow".
+pub total fn render_code(code: List[Int]) -> String {
+    code.map(|n: Int| color_name(n)).join(" ")
+}
+
+/// Render scoring feedback as e.g. "blacks: 2  whites: 1".
+pub total fn render_feedback(fb: Feedback) -> String {
+    "blacks: ".concat(fb.blacks.to_string())
+        .concat("  whites: ").concat(fb.whites.to_string())
+}

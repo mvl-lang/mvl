@@ -1,0 +1,95 @@
+// main.mvl — I/O shell for Mastermind.
+//
+// code.mvl holds all game logic and is PURE (zero effects).
+// This file owns the trust boundary:
+//   ! Console — prompts, feedback, reading guesses from stdin
+//   ! Random  — secret code generation
+//
+// Demonstrates:
+//   1. Req 7  (Effects):  sharp effect boundary — logic pure, I/O declared
+//   2. Req 11 (IFC):      stdin arrives Tainted; validated by parse_guess,
+//                         then declassified via relabel trust with audit tag
+//   3. Req 5  (Errors):   read_line failure mapped to GuessResult::Eof
+//   4. Req 3  (Totality): main is partial — the game loop is user-driven
+//
+// Usage:
+//   mvl run examples/mastermind/main.mvl
+//   make run   (from examples/mastermind/)
+//
+// Assurance note: 0 extern blocks.
+
+use std.io.{stdin, read_line}
+use std.random.{int}
+use code::Feedback;
+use code::GuessResult;
+use code::parse_guess;
+use code::render_code;
+use code::render_feedback;
+use code::score_guess;
+
+// ── Trust boundary: stdin ─────────────────────────────────────────────────────
+
+// Read one guess from the player.
+// Blank line or EOF ends the game (GuessResult::Eof); a non-empty line that
+// fails validation is GuessResult::Invalid and does not consume an attempt.
+fn read_guess() -> GuessResult ! Console {
+    match read_line(stdin()) {
+        Err(_) => GuessResult::Eof,
+        Ok(raw) => {
+            // Validated by parse_guess before any use — safe to declassify.
+            let clean:   String = relabel trust(raw, "MM-INPUT-001");
+            let trimmed: String = clean.trim();
+            if trimmed.is_empty() {
+                GuessResult::Eof
+            } else {
+                match parse_guess(trimmed) {
+                    Some(code) => GuessResult::Guess(code),
+                    None       => GuessResult::Invalid,
+                }
+            }
+        },
+    }
+}
+
+// ── Main ──────────────────────────────────────────────────────────────────────
+
+partial fn main() -> Unit ! Console + Random {
+    println("Mastermind");
+    println("I picked a secret code of 4 colors (repeats allowed):");
+    println("  1 = red    2 = green  3 = blue");
+    println("  4 = yellow 5 = orange 6 = purple");
+    println("Guess with four numbers separated by spaces, e.g. `1 2 3 4`.");
+    println("Feedback: black = right color + position, white = right color only.");
+    let secret:       List[Int] = [int(1, 6), int(1, 6), int(1, 6), int(1, 6)];
+    let max_attempts: Int       = 10;
+    let attempt:      ref Int   = 1;
+    let done:         ref Bool  = false;
+    while !done {
+        if attempt > max_attempts {
+            println("Out of attempts -- the code was: ".concat(render_code(secret)));
+            done = true
+        } else {
+            println("Attempt ".concat(attempt.to_string())
+                .concat(" of ").concat(max_attempts.to_string()).concat(" -- your guess:"));
+            match read_guess() {
+                GuessResult::Eof => {
+                    println("Goodbye! The code was: ".concat(render_code(secret)));
+                    done = true
+                },
+                GuessResult::Invalid => {
+                    println("Invalid guess -- enter four numbers 1-6, e.g. `1 2 3 4`.")
+                },
+                GuessResult::Guess(guess) => {
+                    let fb: Feedback = score_guess(secret, guess);
+                    println("  -> ".concat(render_feedback(fb)));
+                    if fb.blacks == 4 {
+                        println("Cracked it in ".concat(attempt.to_string()).concat(" attempt(s)!"));
+                        done = true
+                    } else {
+                        attempt = attempt + 1
+                    }
+                },
+            }
+        }
+    }
+}

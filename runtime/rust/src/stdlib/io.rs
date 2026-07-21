@@ -221,9 +221,16 @@ pub fn read(fd: Fd, max_bytes: i64) -> Result<Tainted<String>, IoError> {
 ///
 /// Returns `Ok(Tainted<String>)` on success, `Ok(Tainted(""))` at EOF.
 /// Returns `Err(IoError::PermissionDenied)` when `fd` is stdout or stderr (fds 1/2).
+///
+/// Implementation note: reads one byte at a time from the raw fd instead of
+/// wrapping it in a `BufReader`. A per-call `BufReader` would slurp all
+/// available bytes into its internal buffer, return one line, and drop the
+/// rest — losing every subsequent line (stdin pipes, multi-line files).
+/// Byte-at-a-time reads keep no buffered state between calls, so repeated
+/// `read_line` calls on the same fd each return the next line.
 #[allow(unsafe_code)]
 pub fn read_line(fd: Fd) -> Result<Tainted<String>, IoError> {
-    use std::io::{BufRead as _, BufReader};
+    use std::io::Read as _;
     if fd.inner < 0 || fd.inner > i32::MAX as i64 {
         return Err(IoError::Other("fd out of range".into()));
     }
@@ -231,18 +238,26 @@ pub fn read_line(fd: Fd) -> Result<Tainted<String>, IoError> {
         return Err(IoError::PermissionDenied);
     }
     // SAFETY: fd.inner is either stdin (0) or was returned by open().
-    let f =
+    let mut f =
         unsafe { <std::fs::File as std::os::unix::io::FromRawFd>::from_raw_fd(fd.inner as i32) };
-    let mut reader = BufReader::new(f);
-    let mut line = String::new();
-    let result = reader
-        .read_line(&mut line)
-        .map(|_| Tainted(line))
-        .map_err(|e| sanitize_io_error(&e));
-    // Prevent Rust from closing the fd when the BufReader (and inner File) is dropped.
-    let inner = reader.into_inner();
-    std::mem::forget(inner);
-    result
+    let mut bytes: Vec<u8> = Vec::new();
+    let mut one = [0u8; 1];
+    let result = loop {
+        match f.read(&mut one) {
+            Ok(0) => break Ok(bytes), // EOF
+            Ok(_) => {
+                bytes.push(one[0]);
+                if one[0] == b'\n' {
+                    break Ok(bytes);
+                }
+            }
+            Err(ref e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(e) => break Err(sanitize_io_error(&e)),
+        }
+    };
+    // Prevent Rust from closing the fd when the File is dropped.
+    std::mem::forget(f);
+    result.map(|bs| Tainted(String::from_utf8_lossy(&bs).into_owned()))
 }
 
 // ── File I/O ───────────────────────────────────────────────────────────────
@@ -737,6 +752,22 @@ mod tests {
         let fd2 = open(path(path_str.clone())).unwrap();
         let line = read_line(fd2).unwrap();
         assert_eq!(line.0, "first line\n");
+        std::fs::remove_file(&path_str).ok();
+    }
+
+    #[test]
+    fn read_line_twice_returns_both_lines() {
+        // Regression: a per-call BufReader would slurp all bytes, return the
+        // first line, and drop the rest — the second call saw EOF.
+        let path_str = tmp("mvl_test_read_line_twice.txt");
+        std::fs::write(&path_str, "line one\nline two\n".to_string()).unwrap();
+        let fd = open(path(path_str.clone())).unwrap();
+        let first = read_line(Fd { inner: fd.inner }).unwrap();
+        let second = read_line(Fd { inner: fd.inner }).unwrap();
+        let third = read_line(fd).unwrap();
+        assert_eq!(first.0, "line one\n");
+        assert_eq!(second.0, "line two\n");
+        assert_eq!(third.0, "", "EOF after both lines");
         std::fs::remove_file(&path_str).ok();
     }
 
