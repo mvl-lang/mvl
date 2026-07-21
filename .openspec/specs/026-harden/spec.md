@@ -245,9 +245,17 @@ different values between t1 and t2.
 - Compound `while` conditions
 - Compound match-arm guards (`n if a && b => …`) — guards using `RefExpr`
   are converted to `Expr` via `refexpr_to_expr` for the shared pipeline
-- **Not** covered: match arms as independent outcomes (see #1958 —
-  distinct semantics; requires `SingleWitness` outcome and pattern-to-predicate
-  encoding), guards that reference pattern-bound identifiers
+- Match arm reachability (`match x { 0 => …, 1 => …, _ => … }`) — each arm
+  is an independent outcome; one witness is synthesized per arm proving
+  reachability. Supported patterns: `Wildcard`, `Ident` (binding-only —
+  treated as `Wildcard`), `Literal(Integer|Bool)`. Scrutinee must be a
+  bare parameter identifier. Non-`Ident` scrutinees or any unsupported
+  arm pattern taint the whole match to `Unsupported` with a reason
+  (#1958). Reachability outcome is `SingleWitness { args }`; provably
+  unreachable arms (e.g. after a preceding `Wildcard`) report `Coupled`.
+- **Not** covered: complex patterns (`TupleStruct`, `Struct`, `Some`/`None`,
+  `Ok`/`Err`, `Or`, string literals), non-`Ident` scrutinees, guards that
+  reference pattern-bound identifiers
 
 `requires` clauses on the enclosing function MUST be added as preconditions
 to both t1 and t2 — reusing the branch-hypothesis threading pattern from
@@ -298,6 +306,24 @@ test fn harden_mcdc_<fn>_c<i>_f() -> Unit { ... clause evaluates false ... }
 - GIVEN `fn f(a: Bool, b: Bool, x: Int) -> Int { match x { n if a && b => n, _ => 0 } }`
 - WHEN `mvl harden f.mvl --mcdc` is run
 - THEN one MatchGuard decision is emitted with two independence pairs (one per clause)
+
+#### Scenario: integer match arm reachability generates one witness per arm
+
+- GIVEN `fn categorize(x: Int) -> Int { match x { 0 => 100, 1 => 200, _ => 300 } }`
+- WHEN `mvl harden f.mvl --mcdc` is run
+- THEN three `SingleWitness` results are emitted with `outcome=single` — one per arm — each containing a scrutinee value that reaches only that arm (`x=0`, `x=1`, and any `x ∉ {0,1}` respectively)
+
+#### Scenario: match arm with unsupported pattern taints the whole match
+
+- GIVEN `fn opt(x: Option[Int]) -> Int { match x { Some(v) => v, None => 0 } }`
+- WHEN `mvl harden f.mvl --mcdc` is run
+- THEN every arm reports `outcome=unsupported` with a reason naming the offending arm pattern
+
+#### Scenario: --emit-tests writes match arm reachability test blocks
+
+- GIVEN a match decision with three reachable arms
+- WHEN `mvl harden f.mvl --mcdc --emit-tests` is run
+- THEN the generated `*_mcdc_gap_test.mvl` file contains one `test fn harden_mcdc_<fn>_arm<i>()` block per reachable arm, invoking the function with the synthesized scrutinee value
 
 #### Scenario: unsupported parameter type is skipped
 

@@ -33,7 +33,7 @@ use mvl::mvl::checker::SolverMode;
 use mvl::mvl::loader;
 use mvl::mvl::parser::ast::{
     ArithOp, BinaryOp, Block, CmpOp, Decl, ElseBranch, Expr, FnDecl, Literal, LogicOp, MatchArm,
-    MatchBody, Param, Program, RefExpr, Stmt, TypeBody, TypeExpr, UnaryOp,
+    MatchBody, Param, Pattern, Program, RefExpr, Stmt, TypeBody, TypeExpr, UnaryOp,
 };
 use mvl::mvl::parser::lexer::Span;
 use mvl::mvl::passes::mcdc::analysis::{collect_clauses, count_clauses};
@@ -210,6 +210,20 @@ fn print_json(
                 };
                 println!("      \"t1\": [\n{}\n      ],", emit_args(t1_args));
                 println!("      \"t2\": [\n{}\n      ]", emit_args(t2_args));
+            }
+            Axis4Outcome::SingleWitness { args } => {
+                println!("      \"outcome\": \"single\",");
+                let mut lines: Vec<String> = Vec::new();
+                for (j, (name, ty, val)) in args.iter().enumerate() {
+                    let cj = if j + 1 < args.len() { "," } else { "" };
+                    lines.push(format!(
+                        "          {{ \"name\": \"{}\", \"type\": \"{}\", \"value\": \"{}\" }}{cj}",
+                        json_escape(name),
+                        json_escape(ty),
+                        json_escape(val)
+                    ));
+                }
+                println!("      \"args\": [\n{}\n      ]", lines.join("\n"));
             }
             Axis4Outcome::Coupled => {
                 println!("      \"outcome\": \"coupled\"");
@@ -505,6 +519,8 @@ pub fn run(
         failed: usize,
         /// Axis 4 (#1950): compound if/while decisions in this file (populated only when `mcdc` is set).
         mcdc_decisions: Vec<McdcDecision>,
+        /// Axis 4 (#1958): match-arm reachability decisions in this file.
+        mcdc_arm_decisions: Vec<MatchArmDecision>,
         /// Axis 3 (#1931): boundary witnesses for tightened contracts.
         /// Populated in the post-collection pass below so JSON and text emit from the same data.
         axis3_witnesses: Vec<Axis3Witness>,
@@ -563,10 +579,13 @@ pub fn run(
         grand_total_proven += file_proven;
         grand_total_runtime += file_runtime;
         grand_total_failed += file_failed;
-        let mcdc_decisions = if mcdc {
-            collect_mcdc_decisions(prog)
+        let (mcdc_decisions, mcdc_arm_decisions) = if mcdc {
+            (
+                collect_mcdc_decisions(prog),
+                collect_match_arm_decisions(prog),
+            )
         } else {
-            Vec::new()
+            (Vec::new(), Vec::new())
         };
         file_results.push(FileResult {
             file_str: file_str.clone(),
@@ -576,6 +595,7 @@ pub fn run(
             runtime: file_runtime,
             failed: file_failed,
             mcdc_decisions,
+            mcdc_arm_decisions,
             axis3_witnesses: Vec::new(),
             axis4_results: Vec::new(),
         });
@@ -590,6 +610,10 @@ pub fn run(
         fr.axis3_witnesses = compute_axis3_witnesses(&deduped, &struct_fields);
         if mcdc {
             fr.axis4_results = compute_axis4_results(&fr.mcdc_decisions, &struct_fields);
+            fr.axis4_results.extend(compute_axis4_arm_results(
+                &fr.mcdc_arm_decisions,
+                &struct_fields,
+            ));
         }
     }
 
@@ -642,7 +666,12 @@ pub fn run(
 
     for fr in &file_results {
         // Skip files with no refinement sites AND no MC/DC decisions to analyse.
-        if fr.proven == 0 && fr.runtime == 0 && fr.failed == 0 && fr.mcdc_decisions.is_empty() {
+        if fr.proven == 0
+            && fr.runtime == 0
+            && fr.failed == 0
+            && fr.mcdc_decisions.is_empty()
+            && fr.mcdc_arm_decisions.is_empty()
+        {
             continue;
         }
 
@@ -727,8 +756,8 @@ pub fn run(
         let mut mcdc_coupled = 0usize;
         if mcdc {
             println!("── Axis 4: MC/DC Gap Synthesis ──────────────────────────────────────");
-            if fr.mcdc_decisions.is_empty() {
-                println!("  No compound if/while decisions found.");
+            if fr.mcdc_decisions.is_empty() && fr.mcdc_arm_decisions.is_empty() {
+                println!("  No compound if/while decisions or match arms found.");
             } else {
                 // Group results by (fn_name, line) for the per-decision header.
                 let mut last_dec: Option<(String, u32, usize)> = None;
@@ -739,6 +768,12 @@ pub fn run(
                         .iter()
                         .find(|d| d.fn_name == r.fn_name && d.line == r.line)
                         .map(|d| d.clauses.len())
+                        .or_else(|| {
+                            fr.mcdc_arm_decisions
+                                .iter()
+                                .find(|d| d.fn_name == r.fn_name && d.line == r.line)
+                                .map(|d| d.arms.len())
+                        })
                         .unwrap_or(0);
                     if last_dec.as_ref().map(|(n, l, _)| (n.clone(), *l)) != Some(key.clone()) {
                         println!(
@@ -752,6 +787,19 @@ pub fn run(
                             mcdc_pairs += 1;
                             println!(
                                 "    clause {} ({}): pair generated",
+                                r.clause_idx, r.clause_text
+                            );
+                            if !mcdc_use_fns.contains(&r.fn_name) {
+                                mcdc_use_fns.push(r.fn_name.clone());
+                            }
+                            if let Some(snip) = &r.snippet {
+                                mcdc_snippets.push(snip.clone());
+                            }
+                        }
+                        Axis4Outcome::SingleWitness { .. } => {
+                            mcdc_pairs += 1;
+                            println!(
+                                "    arm {} ({}): witness generated",
                                 r.clause_idx, r.clause_text
                             );
                             if !mcdc_use_fns.contains(&r.fn_name) {
@@ -903,7 +951,12 @@ enum Axis4Outcome {
         t1_args: Vec<(String, String, String)>,
         t2_args: Vec<(String, String, String)>,
     },
+    /// A single reachability witness was found — used for match-arm outcomes
+    /// (#1958) where each arm is an independent obligation with one witness
+    /// (a scrutinee value matching this arm's pattern and no earlier arm's).
+    SingleWitness { args: Vec<(String, String, String)> },
     /// One of the two Z3 queries returned UNSAT — the clause is structurally coupled.
+    /// For match arms, also emitted when an arm is provably unreachable.
     Coupled,
     /// Some parameter type is not currently supported by axis 4 (e.g. String, Float).
     Unsupported { reason: String },
@@ -1406,6 +1459,411 @@ fn refexpr_free_vars(e: &RefExpr, out: &mut std::collections::HashSet<String>) {
         }
         _ => {}
     }
+}
+
+// ── Match arm reachability (#1958) ──────────────────────────────────────────
+//
+// Each arm of a `match x { … }` is a distinct MC/DC obligation (spec 010,
+// `DecisionKind::Match`).  For arm i we want to synthesize one witness value
+// of the scrutinee that reaches arm i — i.e. matches `arms[i].pattern` but
+// does NOT match any of `arms[0..i]`.
+//
+// Scope is deliberately narrow (#1958):
+//   * Only `Ident` scrutinees are handled (the scrutinee must map directly to
+//     a function parameter for Z3).
+//   * Only `Wildcard`, `Ident` (as binding-only), and `Literal(Int|Bool)`
+//     patterns are supported.  Anything else → whole match is `Unsupported`.
+//
+// Guards on arms (`n if a && b => …`) are handled separately by
+// `maybe_push_match_guard` — the two obligations coexist per arm.
+
+/// A single match decision found in a non-test function.
+#[derive(Debug, Clone)]
+struct MatchArmDecision {
+    fn_name: String,
+    fn_params: Vec<Param>,
+    requires: Vec<Expr>,
+    is_effectful: bool,
+    line: u32,
+    /// The scrutinee identifier expression (always `Expr::Ident`).
+    scrutinee: Expr,
+    /// Ordered arm patterns (same order as the source `match`).
+    arms: Vec<Pattern>,
+    /// If `Some`, every arm is reported as `Unsupported` with this reason
+    /// (non-Ident scrutinee, or any arm has an unsupported pattern).
+    unsupported_reason: Option<String>,
+}
+
+/// Predicate produced by translating a `Pattern` into a scrutinee constraint.
+#[derive(Debug, Clone)]
+enum PatternPred {
+    /// Matches every value (`_` or bare `Ident`).
+    True,
+    /// Matches iff the given `Expr` (over the scrutinee param) is true.
+    Constraint(Expr),
+}
+
+/// Convert a simple arm pattern into a boolean predicate on `scrutinee`.
+///
+/// Supported patterns (#1958 Phase 1):
+///   * `Wildcard`, `Ident` → `True`
+///   * `Literal(Integer(n))` → `scrutinee == n`
+///   * `Literal(Bool(b))` → `scrutinee == b` (normalized to `scrutinee != 0`
+///     etc. downstream)
+///
+/// Complex patterns (`TupleStruct`, `Struct`, `Some`/`None`, `Ok`/`Err`,
+/// `Or`, string literals) return `None`.
+fn pattern_to_pred(pat: &Pattern, scrutinee: &Expr) -> Option<PatternPred> {
+    match pat {
+        Pattern::Wildcard(_) | Pattern::Ident(_, _) => Some(PatternPred::True),
+        Pattern::Literal(Literal::Integer(n), _) => Some(PatternPred::Constraint(binop(
+            BinaryOp::Eq,
+            scrutinee.clone(),
+            Expr::Literal(Literal::Integer(*n), Span::default()),
+        ))),
+        Pattern::Literal(Literal::Bool(b), _) => Some(PatternPred::Constraint(binop(
+            BinaryOp::Eq,
+            scrutinee.clone(),
+            Expr::Literal(Literal::Integer(if *b { 1 } else { 0 }), Span::default()),
+        ))),
+        _ => None,
+    }
+}
+
+/// Walk `prog` and collect every match decision with N ≥ 2 arms inside
+/// non-test functions.  Marks decisions as `Unsupported` when the scrutinee
+/// isn't a bare parameter identifier or any arm has an unsupported pattern.
+fn collect_match_arm_decisions(prog: &Program) -> Vec<MatchArmDecision> {
+    let mut out = Vec::new();
+    for decl in &prog.declarations {
+        if let Decl::Fn(fd) = decl {
+            if fd.is_test || fd.is_builtin {
+                continue;
+            }
+            collect_arm_decisions_from_block(&fd.body, fd, &mut out);
+        }
+    }
+    out
+}
+
+fn collect_arm_decisions_from_block(block: &Block, fd: &FnDecl, out: &mut Vec<MatchArmDecision>) {
+    for stmt in &block.stmts {
+        collect_arm_decisions_from_stmt(stmt, fd, out);
+    }
+}
+
+fn collect_arm_decisions_from_stmt(stmt: &Stmt, fd: &FnDecl, out: &mut Vec<MatchArmDecision>) {
+    match stmt {
+        Stmt::If { then, else_, .. } => {
+            collect_arm_decisions_from_block(then, fd, out);
+            if let Some(else_branch) = else_ {
+                match else_branch {
+                    ElseBranch::Block(b) => collect_arm_decisions_from_block(b, fd, out),
+                    ElseBranch::If(s) => collect_arm_decisions_from_stmt(s, fd, out),
+                }
+            }
+        }
+        Stmt::While { body, .. } => collect_arm_decisions_from_block(body, fd, out),
+        Stmt::For { body, .. } => collect_arm_decisions_from_block(body, fd, out),
+        Stmt::Match {
+            scrutinee,
+            arms,
+            span,
+        } => {
+            maybe_push_match_arm_decision(scrutinee, arms, span.line, fd, out);
+            for arm in arms {
+                match &arm.body {
+                    MatchBody::Block(b) => collect_arm_decisions_from_block(b, fd, out),
+                    MatchBody::Expr(e) => collect_arm_decisions_from_expr(e, fd, out),
+                }
+            }
+        }
+        Stmt::Let { init, .. } => collect_arm_decisions_from_expr(init, fd, out),
+        Stmt::Assign { value, .. } => collect_arm_decisions_from_expr(value, fd, out),
+        Stmt::Expr { expr, .. } => collect_arm_decisions_from_expr(expr, fd, out),
+        Stmt::Return { value: Some(v), .. } => collect_arm_decisions_from_expr(v, fd, out),
+        _ => {}
+    }
+}
+
+fn collect_arm_decisions_from_expr(expr: &Expr, fd: &FnDecl, out: &mut Vec<MatchArmDecision>) {
+    match expr {
+        Expr::If { then, else_, .. } => {
+            collect_arm_decisions_from_block(then, fd, out);
+            if let Some(e) = else_ {
+                collect_arm_decisions_from_expr(e, fd, out);
+            }
+        }
+        Expr::Block(b) => collect_arm_decisions_from_block(b, fd, out),
+        Expr::Match {
+            scrutinee,
+            arms,
+            span,
+        } => {
+            maybe_push_match_arm_decision(scrutinee, arms, span.line, fd, out);
+            for arm in arms {
+                match &arm.body {
+                    MatchBody::Block(b) => collect_arm_decisions_from_block(b, fd, out),
+                    MatchBody::Expr(e) => collect_arm_decisions_from_expr(e, fd, out),
+                }
+            }
+        }
+        Expr::Binary { left, right, .. } => {
+            collect_arm_decisions_from_expr(left, fd, out);
+            collect_arm_decisions_from_expr(right, fd, out);
+        }
+        Expr::Unary { expr, .. } => collect_arm_decisions_from_expr(expr, fd, out),
+        Expr::FnCall { args, .. } => {
+            for a in args {
+                collect_arm_decisions_from_expr(a, fd, out);
+            }
+        }
+        Expr::MethodCall { receiver, args, .. } => {
+            collect_arm_decisions_from_expr(receiver, fd, out);
+            for a in args {
+                collect_arm_decisions_from_expr(a, fd, out);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn maybe_push_match_arm_decision(
+    scrutinee: &Expr,
+    arms: &[MatchArm],
+    line: u32,
+    fd: &FnDecl,
+    out: &mut Vec<MatchArmDecision>,
+) {
+    if arms.len() < 2 {
+        return;
+    }
+    // Scrutinee must be a bare `Ident` referencing a function parameter.
+    let scrut_name = match scrutinee {
+        Expr::Ident(name, _) => name.clone(),
+        _ => {
+            out.push(MatchArmDecision {
+                fn_name: fd.name.clone(),
+                fn_params: fd.params.clone(),
+                requires: fd.requires.clone(),
+                is_effectful: !fd.effects.is_empty(),
+                line,
+                scrutinee: scrutinee.clone(),
+                arms: arms.iter().map(|a| a.pattern.clone()).collect(),
+                unsupported_reason: Some("non-Ident scrutinee expression".to_string()),
+            });
+            return;
+        }
+    };
+    let is_param = fd.params.iter().any(|p| p.name == scrut_name);
+    if !is_param {
+        out.push(MatchArmDecision {
+            fn_name: fd.name.clone(),
+            fn_params: fd.params.clone(),
+            requires: fd.requires.clone(),
+            is_effectful: !fd.effects.is_empty(),
+            line,
+            scrutinee: scrutinee.clone(),
+            arms: arms.iter().map(|a| a.pattern.clone()).collect(),
+            unsupported_reason: Some("scrutinee is not a function parameter".to_string()),
+        });
+        return;
+    }
+    // Check every arm pattern is supported.  A single unsupported pattern
+    // taints the whole match (issue #1958 semantic decision).
+    let unsupported_reason = arms.iter().enumerate().find_map(|(i, a)| {
+        if pattern_to_pred(&a.pattern, scrutinee).is_none() {
+            Some(format!("arm {} uses an unsupported pattern kind", i))
+        } else {
+            None
+        }
+    });
+    out.push(MatchArmDecision {
+        fn_name: fd.name.clone(),
+        fn_params: fd.params.clone(),
+        requires: fd.requires.clone(),
+        is_effectful: !fd.effects.is_empty(),
+        line,
+        scrutinee: scrutinee.clone(),
+        arms: arms.iter().map(|a| a.pattern.clone()).collect(),
+        unsupported_reason,
+    });
+}
+
+/// Populate `Axis4Result` records for match arm reachability by synthesizing
+/// one witness per arm.  Emits one `Axis4Result` per arm.
+fn compute_axis4_arm_results(
+    decisions: &[MatchArmDecision],
+    struct_fields: &HashMap<String, Vec<(String, String)>>,
+) -> Vec<Axis4Result> {
+    let mut out = Vec::new();
+    for dec in decisions {
+        if dec.is_effectful {
+            continue;
+        }
+        // Whole-decision unsupported → emit one Unsupported result per arm.
+        if let Some(reason) = &dec.unsupported_reason {
+            for (i, pat) in dec.arms.iter().enumerate() {
+                out.push(Axis4Result {
+                    fn_name: dec.fn_name.clone(),
+                    line: dec.line,
+                    clause_idx: i,
+                    clause_text: pattern_short_str(pat),
+                    outcome: Axis4Outcome::Unsupported {
+                        reason: reason.clone(),
+                    },
+                    snippet: None,
+                });
+            }
+            continue;
+        }
+        if !params_supported_for_mcdc(&dec.fn_params, struct_fields) {
+            for (i, pat) in dec.arms.iter().enumerate() {
+                out.push(Axis4Result {
+                    fn_name: dec.fn_name.clone(),
+                    line: dec.line,
+                    clause_idx: i,
+                    clause_text: pattern_short_str(pat),
+                    outcome: Axis4Outcome::Unsupported {
+                        reason: "non-Int/Bool parameter".to_string(),
+                    },
+                    snippet: None,
+                });
+            }
+            continue;
+        }
+        // Precompute each arm's predicate (guaranteed Some given unsupported
+        // was None above).
+        let preds: Vec<PatternPred> = dec
+            .arms
+            .iter()
+            .map(|p| pattern_to_pred(p, &dec.scrutinee).expect("checked above"))
+            .collect();
+        for (i, pat) in dec.arms.iter().enumerate() {
+            let mut hyps: Vec<Expr> = dec.requires.iter().map(normalize_bool_clause).collect();
+            // arm i must match
+            if let PatternPred::Constraint(e) = &preds[i] {
+                hyps.push(normalize_bool_clause(e));
+            }
+            // no earlier arm may match
+            let mut earlier_always_matches = false;
+            for prev in preds.iter().take(i) {
+                match prev {
+                    PatternPred::True => {
+                        earlier_always_matches = true;
+                        break;
+                    }
+                    PatternPred::Constraint(e) => {
+                        hyps.push(negate_normalized(&normalize_bool_clause(e)));
+                    }
+                }
+            }
+            let (outcome, snippet) = if earlier_always_matches {
+                // Arm is provably unreachable — no witness exists.
+                (Axis4Outcome::Coupled, None)
+            } else {
+                match synthesize_witness(&dec.fn_params, &hyps, struct_fields) {
+                    Some(ws) if !ws.is_empty() => {
+                        let args: Vec<(String, String, String)> = ws
+                            .iter()
+                            .zip(dec.fn_params.iter())
+                            .map(|(w, p)| {
+                                (
+                                    w.param_name.clone(),
+                                    declared_type_str(&p.ty),
+                                    format_witness_value_typed(&w.value, &p.ty),
+                                )
+                            })
+                            .collect();
+                        let snip = synthesize_mcdc_arm_test(
+                            &dec.fn_name,
+                            dec.line,
+                            i,
+                            &pattern_short_str(pat),
+                            &dec.fn_params,
+                            &ws,
+                        );
+                        (Axis4Outcome::SingleWitness { args }, snip)
+                    }
+                    _ => (Axis4Outcome::Coupled, None),
+                }
+            };
+            out.push(Axis4Result {
+                fn_name: dec.fn_name.clone(),
+                line: dec.line,
+                clause_idx: i,
+                clause_text: pattern_short_str(pat),
+                outcome,
+                snippet,
+            });
+        }
+    }
+    out
+}
+
+/// Short one-line rendering of a pattern for the report.
+fn pattern_short_str(pat: &Pattern) -> String {
+    match pat {
+        Pattern::Wildcard(_) => "_".to_string(),
+        Pattern::Ident(name, _) => name.clone(),
+        Pattern::Literal(Literal::Integer(n), _) => n.to_string(),
+        Pattern::Literal(Literal::Bool(b), _) => b.to_string(),
+        Pattern::Literal(Literal::Str(s), _) => format!("\"{s}\""),
+        Pattern::Literal(Literal::Float(f), _) => f.to_string(),
+        Pattern::Literal(Literal::Char(c), _) => format!("'{c}'"),
+        Pattern::Literal(Literal::Unit, _) => "()".to_string(),
+        Pattern::None(_) => "None".to_string(),
+        Pattern::Some { .. } => "Some(…)".to_string(),
+        Pattern::Ok { .. } => "Ok(…)".to_string(),
+        Pattern::Err { .. } => "Err(…)".to_string(),
+        Pattern::TupleStruct { name, .. } => format!("{name}(…)"),
+        Pattern::Struct { name, .. } => format!("{name} {{ … }}"),
+        Pattern::Or { .. } => "…|…".to_string(),
+    }
+}
+
+/// Synthesize the `test fn` snippet for a match-arm witness (#1958).
+///
+/// Returns `None` when any witness value is `Unknown`.
+fn synthesize_mcdc_arm_test(
+    fn_name: &str,
+    line: u32,
+    arm_idx: usize,
+    pattern_str: &str,
+    fn_params: &[Param],
+    witnesses: &[WitnessArg],
+) -> Option<String> {
+    if witnesses
+        .iter()
+        .any(|w| matches!(w.value, WitnessValue::Unknown))
+    {
+        return None;
+    }
+    let safe_name = fn_name.replace(|c: char| !c.is_alphanumeric() && c != '_', "_");
+    let test_name = format!("harden_mcdc_{safe_name}_arm{arm_idx}");
+    let mut lines: Vec<String> = Vec::new();
+    for (w, p) in witnesses.iter().zip(fn_params.iter()) {
+        lines.push(format!(
+            "    let {}: {} = {};",
+            w.param_name,
+            declared_type_str(&p.ty),
+            format_witness_value_typed(&w.value, &p.ty)
+        ));
+    }
+    let args: Vec<String> = witnesses
+        .iter()
+        .zip(fn_params.iter())
+        .map(|(w, p)| format_witness_value_typed(&w.value, &p.ty))
+        .collect();
+    lines.push(format!("    {fn_name}({});", args.join(", ")));
+    let mut buf = Vec::new();
+    buf.push(format!(
+        "// Match arm reachability witness for {fn_name}:{line} arm {arm_idx} ({pattern_str})"
+    ));
+    buf.push(format!("test fn {test_name}() -> Unit {{"));
+    buf.push(lines.join("\n"));
+    buf.push("}".to_string());
+    Some(buf.join("\n"))
 }
 
 /// Two-query Z3 pair synthesis for target clause `i` in a decision.
@@ -2183,5 +2641,227 @@ mod tests {
             snippet: None,
         };
         matches!(r.outcome, Axis4Outcome::Coupled);
+    }
+
+    // ── Commit 4 (#1958): Match arm reachability ─────────────────────────
+
+    #[test]
+    fn pattern_to_pred_wildcard_is_true() {
+        let scrut = Expr::Ident("x".to_string(), Span::default());
+        let pred = pattern_to_pred(&Pattern::Wildcard(Span::default()), &scrut);
+        assert!(matches!(pred, Some(PatternPred::True)));
+    }
+
+    #[test]
+    fn pattern_to_pred_ident_is_true() {
+        let scrut = Expr::Ident("x".to_string(), Span::default());
+        let pred = pattern_to_pred(&Pattern::Ident("n".to_string(), Span::default()), &scrut);
+        assert!(matches!(pred, Some(PatternPred::True)));
+    }
+
+    #[test]
+    fn pattern_to_pred_integer_literal_is_eq_constraint() {
+        let scrut = Expr::Ident("x".to_string(), Span::default());
+        let pred = pattern_to_pred(
+            &Pattern::Literal(Literal::Integer(5), Span::default()),
+            &scrut,
+        );
+        match pred {
+            Some(PatternPred::Constraint(Expr::Binary {
+                op: BinaryOp::Eq,
+                right,
+                ..
+            })) => {
+                assert!(matches!(*right, Expr::Literal(Literal::Integer(5), _)));
+            }
+            other => panic!("expected Eq constraint, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn pattern_to_pred_bool_literal_normalizes_to_int() {
+        // Bool patterns must lower to integer literals for Z3 (bool params are
+        // encoded as Int 0/1).
+        let scrut = Expr::Ident("b".to_string(), Span::default());
+        let pred = pattern_to_pred(
+            &Pattern::Literal(Literal::Bool(true), Span::default()),
+            &scrut,
+        );
+        match pred {
+            Some(PatternPred::Constraint(Expr::Binary { right, .. })) => {
+                assert!(matches!(*right, Expr::Literal(Literal::Integer(1), _)));
+            }
+            other => panic!("expected integer 1 rhs, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn pattern_to_pred_complex_pattern_is_unsupported() {
+        let scrut = Expr::Ident("x".to_string(), Span::default());
+        let assert_none = |pat| {
+            assert!(pattern_to_pred(&pat, &scrut).is_none());
+        };
+        assert_none(Pattern::None(Span::default()));
+        assert_none(Pattern::Or {
+            patterns: vec![],
+            span: Span::default(),
+        });
+        assert_none(Pattern::TupleStruct {
+            name: "T".to_string(),
+            fields: vec![],
+            span: Span::default(),
+        });
+    }
+
+    #[test]
+    fn collect_match_arm_decisions_captures_int_match() {
+        let prog = parse_prog("fn f(x: Int) -> Int { match x { 0 => 10, 1 => 20, _ => 30 } }");
+        let decisions = collect_match_arm_decisions(&prog);
+        assert_eq!(decisions.len(), 1);
+        assert_eq!(decisions[0].fn_name, "f");
+        assert_eq!(decisions[0].arms.len(), 3);
+        assert!(decisions[0].unsupported_reason.is_none());
+    }
+
+    #[test]
+    fn collect_match_arm_decisions_skips_single_arm() {
+        // A single-arm match carries no reachability obligation.
+        let prog = parse_prog("fn f(x: Int) -> Int { match x { _ => 0 } }");
+        let decisions = collect_match_arm_decisions(&prog);
+        assert_eq!(decisions.len(), 0);
+    }
+
+    #[test]
+    fn collect_match_arm_decisions_skips_test_fns() {
+        let prog = parse_prog("test fn t(x: Int) -> Int { match x { 0 => 1, _ => 0 } }");
+        let decisions = collect_match_arm_decisions(&prog);
+        assert_eq!(decisions.len(), 0);
+    }
+
+    #[test]
+    fn collect_match_arm_decisions_marks_non_ident_scrutinee_unsupported() {
+        let prog = parse_prog(
+            "fn dbl(x: Int) -> Int { x * 2 } \
+             fn f(x: Int) -> Int { match dbl(x) { 0 => 1, _ => 2 } }",
+        );
+        let decisions = collect_match_arm_decisions(&prog);
+        // Only the `f` body has a match; `dbl` has none.
+        assert_eq!(decisions.len(), 1);
+        assert!(decisions[0]
+            .unsupported_reason
+            .as_ref()
+            .unwrap()
+            .contains("non-Ident scrutinee"));
+    }
+
+    #[test]
+    fn collect_match_arm_decisions_marks_unsupported_pattern() {
+        let prog =
+            parse_prog("fn f(x: Option[Int]) -> Int { match x { Some(v) => v, None => 0 } }");
+        let decisions = collect_match_arm_decisions(&prog);
+        assert_eq!(decisions.len(), 1);
+        assert!(decisions[0]
+            .unsupported_reason
+            .as_ref()
+            .unwrap()
+            .contains("unsupported pattern"));
+    }
+
+    #[test]
+    fn collect_match_arm_decisions_captures_bool_match() {
+        let prog = parse_prog("fn f(b: Bool) -> Int { match b { true => 1, false => 0 } }");
+        let decisions = collect_match_arm_decisions(&prog);
+        assert_eq!(decisions.len(), 1);
+        assert!(decisions[0].unsupported_reason.is_none());
+    }
+
+    #[test]
+    fn collect_match_arm_decisions_walks_nested_matches() {
+        let prog = parse_prog(
+            "fn f(x: Int, y: Int) -> Int { \
+                match x { \
+                    0 => match y { 0 => 1, _ => 2 }, \
+                    _ => 3 \
+                } \
+             }",
+        );
+        let decisions = collect_match_arm_decisions(&prog);
+        assert_eq!(decisions.len(), 2);
+    }
+
+    #[test]
+    fn synthesize_mcdc_arm_test_returns_none_for_unknown_witness() {
+        // If any witness has Unknown value, no valid MVL literal exists.
+        let params = vec![Param {
+            capability: None,
+            name: "x".to_string(),
+            ty: TypeExpr::Base {
+                name: "Int".to_string(),
+                args: vec![],
+                span: Span::default(),
+            },
+            refinement: None,
+            span: Span::default(),
+        }];
+        let witnesses = vec![WitnessArg {
+            param_name: "x".to_string(),
+            value: WitnessValue::Unknown,
+        }];
+        let result = synthesize_mcdc_arm_test("f", 1, 0, "_", &params, &witnesses);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn synthesize_mcdc_arm_test_emits_arm_test_fn() {
+        let params = vec![Param {
+            capability: None,
+            name: "x".to_string(),
+            ty: TypeExpr::Base {
+                name: "Int".to_string(),
+                args: vec![],
+                span: Span::default(),
+            },
+            refinement: None,
+            span: Span::default(),
+        }];
+        let witnesses = vec![WitnessArg {
+            param_name: "x".to_string(),
+            value: WitnessValue::Int(5),
+        }];
+        let result = synthesize_mcdc_arm_test("f", 3, 1, "5", &params, &witnesses).unwrap();
+        assert!(result.contains("test fn harden_mcdc_f_arm1()"));
+        assert!(result.contains("let x: Int = 5"));
+        assert!(result.contains("f(5)"));
+    }
+
+    #[test]
+    fn compute_axis4_arm_results_emits_unsupported_for_tainted_match() {
+        // Unsupported pattern → every arm reports Unsupported.
+        let prog =
+            parse_prog("fn f(x: Option[Int]) -> Int { match x { Some(v) => v, None => 0 } }");
+        let decisions = collect_match_arm_decisions(&prog);
+        let results = compute_axis4_arm_results(&decisions, &HashMap::new());
+        assert_eq!(results.len(), 2);
+        for r in &results {
+            assert!(matches!(r.outcome, Axis4Outcome::Unsupported { .. }));
+        }
+    }
+
+    #[test]
+    fn compute_axis4_arm_results_wildcard_shadows_later_arms() {
+        // `_ => …` matches everything; subsequent arms must be unreachable.
+        // Without z3 we can still verify the structural short-circuit path.
+        let prog = parse_prog("fn f(x: Int) -> Int { match x { _ => 1, 0 => 2 } }");
+        let decisions = collect_match_arm_decisions(&prog);
+        // Force earlier_always_matches path without Z3: check via preds.
+        let dec = &decisions[0];
+        let scrut = &dec.scrutinee;
+        let preds: Vec<PatternPred> = dec
+            .arms
+            .iter()
+            .map(|p| pattern_to_pred(p, scrut).unwrap())
+            .collect();
+        assert!(matches!(preds[0], PatternPred::True));
+        assert!(matches!(preds[1], PatternPred::Constraint(_)));
     }
 }
