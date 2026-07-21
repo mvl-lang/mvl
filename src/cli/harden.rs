@@ -610,8 +610,10 @@ pub fn run(
         fr.axis3_witnesses = compute_axis3_witnesses(&deduped, &struct_fields);
         if mcdc {
             fr.axis4_results = compute_axis4_results(&fr.mcdc_decisions, &struct_fields);
-            fr.axis4_results
-                .extend(compute_axis4_arm_results(&fr.mcdc_arm_decisions, &struct_fields));
+            fr.axis4_results.extend(compute_axis4_arm_results(
+                &fr.mcdc_arm_decisions,
+                &struct_fields,
+            ));
         }
     }
 
@@ -952,9 +954,7 @@ enum Axis4Outcome {
     /// A single reachability witness was found — used for match-arm outcomes
     /// (#1958) where each arm is an independent obligation with one witness
     /// (a scrutinee value matching this arm's pattern and no earlier arm's).
-    SingleWitness {
-        args: Vec<(String, String, String)>,
-    },
+    SingleWitness { args: Vec<(String, String, String)> },
     /// One of the two Z3 queries returned UNSAT — the clause is structurally coupled.
     /// For match arms, also emitted when an arm is provably unreachable.
     Coupled,
@@ -1546,21 +1546,13 @@ fn collect_match_arm_decisions(prog: &Program) -> Vec<MatchArmDecision> {
     out
 }
 
-fn collect_arm_decisions_from_block(
-    block: &Block,
-    fd: &FnDecl,
-    out: &mut Vec<MatchArmDecision>,
-) {
+fn collect_arm_decisions_from_block(block: &Block, fd: &FnDecl, out: &mut Vec<MatchArmDecision>) {
     for stmt in &block.stmts {
         collect_arm_decisions_from_stmt(stmt, fd, out);
     }
 }
 
-fn collect_arm_decisions_from_stmt(
-    stmt: &Stmt,
-    fd: &FnDecl,
-    out: &mut Vec<MatchArmDecision>,
-) {
+fn collect_arm_decisions_from_stmt(stmt: &Stmt, fd: &FnDecl, out: &mut Vec<MatchArmDecision>) {
     match stmt {
         Stmt::If { then, else_, .. } => {
             collect_arm_decisions_from_block(then, fd, out);
@@ -1594,11 +1586,7 @@ fn collect_arm_decisions_from_stmt(
     }
 }
 
-fn collect_arm_decisions_from_expr(
-    expr: &Expr,
-    fd: &FnDecl,
-    out: &mut Vec<MatchArmDecision>,
-) {
+fn collect_arm_decisions_from_expr(expr: &Expr, fd: &FnDecl, out: &mut Vec<MatchArmDecision>) {
     match expr {
         Expr::If { then, else_, .. } => {
             collect_arm_decisions_from_block(then, fd, out);
@@ -2674,8 +2662,10 @@ mod tests {
     #[test]
     fn pattern_to_pred_integer_literal_is_eq_constraint() {
         let scrut = Expr::Ident("x".to_string(), Span::default());
-        let pred =
-            pattern_to_pred(&Pattern::Literal(Literal::Integer(5), Span::default()), &scrut);
+        let pred = pattern_to_pred(
+            &Pattern::Literal(Literal::Integer(5), Span::default()),
+            &scrut,
+        );
         match pred {
             Some(PatternPred::Constraint(Expr::Binary {
                 op: BinaryOp::Eq,
@@ -2693,8 +2683,10 @@ mod tests {
         // Bool patterns must lower to integer literals for Z3 (bool params are
         // encoded as Int 0/1).
         let scrut = Expr::Ident("b".to_string(), Span::default());
-        let pred =
-            pattern_to_pred(&Pattern::Literal(Literal::Bool(true), Span::default()), &scrut);
+        let pred = pattern_to_pred(
+            &Pattern::Literal(Literal::Bool(true), Span::default()),
+            &scrut,
+        );
         match pred {
             Some(PatternPred::Constraint(Expr::Binary { right, .. })) => {
                 assert!(matches!(*right, Expr::Literal(Literal::Integer(1), _)));
@@ -2723,9 +2715,7 @@ mod tests {
 
     #[test]
     fn collect_match_arm_decisions_captures_int_match() {
-        let prog = parse_prog(
-            "fn f(x: Int) -> Int { match x { 0 => 10, 1 => 20, _ => 30 } }",
-        );
+        let prog = parse_prog("fn f(x: Int) -> Int { match x { 0 => 10, 1 => 20, _ => 30 } }");
         let decisions = collect_match_arm_decisions(&prog);
         assert_eq!(decisions.len(), 1);
         assert_eq!(decisions[0].fn_name, "f");
@@ -2743,8 +2733,7 @@ mod tests {
 
     #[test]
     fn collect_match_arm_decisions_skips_test_fns() {
-        let prog =
-            parse_prog("test fn t(x: Int) -> Int { match x { 0 => 1, _ => 0 } }");
+        let prog = parse_prog("test fn t(x: Int) -> Int { match x { 0 => 1, _ => 0 } }");
         let decisions = collect_match_arm_decisions(&prog);
         assert_eq!(decisions.len(), 0);
     }
@@ -2767,9 +2756,8 @@ mod tests {
 
     #[test]
     fn collect_match_arm_decisions_marks_unsupported_pattern() {
-        let prog = parse_prog(
-            "fn f(x: Option[Int]) -> Int { match x { Some(v) => v, None => 0 } }",
-        );
+        let prog =
+            parse_prog("fn f(x: Option[Int]) -> Int { match x { Some(v) => v, None => 0 } }");
         let decisions = collect_match_arm_decisions(&prog);
         assert_eq!(decisions.len(), 1);
         assert!(decisions[0]
@@ -2781,8 +2769,7 @@ mod tests {
 
     #[test]
     fn collect_match_arm_decisions_captures_bool_match() {
-        let prog =
-            parse_prog("fn f(b: Bool) -> Int { match b { true => 1, false => 0 } }");
+        let prog = parse_prog("fn f(b: Bool) -> Int { match b { true => 1, false => 0 } }");
         let decisions = collect_match_arm_decisions(&prog);
         assert_eq!(decisions.len(), 1);
         assert!(decisions[0].unsupported_reason.is_none());
@@ -2850,9 +2837,8 @@ mod tests {
     #[test]
     fn compute_axis4_arm_results_emits_unsupported_for_tainted_match() {
         // Unsupported pattern → every arm reports Unsupported.
-        let prog = parse_prog(
-            "fn f(x: Option[Int]) -> Int { match x { Some(v) => v, None => 0 } }",
-        );
+        let prog =
+            parse_prog("fn f(x: Option[Int]) -> Int { match x { Some(v) => v, None => 0 } }");
         let decisions = collect_match_arm_decisions(&prog);
         let results = compute_axis4_arm_results(&decisions, &HashMap::new());
         assert_eq!(results.len(), 2);
@@ -2865,9 +2851,7 @@ mod tests {
     fn compute_axis4_arm_results_wildcard_shadows_later_arms() {
         // `_ => …` matches everything; subsequent arms must be unreachable.
         // Without z3 we can still verify the structural short-circuit path.
-        let prog = parse_prog(
-            "fn f(x: Int) -> Int { match x { _ => 1, 0 => 2 } }",
-        );
+        let prog = parse_prog("fn f(x: Int) -> Int { match x { _ => 1, 0 => 2 } }");
         let decisions = collect_match_arm_decisions(&prog);
         // Force earlier_always_matches path without Z3: check via preds.
         let dec = &decisions[0];
