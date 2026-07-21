@@ -600,20 +600,6 @@ pub enum RefExpr {
         inner: Box<RefExpr>,
         span: Span,
     },
-    /// `forall x: T, pred` — universal quantifier; ghost/contract context only (Phase 5, #628).
-    Forall {
-        var: String,
-        ty: Box<TypeExpr>,
-        body: Box<RefExpr>,
-        span: Span,
-    },
-    /// `exists x: T, pred` — existential quantifier; ghost/contract context only (Phase 5, #628).
-    Exists {
-        var: String,
-        ty: Box<TypeExpr>,
-        body: Box<RefExpr>,
-        span: Span,
-    },
     /// Bitwise binary operation in a predicate (#1928): `self.bit_and(15) == self` etc.
     /// Emitted to Z3 via QF-BV when any bitwise op appears in the predicate.
     BitwiseOp {

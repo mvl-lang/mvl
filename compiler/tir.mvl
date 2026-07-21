@@ -697,10 +697,10 @@ pub type RefExpr = enum {
     Grouped { inner: Box[RefExpr], span: SourceLoc },
     /// `old(expr)` — entry-time value in `ensures` postconditions.
     Old { inner: Box[RefExpr], span: SourceLoc },
-    /// `forall x: T, pred` — universal quantifier.
-    Forall { var: String, ty: Box[TypeExpr], body: Box[RefExpr], span: SourceLoc },
-    /// `exists x: T, pred` — existential quantifier.
-    Exists { var: String, ty: Box[TypeExpr], body: Box[RefExpr], span: SourceLoc },
+    /// `forall x in [lo..hi]. pred` — bounded universal quantifier (#1915).
+    BoundedForall { var: String, lo: Int, hi: Int, body: Box[RefExpr], span: SourceLoc },
+    /// `exists x in [lo..hi]. pred` — bounded existential quantifier (#1915).
+    BoundedExists { var: String, lo: Int, hi: Int, body: Box[RefExpr], span: SourceLoc },
 }
 
 // ── Session protocol (parser-stage) ──────────────────────────────────────────

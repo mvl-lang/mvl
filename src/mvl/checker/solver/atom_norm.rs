@@ -293,12 +293,6 @@ fn canon_refexpr(r: &RefExpr) -> String {
         RefExpr::Not { inner, .. } => format!("(! {})", canon_refexpr(inner)),
         RefExpr::Grouped { inner, .. } => canon_refexpr(inner),
         RefExpr::Old { inner, .. } => format!("old({})", canon_refexpr(inner)),
-        RefExpr::Forall { var, body, .. } => {
-            format!("∀{var}. {}", canon_refexpr(body))
-        }
-        RefExpr::Exists { var, body, .. } => {
-            format!("∃{var}. {}", canon_refexpr(body))
-        }
         RefExpr::BitwiseOp {
             op, left, right, ..
         } => format!("({} {op:?} {})", canon_refexpr(left), canon_refexpr(right)),

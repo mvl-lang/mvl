@@ -1152,39 +1152,6 @@ pub(super) fn normalize_pred(pred: &RefExpr, old_name: &str) -> RefExpr {
             inner: Box::new(normalize_pred(inner, old_name)),
             span: *span,
         },
-        // Quantifiers: recurse into body; the bound variable shadows the outer scope, so
-        // only normalize free occurrences in the body that differ from the bound var.
-        RefExpr::Forall {
-            var,
-            ty,
-            body,
-            span,
-        } => RefExpr::Forall {
-            var: var.clone(),
-            ty: ty.clone(),
-            body: Box::new(if var == old_name {
-                // old_name is bound here — do not rename inside this scope.
-                *body.clone()
-            } else {
-                normalize_pred(body, old_name)
-            }),
-            span: *span,
-        },
-        RefExpr::Exists {
-            var,
-            ty,
-            body,
-            span,
-        } => RefExpr::Exists {
-            var: var.clone(),
-            ty: ty.clone(),
-            body: Box::new(if var == old_name {
-                *body.clone()
-            } else {
-                normalize_pred(body, old_name)
-            }),
-            span: *span,
-        },
         RefExpr::BoundedForall {
             var,
             lo,
@@ -1380,37 +1347,6 @@ pub(super) fn subst_pred_ident(pred: &RefExpr, old_name: &str, new_val: &RefExpr
         // re-evaluate whether substituting inside Old remains sound.
         RefExpr::Old { inner, span } => RefExpr::Old {
             inner: Box::new(subst_pred_ident(inner, old_name, new_val)),
-            span: *span,
-        },
-        // Quantifiers: substitute in the body unless old_name is the bound variable.
-        RefExpr::Forall {
-            var,
-            ty,
-            body,
-            span,
-        } => RefExpr::Forall {
-            var: var.clone(),
-            ty: ty.clone(),
-            body: Box::new(if var == old_name {
-                *body.clone()
-            } else {
-                subst_pred_ident(body, old_name, new_val)
-            }),
-            span: *span,
-        },
-        RefExpr::Exists {
-            var,
-            ty,
-            body,
-            span,
-        } => RefExpr::Exists {
-            var: var.clone(),
-            ty: ty.clone(),
-            body: Box::new(if var == old_name {
-                *body.clone()
-            } else {
-                subst_pred_ident(body, old_name, new_val)
-            }),
             span: *span,
         },
         RefExpr::BoundedForall {
@@ -1672,12 +1608,7 @@ pub(super) fn collect_idents_inner(pred: &RefExpr, names: &mut Vec<String>) {
         | RefExpr::Old { inner, .. } => {
             collect_idents_inner(inner, names);
         }
-        // Quantifiers: collect free identifiers from the body (bound var is treated as free
-        // here since the caller uses this to count variables, and the bound var is in scope).
-        RefExpr::Forall { body, .. }
-        | RefExpr::Exists { body, .. }
-        | RefExpr::BoundedForall { body, .. }
-        | RefExpr::BoundedExists { body, .. } => {
+        RefExpr::BoundedForall { body, .. } | RefExpr::BoundedExists { body, .. } => {
             collect_idents_inner(body, names);
         }
         RefExpr::Len { ident, .. } => names.push(ident.clone()),
@@ -1748,8 +1679,6 @@ pub(super) fn display_pred(pred: &RefExpr) -> String {
         RefExpr::Grouped { inner, .. } => format!("({})", display_pred(inner)),
         RefExpr::Old { inner, .. } => format!("old({})", display_pred(inner)),
         RefExpr::Len { ident, .. } => format!("len({ident})"),
-        RefExpr::Forall { var, body, .. } => format!("forall {var}, {}", display_pred(body)),
-        RefExpr::Exists { var, body, .. } => format!("exists {var}, {}", display_pred(body)),
         RefExpr::BoundedForall {
             var, lo, hi, body, ..
         } => format!("forall {var} in [{lo}..{hi}]. {}", display_pred(body)),

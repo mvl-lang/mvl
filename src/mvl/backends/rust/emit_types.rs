@@ -626,10 +626,7 @@ impl RustEmitter {
 /// call to `emit_ref_expr_for_assert`.
 pub fn is_runtime_checkable(pred: &RefExpr) -> bool {
     match pred {
-        RefExpr::Forall { .. }
-        | RefExpr::Exists { .. }
-        | RefExpr::BoundedForall { .. }
-        | RefExpr::BoundedExists { .. } => false,
+        RefExpr::BoundedForall { .. } | RefExpr::BoundedExists { .. } => false,
         RefExpr::LogicOp { left, right, .. }
         | RefExpr::Compare { left, right, .. }
         | RefExpr::ArithOp { left, right, .. } => {
@@ -781,10 +778,7 @@ fn emit_ref_expr(pred: &RefExpr, binding: &str) -> String {
         // Full entry-time capture is a future enhancement.
         RefExpr::Old { inner, .. } => emit_ref_expr(inner, binding),
         // Quantifiers are ghost-only and erased before codegen; unreachable here.
-        RefExpr::Forall { .. }
-        | RefExpr::Exists { .. }
-        | RefExpr::BoundedForall { .. }
-        | RefExpr::BoundedExists { .. } => {
+        RefExpr::BoundedForall { .. } | RefExpr::BoundedExists { .. } => {
             unreachable!("quantifiers are ghost-only and must not appear in codegen")
         }
         RefExpr::BitwiseOp {

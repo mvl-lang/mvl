@@ -107,7 +107,6 @@ fn has_string_ops(pred: &RefExpr) -> bool {
         RefExpr::Not { inner, .. }
         | RefExpr::Grouped { inner, .. }
         | RefExpr::Old { inner, .. } => has_string_ops(inner),
-        RefExpr::Forall { body, .. } | RefExpr::Exists { body, .. } => has_string_ops(body),
         RefExpr::FieldAccess { object, .. } => has_string_ops(object),
         _ => false,
     }
@@ -125,7 +124,6 @@ fn has_bitwise_ops(pred: &RefExpr) -> bool {
         RefExpr::Not { inner, .. }
         | RefExpr::Grouped { inner, .. }
         | RefExpr::Old { inner, .. } => has_bitwise_ops(inner),
-        RefExpr::Forall { body, .. } | RefExpr::Exists { body, .. } => has_bitwise_ops(body),
         RefExpr::FieldAccess { object, .. } => has_bitwise_ops(object),
         _ => false,
     }
@@ -669,9 +667,6 @@ fn collect_len_idents(expr: &RefExpr, out: &mut Vec<String>) {
         | RefExpr::Grouped { inner, .. }
         | RefExpr::Old { inner, .. }
         | RefExpr::BitwiseNot { inner, .. } => collect_len_idents(inner, out),
-        RefExpr::Forall { body, .. } | RefExpr::Exists { body, .. } => {
-            collect_len_idents(body, out);
-        }
         RefExpr::FieldAccess { object, .. } => collect_len_idents(object, out),
         RefExpr::ArrayGet { list, index, .. } => {
             collect_len_idents(list, out);
@@ -880,27 +875,6 @@ fn ref_to_bool<'ctx>(
             Some(ref_to_bool(ctx, inner, self_term, vars, len_vars)?.not())
         }
         RefExpr::Grouped { inner, .. } => ref_to_bool(ctx, inner, self_term, vars, len_vars),
-        // Quantifiers (Phase 5, #628): translate to Z3 first-order quantifiers.
-        // The bound variable is introduced as a fresh Z3 integer constant and
-        // added to a local `vars` copy for the duration of the body translation.
-        RefExpr::Forall { var, body, .. } => {
-            let bound = z3::ast::Int::new_const(ctx, var.as_str());
-            let mut inner_vars = vars.clone();
-            inner_vars.insert(var.clone(), bound.clone());
-            let body_bool = ref_to_bool(ctx, body, self_term, &inner_vars, len_vars)?;
-            // forall x: Int, P(x)  ↔  ¬(∃ x: Int, ¬P(x))
-            // Z3 universal quantifier via the `forall` builder.
-            let bound_ast: &dyn z3::ast::Ast = &bound;
-            Some(z3::ast::forall_const(ctx, &[bound_ast], &[], &body_bool))
-        }
-        RefExpr::Exists { var, body, .. } => {
-            let bound = z3::ast::Int::new_const(ctx, var.as_str());
-            let mut inner_vars = vars.clone();
-            inner_vars.insert(var.clone(), bound.clone());
-            let body_bool = ref_to_bool(ctx, body, self_term, &inner_vars, len_vars)?;
-            let bound_ast: &dyn z3::ast::Ast = &bound;
-            Some(z3::ast::exists_const(ctx, &[bound_ast], &[], &body_bool))
-        }
         // Float, Len, and bare Ident/Integer as booleans are not supported.
         _ => None,
     }
@@ -1513,7 +1487,6 @@ fn has_float_ops(pred: &RefExpr) -> bool {
         RefExpr::Not { inner, .. }
         | RefExpr::Grouped { inner, .. }
         | RefExpr::Old { inner, .. } => has_float_ops(inner),
-        RefExpr::Forall { body, .. } | RefExpr::Exists { body, .. } => has_float_ops(body),
         RefExpr::FieldAccess { object, .. } => has_float_ops(object),
         _ => false,
     }

@@ -1233,22 +1233,6 @@ impl<'src> Printer<'src> {
             RefExpr::Len { ident, .. } => format!("len({})", ident),
             RefExpr::Grouped { inner, .. } => format!("({})", self.fmt_ref_expr(inner)),
             RefExpr::Old { inner, .. } => format!("old({})", self.fmt_ref_expr(inner)),
-            RefExpr::Forall { var, ty, body, .. } => {
-                format!(
-                    "forall {}: {}, {}",
-                    var,
-                    self.fmt_type_expr(ty),
-                    self.fmt_ref_expr(body)
-                )
-            }
-            RefExpr::Exists { var, ty, body, .. } => {
-                format!(
-                    "exists {}: {}, {}",
-                    var,
-                    self.fmt_type_expr(ty),
-                    self.fmt_ref_expr(body)
-                )
-            }
             RefExpr::BitwiseOp {
                 op, left, right, ..
             } => {

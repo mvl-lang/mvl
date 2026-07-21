@@ -1,0 +1,8 @@
+// quantifier_in_guard.mvl — forall/exists are ghost-only; rejected in match guards (#1975).
+
+fn check(xs: List[Int], x: Int) -> Bool {
+    match x {
+        v if forall i in [0..5]. v > i => true,
+        _ => false,
+    }
+}

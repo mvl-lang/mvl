@@ -317,11 +317,8 @@ impl TypeChecker {
                 }
             }
             RefExpr::Integer { .. } | RefExpr::Float { .. } | RefExpr::Bool { .. } => {}
-            RefExpr::Forall { body, .. }
-            | RefExpr::Exists { body, .. }
-            | RefExpr::BoundedForall { body, .. }
-            | RefExpr::BoundedExists { body, .. } => {
-                self.check_guard_ref_expr(body);
+            RefExpr::BoundedForall { span, .. } | RefExpr::BoundedExists { span, .. } => {
+                self.emit(CheckError::QuantifierOutsideGhost { span: *span });
             }
             RefExpr::BitwiseOp { left, right, .. } => {
                 self.check_guard_ref_expr(left);

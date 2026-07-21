@@ -1267,7 +1267,7 @@ fn maybe_push_decision(cond: &Expr, line: u32, fd: &FnDecl, out: &mut Vec<McdcDe
 /// function parameters (#1955).
 ///
 /// Guards that reference pattern-bound identifiers or use unsupported
-/// `RefExpr` forms (Old, Forall, StringOp, ArrayGet, RegexMatch, quantifiers)
+/// `RefExpr` forms (Old, BoundedForall, BoundedExists, StringOp, ArrayGet, RegexMatch)
 /// are silently skipped — the `mvl mcdc` command still tracks them as
 /// obligations, but harden can't synthesize an independence pair here.
 fn maybe_push_match_guard(arm: &MatchArm, fd: &FnDecl, out: &mut Vec<McdcDecision>) {
@@ -1341,8 +1341,8 @@ fn collect_clauses_ref(guard: &RefExpr) -> Vec<&RefExpr> {
 /// covering the subset used in match guards.
 ///
 /// Returns `None` when the `RefExpr` uses forms that don't fit into `Expr`
-/// (`Old`, `Forall`, `Exists`, `Len`, `StringOp`, `ArrayGet`, `RegexMatch`,
-/// `Float`, bounded quantifiers, bitwise ops).  Those cause the guard to be
+/// (`Old`, `BoundedForall`, `BoundedExists`, `Len`, `StringOp`, `ArrayGet`, `RegexMatch`,
+/// `Float`, bitwise ops).  Those cause the guard to be
 /// skipped, which is the correct conservative behavior.
 fn refexpr_to_expr(e: &RefExpr) -> Option<Expr> {
     let s = refexpr_span(e);
@@ -1401,9 +1401,8 @@ fn refexpr_to_expr(e: &RefExpr) -> Option<Expr> {
             Some(binop(bop, l, r))
         }
         RefExpr::Grouped { inner, .. } => refexpr_to_expr(inner),
-        // Unsupported in guards for axis 4: Old, Forall, Exists, Len,
-        // StringOp, ArrayGet, RegexMatch, Float, bounded quantifiers,
-        // bitwise ops. Skip the whole guard.
+        // Unsupported in guards for axis 4: Old, BoundedForall, BoundedExists,
+        // Len, StringOp, ArrayGet, RegexMatch, Float, bitwise ops. Skip the whole guard.
         _ => None,
     }
 }
@@ -1426,8 +1425,6 @@ fn refexpr_span(e: &RefExpr) -> Span {
         | RefExpr::Grouped { span, .. }
         | RefExpr::Len { span, .. }
         | RefExpr::Old { span, .. }
-        | RefExpr::Forall { span, .. }
-        | RefExpr::Exists { span, .. }
         | RefExpr::BitwiseOp { span, .. }
         | RefExpr::BitwiseNot { span, .. }
         | RefExpr::BoundedForall { span, .. }

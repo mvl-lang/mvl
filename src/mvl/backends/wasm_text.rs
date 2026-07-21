@@ -433,9 +433,7 @@ fn effective_name(f: &TirFn, needs_wasi: bool) -> (&str, &str) {
 /// ArrayGet are static-only; everything else emits.
 fn is_runtime_checkable(pred: &RefExpr) -> bool {
     match pred {
-        RefExpr::Forall { .. }
-        | RefExpr::Exists { .. }
-        | RefExpr::BoundedForall { .. }
+        RefExpr::BoundedForall { .. }
         | RefExpr::BoundedExists { .. }
         | RefExpr::ArrayGet { .. } => false,
         RefExpr::LogicOp { left, right, .. }

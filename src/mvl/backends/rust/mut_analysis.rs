@@ -447,10 +447,7 @@ impl MutTracker {
             | RefExpr::Grouped { inner, .. }
             | RefExpr::Old { inner, .. } => self.visit_refexpr(inner),
             RefExpr::FieldAccess { object, .. } => self.visit_refexpr(object),
-            RefExpr::Forall { body, .. }
-            | RefExpr::Exists { body, .. }
-            | RefExpr::BoundedForall { body, .. }
-            | RefExpr::BoundedExists { body, .. } => {
+            RefExpr::BoundedForall { body, .. } | RefExpr::BoundedExists { body, .. } => {
                 // Quantifier body may reference outer names (the quantified
                 // variable itself is out of the tracker's scope, so
                 // `resolve` will simply miss it — no false positive).

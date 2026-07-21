@@ -314,6 +314,16 @@ fn req10_refinement_violated_states_the_predicate() {
     );
 }
 
+#[test]
+fn req10_quantifier_in_match_guard_reports_ghost_context_error() {
+    let stderr = check_fails("quantifier_in_guard.mvl");
+    assert_contains(
+        &stderr,
+        "quantifier_in_guard.mvl",
+        &["error[REQ10]", "ghost"],
+    );
+}
+
 // ── Req 11: Information Flow Control ─────────────────────────────────────────
 
 #[test]
