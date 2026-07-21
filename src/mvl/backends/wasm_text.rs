@@ -1019,7 +1019,7 @@ fn emit_stmt(out: &mut String, stmt: &TirStmt, ctx: &Ctx) {
         } => {
             emit_expr(out, cond, ctx);
             match if_stmt_result_ty(then, else_, ctx) {
-                Some(ty) if matches!(ty, Ty::String) => {
+                Some(Ty::String) => {
                     out.push_str("    if (result i32 i32)\n");
                 }
                 Some(ty) => {
