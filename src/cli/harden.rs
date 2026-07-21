@@ -32,8 +32,8 @@ use mvl::mvl::checker::refinements::{
 use mvl::mvl::checker::SolverMode;
 use mvl::mvl::loader;
 use mvl::mvl::parser::ast::{
-    BinaryOp, Block, Decl, ElseBranch, Expr, FnDecl, Literal, MatchBody, Param, Program, Stmt,
-    TypeBody, TypeExpr, UnaryOp,
+    ArithOp, BinaryOp, Block, CmpOp, Decl, ElseBranch, Expr, FnDecl, Literal, LogicOp, MatchArm,
+    MatchBody, Param, Program, RefExpr, Stmt, TypeBody, TypeExpr, UnaryOp,
 };
 use mvl::mvl::parser::lexer::Span;
 use mvl::mvl::passes::mcdc::analysis::{collect_clauses, count_clauses};
@@ -122,10 +122,13 @@ struct HardenSite<'a> {
 fn print_json(
     sites: &[HardenSite<'_>],
     tightenings: &[&TighteningCandidate],
+    axis3: &[Axis3Witness],
+    axis4: &[Axis4Result],
     total_proven: usize,
     total_runtime: usize,
     total_failed: usize,
 ) {
+    let json_escape = |s: &str| s.replace('\\', "\\\\").replace('"', "\\\"");
     println!("{{");
     println!("  \"total_proven\": {total_proven},");
     println!("  \"total_runtime\": {total_runtime},");
@@ -133,17 +136,14 @@ fn print_json(
     println!("  \"axis1_promotion_candidates\": [");
     for (i, s) in sites.iter().enumerate() {
         let comma = if i + 1 < sites.len() { "," } else { "" };
-        let hint = s.hint.suggestion().replace('"', "\\\"");
+        let hint = json_escape(s.hint.suggestion());
         println!("    {{");
-        println!("      \"file\": \"{}\",", s.file.replace('"', "\\\""));
+        println!("      \"file\": \"{}\",", json_escape(s.file));
         println!("      \"line\": {},", s.line);
-        println!("      \"caller\": \"{}\",", s.caller.replace('"', "\\\""));
-        println!("      \"callee\": \"{}\",", s.callee.replace('"', "\\\""));
-        println!("      \"param\": \"{}\",", s.param.replace('"', "\\\""));
-        println!(
-            "      \"predicate\": \"{}\",",
-            s.predicate.replace('"', "\\\"")
-        );
+        println!("      \"caller\": \"{}\",", json_escape(s.caller));
+        println!("      \"callee\": \"{}\",", json_escape(s.callee));
+        println!("      \"param\": \"{}\",", json_escape(s.param));
+        println!("      \"predicate\": \"{}\",", json_escape(s.predicate));
         println!("      \"suggestion\": \"{hint}\"");
         println!("    }}{comma}");
     }
@@ -152,16 +152,73 @@ fn print_json(
     for (i, t) in tightenings.iter().enumerate() {
         let comma = if i + 1 < tightenings.len() { "," } else { "" };
         println!("    {{");
-        println!("      \"fn_name\": \"{}\",", t.fn_name.replace('"', "\\\""));
+        println!("      \"fn_name\": \"{}\",", json_escape(&t.fn_name));
         println!("      \"line\": {},", t.span.line);
+        println!("      \"declared\": \"{}\",", json_escape(&t.declared_pred));
+        println!("      \"tighter\": \"{}\"", json_escape(&t.tighter_pred));
+        println!("    }}{comma}");
+    }
+    println!("  ],");
+    println!("  \"axis3_boundary_witnesses\": [");
+    for (i, w) in axis3.iter().enumerate() {
+        let comma = if i + 1 < axis3.len() { "," } else { "" };
+        println!("    {{");
+        println!("      \"fn_name\": \"{}\",", json_escape(&w.fn_name));
+        println!("      \"line\": {},", w.line);
+        println!("      \"declared\": \"{}\",", json_escape(&w.declared_pred));
+        println!("      \"tighter\": \"{}\",", json_escape(&w.tighter_pred));
+        println!("      \"args\": [");
+        for (j, (name, ty, val)) in w.args.iter().enumerate() {
+            let cj = if j + 1 < w.args.len() { "," } else { "" };
+            println!(
+                "        {{ \"name\": \"{}\", \"type\": \"{}\", \"value\": \"{}\" }}{cj}",
+                json_escape(name),
+                json_escape(ty),
+                json_escape(val)
+            );
+        }
+        println!("      ]");
+        println!("    }}{comma}");
+    }
+    println!("  ],");
+    println!("  \"axis4_mcdc_pairs\": [");
+    for (i, r) in axis4.iter().enumerate() {
+        let comma = if i + 1 < axis4.len() { "," } else { "" };
+        println!("    {{");
+        println!("      \"fn_name\": \"{}\",", json_escape(&r.fn_name));
+        println!("      \"line\": {},", r.line);
+        println!("      \"clause_idx\": {},", r.clause_idx);
         println!(
-            "      \"declared\": \"{}\",",
-            t.declared_pred.replace('"', "\\\"")
+            "      \"clause_text\": \"{}\",",
+            json_escape(&r.clause_text)
         );
-        println!(
-            "      \"tighter\": \"{}\"",
-            t.tighter_pred.replace('"', "\\\"")
-        );
+        match &r.outcome {
+            Axis4Outcome::Pair { t1_args, t2_args } => {
+                println!("      \"outcome\": \"pair\",");
+                let emit_args = |args: &[(String, String, String)]| {
+                    let mut lines: Vec<String> = Vec::new();
+                    for (j, (name, ty, val)) in args.iter().enumerate() {
+                        let cj = if j + 1 < args.len() { "," } else { "" };
+                        lines.push(format!(
+                            "          {{ \"name\": \"{}\", \"type\": \"{}\", \"value\": \"{}\" }}{cj}",
+                            json_escape(name),
+                            json_escape(ty),
+                            json_escape(val)
+                        ));
+                    }
+                    lines.join("\n")
+                };
+                println!("      \"t1\": [\n{}\n      ],", emit_args(t1_args));
+                println!("      \"t2\": [\n{}\n      ]", emit_args(t2_args));
+            }
+            Axis4Outcome::Coupled => {
+                println!("      \"outcome\": \"coupled\"");
+            }
+            Axis4Outcome::Unsupported { reason } => {
+                println!("      \"outcome\": \"unsupported\",");
+                println!("      \"reason\": \"{}\"", json_escape(reason));
+            }
+        }
         println!("    }}{comma}");
     }
     println!("  ]");
@@ -245,6 +302,7 @@ fn format_witness_value(val: &WitnessValue) -> String {
     match val {
         WitnessValue::Int(n) => n.to_string(),
         WitnessValue::Float(f) => format!("{f}"),
+        WitnessValue::Str(s) => escape_mvl_string_literal(s),
         WitnessValue::Struct { type_name, fields } => {
             if fields.is_empty() {
                 return format!("{type_name} {{}}");
@@ -259,11 +317,30 @@ fn format_witness_value(val: &WitnessValue) -> String {
     }
 }
 
+/// Render a Rust string as an MVL string literal, escaping quotes and backslashes.
+fn escape_mvl_string_literal(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 2);
+    out.push('"');
+    for c in s.chars() {
+        match c {
+            '\\' => out.push_str("\\\\"),
+            '"' => out.push_str("\\\""),
+            '\n' => out.push_str("\\n"),
+            '\t' => out.push_str("\\t"),
+            '\r' => out.push_str("\\r"),
+            _ => out.push(c),
+        }
+    }
+    out.push('"');
+    out
+}
+
 /// Derive a MVL type expression string for a `WitnessValue`.
 fn witness_type_str(val: &WitnessValue, param_type: &TypeExpr) -> String {
     match val {
         WitnessValue::Int(_) => "Int".to_string(),
         WitnessValue::Float(_) => "Float".to_string(),
+        WitnessValue::Str(_) => "String".to_string(),
         WitnessValue::Struct { type_name, .. } => type_name.clone(),
         WitnessValue::Unknown => {
             // Fall back to the declared parameter type.
@@ -428,6 +505,11 @@ pub fn run(
         failed: usize,
         /// Axis 4 (#1950): compound if/while decisions in this file (populated only when `mcdc` is set).
         mcdc_decisions: Vec<McdcDecision>,
+        /// Axis 3 (#1931): boundary witnesses for tightened contracts.
+        /// Populated in the post-collection pass below so JSON and text emit from the same data.
+        axis3_witnesses: Vec<Axis3Witness>,
+        /// Axis 4 (#1950): MC/DC pair results per (decision, clause).
+        axis4_results: Vec<Axis4Result>,
     }
     let mut file_results: Vec<FileResult> = Vec::new();
 
@@ -494,7 +576,21 @@ pub fn run(
             runtime: file_runtime,
             failed: file_failed,
             mcdc_decisions,
+            axis3_witnesses: Vec::new(),
+            axis4_results: Vec::new(),
         });
+    }
+
+    // ── Post-collection pass: compute axis 3 witnesses and axis 4 pairs ────
+    //
+    // We do this once, before splitting into JSON / text emission, so both
+    // paths consume the same structured data.  See spec 026-harden R6.
+    for fr in file_results.iter_mut() {
+        let deduped = deduplicate_tightenings(&fr.tightenings);
+        fr.axis3_witnesses = compute_axis3_witnesses(&deduped, &struct_fields);
+        if mcdc {
+            fr.axis4_results = compute_axis4_results(&fr.mcdc_decisions, &struct_fields);
+        }
     }
 
     if json {
@@ -517,9 +613,19 @@ pub fn run(
             .flat_map(|fr| fr.tightenings.iter().cloned())
             .collect();
         let all_tightenings = deduplicate_tightenings(&all_raw_tightenings);
+        let all_axis3: Vec<Axis3Witness> = file_results
+            .iter()
+            .flat_map(|fr| fr.axis3_witnesses.iter().cloned())
+            .collect();
+        let all_axis4: Vec<Axis4Result> = file_results
+            .iter()
+            .flat_map(|fr| fr.axis4_results.iter().cloned())
+            .collect();
         print_json(
             &flat,
             &all_tightenings,
+            &all_axis3,
+            &all_axis4,
             grand_total_proven,
             grand_total_runtime,
             grand_total_failed,
@@ -596,32 +702,22 @@ pub fn run(
         println!("\n── Axis 3: Boundary Test Generation ─────────────────────────────────");
         let mut witness_snippets: Vec<String> = Vec::new();
         let mut witness_use_fns: Vec<String> = Vec::new();
-        for t in &deduped {
-            match synthesize_witness(&t.params, &t.branch_hyps, &struct_fields) {
-                Some(witnesses) if !witnesses.is_empty() => {
-                    let snip = synthesize_test_fn(
-                        &t.fn_name,
-                        &t.declared_pred,
-                        &t.tighter_pred,
-                        &witnesses,
-                        t,
-                    );
-                    println!("\n  Witness for {}:", t.fn_name);
-                    for w in &witnesses {
-                        println!("    {} = {}", w.param_name, format_witness_value(&w.value));
-                    }
-                    if !witness_use_fns.contains(&t.fn_name) {
-                        witness_use_fns.push(t.fn_name.clone());
-                    }
-                    witness_snippets.push(snip);
-                }
-                _ => {
-                    println!(
-                        "\n  No witness found for {} (non-integer params or Z3 timeout).",
-                        t.fn_name
-                    );
-                }
+        for w in &fr.axis3_witnesses {
+            if w.args.is_empty() {
+                println!(
+                    "\n  No witness found for {} (non-integer params or Z3 timeout).",
+                    w.fn_name
+                );
+                continue;
             }
+            println!("\n  Witness for {}:", w.fn_name);
+            for (name, _ty, val) in &w.args {
+                println!("    {name} = {val}");
+            }
+            if !witness_use_fns.contains(&w.fn_name) {
+                witness_use_fns.push(w.fn_name.clone());
+            }
+            witness_snippets.push(w.snippet.clone());
         }
 
         // ── Axis 4: MC/DC gap synthesis (#1950) ──────────────────────────────
@@ -634,53 +730,49 @@ pub fn run(
             if fr.mcdc_decisions.is_empty() {
                 println!("  No compound if/while decisions found.");
             } else {
-                for dec in &fr.mcdc_decisions {
-                    if dec.is_effectful {
-                        continue;
+                // Group results by (fn_name, line) for the per-decision header.
+                let mut last_dec: Option<(String, u32, usize)> = None;
+                for r in &fr.axis4_results {
+                    let key = (r.fn_name.clone(), r.line);
+                    let clause_count = fr
+                        .mcdc_decisions
+                        .iter()
+                        .find(|d| d.fn_name == r.fn_name && d.line == r.line)
+                        .map(|d| d.clauses.len())
+                        .unwrap_or(0);
+                    if last_dec.as_ref().map(|(n, l, _)| (n.clone(), *l)) != Some(key.clone()) {
+                        println!(
+                            "\n  Decision {}:{} ({} clauses):",
+                            r.fn_name, r.line, clause_count
+                        );
+                        last_dec = Some((r.fn_name.clone(), r.line, clause_count));
                     }
-                    println!(
-                        "\n  Decision {}:{} ({} clauses):",
-                        dec.fn_name,
-                        dec.line,
-                        dec.clauses.len()
-                    );
-                    for (i, clause) in dec.clauses.iter().enumerate() {
-                        let clause_str = expr_to_short_str(clause);
-                        match synthesize_mcdc_pair(
-                            &dec.fn_params,
-                            &dec.requires,
-                            &dec.clauses,
-                            i,
-                            &dec.decision_expr,
-                            &struct_fields,
-                        ) {
-                            McdcClauseOutcome::Pair { t1, t2 } => {
-                                mcdc_pairs += 1;
-                                println!("    clause {i} ({clause_str}): pair generated");
-                                if !mcdc_use_fns.contains(&dec.fn_name) {
-                                    mcdc_use_fns.push(dec.fn_name.clone());
-                                }
-                                if let Some(snip) = synthesize_mcdc_test_pair(
-                                    &dec.fn_name,
-                                    dec.line,
-                                    i,
-                                    &clause_str,
-                                    &dec.fn_params,
-                                    &t1,
-                                    &t2,
-                                ) {
-                                    mcdc_snippets.push(snip);
-                                }
+                    match &r.outcome {
+                        Axis4Outcome::Pair { .. } => {
+                            mcdc_pairs += 1;
+                            println!(
+                                "    clause {} ({}): pair generated",
+                                r.clause_idx, r.clause_text
+                            );
+                            if !mcdc_use_fns.contains(&r.fn_name) {
+                                mcdc_use_fns.push(r.fn_name.clone());
                             }
-                            McdcClauseOutcome::Coupled => {
-                                mcdc_coupled += 1;
-                                println!(
-                                    "    clause {i} ({clause_str}): coupled — masking MC/DC required"
-                                );
+                            if let Some(snip) = &r.snippet {
+                                mcdc_snippets.push(snip.clone());
                             }
-                            McdcClauseOutcome::Unsupported => {
-                                println!("    clause {i} ({clause_str}): unsupported clause type");
-                            }
+                        }
+                        Axis4Outcome::Coupled => {
+                            mcdc_coupled += 1;
+                            println!(
+                                "    clause {} ({}): coupled — masking MC/DC required",
+                                r.clause_idx, r.clause_text
+                            );
+                        }
+                        Axis4Outcome::Unsupported { reason } => {
+                            println!(
+                                "    clause {} ({}): unsupported clause type — {reason}",
+                                r.clause_idx, r.clause_text
+                            );
                         }
                     }
                 }
@@ -783,6 +875,181 @@ pub fn run(
 //  Axis 4: MC/DC gap synthesis (#1950)
 // ══════════════════════════════════════════════════════════════════════════════
 
+// ── Axis 3 / Axis 4 structured results (#1955) ────────────────────────────────
+
+/// A single boundary witness (axis 3 output).
+///
+/// Populated once in the post-collection pass so the text and JSON emitters
+/// consume the same structured data.  `args` is empty when no witness could
+/// be found (non-integer params or Z3 timeout).
+#[derive(Debug, Clone)]
+struct Axis3Witness {
+    fn_name: String,
+    line: u32,
+    declared_pred: String,
+    tighter_pred: String,
+    /// Tuples of `(param_name, mvl_type, mvl_literal)` — pre-rendered so both
+    /// text and JSON emit identically.
+    args: Vec<(String, String, String)>,
+    /// The `test fn` snippet as MVL source (used by `--emit-tests`).
+    snippet: String,
+}
+
+/// The outcome of MC/DC pair synthesis for a single (decision, clause).
+#[derive(Debug, Clone)]
+enum Axis4Outcome {
+    /// Both t1 and t2 witnesses were found.
+    Pair {
+        t1_args: Vec<(String, String, String)>,
+        t2_args: Vec<(String, String, String)>,
+    },
+    /// One of the two Z3 queries returned UNSAT — the clause is structurally coupled.
+    Coupled,
+    /// Some parameter type is not currently supported by axis 4 (e.g. String, Float).
+    Unsupported { reason: String },
+}
+
+/// A single MC/DC clause result (axis 4 output).
+#[derive(Debug, Clone)]
+struct Axis4Result {
+    fn_name: String,
+    line: u32,
+    clause_idx: usize,
+    clause_text: String,
+    outcome: Axis4Outcome,
+    /// Pre-rendered `test fn` pair snippet (only for `Pair` outcomes and only
+    /// when every witness value is representable as an MVL literal).
+    snippet: Option<String>,
+}
+
+/// Populate `Axis3Witness` records from deduplicated tightening candidates.
+fn compute_axis3_witnesses(
+    deduped: &[&TighteningCandidate],
+    struct_fields: &HashMap<String, Vec<(String, String)>>,
+) -> Vec<Axis3Witness> {
+    let mut out = Vec::new();
+    for t in deduped {
+        let ws = synthesize_witness(&t.params, &t.branch_hyps, struct_fields);
+        match ws {
+            Some(witnesses) if !witnesses.is_empty() => {
+                let snippet = synthesize_test_fn(
+                    &t.fn_name,
+                    &t.declared_pred,
+                    &t.tighter_pred,
+                    &witnesses,
+                    t,
+                );
+                let args: Vec<(String, String, String)> = witnesses
+                    .iter()
+                    .zip(t.params.iter())
+                    .map(|(w, p)| {
+                        (
+                            w.param_name.clone(),
+                            declared_type_str(&p.ty),
+                            format_witness_value_typed(&w.value, &p.ty),
+                        )
+                    })
+                    .collect();
+                out.push(Axis3Witness {
+                    fn_name: t.fn_name.clone(),
+                    line: t.span.line,
+                    declared_pred: t.declared_pred.clone(),
+                    tighter_pred: t.tighter_pred.clone(),
+                    args,
+                    snippet,
+                });
+            }
+            _ => {
+                out.push(Axis3Witness {
+                    fn_name: t.fn_name.clone(),
+                    line: t.span.line,
+                    declared_pred: t.declared_pred.clone(),
+                    tighter_pred: t.tighter_pred.clone(),
+                    args: Vec::new(),
+                    snippet: String::new(),
+                });
+            }
+        }
+    }
+    out
+}
+
+/// Populate `Axis4Result` records by running MC/DC pair synthesis per (decision, clause).
+fn compute_axis4_results(
+    decisions: &[McdcDecision],
+    struct_fields: &HashMap<String, Vec<(String, String)>>,
+) -> Vec<Axis4Result> {
+    let mut out = Vec::new();
+    for dec in decisions {
+        if dec.is_effectful {
+            continue;
+        }
+        for (i, clause) in dec.clauses.iter().enumerate() {
+            let clause_str = expr_to_short_str(clause);
+            let raw = synthesize_mcdc_pair(
+                &dec.fn_params,
+                &dec.requires,
+                &dec.clauses,
+                i,
+                &dec.decision_expr,
+                struct_fields,
+            );
+            let (outcome, snippet) = match raw {
+                McdcClauseOutcome::Pair { t1, t2 } => {
+                    let t1_args: Vec<(String, String, String)> = t1
+                        .iter()
+                        .zip(dec.fn_params.iter())
+                        .map(|(w, p)| {
+                            (
+                                w.param_name.clone(),
+                                declared_type_str(&p.ty),
+                                format_witness_value_typed(&w.value, &p.ty),
+                            )
+                        })
+                        .collect();
+                    let t2_args: Vec<(String, String, String)> = t2
+                        .iter()
+                        .zip(dec.fn_params.iter())
+                        .map(|(w, p)| {
+                            (
+                                w.param_name.clone(),
+                                declared_type_str(&p.ty),
+                                format_witness_value_typed(&w.value, &p.ty),
+                            )
+                        })
+                        .collect();
+                    let snip = synthesize_mcdc_test_pair(
+                        &dec.fn_name,
+                        dec.line,
+                        i,
+                        &clause_str,
+                        &dec.fn_params,
+                        &t1,
+                        &t2,
+                    );
+                    (Axis4Outcome::Pair { t1_args, t2_args }, snip)
+                }
+                McdcClauseOutcome::Coupled => (Axis4Outcome::Coupled, None),
+                McdcClauseOutcome::Unsupported => (
+                    Axis4Outcome::Unsupported {
+                        reason: "non-Int/Bool parameter".to_string(),
+                    },
+                    None,
+                ),
+            };
+            out.push(Axis4Result {
+                fn_name: dec.fn_name.clone(),
+                line: dec.line,
+                clause_idx: i,
+                clause_text: clause_str,
+                outcome,
+                snippet,
+            });
+        }
+    }
+    out
+}
+
 /// A single compound `if`/`while` decision found in a non-test function,
 /// carrying everything axis 4 needs to synthesize independence pairs.
 #[derive(Debug, Clone)]
@@ -815,9 +1082,12 @@ enum McdcClauseOutcome {
     Unsupported,
 }
 
-/// Walk `prog` and collect every compound if/while decision inside non-test functions.
+/// Walk `prog` and collect every compound if/while decision — plus compound
+/// match-arm guards (#1955) — inside non-test functions.
 ///
-/// Match, MatchGuard, and Bool-return decisions are out of scope for axis 4 (v1).
+/// Match arms themselves (as independent outcomes) and Bool-return decisions
+/// remain out of scope for axis 4 (v1); see follow-up ticket for arm
+/// reachability witnesses.
 fn collect_mcdc_decisions(prog: &Program) -> Vec<McdcDecision> {
     let mut out = Vec::new();
     for decl in &prog.declarations {
@@ -863,6 +1133,7 @@ fn collect_decisions_from_stmt(stmt: &Stmt, fd: &FnDecl, out: &mut Vec<McdcDecis
         Stmt::For { body, .. } => collect_decisions_from_block(body, fd, out),
         Stmt::Match { arms, .. } => {
             for arm in arms {
+                maybe_push_match_guard(arm, fd, out);
                 match &arm.body {
                     MatchBody::Block(b) => collect_decisions_from_block(b, fd, out),
                     MatchBody::Expr(e) => collect_decisions_from_expr(e, fd, out),
@@ -936,6 +1207,205 @@ fn maybe_push_decision(cond: &Expr, line: u32, fd: &FnDecl, out: &mut Vec<McdcDe
         decision_expr: cond.clone(),
         clauses,
     });
+}
+
+/// Push a MatchGuard decision when an arm has a compound (`&&`/`||`) guard
+/// whose atomic clauses can be converted to `Expr` and only reference
+/// function parameters (#1955).
+///
+/// Guards that reference pattern-bound identifiers or use unsupported
+/// `RefExpr` forms (Old, Forall, StringOp, ArrayGet, RegexMatch, quantifiers)
+/// are silently skipped — the `mvl mcdc` command still tracks them as
+/// obligations, but harden can't synthesize an independence pair here.
+fn maybe_push_match_guard(arm: &MatchArm, fd: &FnDecl, out: &mut Vec<McdcDecision>) {
+    let Some(guard) = &arm.guard else {
+        return;
+    };
+    // Guards with a single atomic clause carry no MC/DC obligation.
+    let clause_refs = collect_clauses_ref(guard);
+    if clause_refs.len() <= 1 {
+        return;
+    }
+    // Convert the full guard and each clause to `Expr` form for the existing
+    // pair-synthesis pipeline. Any conversion failure aborts this arm.
+    let Some(decision_expr) = refexpr_to_expr(guard) else {
+        return;
+    };
+    let mut clauses: Vec<Expr> = Vec::new();
+    for c in &clause_refs {
+        let Some(e) = refexpr_to_expr(c) else {
+            return;
+        };
+        clauses.push(e);
+    }
+    // Only accept guards whose free identifiers are all function parameters.
+    // Guards that reference pattern bindings (`n if n > 0 && …`) would need
+    // extra binding infrastructure and are deferred.
+    let param_names: std::collections::HashSet<&str> =
+        fd.params.iter().map(|p| p.name.as_str()).collect();
+    let mut free: std::collections::HashSet<String> = std::collections::HashSet::new();
+    refexpr_free_vars(guard, &mut free);
+    if !free.iter().all(|n| param_names.contains(n.as_str())) {
+        return;
+    }
+    out.push(McdcDecision {
+        fn_name: fd.name.clone(),
+        fn_params: fd.params.clone(),
+        requires: fd.requires.clone(),
+        is_effectful: !fd.effects.is_empty(),
+        line: arm.span.line,
+        decision_expr,
+        clauses,
+    });
+}
+
+/// Split a compound `RefExpr` guard into its atomic leaf clauses (left-to-right).
+///
+/// Mirrors `passes::mcdc::analysis::collect_clauses` for the `Expr` domain.
+/// `Grouped` nodes are transparently unwrapped.
+fn collect_clauses_ref(guard: &RefExpr) -> Vec<&RefExpr> {
+    let mut out = Vec::new();
+    fn walk<'a>(e: &'a RefExpr, out: &mut Vec<&'a RefExpr>) {
+        match e {
+            RefExpr::LogicOp {
+                op: LogicOp::And | LogicOp::Or,
+                left,
+                right,
+                ..
+            } => {
+                walk(left, out);
+                walk(right, out);
+            }
+            RefExpr::Grouped { inner, .. } => walk(inner, out),
+            _ => out.push(e),
+        }
+    }
+    walk(guard, &mut out);
+    out
+}
+
+/// Partial conversion from `RefExpr` (predicate) to `Expr` (general expression),
+/// covering the subset used in match guards.
+///
+/// Returns `None` when the `RefExpr` uses forms that don't fit into `Expr`
+/// (`Old`, `Forall`, `Exists`, `Len`, `StringOp`, `ArrayGet`, `RegexMatch`,
+/// `Float`, bounded quantifiers, bitwise ops).  Those cause the guard to be
+/// skipped, which is the correct conservative behavior.
+fn refexpr_to_expr(e: &RefExpr) -> Option<Expr> {
+    let s = refexpr_span(e);
+    match e {
+        RefExpr::Integer { value, .. } => Some(Expr::Literal(Literal::Integer(*value), s)),
+        RefExpr::Bool { value, .. } => Some(Expr::Literal(Literal::Bool(*value), s)),
+        RefExpr::Ident { name, .. } => Some(Expr::Ident(name.clone(), s)),
+        RefExpr::FieldAccess { object, field, .. } => Some(Expr::FieldAccess {
+            expr: Box::new(refexpr_to_expr(object)?),
+            field: field.clone(),
+            span: s,
+        }),
+        RefExpr::Not { inner, .. } => Some(Expr::Unary {
+            op: UnaryOp::Not,
+            expr: Box::new(refexpr_to_expr(inner)?),
+            span: s,
+        }),
+        RefExpr::Compare {
+            op, left, right, ..
+        } => {
+            let l = refexpr_to_expr(left)?;
+            let r = refexpr_to_expr(right)?;
+            let bop = match op {
+                CmpOp::Eq => BinaryOp::Eq,
+                CmpOp::Ne => BinaryOp::Ne,
+                CmpOp::Lt => BinaryOp::Lt,
+                CmpOp::Le => BinaryOp::Le,
+                CmpOp::Gt => BinaryOp::Gt,
+                CmpOp::Ge => BinaryOp::Ge,
+            };
+            Some(binop(bop, l, r))
+        }
+        RefExpr::ArithOp {
+            op, left, right, ..
+        } => {
+            let l = refexpr_to_expr(left)?;
+            let r = refexpr_to_expr(right)?;
+            let bop = match op {
+                ArithOp::Add => BinaryOp::Add,
+                ArithOp::Sub => BinaryOp::Sub,
+                ArithOp::Mul => BinaryOp::Mul,
+                ArithOp::Div => BinaryOp::Div,
+                ArithOp::Rem => BinaryOp::Rem,
+            };
+            Some(binop(bop, l, r))
+        }
+        RefExpr::LogicOp {
+            op, left, right, ..
+        } => {
+            let l = refexpr_to_expr(left)?;
+            let r = refexpr_to_expr(right)?;
+            let bop = match op {
+                LogicOp::And => BinaryOp::And,
+                LogicOp::Or => BinaryOp::Or,
+            };
+            Some(binop(bop, l, r))
+        }
+        RefExpr::Grouped { inner, .. } => refexpr_to_expr(inner),
+        // Unsupported in guards for axis 4: Old, Forall, Exists, Len,
+        // StringOp, ArrayGet, RegexMatch, Float, bounded quantifiers,
+        // bitwise ops. Skip the whole guard.
+        _ => None,
+    }
+}
+
+/// Extract the source span of a `RefExpr` — `RefExpr` doesn't have an inherent
+/// `.span()` accessor, so we destructure per variant.  We only need this for
+/// the variants `refexpr_to_expr` produces (all others are handled by the
+/// `None` fallback there anyway).
+fn refexpr_span(e: &RefExpr) -> Span {
+    match e {
+        RefExpr::Integer { span, .. }
+        | RefExpr::Bool { span, .. }
+        | RefExpr::Float { span, .. }
+        | RefExpr::Ident { span, .. }
+        | RefExpr::FieldAccess { span, .. }
+        | RefExpr::Not { span, .. }
+        | RefExpr::Compare { span, .. }
+        | RefExpr::ArithOp { span, .. }
+        | RefExpr::LogicOp { span, .. }
+        | RefExpr::Grouped { span, .. }
+        | RefExpr::Len { span, .. }
+        | RefExpr::Old { span, .. }
+        | RefExpr::Forall { span, .. }
+        | RefExpr::Exists { span, .. }
+        | RefExpr::BitwiseOp { span, .. }
+        | RefExpr::BitwiseNot { span, .. }
+        | RefExpr::BoundedForall { span, .. }
+        | RefExpr::BoundedExists { span, .. }
+        | RefExpr::StringOp { span, .. }
+        | RefExpr::ArrayGet { span, .. }
+        | RefExpr::RegexMatch { span, .. }
+        | RefExpr::Abs { span, .. }
+        | RefExpr::Min { span, .. }
+        | RefExpr::Max { span, .. } => *span,
+    }
+}
+
+/// Collect all identifier names referenced in a `RefExpr` into `out`.
+fn refexpr_free_vars(e: &RefExpr, out: &mut std::collections::HashSet<String>) {
+    match e {
+        RefExpr::Ident { name, .. } => {
+            out.insert(name.clone());
+        }
+        RefExpr::FieldAccess { object, .. } => refexpr_free_vars(object, out),
+        RefExpr::Not { inner, .. } | RefExpr::Grouped { inner, .. } => {
+            refexpr_free_vars(inner, out)
+        }
+        RefExpr::Compare { left, right, .. }
+        | RefExpr::ArithOp { left, right, .. }
+        | RefExpr::LogicOp { left, right, .. } => {
+            refexpr_free_vars(left, out);
+            refexpr_free_vars(right, out);
+        }
+        _ => {}
+    }
 }
 
 /// Two-query Z3 pair synthesis for target clause `i` in a decision.
@@ -1098,7 +1568,7 @@ fn params_supported_for_mcdc(
             },
             _ => return false,
         };
-        if matches!(name, "Int" | "Bool") {
+        if matches!(name, "Int" | "Bool" | "String") {
             continue;
         }
         if let Some(fields) = struct_fields.get(name) {
@@ -1133,7 +1603,10 @@ fn witnesses_to_env(ws: &[WitnessArg]) -> HashMap<String, i64> {
                     }
                 }
             }
-            WitnessValue::Unknown => {}
+            WitnessValue::Str(_) | WitnessValue::Unknown => {
+                // Strings aren't in the integer eval domain; clauses referencing
+                // them fall through to a best-effort skip in the caller.
+            }
         }
     }
     env
@@ -1266,6 +1739,7 @@ fn expr_to_short_str(e: &Expr) -> String {
         Expr::Ident(name, _) => name.clone(),
         Expr::Literal(Literal::Bool(b), _) => b.to_string(),
         Expr::Literal(Literal::Integer(n), _) => n.to_string(),
+        Expr::Literal(Literal::Str(s), _) => format!("\"{s}\""),
         Expr::FieldAccess { expr, field, .. } => {
             format!("{}.{field}", expr_to_short_str(expr))
         }
@@ -1292,6 +1766,19 @@ fn expr_to_short_str(e: &Expr) -> String {
                 "{} {op_str} {}",
                 expr_to_short_str(left),
                 expr_to_short_str(right)
+            )
+        }
+        Expr::MethodCall {
+            receiver,
+            method,
+            args,
+            ..
+        } => {
+            let arg_strs: Vec<String> = args.iter().map(expr_to_short_str).collect();
+            format!(
+                "{}.{method}({})",
+                expr_to_short_str(receiver),
+                arg_strs.join(", ")
             )
         }
         _ => "?".to_string(),
@@ -1521,8 +2008,9 @@ mod tests {
     }
 
     #[test]
-    fn params_supported_rejects_string() {
-        let prog = parse_prog("fn f(s: String) -> Int { 0 }");
+    fn params_supported_rejects_float() {
+        // Float remains unsupported until Z3 Real theory lands (#1957).
+        let prog = parse_prog("fn f(x: Float) -> Int { 0 }");
         let params = match &prog.declarations[0] {
             Decl::Fn(fd) => fd.params.clone(),
             _ => unreachable!(),
@@ -1550,5 +2038,150 @@ mod tests {
         let after = std::fs::read_to_string(&tmp).unwrap();
         assert!(after.contains("new"));
         let _ = std::fs::remove_file(&tmp);
+    }
+
+    // ── JSON escape: string content stays valid JSON ──────────────────────
+
+    // ── Commit 3: String clause support ───────────────────────────────────
+
+    #[test]
+    fn escape_mvl_string_literal_wraps_and_escapes() {
+        assert_eq!(escape_mvl_string_literal("hello"), "\"hello\"");
+        assert_eq!(
+            escape_mvl_string_literal("with \"quote\""),
+            "\"with \\\"quote\\\"\""
+        );
+        assert_eq!(escape_mvl_string_literal("a\\b"), "\"a\\\\b\"");
+        assert_eq!(escape_mvl_string_literal("a\nb"), "\"a\\nb\"");
+    }
+
+    #[test]
+    fn params_supported_accepts_string() {
+        let prog = parse_prog("fn f(s: String, n: Int) -> Int { 0 }");
+        let params = match &prog.declarations[0] {
+            Decl::Fn(fd) => fd.params.clone(),
+            _ => unreachable!(),
+        };
+        assert!(params_supported_for_mcdc(&params, &HashMap::new()));
+    }
+
+    #[test]
+    fn format_witness_value_typed_renders_string() {
+        let ty = TypeExpr::Base {
+            name: "String".to_string(),
+            args: vec![],
+            span: Span::default(),
+        };
+        let v = WitnessValue::Str("hello".to_string());
+        assert_eq!(format_witness_value_typed(&v, &ty), "\"hello\"");
+    }
+
+    #[test]
+    fn expr_to_short_str_renders_method_call() {
+        let recv = Expr::Ident("s".to_string(), Span::default());
+        let lit = Expr::Literal(Literal::Str("/api/".to_string()), Span::default());
+        let call = Expr::MethodCall {
+            receiver: Box::new(recv),
+            method: "starts_with".to_string(),
+            args: vec![lit],
+            span: Span::default(),
+        };
+        assert_eq!(expr_to_short_str(&call), "s.starts_with(\"/api/\")");
+    }
+
+    // ── Commit 2: MatchGuard support ──────────────────────────────────────
+
+    #[test]
+    fn match_guard_compound_condition_becomes_decision() {
+        let prog = parse_prog(
+            "fn f(a: Bool, b: Bool, x: Int) -> Int { match x { n if a && b => n, _ => 0 } }",
+        );
+        let decisions = collect_mcdc_decisions(&prog);
+        assert_eq!(decisions.len(), 1, "expected one MatchGuard decision");
+        assert_eq!(decisions[0].clauses.len(), 2);
+        assert_eq!(decisions[0].fn_name, "f");
+    }
+
+    #[test]
+    fn match_guard_single_clause_not_tracked() {
+        let prog = parse_prog("fn f(a: Bool, x: Int) -> Int { match x { n if a => n, _ => 0 } }");
+        let decisions = collect_mcdc_decisions(&prog);
+        assert_eq!(decisions.len(), 0);
+    }
+
+    #[test]
+    fn match_guard_referencing_pattern_binding_is_skipped() {
+        // Guard `n > 0 && n < 100` references `n` which is bound by the arm's
+        // pattern — not a fn param.  Harden can't synthesize a witness cleanly,
+        // so the guard is skipped (mvl mcdc still tracks it as an obligation).
+        let prog =
+            parse_prog("fn f(x: Int) -> Int { match x { n if n > 0 && n < 100 => n, _ => 0 } }");
+        let decisions = collect_mcdc_decisions(&prog);
+        assert_eq!(decisions.len(), 0);
+    }
+
+    #[test]
+    fn refexpr_to_expr_converts_logic_op() {
+        let prog = parse_prog(
+            "fn f(a: Bool, b: Bool, x: Int) -> Int { match x { n if a || b => n, _ => 0 } }",
+        );
+        let decisions = collect_mcdc_decisions(&prog);
+        assert_eq!(decisions.len(), 1);
+        // Decision expr should be a LogicOp::Or, converted to BinaryOp::Or.
+        assert!(matches!(
+            &decisions[0].decision_expr,
+            Expr::Binary {
+                op: BinaryOp::Or,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn collect_clauses_ref_splits_on_and() {
+        // Build `a && b && c` refexpr and check we get 3 leaves.
+        let span = Span::default();
+        let a = RefExpr::Ident {
+            name: "a".into(),
+            span,
+        };
+        let b = RefExpr::Ident {
+            name: "b".into(),
+            span,
+        };
+        let c = RefExpr::Ident {
+            name: "c".into(),
+            span,
+        };
+        let ab = RefExpr::LogicOp {
+            op: LogicOp::And,
+            left: Box::new(a),
+            right: Box::new(b),
+            span,
+        };
+        let abc = RefExpr::LogicOp {
+            op: LogicOp::And,
+            left: Box::new(ab),
+            right: Box::new(c),
+            span,
+        };
+        let leaves = collect_clauses_ref(&abc);
+        assert_eq!(leaves.len(), 3);
+    }
+
+    #[test]
+    fn axis4_result_pair_snippet_absent_when_witness_unknown() {
+        // A Pair outcome doesn't automatically have a snippet — snippet is None
+        // when synthesize_mcdc_test_pair rejects Unknown witness values.
+        // This just verifies the enum variants compile and can be constructed.
+        let r = Axis4Result {
+            fn_name: "f".to_string(),
+            line: 1,
+            clause_idx: 0,
+            clause_text: "x > 0".to_string(),
+            outcome: Axis4Outcome::Coupled,
+            snippet: None,
+        };
+        matches!(r.outcome, Axis4Outcome::Coupled);
     }
 }

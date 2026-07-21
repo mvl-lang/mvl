@@ -345,10 +345,12 @@ fn impl_z3_witness(
 
     // ── Create Z3 variables per parameter ────────────────────────────────────
     //
-    // `int_vars`: param_name (or param__field) → Z3 Int
+    // `int_vars`: param_name (or param__field) → Z3 Int (Int/Bool params + struct fields)
     // `real_vars`: param_name → Z3 Real  (for Float/Float32/Float64, ADR-0058)
+    // `str_vars`: param_name → Z3 String (String params, #1955)
     let mut int_vars: HashMap<String, z3::ast::Int> = HashMap::new();
     let mut real_vars: HashMap<String, z3::ast::Real> = HashMap::new();
+    let mut str_vars: HashMap<String, z3::ast::String> = HashMap::new();
 
     for param in params {
         let type_name = match &param.ty {
@@ -368,6 +370,10 @@ fn impl_z3_witness(
                 let var = z3::ast::Real::new_const(&ctx, param.name.as_str());
                 real_vars.insert(param.name.clone(), var);
             }
+            "String" => {
+                let var = z3::ast::String::new_const(&ctx, param.name.as_str());
+                str_vars.insert(param.name.clone(), var);
+            }
             other => {
                 if let Some(fields) = struct_fields.get(other) {
                     for (field_name, field_type) in fields {
@@ -382,7 +388,7 @@ fn impl_z3_witness(
         }
     }
 
-    if int_vars.is_empty() && real_vars.is_empty() {
+    if int_vars.is_empty() && real_vars.is_empty() && str_vars.is_empty() {
         return None;
     }
 
@@ -396,6 +402,7 @@ fn impl_z3_witness(
     fn expr_to_z3_bool<'ctx>(
         e: &Expr,
         vars: &HashMap<String, z3::ast::Int<'ctx>>,
+        str_vars: &HashMap<String, z3::ast::String<'ctx>>,
         ctx: &'ctx Context,
     ) -> Option<z3::ast::Bool<'ctx>> {
         use z3::ast::Ast;
@@ -412,18 +419,32 @@ fn impl_z3_witness(
                     BinaryOp::Gt => Some(AstCmp::Gt),
                     BinaryOp::Ge => Some(AstCmp::Ge),
                     BinaryOp::And => {
-                        let l = expr_to_z3_bool(left, vars, ctx)?;
-                        let r = expr_to_z3_bool(right, vars, ctx)?;
+                        let l = expr_to_z3_bool(left, vars, str_vars, ctx)?;
+                        let r = expr_to_z3_bool(right, vars, str_vars, ctx)?;
                         return Some(z3::ast::Bool::and(ctx, &[&l, &r]));
                     }
                     BinaryOp::Or => {
-                        let l = expr_to_z3_bool(left, vars, ctx)?;
-                        let r = expr_to_z3_bool(right, vars, ctx)?;
+                        let l = expr_to_z3_bool(left, vars, str_vars, ctx)?;
+                        let r = expr_to_z3_bool(right, vars, str_vars, ctx)?;
                         return Some(z3::ast::Bool::or(ctx, &[&l, &r]));
                     }
                     _ => None,
                 };
                 if let Some(op) = cmp {
+                    // String equality: `s == "lit"` or `s == t`.
+                    if matches!(op, AstCmp::Eq | AstCmp::Ne) {
+                        if let (Some(l), Some(r)) = (
+                            expr_to_z3_str(left, str_vars, ctx),
+                            expr_to_z3_str(right, str_vars, ctx),
+                        ) {
+                            let eq = l._eq(&r);
+                            return Some(if matches!(op, AstCmp::Eq) {
+                                eq
+                            } else {
+                                eq.not()
+                            });
+                        }
+                    }
                     let l = expr_to_z3_int(left, vars, ctx)?;
                     let r = expr_to_z3_int(right, vars, ctx)?;
                     Some(match op {
@@ -443,11 +464,41 @@ fn impl_z3_witness(
             } => {
                 use crate::mvl::parser::ast::UnaryOp;
                 if matches!(op, UnaryOp::Not) {
-                    Some(expr_to_z3_bool(inner, vars, ctx)?.not())
+                    Some(expr_to_z3_bool(inner, vars, str_vars, ctx)?.not())
                 } else {
                     None
                 }
             }
+            // String method calls: `s.contains("x")`, `s.starts_with("x")`, `s.ends_with("x")`.
+            Expr::MethodCall {
+                receiver,
+                method,
+                args,
+                ..
+            } if args.len() == 1 => {
+                let recv_str = expr_to_z3_str(receiver, str_vars, ctx)?;
+                let arg_str = expr_to_z3_str(&args[0], str_vars, ctx)?;
+                match method.as_str() {
+                    "contains" => Some(recv_str.contains(&arg_str)),
+                    "starts_with" => Some(recv_str.prefix(&arg_str)),
+                    "ends_with" => Some(recv_str.suffix(&arg_str)),
+                    _ => None,
+                }
+            }
+            _ => None,
+        }
+    }
+
+    /// Translate an `Expr` to a Z3 String (for string params + string literals).
+    /// Returns `None` for non-string forms.
+    fn expr_to_z3_str<'ctx>(
+        e: &Expr,
+        str_vars: &HashMap<String, z3::ast::String<'ctx>>,
+        ctx: &'ctx Context,
+    ) -> Option<z3::ast::String<'ctx>> {
+        match e {
+            Expr::Literal(Literal::Str(s), _) => z3::ast::String::from_str(ctx, s).ok(),
+            Expr::Ident(name, _) => str_vars.get(name.as_str()).cloned(),
             _ => None,
         }
     }
@@ -487,7 +538,7 @@ fn impl_z3_witness(
     }
 
     for hyp in branch_hyps {
-        if let Some(z3_hyp) = expr_to_z3_bool(hyp, &int_vars, &ctx) {
+        if let Some(z3_hyp) = expr_to_z3_bool(hyp, &int_vars, &str_vars, &ctx) {
             solver.assert(&z3_hyp);
         }
     }
@@ -543,6 +594,18 @@ fn impl_z3_witness(
                         v.as_real().map(|(num, den)| num as f64 / den as f64)
                     })
                     .map(WitnessValue::Float)
+                    .unwrap_or(WitnessValue::Unknown);
+                witnesses.push(WitnessArg {
+                    param_name: param.name.clone(),
+                    value: val,
+                });
+            }
+            "String" => {
+                let val = str_vars
+                    .get(&param.name)
+                    .and_then(|var| model.eval(var, true))
+                    .and_then(|v| v.as_string())
+                    .map(WitnessValue::Str)
                     .unwrap_or(WitnessValue::Unknown);
                 witnesses.push(WitnessArg {
                     param_name: param.name.clone(),

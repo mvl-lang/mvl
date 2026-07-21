@@ -1,6 +1,14 @@
 # Changelog
 
-## [Unreleased]
+## [1.7.0] - 2026-07-21
+
+### Added — #1955
+
+- **`mvl harden --mcdc` extensions:** axis-4 MC/DC gap synthesis now covers three new areas.
+  - **String clause types.** `try_z3_witness` now allocates Z3 String variables for `String` parameters and translates equality (`s == "lit"`), `contains`, `starts_with`, and `ends_with` predicates. `WitnessValue::Str(String)` added; witnesses render as MVL string literals with proper quote/backslash/newline escaping.
+  - **Compound match-arm guards.** The axis-4 walker now visits match arms and treats compound guards (`n if a && b => …`) as MC/DC decisions, converting the guard's `RefExpr` to `Expr` for the shared pair-synthesis pipeline. Guards that reference pattern-bound identifiers are silently skipped (tracked separately by `mvl mcdc`).
+  - **JSON output for axes 3 and 4.** `mvl harden --json` gains `axis3_boundary_witnesses` and `axis4_mcdc_pairs` sections. Axis-4 entries carry an `outcome` field (`"pair"` / `"coupled"` / `"unsupported"`); `pair` outcomes include `t1`/`t2` arrays with pre-rendered MVL-literal `value` strings. Backslash escaping added to the emitter.
+- **Match-arm reachability tracked as follow-up (#1958)** — distinct semantics from Unique-Cause pair synthesis; needs pattern-to-predicate encoding and a `SingleWitness` outcome variant.
 
 ### Added — #1957
 
