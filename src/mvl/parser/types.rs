@@ -2116,6 +2116,29 @@ mod tests {
     }
 
     #[test]
+    fn parse_ref_len_method_call_in_type_alias() {
+        // Full type-alias context: type X = String where xs.len() > 0
+        let d = type_decl("type Name = String where xs.len() > 0");
+        let TypeBody::Alias(ty) = d.body else {
+            panic!("expected Alias body")
+        };
+        let TypeExpr::Refined { pred, .. } = *ty else {
+            panic!("expected Refined type")
+        };
+        assert!(
+            matches!(
+                pred,
+                RefExpr::Compare {
+                    ref left,
+                    ..
+                } if matches!(**left, RefExpr::Len { ref ident, .. } if ident == "xs")
+            ),
+            "expected Compare(Gt, Len(xs), 0), got {:?}",
+            pred
+        );
+    }
+
+    #[test]
     fn parse_ref_len_method_call_field_path() {
         // a.b.len() should produce Len { ident: "a.b" }
         let re = ref_expr_direct("a.b.len() == 0").expect("parse ok");
