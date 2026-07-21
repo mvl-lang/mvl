@@ -85,10 +85,12 @@ fn missing_runtime_error() -> ! {
 /// Download and extract the runtime tarball for `version` from GitHub releases.
 ///
 /// Tarball layout (relative paths inside the archive):
+///   `core/`        — shared pure-algorithm crate (dep of `rust/` and `rust-tokio/`)
 ///   `rust/`        — default runtime crate
 ///   `rust-tokio/`  — tokio runtime crate
 ///
 /// Extracted to `<runtime_root>/` so the final layout is:
+///   `<mvl_data_home>/runtime/{version}/core/`
 ///   `<mvl_data_home>/runtime/{version}/rust/`
 ///   `<mvl_data_home>/runtime/{version}/rust-tokio/`
 pub fn install_runtime(version: &str) {

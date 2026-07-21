@@ -77,9 +77,10 @@ INSTALL_BIN_DIR         := $(HOME)/.local/bin
 install-runtime: build ## Install stdlib + runtime crates from CURRENT $(BUILD) (no mvl binary; for CI matrix)
 	@echo "Installing runtime v$(INSTALL_RUNTIME_VERSION) + stdlib from $(BUILD) artifacts ..."
 	@mkdir -p $(INSTALL_TOOLCHAIN_DIR)/std
-	@mkdir -p $(INSTALL_RUNTIME_DIR)/rust $(INSTALL_RUNTIME_DIR)/rust-tokio $(INSTALL_RUNTIME_DIR)/llvm $(INSTALL_RUNTIME_DIR)/wasm
+	@mkdir -p $(INSTALL_RUNTIME_DIR)/core $(INSTALL_RUNTIME_DIR)/rust $(INSTALL_RUNTIME_DIR)/rust-tokio $(INSTALL_RUNTIME_DIR)/llvm $(INSTALL_RUNTIME_DIR)/wasm
 	rsync -a --delete std/ $(INSTALL_TOOLCHAIN_DIR)/std/
 	@echo "$(INSTALL_VERSION)" > $(INSTALL_TOOLCHAIN_DIR)/std/.version
+	rsync -a --delete runtime/core/       $(INSTALL_RUNTIME_DIR)/core/
 	rsync -a --delete runtime/rust/       $(INSTALL_RUNTIME_DIR)/rust/
 	rsync -a --delete runtime/rust-tokio/ $(INSTALL_RUNTIME_DIR)/rust-tokio/
 	@cp target/$(BUILD)/libmvl_runtime_llvm.dylib $(INSTALL_RUNTIME_DIR)/llvm/ 2>/dev/null || true
@@ -93,7 +94,7 @@ install: ## Install all artifacts (mvl, stdlib, rust/llvm/wasm runtimes) from lo
 	@echo ""
 	@echo "Installing mvl $(INSTALL_VERSION) to $(INSTALL_TOOLCHAIN_DIR) ..."
 	@mkdir -p $(INSTALL_TOOLCHAIN_DIR)/bin $(INSTALL_TOOLCHAIN_DIR)/std $(INSTALL_BIN_DIR)
-	@mkdir -p $(INSTALL_RUNTIME_DIR)/rust $(INSTALL_RUNTIME_DIR)/rust-tokio $(INSTALL_RUNTIME_DIR)/llvm $(INSTALL_RUNTIME_DIR)/wasm
+	@mkdir -p $(INSTALL_RUNTIME_DIR)/core $(INSTALL_RUNTIME_DIR)/rust $(INSTALL_RUNTIME_DIR)/rust-tokio $(INSTALL_RUNTIME_DIR)/llvm $(INSTALL_RUNTIME_DIR)/wasm
 	# 1. mvl binary + ~/.local/bin symlink
 	cp target/release/mvl $(INSTALL_TOOLCHAIN_DIR)/bin/mvl
 	chmod +x $(INSTALL_TOOLCHAIN_DIR)/bin/mvl
@@ -105,7 +106,8 @@ install: ## Install all artifacts (mvl, stdlib, rust/llvm/wasm runtimes) from lo
 	# 2. stdlib source (.mvl files)
 	rsync -a --delete std/ $(INSTALL_TOOLCHAIN_DIR)/std/
 	@echo "$(INSTALL_VERSION)" > $(INSTALL_TOOLCHAIN_DIR)/std/.version
-	# 3. Rust runtime crate source (default + tokio target)
+	# 3. Rust runtime crate source (core + default + tokio target)
+	rsync -a --delete runtime/core/       $(INSTALL_RUNTIME_DIR)/core/
 	rsync -a --delete runtime/rust/       $(INSTALL_RUNTIME_DIR)/rust/
 	rsync -a --delete runtime/rust-tokio/ $(INSTALL_RUNTIME_DIR)/rust-tokio/
 	# 4. LLVM runtime cdylib — installed in runtime/{ver}/llvm/ (ADR-0009, #1765).
@@ -123,6 +125,7 @@ install: ## Install all artifacts (mvl, stdlib, rust/llvm/wasm runtimes) from lo
 	@echo "  binary:       $(INSTALL_BIN_DIR)/mvl -> $(INSTALL_TOOLCHAIN_DIR)/bin/mvl"
 	@echo "  driver:       $(INSTALL_BIN_DIR)/mvlr -> $(INSTALL_TOOLCHAIN_DIR)/bin/mvlr"
 	@echo "  stdlib:       $(INSTALL_TOOLCHAIN_DIR)/std/"
+	@echo "  core runtime: $(INSTALL_RUNTIME_DIR)/core/ (v$(INSTALL_RUNTIME_VERSION))"
 	@echo "  rust runtime: $(INSTALL_RUNTIME_DIR)/rust/ (v$(INSTALL_RUNTIME_VERSION))"
 	@echo "  rust-tokio:   $(INSTALL_RUNTIME_DIR)/rust-tokio/"
 	@echo "  llvm runtime: $(INSTALL_RUNTIME_DIR)/llvm/ (v$(INSTALL_RUNTIME_VERSION))"
