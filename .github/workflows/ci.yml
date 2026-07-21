@@ -311,6 +311,7 @@ jobs:
           RUNTIME_VERSION=$(grep '^version' runtime/rust/Cargo.toml | head -1 | sed 's/.*"\(.*\)".*/\1/')
           RUNTIME_HOME="${HOME}/.local/share/mvl/runtime/${RUNTIME_VERSION}"
           mkdir -p "${RUNTIME_HOME}"
+          [ -e "${RUNTIME_HOME}/core" ] || ln -s "${{ github.workspace }}/runtime/core" "${RUNTIME_HOME}/core"
           [ -e "${RUNTIME_HOME}/rust" ] || ln -s "${{ github.workspace }}/runtime/rust" "${RUNTIME_HOME}/rust"
           [ -e "${RUNTIME_HOME}/rust-tokio" ] || ln -s "${{ github.workspace }}/runtime/rust-tokio" "${RUNTIME_HOME}/rust-tokio"
 

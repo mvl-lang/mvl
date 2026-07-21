@@ -447,6 +447,14 @@ pub fn run(
                 eprintln!("error: failed to copy mvl_runtime: {e}");
                 process::exit(1);
             });
+            // `mvl_runtime/Cargo.toml` has `path = "../core"` so the core crate
+            // must be present alongside mvl_runtime/ in the build temp dir.
+            let core_src = mvl::mvl::runtime_xdg::runtime_core_path();
+            let core_dst = tmp_dir.join("core");
+            super::copy_dir_recursive(&core_src, &core_dst).unwrap_or_else(|e| {
+                eprintln!("error: failed to copy mvl_runtime_core: {e}");
+                process::exit(1);
+            });
         }
     }
 

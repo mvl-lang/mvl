@@ -38,6 +38,12 @@ pub fn runtime_root() -> PathBuf {
     mvl_data_home().join("runtime").join(RUNTIME_VERSION)
 }
 
+/// Path to the shared core crate (`mvl_runtime_core`), depended on by both
+/// `rust/` and `rust-tokio/` via `path = "../core"`.
+pub fn runtime_core_path() -> PathBuf {
+    runtime_root().join("core")
+}
+
 /// Path to the default (non-tokio) runtime crate.
 pub fn runtime_rust_path() -> PathBuf {
     runtime_root().join("rust")
