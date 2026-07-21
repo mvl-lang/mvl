@@ -1187,6 +1187,24 @@ pub unsafe extern "C" fn _mvl_map_drop_si64(m: i32) {
     }
 }
 
+// ── Struct / payload allocation (#1821) ──────────────────────────────────
+
+/// Allocate `size` bytes on the Rust heap and return the pointer as i32.
+/// Used by the WASM emitter for struct construction and payload-enum
+/// header + payload allocation (#1821). The returned region is zeroed.
+/// Callers are responsible for freeing via `Box::from_raw` when done;
+/// for corpus tests the allocations are short-lived and leaking is fine.
+#[unsafe(no_mangle)]
+pub extern "C" fn _mvl_struct_alloc(size: i32) -> i32 {
+    if size <= 0 {
+        return 0;
+    }
+    let mut v: Vec<u8> = vec![0u8; size as usize];
+    let ptr = v.as_mut_ptr() as i32;
+    std::mem::forget(v);
+    ptr
+}
+
 // ── Tests ────────────────────────────────────────────────────────────────
 //
 // Compiled + run under wasm32-wasip1 so the i32-pointer ABI works as it
