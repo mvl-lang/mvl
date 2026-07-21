@@ -1,0 +1,301 @@
+// injection.mvl — SQL-injection-prevention kernel.
+//
+// Composes three MVL features into one input-validation invariant:
+//
+//   * QF-Strings refinement predicates (#1919 `self.contains(...)` and
+//     #1921 `self.matches(...)`) — state metacharacter absence, length
+//     bounds, and identifier well-formedness at the type level.
+//
+//   * IFC declassification (`Tainted[String]` → `String`) with a single
+//     audited `relabel trust` anchor — every user-controlled string
+//     must pass this checkpoint before being usable in query
+//     construction.  The anchor is grep-able:
+//     `grep -n "SQL-DECLASSIFY-001"` returns exactly one line.
+//
+//   * MC/DC compound decision (`should_reject_input`) with a
+//     structurally coupled term — same shape as `contraindicated` in
+//     `dose_scheduling`.  Coverage is achieved under DO-178C masking
+//     MC/DC per Appendix A, 6.4.4.2.
+//
+// The invariant preserved by this kernel:
+//   user-controlled input never reaches the query template without either
+//     (a) passing the refined-type predicates that guarantee SQL-safety, or
+//     (b) being routed through the sole declassification anchor above.
+//
+// Refinement targets (what layered discharge proves):
+//   * Length arithmetic on bounded inputs — L1 for literal call sites,
+//     L4 (Cooper) for symbolic length reasoning.
+//   * Metacharacter absence via `!self.contains(...)` — L1 constant-folds
+//     literal arguments; L5 QF-Strings discharges symbolic ones.
+//   * Regex membership via `self.matches(...)` — L1 for literals,
+//     L5 QF-Strings RegLan for symbolic.
+//
+// Compound decisions (what MC/DC audits):
+//   * `should_reject_input` — four atomic conditions with a coupled
+//     term (`contains_metachar` appears twice).  Requires `--masking`
+//     for DO-178C-conformant coverage.
+
+use model.{SafeSqlParam, BoundedInput, SqlIdentifier, EscapedSqlParam, SqlQuery, InputRejectReason, AdmitResult}
+
+// ── IFC boundary: sole declassification anchor ────────────────────────
+
+/// Declassify a user-supplied string that has been separately validated.
+///
+/// AUDIT ANCHOR (`SQL-DECLASSIFY-001`): sole `relabel trust` on the
+/// user-input flow into the SQL construction path.  A future violation
+/// is detectable by grepping for the tag:
+/// `grep -rn "SQL-DECLASSIFY-001" examples/sql_injection_prevention/`
+/// returns exactly one line.
+///
+/// The output has the plain `String` type; promoting the result to a
+/// `SafeSqlParam` (see `into_safe_param`) is a separate check that the
+/// solver discharges via QF-Strings, either statically (for literal
+/// arguments) or as a runtime obligation (for symbolic arguments).
+pub total fn declassify_user_input(t: Tainted[String]) -> String {
+    relabel trust(t, "SQL-DECLASSIFY-001")
+}
+
+// ── Refined-type entry points ─────────────────────────────────────────
+//
+// Every function below narrows an unrefined `String` into a refined
+// wrapper.  The identity body forces the refinement obligation to be
+// checked at the call site, exercising the solver's per-layer dispatch:
+//   * literal arguments               → L1 constant-fold
+//   * symbolic arguments              → L5 (QF-Strings or RegLan)
+//   * len-only symbolic arguments     → L4 (Cooper on `str.len`) or L5
+
+/// Promote a validated string to the SQL-safe parameter refinement.
+///
+/// The refinement `SafeSqlParam` requires the string to contain none of
+/// the three canonical SQL metacharacters (`'`, `;`, `--`).  Passing a
+/// literal that violates this fails at compile time (L1); passing a
+/// symbolic string emits an L5 QF-Strings obligation.
+pub fn into_safe_param(s: SafeSqlParam) -> SafeSqlParam {
+    s
+}
+
+/// Promote a length-bounded string to the `BoundedInput` refinement.
+///
+/// The `len(self) <= 4096` clause discharges at L1 for literal
+/// arguments; symbolic arguments produce an L4 Cooper obligation on
+/// `str.len`.
+pub fn into_bounded_input(s: BoundedInput) -> BoundedInput {
+    s
+}
+
+/// Promote a well-formed identifier to the `SqlIdentifier` refinement.
+///
+/// The regex refinement discharges at L1 for literal arguments and at
+/// L5 (QF-Strings RegLan) for symbolic ones.
+pub fn into_sql_identifier(s: SqlIdentifier) -> SqlIdentifier {
+    s
+}
+
+/// Promote an escaped payload to the `EscapedSqlParam` refinement.
+///
+/// This is the accepting shape after character-set whitelisting.  The
+/// regex refinement exercises L5 QF-Strings on symbolic arguments.
+pub fn into_escaped_param(s: EscapedSqlParam) -> EscapedSqlParam {
+    s
+}
+
+// ── L5-forcing predicates (QF-Strings obligations) ────────────────────
+//
+// Three pass-through functions whose `ensures` clauses force Z3 QF-Strings
+// / RegLan obligations.  The pattern mirrors data_integrity's BV-proving
+// functions: take a symbolically refined input, return it unchanged, and
+// state a derived property in `ensures` that Z3 must discharge from the
+// type refinement.  Literal call sites are L1; the function definition's
+// ensures clause is L5.
+
+/// Prove metacharacter absence (L5 QF-Strings — #1919).
+///
+/// Z3 transfers the `SafeSqlParam` type predicate to the `result` ensures
+/// clause via QF-Strings string-content reasoning.  The three no-contain
+/// predicates on `result` are exactly the `SafeSqlParam` invariant; Z3
+/// discharges them symbolically rather than by constant-folding.
+pub total fn is_safe_input(s: SafeSqlParam) -> String
+    ensures !result.contains("'") && !result.contains(";") && !result.contains("--")
+{
+    s
+}
+
+/// Prove escape completeness (L5 QF-Strings RegLan — #1921).
+///
+/// Z3 RegLan propagates the `EscapedSqlParam` regex type predicate to the
+/// result: if the input matches the whitelist, so does the output.  Z3 sees
+/// `self.regex_matches(re)` as a hypothesis and `¬self.regex_matches(re)` as
+/// the goal negation — trivially UNSAT, triggering an L5:z3 discharge on the
+/// `RegexMatch` predicate kind.
+pub total fn is_properly_escaped(e: EscapedSqlParam) -> String
+    ensures result.matches("^[a-zA-Z0-9_ .,=()@-]*$")
+{
+    e
+}
+
+/// Prove safe-input composability: a valid SQL identifier carries its format.
+///
+/// Refinement layer: L5 (QF-Strings RegLan — #1921).
+/// Z3 propagates the `SqlIdentifier` regex predicate to `result`: the
+/// hypothesis `self.regex_matches(re)` is asserted from the type; the goal
+/// negation `¬self.regex_matches(re)` is immediately UNSAT.  Third distinct
+/// L5:z3 obligation — proves the identifier well-formedness invariant holds
+/// end-to-end through the pass-through, giving the solver a compositional
+/// anchor for the query-construction safety argument.
+pub total fn no_injection_possible(id: SqlIdentifier) -> String
+    ensures result.matches("^[a-zA-Z_][a-zA-Z0-9_]*$")
+{
+    id
+}
+
+// ── Bounded arithmetic on input length (L1/L4) ────────────────────────
+
+/// The number of parameters remaining in the 32-slot query envelope.
+///
+/// Refinement layer: **L4 (Cooper / Presburger)**.
+/// From `used >= 0 && used <= 32`, derive `32 - used >= 0 && 32 - used <= 32`
+/// via Fourier--Motzkin elimination.
+pub total fn remaining_param_slots(used: Int where self >= 0 && self <= 32) -> Int
+    ensures result >= 0 && result <= 32
+{
+    32 - used
+}
+
+// ── Compound safety predicate (MC/DC target) ──────────────────────────
+
+/// Should this user input be rejected outright?
+///
+/// A four-term compound predicate.  Serves as the MC/DC test target for
+/// this example --- five distinct test cases exercise all four atomic
+/// conditions independently (see `injection_test.mvl`).
+///
+/// MC/DC AUDIT ANCHOR (`MCDC-SQLINJ-001`): `contains_metachar` appears
+/// in two clauses of this decision (`contains_metachar && !is_from_trusted_zone`
+/// and `contains_metachar && !has_explicit_bypass`).  Unique-cause MC/DC
+/// independence is therefore structurally impossible for this term.
+/// Under DO-178C masking MC/DC rules (Appendix A, 6.4.4.2), the coupled
+/// term is exempt: the analyser reports it as MISSED without
+/// `--masking` and PASS with `--masking`.
+///
+/// Security rationale for the shared term: an input containing a SQL
+/// metacharacter is rejected in two independent contexts --- when the
+/// caller is outside the trusted zone (external network) and when no
+/// explicit override token is presented (internal misconfiguration).
+/// The two clauses express different threat models over the same
+/// physical fact, so both must exist as separate rejection paths.
+/// `make mcdc ARGS=--masking` is the accepting mode for this example.
+pub total fn should_reject_input(
+    length_exceeded: Bool,
+    contains_metachar: Bool,
+    is_from_trusted_zone: Bool,
+    has_explicit_bypass: Bool,
+) -> Bool {
+    length_exceeded
+    || (contains_metachar && !is_from_trusted_zone)
+    || (contains_metachar && !has_explicit_bypass)
+}
+
+/// Compute the rejection reason.  Priority order: length before content
+/// (cheap check first), origin before override (defence in depth).
+///
+/// Precondition: must only be called when `should_reject_input` returns
+/// `true` for the same arguments.  The final `else` branch is unreachable
+/// under correct usage (clean input is never a rejection).
+pub total fn input_reject_reason(
+    length_exceeded: Bool,
+    contains_metachar: Bool,
+    is_from_trusted_zone: Bool,
+    has_explicit_bypass: Bool,
+) -> InputRejectReason {
+    if length_exceeded { InputRejectReason::LengthExceeded }
+    else if contains_metachar && !is_from_trusted_zone { InputRejectReason::UntrustedOrigin }
+    else if contains_metachar && !has_explicit_bypass { InputRejectReason::NoOverride }
+    else if contains_metachar { InputRejectReason::ContainsMetacharacter }
+    else { InputRejectReason::LengthExceeded }
+}
+
+// ── Query builder ─────────────────────────────────────────────────────
+
+/// Construct a prepared query.  Every parameter must satisfy
+/// `SafeSqlParam` at the call site; the template is a `BoundedInput`.
+///
+/// The `SqlQuery` result is a data-only value: it carries the template
+/// and a parameter count, not the concatenation.  The parameter values
+/// are bound by the driver at execution time --- never spliced into
+/// the template.
+pub total fn build_sql_query(
+    template: BoundedInput,
+    param_count: Int where self >= 0 && self <= 32,
+) -> SqlQuery {
+    SqlQuery {
+        template: template,
+        param_count: param_count,
+    }
+}
+
+// ── Inline unit tests (support MC/DC discovery, ref #1888) ────────────
+
+test fn reject_when_length_exceeded_only() -> Unit {
+    assert_eq(should_reject_input(true, false, true, true), true);
+}
+
+test fn reject_when_metachar_from_untrusted_zone() -> Unit {
+    assert_eq(should_reject_input(false, true, false, true), true);
+}
+
+test fn reject_when_metachar_without_override() -> Unit {
+    assert_eq(should_reject_input(false, true, true, false), true);
+}
+
+test fn accept_when_metachar_but_trusted_and_overridden() -> Unit {
+    assert_eq(should_reject_input(false, true, true, true), false);
+}
+
+test fn accept_when_clean_input() -> Unit {
+    assert_eq(should_reject_input(false, false, true, true), false);
+}
+
+test fn accept_when_clean_and_untrusted_no_override() -> Unit {
+    // No metacharacter, so origin/override are irrelevant.
+    assert_eq(should_reject_input(false, false, false, false), false);
+}
+
+test fn reject_reason_length_first() -> Unit {
+    let r: InputRejectReason = input_reject_reason(true, true, false, false);
+    let is_length: Int = match r {
+        InputRejectReason::LengthExceeded => 1,
+        _                                 => 0,
+    };
+    assert_eq(is_length, 1);
+}
+
+test fn reject_reason_untrusted_origin() -> Unit {
+    let r: InputRejectReason = input_reject_reason(false, true, false, true);
+    let is_origin: Int = match r {
+        InputRejectReason::UntrustedOrigin => 1,
+        _                                  => 0,
+    };
+    assert_eq(is_origin, 1);
+}
+
+test fn reject_reason_no_override() -> Unit {
+    let r: InputRejectReason = input_reject_reason(false, true, true, false);
+    let is_no_override: Int = match r {
+        InputRejectReason::NoOverride => 1,
+        _                             => 0,
+    };
+    assert_eq(is_no_override, 1);
+}
+
+test fn remaining_slots_full() -> Unit {
+    assert_eq(remaining_param_slots(0), 32);
+}
+
+test fn remaining_slots_empty() -> Unit {
+    assert_eq(remaining_param_slots(32), 0);
+}
+
+test fn remaining_slots_mid() -> Unit {
+    assert_eq(remaining_param_slots(20), 12);
+}
+

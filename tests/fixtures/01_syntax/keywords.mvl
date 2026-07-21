@@ -88,10 +88,10 @@ partial fn loop_contracts(ref i: Int where self >= 0) -> Int {
     i
 }
 
-// Quantifier keywords: forall, exists (Phase 5)
+// Quantifier keywords: forall, exists — bounded form only (#1915)
 fn quantified(n: Int where self >= 0) -> Int
-    requires forall k: Int, k >= 0
-    ensures exists k: Int, k >= 0
+    requires forall k in [0..9]. k >= 0
+    ensures exists k in [0..9]. k >= 0
 {
     n
 }

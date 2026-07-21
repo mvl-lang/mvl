@@ -37,7 +37,7 @@ use crate::mvl::checker::solver::{
 };
 use crate::mvl::parser::ast::{
     ArithOp, BinaryOp, CmpOp, Decl, ElseBranch, Expr, FnDecl, LValue, Literal, LogicOp, MatchArm,
-    MatchBody, Param, Pattern, Program, RefExpr, Stmt, TypeBody, TypeExpr,
+    MatchBody, Param, Pattern, Program, RefExpr, Stmt, StringOp, TypeBody, TypeExpr,
 };
 use crate::mvl::parser::lexer::Span;
 use crate::mvl::parser::visit::{walk_expr, walk_stmt, Visit};
@@ -86,10 +86,72 @@ pub struct RefinementCounts {
     /// Per-call-site proof records covering ALL outcomes (proven / runtime / failed).
     /// Populated unconditionally; consumed by `mvl prove` (#836) for the breakdown report.
     pub sites: Vec<ProofSite>,
+    /// Axis 2 (#1931): proven `ensures` clauses where a tighter bound is also provable.
+    /// Populated during `check_ensures_for_return`; consumed by `mvl harden`.
+    pub tightening_candidates: Vec<TighteningCandidate>,
     /// Name of the function currently being analyzed (set by `check_refinements` before
     /// each `analyze_block` call so `ProofSite::caller_fn` can be populated without
     /// threading the name through every recursive helper).
     pub current_fn: String,
+}
+
+// ── Axis 2: contract tightening candidates (#1931) ────────────────────────────
+
+/// A proven `ensures` clause where Z3 can prove a strictly tighter bound.
+///
+/// Collected during `check_ensures_for_return` and surfaced by `mvl harden`.
+/// One candidate is emitted per return point (branch); callers should
+/// deduplicate by `(fn_name, declared_pred)` keeping the weakest tighter bound
+/// (min for `>=`/`>`, max for `<=`/`<`) to produce a globally-sound suggestion.
+#[derive(Debug, Clone)]
+pub struct TighteningCandidate {
+    /// Function whose postcondition could be tightened.
+    pub fn_name: String,
+    /// The declared predicate string (e.g. `"ensures result >= 0"`).
+    pub declared_pred: String,
+    /// The tighter predicate Z3 can prove (e.g. `"ensures result >= 5"`).
+    pub tighter_pred: String,
+    /// Raw tighter bound value for deduplication arithmetic (f64 covers both Int and Float bounds).
+    pub tighter_bound: f64,
+    /// Whether to find the min (Ge/Gt) or max (Le/Lt) across branches.
+    /// `true` = take the minimum tighter bound (lower-bound predicates).
+    pub take_min: bool,
+    /// Source location of the return expression that was proven.
+    pub span: Span,
+    // ── Axis 3: boundary witness synthesis (#1931) ─────────────────────────
+    /// Function parameters — used by `mvl harden --emit-tests` to synthesize
+    /// call arguments.  Cloned from `FnDecl.params` at contract-check time.
+    pub params: Vec<Param>,
+    /// Branch conditions active at this return point — used as Z3 constraints
+    /// when searching for a witness input that reaches this return path.
+    pub branch_hyps: Vec<Expr>,
+}
+
+// ── Axis 3: boundary witness synthesis (#1931) ────────────────────────────────
+
+/// A concrete value found by Z3 as a witness for a boundary test input.
+#[derive(Debug, Clone)]
+pub enum WitnessValue {
+    /// A concrete integer (covers Int, Bool-as-int, refined Int, etc.).
+    Int(i64),
+    /// A concrete float synthesized from a Z3 Real model (#1957).
+    Float(f64),
+    /// A concrete string extracted from Z3 String theory (#1955).
+    Str(String),
+    /// A struct constructed from field witnesses.
+    Struct {
+        type_name: String,
+        fields: Vec<(String, WitnessValue)>,
+    },
+    /// Z3 returned unknown or the param type is unsupported.
+    Unknown,
+}
+
+/// A single function parameter bound to a witness value.
+#[derive(Debug, Clone)]
+pub struct WitnessArg {
+    pub param_name: String,
+    pub value: WitnessValue,
 }
 
 // ── Per-call-site proof records (#836) ────────────────────────────────────────
@@ -98,9 +160,13 @@ pub struct RefinementCounts {
 #[derive(Debug, Clone)]
 pub enum ProofOutcome {
     /// Proven statically at the given solver layer (1–5).
-    Proven { layer: usize },
+    /// `is_bv = true` when Layer 5 used Z3 QF-BV (bit-vector theory) (#1928).
+    Proven { layer: usize, is_bv: bool },
     /// Could not prove statically; a runtime assertion will be emitted.
     RuntimeCheck,
+    /// Could not prove statically, but Z3 found a concrete counter-example
+    /// showing how the predicate can fail (#1896).
+    RuntimeCheckWithWitness { counterexample: String },
     /// Statically violated — the argument provably breaks the predicate.
     Failed,
 }
@@ -120,6 +186,18 @@ pub struct ProofSite {
     pub span: Span,
     /// What the solver determined for this site.
     pub outcome: ProofOutcome,
+}
+
+/// Axis 3 witness synthesis — public thin wrapper over the `pub(crate)` layer5 entry point.
+///
+/// Exposed here so the CLI crate (`src/cli/harden.rs`) can call it without
+/// requiring access to the private `checker::solver` module.
+pub fn synthesize_witness(
+    params: &[crate::mvl::parser::ast::Param],
+    branch_hyps: &[crate::mvl::parser::ast::Expr],
+    struct_fields: &std::collections::HashMap<String, Vec<(String, String)>>,
+) -> Option<Vec<WitnessArg>> {
+    crate::mvl::checker::solver::layer5::try_z3_witness(params, branch_hyps, struct_fields)
 }
 
 // ── Entry points ──────────────────────────────────────────────────────────────
@@ -686,6 +764,23 @@ pub(crate) fn build_type_alias_refinements(prog: &Program) -> HashMap<String, Op
     map
 }
 
+/// Multi-file variant: merge type-alias refinements from all loaded programs.
+///
+/// Used by the contracts checker so that `ensures` / `requires` clauses over
+/// parameters typed with a refined alias defined in an imported module (e.g.
+/// `s: SafeSqlParam` where `SafeSqlParam` is in `model.mvl`) see the correct
+/// type predicate in `var_refs`.  Without this, cross-module refined type
+/// aliases resolve to `None` and the solver cannot discharge the obligation.
+pub(crate) fn build_type_alias_refinements_combined(
+    progs: &[&Program],
+) -> HashMap<String, Option<RefExpr>> {
+    let mut map = HashMap::new();
+    for prog in progs {
+        map.extend(build_type_alias_refinements(prog));
+    }
+    map
+}
+
 /// Extract the outermost refinement from a `TypeExpr`, if present.
 fn extract_type_refinement(ty: &TypeExpr) -> Option<RefExpr> {
     match ty {
@@ -1086,6 +1181,28 @@ fn normalize_pred(pred: &RefExpr, param_name: &str) -> RefExpr {
             field: field.clone(),
             span: *span,
         },
+        // StringOp: recurse into receiver (which may reference the param as `self`).
+        RefExpr::StringOp {
+            op,
+            receiver,
+            literal,
+            span,
+        } => RefExpr::StringOp {
+            op: *op,
+            receiver: Box::new(normalize_pred(receiver, param_name)),
+            literal: literal.clone(),
+            span: *span,
+        },
+        // RegexMatch: same shape — recurse into receiver, pattern is a compile-time const.
+        RefExpr::RegexMatch {
+            receiver,
+            pattern,
+            span,
+        } => RefExpr::RegexMatch {
+            receiver: Box::new(normalize_pred(receiver, param_name)),
+            pattern: pattern.clone(),
+            span: *span,
+        },
         // Literals and Len don't contain the param name.
         other => other.clone(),
     }
@@ -1428,8 +1545,10 @@ impl<'a, 'ast> Visit<'ast> for RefinementAnalyzer<'a, 'ast> {
                         self.counts,
                     );
                     match outcome {
-                        RefResult::Proven => self.counts.proven += 1,
-                        RefResult::RuntimeCheck => self.counts.runtime_checked += 1,
+                        RefResult::Proven | RefResult::ProvenBv => self.counts.proven += 1,
+                        RefResult::RuntimeCheck | RefResult::RuntimeCheckWithWitness { .. } => {
+                            self.counts.runtime_checked += 1
+                        }
                         RefResult::Failed { counterexample } => {
                             self.counts.failed += 1;
                             self.errors.push(CheckError::RefinementViolated {
@@ -1613,7 +1732,7 @@ fn check_call_site(
         // `check_arg_against_pred_counted` via `record()` — do not
         // increment here or they will double-count.
         let proof_outcome = match &outcome {
-            RefResult::Proven => {
+            RefResult::Proven | RefResult::ProvenBv => {
                 counts.proof_log.push(ProofEntry {
                     file: String::new(), // filled by assurance aggregator
                     line: call_span.line,
@@ -1622,9 +1741,17 @@ fn check_call_site(
                     predicate: format!("{}: {}", param_name, display_pred(pred)),
                     layer,
                 });
-                ProofOutcome::Proven { layer }
+                ProofOutcome::Proven {
+                    layer,
+                    is_bv: matches!(outcome, RefResult::ProvenBv),
+                }
             }
             RefResult::RuntimeCheck => ProofOutcome::RuntimeCheck,
+            RefResult::RuntimeCheckWithWitness { counterexample } => {
+                ProofOutcome::RuntimeCheckWithWitness {
+                    counterexample: counterexample.clone(),
+                }
+            }
             RefResult::Failed { counterexample } => {
                 errors.push(CheckError::RefinementViolated {
                     pred: format!(
@@ -1663,11 +1790,11 @@ fn record(n: usize, r: RefResult, counts: &mut RefinementCounts) -> RefResult {
     // summed to the real proof total. Centralising the update here makes it
     // impossible to add a new caller that silently drops counts.
     match &r {
-        RefResult::Proven => {
+        RefResult::Proven | RefResult::ProvenBv => {
             counts.by_layer[n] += 1;
             counts.proven += 1;
         }
-        RefResult::RuntimeCheck => {
+        RefResult::RuntimeCheck | RefResult::RuntimeCheckWithWitness { .. } => {
             counts.runtime_checked += 1;
         }
         RefResult::Failed { .. } => {
@@ -1687,6 +1814,17 @@ pub(crate) fn check_arg_against_pred_counted(
     fn_decls: &HashMap<String, FnDecl>,
     counts: &mut RefinementCounts,
 ) -> RefResult {
+    // L3 bounded-quantifier expansion (#1915): before the layered cascade,
+    // unroll `forall i in [lo..hi]. p(i)` into a conjunction of substituted
+    // instances (and existentials into a disjunction). Each instance is then
+    // dispatched through the full L1..L5 cascade. See ADR-0057.
+    if matches!(
+        pred,
+        RefExpr::BoundedForall { .. } | RefExpr::BoundedExists { .. }
+    ) {
+        return expand_bounded_quantifier(arg, pred, var_refs, fn_decls, counts);
+    }
+
     // Atom normalization (#1805): L2/L4/L5 gate on `Expr::Ident`, which excludes
     // real-world compound atoms like `field.height` or `xs.len()`.  We rewrite
     // those non-arithmetic subtrees to fresh `Ident("__atom_N")` in a single
@@ -1694,8 +1832,12 @@ pub(crate) fn check_arg_against_pred_counted(
     // and 3 receive the *original* inputs — L1 relies on structural shape
     // equality, and L3 dispatches on `Expr::FnCall` which normalization does
     // not rewrite anyway (but keeping originals avoids any accidental drift).
-    let normalize = || {
-        let mut norm = AtomNormalizer::new();
+    //
+    // The normalizer is preserved (not wrapped in a closure) so that try_z3
+    // can use it to project __atom_N names back to source-level names in
+    // counter-example witnesses (#1896).
+    let mut norm = AtomNormalizer::new();
+    let make_normalized = |norm: &mut AtomNormalizer| {
         let n_arg = norm.rewrite_expr(arg);
         let n_pred = norm.rewrite_refexpr(pred);
         let n_var_refs = norm.rewrite_var_refs(var_refs);
@@ -1704,8 +1846,8 @@ pub(crate) fn check_arg_against_pred_counted(
 
     match counts.mode {
         SolverMode::Z3Only => {
-            let (n_arg, n_pred, n_var_refs) = normalize();
-            if let Some(r) = try_z3(&n_pred, &n_arg, &n_var_refs) {
+            let (n_arg, n_pred, n_var_refs) = make_normalized(&mut norm);
+            if let Some(r) = try_z3(&n_pred, &n_arg, &n_var_refs, Some(&norm)) {
                 return record(5, r, counts);
             }
         }
@@ -1713,7 +1855,7 @@ pub(crate) fn check_arg_against_pred_counted(
             if let Some(r) = try_trivial(pred, arg, var_refs, fn_decls) {
                 return record(1, r, counts);
             }
-            let (n_arg, n_pred, n_var_refs) = normalize();
+            let (n_arg, n_pred, n_var_refs) = make_normalized(&mut norm);
             if let Some(r) = try_interval(&n_pred, &n_arg, &n_var_refs) {
                 return record(2, r, counts);
             }
@@ -1722,7 +1864,7 @@ pub(crate) fn check_arg_against_pred_counted(
             if let Some(r) = try_trivial(pred, arg, var_refs, fn_decls) {
                 return record(1, r, counts);
             }
-            let (n_arg, n_pred, n_var_refs) = normalize();
+            let (n_arg, n_pred, n_var_refs) = make_normalized(&mut norm);
             if let Some(r) = try_interval(&n_pred, &n_arg, &n_var_refs) {
                 return record(2, r, counts);
             }
@@ -1736,7 +1878,7 @@ pub(crate) fn check_arg_against_pred_counted(
             if let Some(r) = try_cooper(&n_pred, &n_arg, &n_var_refs) {
                 return record(4, r, counts);
             }
-            if let Some(r) = try_z3(&n_pred, &n_arg, &n_var_refs) {
+            if let Some(r) = try_z3(&n_pred, &n_arg, &n_var_refs, Some(&norm)) {
                 return record(5, r, counts);
             }
         }
@@ -1745,6 +1887,119 @@ pub(crate) fn check_arg_against_pred_counted(
     // Count it before returning so callers see it in `runtime_checked`.
     counts.runtime_checked += 1;
     RefResult::RuntimeCheck
+}
+
+// ── L3 bounded-quantifier expansion (#1915) ─────────────────────────────────
+
+/// Maximum number of expanded obligations produced by a single bounded
+/// quantifier before the checker falls back to `RuntimeCheck`. Prevents
+/// pathological blow-up on wide ranges. Same pattern as `MAX_PATHS` in L3.
+const MAX_BOUNDED_EXPANSION: usize = 1000;
+
+/// Expand a bounded quantifier by substituting the bound variable with each
+/// integer in `[lo..hi]` and dispatching each instance through the layered
+/// solver. Aggregates results:
+/// - `forall`: any failure ⇒ failure; all proven ⇒ proven; otherwise runtime.
+/// - `exists`: any proven ⇒ proven; all failed ⇒ failure; otherwise runtime.
+///
+/// Each expanded instance is credited to `by_layer[3]` regardless of which
+/// inner layer discharges it (per #1915 AC): the expansion is the L3 activity.
+fn expand_bounded_quantifier(
+    arg: &Expr,
+    pred: &RefExpr,
+    var_refs: &HashMap<String, Option<RefExpr>>,
+    fn_decls: &HashMap<String, FnDecl>,
+    counts: &mut RefinementCounts,
+) -> RefResult {
+    let (var, lo, hi, body, is_forall) = match pred {
+        RefExpr::BoundedForall {
+            var, lo, hi, body, ..
+        } => (var.clone(), *lo, *hi, body.as_ref(), true),
+        RefExpr::BoundedExists {
+            var, lo, hi, body, ..
+        } => (var.clone(), *lo, *hi, body.as_ref(), false),
+        _ => unreachable!("expand_bounded_quantifier requires a bounded quantifier"),
+    };
+
+    // Range width. Parser has already rejected `lo > hi`; guard defensively.
+    if hi < lo {
+        counts.runtime_checked += 1;
+        return RefResult::RuntimeCheck;
+    }
+    let width = (hi - lo + 1) as usize;
+    if width > MAX_BOUNDED_EXPANSION {
+        // Cap exceeded — record one runtime-check obligation, do not expand.
+        // A follow-up ticket can add an explicit diagnostic here.
+        counts.runtime_checked += 1;
+        return RefResult::RuntimeCheck;
+    }
+
+    let mut all_proven = true;
+    let mut all_failed = true;
+    let mut first_failure: Option<String> = None;
+
+    for k in lo..=hi {
+        let instance_span = dummy_span();
+        let value = RefExpr::Integer {
+            value: k,
+            span: instance_span,
+        };
+        let instance = crate::mvl::checker::contracts::subst_pred_ident(body, &var, &value);
+
+        // Dispatch this instance through the full cascade, but suppress the
+        // inner counting — we credit each instance to L3 below regardless of
+        // which inner layer discharged it (AC #5).
+        let mut inner_counts = RefinementCounts {
+            mode: counts.mode,
+            ..Default::default()
+        };
+        let r =
+            check_arg_against_pred_counted(arg, &instance, var_refs, fn_decls, &mut inner_counts);
+        counts.by_layer[3] += 1;
+        match r {
+            RefResult::Proven | RefResult::ProvenBv => {
+                counts.proven += 1;
+                all_failed = false;
+                // `exists` short-circuits on first proof.
+                if !is_forall {
+                    return RefResult::Proven;
+                }
+            }
+            RefResult::Failed { counterexample } => {
+                counts.failed += 1;
+                all_proven = false;
+                if is_forall {
+                    // `forall` short-circuits on first refutation.
+                    return RefResult::Failed {
+                        counterexample: counterexample.or_else(|| Some(format!("{var} = {k}"))),
+                    };
+                }
+                if first_failure.is_none() {
+                    first_failure = counterexample;
+                }
+            }
+            RefResult::RuntimeCheck | RefResult::RuntimeCheckWithWitness { .. } => {
+                counts.runtime_checked += 1;
+                all_proven = false;
+                all_failed = false;
+            }
+        }
+    }
+
+    if is_forall {
+        if all_proven {
+            RefResult::Proven
+        } else {
+            RefResult::RuntimeCheck
+        }
+    } else if all_failed {
+        RefResult::Failed {
+            counterexample: first_failure
+                .or_else(|| Some(format!("no witness found in [{lo}..{hi}]"))),
+        }
+    } else {
+        RefResult::RuntimeCheck
+    }
 }
 
 // ── Predicate display ─────────────────────────────────────────────────────────
@@ -1795,8 +2050,56 @@ fn display_pred(pred: &RefExpr) -> String {
         RefExpr::Len { ident, .. } => format!("len({ident})"),
         RefExpr::Forall { var, body, .. } => format!("forall {var}, {}", display_pred(body)),
         RefExpr::Exists { var, body, .. } => format!("exists {var}, {}", display_pred(body)),
+        RefExpr::BoundedForall {
+            var, lo, hi, body, ..
+        } => format!("forall {var} in [{lo}..{hi}]. {}", display_pred(body)),
+        RefExpr::BoundedExists {
+            var, lo, hi, body, ..
+        } => format!("exists {var} in [{lo}..{hi}]. {}", display_pred(body)),
         RefExpr::FieldAccess { object, field, .. } => {
             format!("{}.{}", display_pred(object), field)
+        }
+        RefExpr::BitwiseOp {
+            op, left, right, ..
+        } => {
+            use crate::mvl::parser::ast::BitwiseOp;
+            let op_str = match op {
+                BitwiseOp::And => "&",
+                BitwiseOp::Or => "|",
+                BitwiseOp::Xor => "^",
+                BitwiseOp::Shl => "<<",
+                BitwiseOp::Shr => ">>",
+            };
+            format!("{} {op_str} {}", display_pred(left), display_pred(right))
+        }
+        RefExpr::BitwiseNot { inner, .. } => format!("~{}", display_pred(inner)),
+        RefExpr::StringOp {
+            op,
+            receiver,
+            literal,
+            ..
+        } => {
+            let method = match op {
+                StringOp::Contains => "contains",
+                StringOp::StartsWith => "starts_with",
+                StringOp::EndsWith => "ends_with",
+            };
+            format!("{}.{}({:?})", display_pred(receiver), method, literal)
+        }
+        RefExpr::ArrayGet { list, index, .. } => {
+            format!("{}.get({})", display_pred(list), display_pred(index))
+        }
+        RefExpr::RegexMatch {
+            receiver, pattern, ..
+        } => {
+            format!("{}.matches({:?})", display_pred(receiver), pattern)
+        }
+        RefExpr::Abs { inner, .. } => format!("abs({})", display_pred(inner)),
+        RefExpr::Min { left, right, .. } => {
+            format!("min({}, {})", display_pred(left), display_pred(right))
+        }
+        RefExpr::Max { left, right, .. } => {
+            format!("max({}, {})", display_pred(left), display_pred(right))
         }
     }
 }
@@ -1889,8 +2192,8 @@ mod tests {
         let result = check_arg_against_pred_counted(&arg, &pred, &var_refs, &fn_decls, &mut counts);
         // With Z3 feature: Proven (by_layer[5] = 1). Without: RuntimeCheck.
         match result {
-            RefResult::Proven => assert_eq!(counts.by_layer[5], 1),
-            RefResult::RuntimeCheck => {} // z3 feature not enabled
+            RefResult::Proven | RefResult::ProvenBv => assert_eq!(counts.by_layer[5], 1),
+            RefResult::RuntimeCheck | RefResult::RuntimeCheckWithWitness { .. } => {} // z3 feature not enabled
             RefResult::Failed { .. } => panic!("unexpected Failed"),
         }
         // Layers 1–4 must NOT have been credited.

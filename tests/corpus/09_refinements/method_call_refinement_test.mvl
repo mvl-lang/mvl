@@ -1,0 +1,94 @@
+// 09_refinements/method_call_refinement_test.mvl — method-call sugar for built-in
+// refinement functions (#1936).
+//
+// Verifies that xs.len(), x.abs(), x.min(y), x.max(y) parse and type-check in
+// both:
+//   (a) type-alias-body position:     type T = String where self.len() > 0
+//   (b) function-parameter position:  fn f(xs: String where self.len() > 0)
+//
+// Also verifies that the equivalent function-call forms (len(xs), abs(x),
+// min(x,y), max(x,y)) are accepted in the same positions.
+//
+// Rust-backend note: abs/min/max predicates discharge as RuntimeCheck
+// (solver support is a future enhancement); tests use values where the
+// predicate holds so runtime assertions pass.
+
+// ── len — type-alias-body form ────────────────────────────────────────────────
+
+/// Non-empty string using method-call syntax.
+pub type NonEmptyStr = String where self.len() > 0
+
+/// Non-empty string using function-call syntax (canonical form).
+pub type NonEmptyStr2 = String where len(self) > 0
+
+// ── len — function-parameter forms ───────────────────────────────────────────
+
+fn greet_method(name: String where self.len() > 0) -> String { name }
+fn greet_func(name: String where len(self) > 0) -> String { name }
+
+// ── abs — type-alias-body form ────────────────────────────────────────────────
+
+/// Bounded offset: absolute value < 100.
+pub type SmallOffset = Int where self.abs() < 100
+
+/// Same type using function-call form.
+pub type SmallOffset2 = Int where abs(self) < 100
+
+// ── abs — function-parameter forms ───────────────────────────────────────────
+
+fn accept_small_offset_method(x: Int where self.abs() < 100) -> Int { x }
+fn accept_small_offset_func(x: Int where abs(self) < 100) -> Int { x }
+
+// ── min — function-parameter forms ───────────────────────────────────────────
+
+fn min_method_param(a: Int, b: Int where a.min(b) >= 0) -> Int { b }
+fn min_func_param(a: Int, b: Int where min(a, b) >= 0) -> Int { b }
+
+// ── max — function-parameter forms ───────────────────────────────────────────
+
+fn max_method_param(a: Int, b: Int where a.max(b) < 1000) -> Int { b }
+fn max_func_param(a: Int, b: Int where max(a, b) < 1000) -> Int { b }
+
+// ── Tests ─────────────────────────────────────────────────────────────────────
+
+test fn test_len_method_form_alias() -> Unit {
+    let result: String = greet_method("hello");
+    assert_eq(result, "hello")
+}
+
+test fn test_len_func_form_alias() -> Unit {
+    let result: String = greet_func("world");
+    assert_eq(result, "world")
+}
+
+test fn test_abs_method_form_alias() -> Unit {
+    let x: SmallOffset = 42;
+    let y: SmallOffset = accept_small_offset_method(x);
+    assert_eq(x, y)
+}
+
+test fn test_abs_func_form_alias() -> Unit {
+    let x: SmallOffset2 = 42;
+    let y: SmallOffset2 = accept_small_offset_func(x);
+    assert_eq(x, y)
+}
+
+test fn test_min_method_form() -> Unit {
+    let result: Int = min_method_param(10, 20);
+    assert_eq(result, 20)
+}
+
+test fn test_min_func_form() -> Unit {
+    let result: Int = min_func_param(10, 20);
+    assert_eq(result, 20)
+}
+
+test fn test_max_method_form() -> Unit {
+    let result: Int = max_method_param(10, 20);
+    assert_eq(result, 20)
+}
+
+test fn test_max_func_form() -> Unit {
+    let result: Int = max_func_param(10, 20);
+    assert_eq(result, 20)
+}

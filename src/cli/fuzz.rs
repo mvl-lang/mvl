@@ -445,7 +445,8 @@ fn transpile_project(files: &[PathBuf]) -> FuzzLibOutput {
         all_expr_types,
         &sibling_expr_types,
         mvl::mvl::backends::AssertMode::Assume, // don't panic on refinement violations in fuzz
-        true, // extern_stubs: extern "rust" → todo!() so the harness links without bridges
+        false, // optimize_proved: keep bounds checks in fuzz corpus for safety
+        true,  // extern_stubs: extern "rust" → todo!() so the harness links without bridges
         &[],
     );
 

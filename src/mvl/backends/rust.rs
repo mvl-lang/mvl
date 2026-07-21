@@ -238,6 +238,7 @@ pub fn transpile(tir: &crate::mvl::ir::TirProgram, config: TranspileConfig) -> T
 
     let mut cg = RustEmitter::new();
     cg.assert_mode = config.assert_mode;
+    cg.optimize_proved = config.optimize_proved;
     cg.current_file = config.file_stem.clone();
     // Set test_extern_stubs: explicitly from config OR when prelude contains extern blocks.
     // Extern blocks in the prelude (e.g. pkg FFI bindings) cannot be linked in test

@@ -1,6 +1,6 @@
 # log_analyzer example — MVL Phase 4 demonstration
 # Run from this directory: make build, make test, etc.
-.PHONY: help guard-mvl build check prove lint test-solver test test-llvm assurance mcdc mutate fuzz generate smoke run run-llvm all clean
+.PHONY: help guard-mvl build check prove lint test-solver test assurance mcdc mutate fuzz generate smoke run run-llvm all clean
 
 .DEFAULT_GOAL := help
 
@@ -53,8 +53,6 @@ test-solver: guard-mvl ## Show per-file solver statistics for all source files
 test: guard-mvl ## Run all standalone _test.mvl files (18 tests)
 	$(MVL) test $(DIR)
 
-test-llvm: guard-mvl ## Run tests via LLVM backend
-	$(MVL) test $(DIR) --backend=llvm
 
 assurance: guard-mvl ## Assurance report: spec coverage, MC/DC, mutation score (verbose)
 	$(MVL) assurance $(DIR) --verbose

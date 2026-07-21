@@ -644,11 +644,12 @@ dependencies = [
 
 [[package]]
 name = "mvl"
-version = "1.5.4"
+version = "1.7.0"
 dependencies = [
  "criterion",
  "flate2",
  "libc",
+ "regex",
  "tar",
  "tempfile",
  "ureq",

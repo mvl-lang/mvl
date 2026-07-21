@@ -71,16 +71,19 @@ fn sibling_fn_emitted_in_flat_module() {
     assert!(ir.contains("define i32 @main()"), "main not in IR: {ir}");
 }
 
-/// `extern "rust"` block is NOT emitted by LLVM backend (handled by Rust backend only).
+/// `extern "rust"` block emits an opaque `declare` stub so callers produce valid IR.
+/// lli validates the whole module statically; without the stub, functions that call
+/// rust-extern symbols produce type errors (i64 default vs actual return type) that
+/// reject the whole IR file even when the function being run never calls the extern.
 #[test]
-fn extern_rust_not_emitted_by_llvm() {
+fn extern_rust_emits_declare_stub() {
     let ir = compile(
         "extern \"rust\" {\n\
          fn bridge_fn(x: Int) -> Int\n\
          }",
     );
     assert!(
-        !ir.contains("declare") || !ir.contains("bridge_fn"),
-        "extern rust should not emit declare: {ir}"
+        ir.contains("declare") && ir.contains("bridge_fn"),
+        "extern rust should emit an opaque declare stub: {ir}"
     );
 }

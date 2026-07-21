@@ -15,6 +15,31 @@ use std::collections::HashSet;
 use std::fs;
 use std::process;
 
+/// Format a single MC/DC observation as `(T,F,?,T)→T`.
+///
+/// Bits 0..N-1 = clause values, bits N..2N-1 = eval flags, bit 2N = outcome.
+/// Uses `?` when a clause was masked by short-circuit evaluation.
+fn fmt_obs(clause_count: usize, enc: u32) -> String {
+    let n = clause_count;
+    let eval_shift = n;
+    let outcome_bit = 2 * n;
+    let outcome = (enc >> outcome_bit) & 1 == 1;
+    let vals: Vec<&str> = (0..n)
+        .map(|i| {
+            let evaled = (enc >> (eval_shift + i)) & 1 == 1;
+            let val = (enc >> i) & 1 == 1;
+            if !evaled {
+                "?"
+            } else if val {
+                "T"
+            } else {
+                "F"
+            }
+        })
+        .collect();
+    format!("({})→{}", vals.join(","), if outcome { 'T' } else { 'F' })
+}
+
 fn validate_module_name(name: &str, source_path: &str) {
     let valid = !name.is_empty()
         && name.chars().next().is_some_and(|c| c.is_ascii_lowercase())
@@ -621,7 +646,8 @@ pub fn run(path: &str, quiet: bool, verbose: bool, masking: bool, json: bool) {
 
     // Independence analysis.
     use mvl::mvl::passes::mcdc::transform::{
-        is_clause_covered, is_match_arm_covered, DecisionKind as TransformKind,
+        find_independence_pair, is_clause_covered, is_match_arm_covered,
+        DecisionKind as TransformKind,
     };
     let mut covered = 0usize;
     let mut total_obligations = 0usize;
@@ -709,6 +735,7 @@ pub fn run(path: &str, quiet: bool, verbose: bool, masking: bool, json: bool) {
     if verbose && !json {
         println!("\nDETAILED RESULTS");
         println!("{}", "─".repeat(60));
+
         // Pure decisions (not in effectful functions).
         for (decision, (_, clause_results)) in all_decisions.iter().zip(decision_results.iter()) {
             if exempt_ids.contains(&decision.id) {
@@ -734,31 +761,161 @@ pub fn run(path: &str, quiet: bool, verbose: bool, masking: bool, json: bool) {
                 status.join(" "),
                 if all_ok { "COVERED" } else { "MISSED" }
             );
-            // Show coupling info for any missed clause that is part of a coupled pair.
-            for (clause_bit, ok) in clause_results.iter().enumerate() {
-                if *ok {
-                    continue;
+
+            // Source line context.
+            if let Some(src) = module_sources
+                .get(&decision.file)
+                .and_then(|lines| lines.get(decision.line as usize - 1))
+            {
+                let trimmed = src.trim();
+                if !trimmed.is_empty() {
+                    println!("    source: {trimmed}");
                 }
-                for (ci, cj, shared) in &decision.coupled_pairs {
-                    if *ci == clause_bit || *cj == clause_bit {
+            }
+
+            let obs = observations
+                .get(decision.id)
+                .map(|v| v.as_slice())
+                .unwrap_or(&[]);
+
+            if matches!(decision.kind, TransformKind::Match) {
+                // Match arms: just list which were hit.
+                println!(
+                    "    arms covered: {}",
+                    clause_results.iter().filter(|&&ok| ok).count()
+                );
+            } else {
+                let n = decision.clause_count;
+
+                // ── Observations table ──────────────────────────────────────
+                if obs.is_empty() {
+                    println!("    observations: none recorded");
+                } else {
+                    // Header: | # | C0 | C1 | … | Result |
+                    let col_w = 4usize;
+                    let widths: Vec<usize> =
+                        std::iter::once(3usize) // "#"
+                            .chain(std::iter::repeat_n(col_w, n))
+                            .chain(std::iter::once(6usize)) // "Result"
+                            .collect();
+                    let sep_row: String = widths
+                        .iter()
+                        .map(|w| "─".repeat(w + 2))
+                        .collect::<Vec<_>>()
+                        .join("┼");
+                    let bot_row: String = widths
+                        .iter()
+                        .map(|w| "─".repeat(w + 2))
+                        .collect::<Vec<_>>()
+                        .join("┴");
+                    println!("    observations ({} recorded):", obs.len());
+                    // Header row
+                    print!("    │ {:>3} │", "#");
+                    for c in 0..n {
+                        print!(" {:^col_w$} │", format!("C{c}"));
+                    }
+                    println!(" Result │");
+                    println!("    ├{sep_row}┤");
+                    for (row_idx, &enc) in obs.iter().enumerate() {
+                        let eval_shift = n;
+                        let outcome_bit = 2 * n;
+                        let outcome = (enc >> outcome_bit) & 1 == 1;
+                        print!("    │ {:>3} │", row_idx);
+                        for c in 0..n {
+                            let evaled = (enc >> (eval_shift + c)) & 1 == 1;
+                            let val = (enc >> c) & 1 == 1;
+                            let cell = if evaled {
+                                if val {
+                                    "T"
+                                } else {
+                                    "F"
+                                }
+                            } else {
+                                "?"
+                            };
+                            print!(" {:^col_w$} │", cell);
+                        }
+                        println!(" {:^6} │", if outcome { "T" } else { "F" });
+                    }
+                    println!("    └{bot_row}┘");
+                    println!("    (? = masked by short-circuit)");
+                }
+
+                // ── Independence pairs table ────────────────────────────────
+                println!("    independence pairs:");
+                // Column widths
+                let clause_col = 8usize;
+                let pair_col = (n * 2 + 4).max(14usize); // "(T,F,…)→T"
+                let status_col = 8usize;
+                let pair_sep = format!(
+                    "    ├{}┼{}┼{}┼{}┤",
+                    "─".repeat(clause_col + 2),
+                    "─".repeat(pair_col + 2),
+                    "─".repeat(pair_col + 2),
+                    "─".repeat(status_col + 2),
+                );
+                println!(
+                    "    │ {:clause_col$} │ {:pair_col$} │ {:pair_col$} │ {:status_col$} │",
+                    "Clause", "Pair A", "Pair B", "Status"
+                );
+                println!("{pair_sep}");
+                for clause_bit in 0..n {
+                    let pair = find_independence_pair(n, clause_bit, obs);
+                    let (pair_a, pair_b, status_str) = match pair {
+                        Some((a, b)) => (fmt_obs(n, a), fmt_obs(n, b), "✓".to_string()),
+                        None => ("—".to_string(), "—".to_string(), "✗ MISSED".to_string()),
+                    };
+                    println!(
+                        "    │ {:clause_col$} │ {:pair_col$} │ {:pair_col$} │ {:status_col$} │",
+                        format!("C{clause_bit}"),
+                        pair_a,
+                        pair_b,
+                        status_str,
+                    );
+                }
+                println!(
+                    "    └{}┴{}┴{}┴{}┘",
+                    "─".repeat(clause_col + 2),
+                    "─".repeat(pair_col + 2),
+                    "─".repeat(pair_col + 2),
+                    "─".repeat(status_col + 2),
+                );
+
+                // ── Coupling explanations for missed clauses ────────────────
+                for (clause_bit, ok) in clause_results.iter().enumerate() {
+                    if *ok {
+                        continue;
+                    }
+                    let coupled = decision
+                        .coupled_pairs
+                        .iter()
+                        .find(|(ci, cj, _)| *ci == clause_bit || *cj == clause_bit);
+                    if let Some((ci, cj, shared)) = coupled {
                         let other = if *ci == clause_bit { *cj } else { *ci };
                         println!(
-                            "    └─ clause {} COUPLED with clause {} via: {}",
-                            clause_bit,
-                            other,
+                            "    C{clause_bit}: coupled with C{other} via: {}",
                             shared.join(", ")
                         );
-                        println!("       unique-cause independence may be structurally impossible");
-                        if masking {
-                            println!("       masking MC/DC: exempt (--masking)");
-                        }
+                        println!(
+                            "      unique-cause independence structurally impossible{}",
+                            if masking {
+                                " — exempt (--masking)"
+                            } else {
+                                ""
+                            }
+                        );
+                    } else {
+                        println!("    C{clause_bit}: MISSED — no independence pair found in observations");
+                        println!("      → add a test that toggles C{clause_bit} while keeping all other evaluated clauses constant");
                     }
                 }
             }
+            println!();
         }
+
         // Exempt decisions (inside effectful functions).
         if !exempt_ids.is_empty() {
-            println!("\nEXEMPT (! effects — integration coverage only)");
+            println!("EXEMPT (! effects — integration coverage only)");
             for decision in all_decisions.iter().filter(|d| exempt_ids.contains(&d.id)) {
                 let kind_label = decision.kind.label();
                 let unit = if matches!(decision.kind, TransformKind::Match) {
@@ -772,6 +929,7 @@ pub fn run(path: &str, quiet: bool, verbose: bool, masking: bool, json: bool) {
                     decision.file, decision.line, kind_label, decision.clause_count, dashes,
                 );
             }
+            println!();
         }
         println!("{}", "─".repeat(60));
     }

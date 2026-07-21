@@ -614,6 +614,105 @@ pub enum RefExpr {
         body: Box<RefExpr>,
         span: Span,
     },
+    /// Bitwise binary operation in a predicate (#1928): `self.bit_and(15) == self` etc.
+    /// Emitted to Z3 via QF-BV when any bitwise op appears in the predicate.
+    BitwiseOp {
+        op: BitwiseOp,
+        left: Box<RefExpr>,
+        right: Box<RefExpr>,
+        span: Span,
+    },
+    /// Bitwise NOT in a predicate (#1928): `self.bit_not()`.
+    BitwiseNot {
+        inner: Box<RefExpr>,
+        span: Span,
+    },
+    /// `forall x in [lo..hi]. pred` — bounded universal quantifier over an integer range
+    /// (inclusive on both ends). Discharged by L3 expansion into a conjunction of
+    /// instantiated bodies. See #1915.
+    BoundedForall {
+        var: String,
+        lo: i64,
+        hi: i64,
+        body: Box<RefExpr>,
+        span: Span,
+    },
+    /// `exists x in [lo..hi]. pred` — bounded existential quantifier over an integer range
+    /// (inclusive on both ends). Discharged by L3 expansion into a disjunction of
+    /// instantiated bodies. See #1915.
+    BoundedExists {
+        var: String,
+        lo: i64,
+        hi: i64,
+        body: Box<RefExpr>,
+        span: Span,
+    },
+    /// String-content predicate in a refinement: `self.contains("needle")`,
+    /// `self.starts_with("prefix")`, `self.ends_with("suffix")`. The argument
+    /// must be a compile-time string literal. Discharged by L1 (literal haystack)
+    /// or L5 Z3 QF-S (symbolic). See #1919.
+    StringOp {
+        op: StringOp,
+        receiver: Box<RefExpr>,
+        literal: String,
+        span: Span,
+    },
+    /// `list.get(index)` — array-index access in a refinement predicate (#1916).
+    /// The index must be provably in-bounds from the surrounding context.
+    /// Discharged via L2 (interval length propagation) or L5 (Z3 QF-Arrays `select`).
+    ArrayGet {
+        list: Box<RefExpr>,
+        index: Box<RefExpr>,
+        span: Span,
+    },
+    /// Regex-membership predicate in a refinement: `self.matches("pattern")`.
+    /// The pattern must be a compile-time string literal from the admitted
+    /// regular fragment (no backrefs, lookahead, recursion; see ADR-0057).
+    /// Discharged by L1 (literal haystack), L2 (length extraction from
+    /// anchored fixed-quantifier patterns), or L5 Z3 RegLan (symbolic).
+    /// See #1921.
+    RegexMatch {
+        receiver: Box<RefExpr>,
+        pattern: String,
+        span: Span,
+    },
+    /// `abs(x)` or `x.abs()` — absolute value in a refinement predicate (#1936).
+    /// Accepted in both function-call and method-call forms; desugared to this
+    /// node so downstream layers are uniform.
+    Abs {
+        inner: Box<RefExpr>,
+        span: Span,
+    },
+    /// `min(x, y)` or `x.min(y)` — minimum of two values (#1936).
+    Min {
+        left: Box<RefExpr>,
+        right: Box<RefExpr>,
+        span: Span,
+    },
+    /// `max(x, y)` or `x.max(y)` — maximum of two values (#1936).
+    Max {
+        left: Box<RefExpr>,
+        right: Box<RefExpr>,
+        span: Span,
+    },
+}
+
+/// String-content operations supported in refinement predicates (#1919).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StringOp {
+    Contains,
+    StartsWith,
+    EndsWith,
+}
+
+/// Bitwise operators supported in refinement predicates (#1928).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BitwiseOp {
+    And, // bit_and / &
+    Or,  // bit_or  / |
+    Xor, // bit_xor / ^
+    Shl, // shift_left  / <<
+    Shr, // shift_right / >>
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1155,6 +1254,119 @@ pub(crate) fn expr_to_ref_expr_ext(expr: &Expr, fallback_span: Span) -> Option<R
                 None
             }
         }
+        // x.get(i) → RefExpr::ArrayGet (#1916)
+        Expr::MethodCall {
+            receiver,
+            method,
+            args,
+            span,
+        } if method == "get" && args.len() == 1 => {
+            let list = expr_to_ref_expr_ext(receiver, fallback_span)?;
+            let index = expr_to_ref_expr_ext(&args[0], fallback_span)?;
+            Some(RefExpr::ArrayGet {
+                list: Box::new(list),
+                index: Box::new(index),
+                span: *span,
+            })
+        }
+        // x.bit_and(y) / x.bit_or(y) / … → RefExpr::BitwiseOp (#1928)
+        Expr::MethodCall {
+            receiver,
+            method,
+            args,
+            span,
+        } if matches!(
+            method.as_str(),
+            "bit_and" | "bit_or" | "bit_xor" | "shift_left" | "shift_right"
+        ) && args.len() == 1 =>
+        {
+            let recv = expr_to_ref_expr_ext(receiver, fallback_span)?;
+            let rhs = expr_to_ref_expr_ext(&args[0], *span)?;
+            let op = match method.as_str() {
+                "bit_and" => BitwiseOp::And,
+                "bit_or" => BitwiseOp::Or,
+                "bit_xor" => BitwiseOp::Xor,
+                "shift_left" => BitwiseOp::Shl,
+                "shift_right" => BitwiseOp::Shr,
+                _ => unreachable!(),
+            };
+            Some(RefExpr::BitwiseOp {
+                op,
+                left: Box::new(recv),
+                right: Box::new(rhs),
+                span: *span,
+            })
+        }
+        // x.bit_not() → RefExpr::BitwiseNot (#1928)
+        Expr::MethodCall {
+            receiver,
+            method,
+            args,
+            span,
+        } if method == "bit_not" && args.is_empty() => {
+            let recv = expr_to_ref_expr_ext(receiver, fallback_span)?;
+            Some(RefExpr::BitwiseNot {
+                inner: Box::new(recv),
+                span: *span,
+            })
+        }
+        // x.contains("lit") / x.starts_with("lit") / x.ends_with("lit") → RefExpr::StringOp (#1919)
+        // The argument must be a compile-time string literal; non-literals are rejected here.
+        Expr::MethodCall {
+            receiver,
+            method,
+            args,
+            span,
+        } if matches!(method.as_str(), "contains" | "starts_with" | "ends_with")
+            && args.len() == 1 =>
+        {
+            let recv = expr_to_ref_expr_ext(receiver, fallback_span)?;
+            let literal = match &args[0] {
+                Expr::Literal(Literal::Str(s), _) => s.clone(),
+                _ => return None, // non-literal argument — not in the admitted fragment
+            };
+            let op = match method.as_str() {
+                "contains" => StringOp::Contains,
+                "starts_with" => StringOp::StartsWith,
+                "ends_with" => StringOp::EndsWith,
+                _ => unreachable!(),
+            };
+            Some(RefExpr::StringOp {
+                op,
+                receiver: Box::new(recv),
+                literal,
+                span: *span,
+            })
+        }
+        // x.matches("regex") → RefExpr::RegexMatch (#1921)
+        // Pattern must be a compile-time string literal from the admitted regular
+        // fragment; irregular features (backrefs, lookaround, recursion) are
+        // rejected by the regex-fragment validator invoked in the where-clause
+        // parser (see parser/types.rs). Here, non-literal args are silently
+        // rejected (return None) as with StringOp.
+        Expr::MethodCall {
+            receiver,
+            method,
+            args,
+            span,
+        } if method.as_str() == "matches" && args.len() == 1 => {
+            let recv = expr_to_ref_expr_ext(receiver, fallback_span)?;
+            let pattern = match &args[0] {
+                Expr::Literal(Literal::Str(s), _) => s.clone(),
+                _ => return None,
+            };
+            // Validate the pattern here too — contract callers reach this path
+            // without going through parse_ref_atom, so a bad pattern would slip
+            // past parser validation otherwise.
+            if crate::mvl::parser::regex_frag::validate(&pattern).is_err() {
+                return None;
+            }
+            Some(RefExpr::RegexMatch {
+                receiver: Box::new(recv),
+                pattern,
+                span: *span,
+            })
+        }
         Expr::Binary {
             op,
             left,
@@ -1193,6 +1405,16 @@ pub(crate) fn expr_to_ref_expr_ext(expr: &Expr, fallback_span: Span) -> Option<R
                     span: *span,
                 })
             };
+            let bitwise = |bop: BitwiseOp| -> Option<RefExpr> {
+                let l = expr_to_ref_expr_ext(left, *span)?;
+                let r = expr_to_ref_expr_ext(right, *span)?;
+                Some(RefExpr::BitwiseOp {
+                    op: bop,
+                    left: Box::new(l),
+                    right: Box::new(r),
+                    span: *span,
+                })
+            };
             match op {
                 BinaryOp::Add => arith(ArithOp::Add),
                 BinaryOp::Sub => arith(ArithOp::Sub),
@@ -1207,7 +1429,11 @@ pub(crate) fn expr_to_ref_expr_ext(expr: &Expr, fallback_span: Span) -> Option<R
                 BinaryOp::Ge => cmp(CmpOp::Ge),
                 BinaryOp::And => logic(LogicOp::And),
                 BinaryOp::Or => logic(LogicOp::Or),
-                _ => None,
+                BinaryOp::BitAnd => bitwise(BitwiseOp::And),
+                BinaryOp::BitOr => bitwise(BitwiseOp::Or),
+                BinaryOp::BitXor => bitwise(BitwiseOp::Xor),
+                BinaryOp::Shl => bitwise(BitwiseOp::Shl),
+                BinaryOp::Shr => bitwise(BitwiseOp::Shr),
             }
         }
         Expr::Unary {
@@ -1233,6 +1459,17 @@ pub(crate) fn expr_to_ref_expr_ext(expr: &Expr, fallback_span: Span) -> Option<R
         } => {
             let inner_ref = expr_to_ref_expr_ext(inner, *span)?;
             Some(RefExpr::Not {
+                inner: Box::new(inner_ref),
+                span: *span,
+            })
+        }
+        Expr::Unary {
+            op: UnaryOp::BitNot,
+            expr: inner,
+            span,
+        } => {
+            let inner_ref = expr_to_ref_expr_ext(inner, *span)?;
+            Some(RefExpr::BitwiseNot {
                 inner: Box::new(inner_ref),
                 span: *span,
             })

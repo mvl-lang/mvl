@@ -138,6 +138,15 @@ pub struct RustEmitter {
     pub stdlib_fn_qualified: std::collections::HashMap<String, String>,
     /// Controls how struct invariants are enforced at runtime (issue #662).
     pub assert_mode: crate::mvl::backends::AssertMode,
+    /// Elide runtime bounds checks for expressions whose type proves non-negativity (#1891).
+    pub optimize_proved: bool,
+    /// Refined type alias name → its refinement predicate.
+    ///
+    /// Parallel to `refined_aliases` (which maps name → base type) but retains the
+    /// predicate so `--optimize-proved` can elide bounds checks certified at type-check
+    /// time.  Populated from `TirTypeBody::Alias(Ty::Refined(inner, pred))` entries
+    /// in `emit_program_core` alongside `refined_aliases`.
+    pub refined_alias_predicates: std::collections::HashMap<String, crate::mvl::ir::RefExpr>,
     /// Names of all methods (pub fn and fn) in the actor currently being emitted.
     ///
     /// Set by `emit_actor_decl` before emitting method bodies; cleared after.
@@ -619,21 +628,43 @@ impl RustEmitter {
 
         // Populate refined alias registry (#1326).
         // Maps alias name → base type for refined aliases (emitted as newtypes).
+        // Also populate `refined_alias_predicates` for --optimize-proved (#1891).
+        let mut register_refined_alias =
+            |name: String, inner: &crate::mvl::ir::Ty, pred: &crate::mvl::ir::RefExpr| {
+                self.refined_aliases.insert(name.clone(), inner.clone());
+                self.refined_alias_predicates.insert(name, pred.clone());
+            };
         for td in &tir.types {
-            if let crate::mvl::ir::TirTypeBody::Alias(crate::mvl::ir::Ty::Refined(inner, _)) =
+            if let crate::mvl::ir::TirTypeBody::Alias(crate::mvl::ir::Ty::Refined(inner, pred)) =
                 &td.body
             {
-                self.refined_aliases
-                    .insert(td.name.clone(), inner.as_ref().clone());
+                register_refined_alias(td.name.clone(), inner.as_ref(), pred.as_ref());
             }
         }
         for pt in prelude_tirs {
             for td in &pt.types {
-                if let crate::mvl::ir::TirTypeBody::Alias(crate::mvl::ir::Ty::Refined(inner, _)) =
-                    &td.body
+                if let crate::mvl::ir::TirTypeBody::Alias(crate::mvl::ir::Ty::Refined(
+                    inner,
+                    pred,
+                )) = &td.body
                 {
-                    self.refined_aliases
-                        .insert(td.name.clone(), inner.as_ref().clone());
+                    register_refined_alias(td.name.clone(), inner.as_ref(), pred.as_ref());
+                }
+            }
+        }
+        // Also include refined aliases from sibling modules so that cross-module
+        // refined type aliases (e.g. `SafeSqlParam` from `model.mvl` used in
+        // `injection.mvl`) are visible to `refined_alias_base` during codegen.
+        // Without this, the `.0` unwrap for newtype return coercion is skipped and
+        // string-method calls on the newtype fail to compile (#1911 smoke test).
+        for st in sibling_tirs {
+            for td in &st.types {
+                if let crate::mvl::ir::TirTypeBody::Alias(crate::mvl::ir::Ty::Refined(
+                    inner,
+                    pred,
+                )) = &td.body
+                {
+                    register_refined_alias(td.name.clone(), inner.as_ref(), pred.as_ref());
                 }
             }
         }

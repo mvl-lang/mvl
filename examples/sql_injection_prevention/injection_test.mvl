@@ -1,0 +1,136 @@
+// injection_test.mvl — Behavioural tests for the SQL-injection kernel.
+//
+// The inline `test fn` blocks in `injection.mvl` handle the compound-
+// decision MC/DC coverage (per pattern 006 and the #1888 workaround —
+// production-file inline tests keep `mvl mcdc` able to discover the
+// decisions).  This file adds end-to-end scenario tests that exercise
+// input attack vectors and the IFC boundary.
+
+use injection.{declassify_user_input, should_reject_input, input_reject_reason, remaining_param_slots, build_sql_query}
+use model.{SafeSqlParam, BoundedInput, SqlIdentifier, EscapedSqlParam, SqlQuery, InputRejectReason}
+
+// ── Scenario 1 — canonical attack payloads are rejected ───────────────
+//
+// These scenarios stand in for the OWASP A03:2021 canonical attack
+// vectors.  Each demonstrates that the compound decision rejects the
+// input when the refinement would fail (i.e., the input contains a
+// metacharacter and neither zone-trust nor override applies).
+
+test fn scenario_single_quote_from_untrusted_rejects() -> Unit {
+    // The classical `' OR 1=1 --` payload: contains ', ;, and --.
+    // Simulated at the decision layer: the metacharacter flag is set
+    // and the origin is untrusted.
+    assert_eq(should_reject_input(false, true, false, false), true);
+}
+
+test fn scenario_semicolon_stacking_from_untrusted_rejects() -> Unit {
+    // The `; DROP TABLE users --` stacked-query payload.
+    assert_eq(should_reject_input(false, true, false, true), true);
+}
+
+test fn scenario_double_dash_comment_rejects() -> Unit {
+    // `admin' -- ` comment-truncation payload.
+    // Content-only check: contains metacharacter, override missing.
+    assert_eq(should_reject_input(false, true, true, false), true);
+}
+
+test fn scenario_length_bomb_rejects_regardless_of_zone() -> Unit {
+    // A 5000-character input attacks the length envelope first.
+    // Length exceeded → reject even from a trusted, overridden call.
+    assert_eq(should_reject_input(true, false, true, true), true);
+}
+
+// ── Scenario 2 — clean input passes cleanly ───────────────────────────
+
+test fn scenario_clean_input_accepts() -> Unit {
+    // A normal well-formed identifier like `alice_smith`: no
+    // metacharacter, bounded length.
+    assert_eq(should_reject_input(false, false, true, true), false);
+}
+
+test fn scenario_clean_input_from_untrusted_still_accepts() -> Unit {
+    // Trust zone irrelevant when the content is clean.
+    assert_eq(should_reject_input(false, false, false, false), false);
+}
+
+// ── Scenario 3 — override path (defence-in-depth exit valve) ──────────
+
+test fn scenario_metachar_with_full_authorisation_accepts() -> Unit {
+    // Both trusted zone AND explicit override — the two-clause coupled
+    // rejection collapses, and the input is admitted.  This is the
+    // audit-monitored exception path.
+    assert_eq(should_reject_input(false, true, true, true), false);
+}
+
+// ── Scenario 4 — reject-reason priority ordering ──────────────────────
+
+test fn reject_reason_length_wins_over_content() -> Unit {
+    let r: InputRejectReason = input_reject_reason(true, true, false, false);
+    let is_length: Int = match r {
+        InputRejectReason::LengthExceeded => 1,
+        _                                 => 0,
+    };
+    assert_eq(is_length, 1);
+}
+
+test fn reject_reason_untrusted_origin_before_no_override() -> Unit {
+    // Both untrusted origin AND no override are true.  Origin fires
+    // first — defence in depth on the outer perimeter.
+    let r: InputRejectReason = input_reject_reason(false, true, false, false);
+    let is_origin: Int = match r {
+        InputRejectReason::UntrustedOrigin => 1,
+        _                                  => 0,
+    };
+    assert_eq(is_origin, 1);
+}
+
+// ── Scenario 5 — IFC declassifier smoke ───────────────────────────────
+
+test fn declassify_removes_taint() -> Unit {
+    // Simulate a request-body string arriving as Tainted[String] from
+    // an HTTP request.  The declassifier removes the taint under the
+    // audited anchor `SQL-DECLASSIFY-001`.
+    let raw: String = "alice_smith";
+    let tainted: Tainted[String] = relabel taint(raw, "HTTP-INGEST-TEST");
+    let clean: String = declassify_user_input(tainted);
+    assert_eq(clean, "alice_smith");
+}
+
+test fn declassify_preserves_arbitrary_content() -> Unit {
+    // The declassifier is a semantic identity on the value — it
+    // removes the taint label but does not sanitise.  Sanitisation
+    // is the refinement gate's job (into_safe_param) and happens
+    // downstream.
+    let raw: String = "any content whatsoever";
+    let tainted: Tainted[String] = relabel taint(raw, "HTTP-INGEST-TEST");
+    let clean: String = declassify_user_input(tainted);
+    assert_eq(clean, "any content whatsoever");
+}
+
+// ── Scenario 6 — query construction end-to-end ────────────────────────
+
+test fn build_query_with_zero_params() -> Unit {
+    let tmpl: BoundedInput = "SELECT COUNT(*) FROM users";
+    let q: SqlQuery = build_sql_query(tmpl, 0);
+    assert_eq(q.param_count, 0);
+}
+
+test fn build_query_with_two_params() -> Unit {
+    let tmpl: BoundedInput = "SELECT id FROM users WHERE email = ? AND status = ?";
+    let q: SqlQuery = build_sql_query(tmpl, 2);
+    assert_eq(q.param_count, 2);
+}
+
+// ── Scenario 7 — parameter-slot arithmetic (L4 Cooper) ────────────────
+
+test fn slots_after_two_used() -> Unit {
+    assert_eq(remaining_param_slots(2), 30);
+}
+
+test fn slots_full_capacity() -> Unit {
+    assert_eq(remaining_param_slots(0), 32);
+}
+
+test fn slots_exhausted() -> Unit {
+    assert_eq(remaining_param_slots(32), 0);
+}

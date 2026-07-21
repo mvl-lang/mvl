@@ -1,0 +1,16 @@
+// Solver Layer 3: bounded quantifier violation short-circuits to Failed (#1915)
+// solver:expect-fail
+//
+// `forall i in [0..9]. i < 5` fails as soon as the expansion hits i = 5,
+// producing a counterexample `i = 5`. The checker reports a compile-time
+// error at the call site.
+
+partial fn bounded_forall_fails() -> Int
+    requires forall i in [0..9]. i < 5
+{
+    0
+}
+
+partial fn main() -> Unit {
+    let _: Int = bounded_forall_fails();
+}

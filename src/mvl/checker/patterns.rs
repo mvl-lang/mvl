@@ -317,8 +317,35 @@ impl TypeChecker {
                 }
             }
             RefExpr::Integer { .. } | RefExpr::Float { .. } | RefExpr::Bool { .. } => {}
-            RefExpr::Forall { body, .. } | RefExpr::Exists { body, .. } => {
+            RefExpr::Forall { body, .. }
+            | RefExpr::Exists { body, .. }
+            | RefExpr::BoundedForall { body, .. }
+            | RefExpr::BoundedExists { body, .. } => {
                 self.check_guard_ref_expr(body);
+            }
+            RefExpr::BitwiseOp { left, right, .. } => {
+                self.check_guard_ref_expr(left);
+                self.check_guard_ref_expr(right);
+            }
+            RefExpr::BitwiseNot { inner, .. } => {
+                self.check_guard_ref_expr(inner);
+            }
+            RefExpr::StringOp { receiver, .. } => {
+                self.check_guard_ref_expr(receiver);
+            }
+            RefExpr::ArrayGet { list, index, .. } => {
+                self.check_guard_ref_expr(list);
+                self.check_guard_ref_expr(index);
+            }
+            RefExpr::RegexMatch { receiver, .. } => {
+                self.check_guard_ref_expr(receiver);
+            }
+            RefExpr::Abs { inner, .. } => {
+                self.check_guard_ref_expr(inner);
+            }
+            RefExpr::Min { left, right, .. } | RefExpr::Max { left, right, .. } => {
+                self.check_guard_ref_expr(left);
+                self.check_guard_ref_expr(right);
             }
         }
     }

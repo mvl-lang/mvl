@@ -583,6 +583,23 @@ mod tests {
         result.expect("parse_fn_decl failed")
     }
 
+    #[test]
+    fn parse_fn_with_bounded_forall_requires() {
+        // #1915: fn with bounded universal quantifier in a requires clause.
+        let d =
+            fn_decl("partial fn f() -> Int\n    requires forall i in [0..9]. i < 10\n{\n    0\n}");
+        assert_eq!(d.requires.len(), 1);
+        assert!(matches!(d.requires[0], Expr::Quantifier(_, _)));
+        let Expr::Quantifier(ref re, _) = d.requires[0] else {
+            unreachable!()
+        };
+        assert!(
+            matches!(**re, RefExpr::BoundedForall { .. }),
+            "expected BoundedForall, got {:?}",
+            re
+        );
+    }
+
     // ── Requirement 4 / Scenario: Parse total function with effects ───────
 
     #[test]

@@ -45,6 +45,24 @@ macro_rules! mvl_refine {
 // Re-export at module path so users can do `use mvl_runtime::refine::mvl_refine`
 pub use mvl_refine;
 
+/// Runtime regex-membership check for refinement predicates (#1921).
+///
+/// Returns `true` if `haystack` matches the compiled `pattern`, `false` otherwise.
+/// Panics if the pattern is invalid — but MVL's parse-time regex-fragment
+/// validator (see `parser/regex_frag.rs`) rejects malformed / irregular patterns
+/// before this point, so a panic here indicates a compiler bug.
+///
+/// Called from `mvl_refine!` expansions emitted for `self.matches("...")`
+/// runtime checks. In release builds those asserts compile out, so the
+/// per-call `Regex::new` cost is not on the hot path.
+pub fn mvl_regex_matches(haystack: &str, pattern: &str) -> bool {
+    ::regex::Regex::new(pattern)
+        .expect(
+            "mvl_regex_matches: pattern rejected by regex crate but accepted by MVL — compiler bug",
+        )
+        .is_match(haystack)
+}
+
 #[cfg(test)]
 mod tests {
     #[test]

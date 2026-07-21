@@ -1,0 +1,66 @@
+// Solver Layer 5: regex-membership refinement predicates (#1921, ADR-0057)
+//
+// Tests that `self.matches("pattern")` is accepted in refinement-type
+// definitions and is discharged by the solver:
+//   - L1 constant-folds literal-argument cases via the `regex` crate.
+//   - L5 Z3 RegLan handles symbolic arguments (see regex_z3.rs).
+//
+// Acceptance criteria (#1921):
+//   - Parser accepts `self.matches(pattern_literal)` in refinement predicates.
+//   - Rejects non-literal patterns at parse time (covered by parser unit tests).
+//   - Rejects irregular fragments (backrefs, lookaround, recursion) at parse
+//     time with a clear diagnostic (covered by regex_frag unit tests).
+//   - L1 constant-folds literal-literal cases (this file: literal arguments).
+//   - L5 emits correct SMT-LIB2 with Z3's RegLan operations (this file:
+//     refinements compose with len-based clauses).
+//   - Existing case studies compile unchanged (no regression — covered by
+//     make test-corpus).
+
+// ── Type definitions with regex-membership refinements ───────────────────────
+
+// Well-formed IBAN prefix + length.
+pub type IbanCandidate = String where self.matches("^[A-Z]{2}[0-9]{2}[A-Z0-9]+$") && len(self) >= 15 && len(self) <= 34
+
+// Bearer-token format.
+pub type BearerToken = String where self.matches("^Bearer [A-Za-z0-9._~+/=-]+$")
+
+// Sanitised identifier.
+pub type SafeIdent = String where self.matches("^[a-zA-Z_][a-zA-Z0-9_]*$") && len(self) <= 63
+
+// Composition with a string-content clause (#1919 + #1921).
+pub type SafeParam = String where self.matches("^[a-zA-Z0-9_-]+$") && !self.contains(";")
+
+// ── Functions using refined string types ─────────────────────────────────────
+
+pub fn use_iban(x: IbanCandidate) -> IbanCandidate {
+    x
+}
+
+pub fn use_bearer(t: BearerToken) -> BearerToken {
+    t
+}
+
+pub fn use_ident(id: SafeIdent) -> SafeIdent {
+    id
+}
+
+pub fn use_param(p: SafeParam) -> SafeParam {
+    p
+}
+
+// ── Test block ────────────────────────────────────────────────────────────────
+
+test fn regex_membership_refinements() -> Unit {
+    // L1: literal arguments — every predicate discharges at compile time.
+    let iban: IbanCandidate = "DE89370400440532013000";
+    let _: IbanCandidate = use_iban(iban);
+
+    let token: BearerToken = "Bearer abc123.xyz";
+    let _: BearerToken = use_bearer(token);
+
+    let ident: SafeIdent = "user_name42";
+    let _: SafeIdent = use_ident(ident);
+
+    let param: SafeParam = "safe_input-42";
+    let _: SafeParam = use_param(param);
+}

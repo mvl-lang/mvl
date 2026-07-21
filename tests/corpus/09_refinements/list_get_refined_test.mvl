@@ -1,0 +1,47 @@
+// 09_refinements/list_get_refined_test.mvl
+//
+// List.get(i) with refined index types.
+//
+// Named refined-alias arguments (e.g. NonNegativeIndex) lower to Rust newtypes
+// that previously triggered compilation errors in the bounds-check guard (the
+// guard compared the newtype against `0` which Rust rejects). Fix: emit `.0`
+// to unwrap the newtype before comparison (#1891).
+//
+// With --optimize-proved, the emitter elides the guard entirely for indices
+// whose refined type proves non-negativity at compile time.
+
+type NonNegativeIndex = Int where self >= 0
+type PositiveIndex = Int where self > 0
+
+fn get_at_nonneg(xs: List[Int], i: NonNegativeIndex) -> Option[Int] {
+    xs.get(i)
+}
+
+fn get_at_positive(xs: List[Int], i: PositiveIndex) -> Option[Int] {
+    xs.get(i)
+}
+
+test fn list_get_nonneg_alias_in_bounds() -> Unit {
+    let xs: List[Int] = [10, 20, 30];
+    let i: NonNegativeIndex = 1;
+    assert_eq(get_at_nonneg(xs, i).unwrap_or(-1), 20)
+}
+
+test fn list_get_nonneg_alias_zero_index() -> Unit {
+    let xs: List[Int] = [10, 20, 30];
+    let i: NonNegativeIndex = 0;
+    assert_eq(get_at_nonneg(xs, i).unwrap_or(-1), 10)
+}
+
+test fn list_get_positive_alias() -> Unit {
+    let xs: List[Int] = [10, 20, 30];
+    let i: PositiveIndex = 2;
+    assert_eq(get_at_positive(xs, i).unwrap_or(-1), 30)
+}
+
+test fn list_get_nonneg_alias_out_of_bounds() -> Unit {
+    // Out-of-bounds still returns None even with a proven-non-negative index.
+    let xs: List[Int] = [1, 2];
+    let i: NonNegativeIndex = 5;
+    assert_eq(get_at_nonneg(xs, i).unwrap_or(-99), -99)
+}

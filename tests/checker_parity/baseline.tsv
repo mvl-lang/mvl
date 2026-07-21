@@ -34,7 +34,11 @@ tests/corpus/07_ownership/value_test.mvl	ok
 tests/corpus/08_ifc/audit_relabel_test.mvl	ok
 tests/corpus/08_ifc/secret_test.mvl	ok
 tests/corpus/08_ifc/tainted_test.mvl	ok
+tests/corpus/09_refinements/array_index_refinement_test.mvl	fail	33	1
+tests/corpus/09_refinements/bitwise_refinement_test.mvl	ok
 tests/corpus/09_refinements/field_refinement_test.mvl	ok
+tests/corpus/09_refinements/float_refinement_test.mvl	ok
+tests/corpus/09_refinements/method_call_refinement_test.mvl	ok
 tests/corpus/09_refinements/struct_invariant_test.mvl	ok
 tests/corpus/09_refinements/type_alias_test.mvl	ok
 tests/corpus/10_termination/decreases_test.mvl	ok

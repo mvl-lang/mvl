@@ -73,6 +73,13 @@ pub fn print_usage() {
     eprintln!(
         "  mvl prove  <file|dir> --callee <fn>       — filter sites to a specific callee function"
     );
+    eprintln!("  mvl harden <file|dir>                      — contract hardening: list runtime obligations with promotion hints (Axis 1, #1913)");
+    eprintln!("  mvl harden <file|dir> --verbose           — include predicate text in each line");
+    eprintln!("  mvl harden <file|dir> --json              — machine-readable JSON output for CI");
+    eprintln!(
+        "  mvl harden <file|dir> --callee <fn>       — filter obligations to a specific callee"
+    );
+    eprintln!("  mvl harden <file|dir> --emit-tests        — write *_boundary_test.mvl witness test files (Axis 3, #1931)");
     eprintln!("  mvl fmt   <file|dir>               — format MVL source files in place");
     eprintln!(
         "  mvl fmt   <file|dir> --check       — exit 1 if any file is not formatted (CI gate)"
@@ -81,6 +88,10 @@ pub fn print_usage() {
     eprintln!(
         "  mvl fmt   --stdin                  — read from stdin, write formatted output to stdout"
     );
+    eprintln!(
+        "  mvl kloc  [<dir>]                  — per-directory lines-of-code report (default: .)"
+    );
+    eprintln!("  mvl kloc  [<dir>] --csv            — emit CSV instead of the formatted table");
     eprintln!("  mvl tir   <file>                   — emit TirProgram as JSON (spike 004, self-hosting Stage A)");
     eprintln!("  mvl lint  <file|dir>               — check style rules");
     eprintln!("  mvl lint  <file|dir> --show-config — show active linter configuration");
@@ -128,6 +139,11 @@ pub(super) fn parse_error_limit(args: &[String]) -> usize {
         .find_map(|a| a.strip_prefix("--error-limit="))
         .and_then(|s| s.parse().ok())
         .unwrap_or(10)
+}
+
+/// Parse `--optimize-proved` flag; defaults to false.
+pub(super) fn parse_optimize_proved(args: &[String]) -> bool {
+    args.iter().any(|a| a == "--optimize-proved")
 }
 
 /// Parse `--assert-mode=<mode>` from args; defaults to `AssertMode::Always`.

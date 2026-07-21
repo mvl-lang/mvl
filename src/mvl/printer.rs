@@ -1249,6 +1249,88 @@ impl<'src> Printer<'src> {
                     self.fmt_ref_expr(body)
                 )
             }
+            RefExpr::BitwiseOp {
+                op, left, right, ..
+            } => {
+                use crate::mvl::parser::ast::BitwiseOp;
+                let op_s = match op {
+                    BitwiseOp::And => "&",
+                    BitwiseOp::Or => "|",
+                    BitwiseOp::Xor => "^",
+                    BitwiseOp::Shl => "<<",
+                    BitwiseOp::Shr => ">>",
+                };
+                format!(
+                    "{} {} {}",
+                    self.fmt_ref_expr(left),
+                    op_s,
+                    self.fmt_ref_expr(right)
+                )
+            }
+            RefExpr::BitwiseNot { inner, .. } => format!("~{}", self.fmt_ref_expr(inner)),
+            RefExpr::BoundedForall {
+                var, lo, hi, body, ..
+            } => {
+                format!(
+                    "forall {} in [{}..{}]. {}",
+                    var,
+                    lo,
+                    hi,
+                    self.fmt_ref_expr(body)
+                )
+            }
+            RefExpr::BoundedExists {
+                var, lo, hi, body, ..
+            } => {
+                format!(
+                    "exists {} in [{}..{}]. {}",
+                    var,
+                    lo,
+                    hi,
+                    self.fmt_ref_expr(body)
+                )
+            }
+            RefExpr::StringOp {
+                op,
+                receiver,
+                literal,
+                ..
+            } => {
+                use crate::mvl::parser::ast::StringOp;
+                let method = match op {
+                    StringOp::Contains => "contains",
+                    StringOp::StartsWith => "starts_with",
+                    StringOp::EndsWith => "ends_with",
+                };
+                format!("{}.{}({:?})", self.fmt_ref_expr(receiver), method, literal)
+            }
+            RefExpr::ArrayGet { list, index, .. } => {
+                format!(
+                    "{}.get({})",
+                    self.fmt_ref_expr(list),
+                    self.fmt_ref_expr(index)
+                )
+            }
+            RefExpr::RegexMatch {
+                receiver, pattern, ..
+            } => {
+                format!("{}.matches({:?})", self.fmt_ref_expr(receiver), pattern)
+            }
+            RefExpr::Abs { inner, .. } => format!("abs({})", self.fmt_ref_expr(inner)),
+            RefExpr::Min { left, right, .. } => {
+                format!(
+                    "min({}, {})",
+                    self.fmt_ref_expr(left),
+                    self.fmt_ref_expr(right)
+                )
+            }
+            RefExpr::Max { left, right, .. } => {
+                format!(
+                    "max({}, {})",
+                    self.fmt_ref_expr(left),
+                    self.fmt_ref_expr(right)
+                )
+            }
         }
     }
 

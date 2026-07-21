@@ -1,0 +1,88 @@
+// model.mvl — Domain types for SQL injection prevention.
+//
+// A database query construction kernel that structurally prevents SQL
+// injection (OWASP A03:2021, CWE-89) by combining information-flow
+// control (IFC) with string-refinement types.  The invariant is that
+// user input never reaches the SQL template unescaped: either the input
+// has passed the refinement predicates that certify it as SQL-safe, or
+// it has been routed through the sole audited `relabel trust`
+// declassifier from `Tainted[String]`.
+//
+// This example is the counterpart to `examples/data_integrity/` on the
+// input side of the cybersecurity axis: `data_integrity` proves
+// confidentiality/authentication (Secret-output IFC + QF-BV); this file
+// proves input-validation (Tainted-input IFC + QF-Strings).
+//
+// Standard: OWASP Top 10 A03:2021 Injection; PCI-DSS §6.5.1.  Assurance
+// envelope: see `make test-owasp`.
+//
+// Assurance note: 0 extern blocks (pure domain model).
+
+// ── Refined string types (QF-Strings, L5) ─────────────────────────────
+//
+// Each of the four refined types below states a class of QF-Strings
+// obligation.  Together they cover the string-refinement design space
+// the case study exercises:
+//
+//   1. Metacharacter absence — `self.contains(literal)` (#1919).
+//   2. Bounded length         — `len(self) <= N`         (existing).
+//   3. Regex format check     — `self.matches(pattern)`  (#1921).
+//   4. Composed regex + len   — matches + length bound   (composition).
+
+/// Input that provably contains no SQL string-delimiter metacharacter.
+///
+/// The three metacharacters excluded here — single quote, semicolon,
+/// and double-dash — are the canonical injection carriers per OWASP
+/// A03:2021.  Any string reaching a query-parameter slot is required
+/// to satisfy this refinement.
+pub type SafeSqlParam = String where !self.contains("'") && !self.contains(";") && !self.contains("--")
+
+/// A bounded input string, enforcing a length ceiling to defeat both
+/// buffer-exhaustion attacks and second-order injection (long payloads
+/// designed to bypass truncation-based sanitisers).
+pub type BoundedInput = String where len(self) <= 4096
+
+/// A well-formed SQL identifier: table or column name.  Non-identifier
+/// characters are rejected by the regex; length is capped at PostgreSQL's
+/// documented identifier limit (63 characters).
+pub type SqlIdentifier = String where self.matches("^[a-zA-Z_][a-zA-Z0-9_]*$") && len(self) <= 63
+
+/// An escaped parameter value: alphanumerics, whitespace, and a small
+/// set of punctuation.  This is the accepting shape after
+/// `escape_sql_input` has whitelisted the input.
+pub type EscapedSqlParam = String where self.matches("^[a-zA-Z0-9_ .,=()@-]*$") && len(self) <= 4096
+
+// ── Query construction ────────────────────────────────────────────────
+
+/// A prepared SQL query.  The `template` is provided by the application
+/// as a compile-time string constant; `params` are the safe user-facing
+/// substitution values that pass through the refinement gate.
+///
+/// The composition invariant — "no user-controlled string reaches the
+/// template" — is preserved by the type: the only way to construct
+/// `SqlQuery` is via `build_sql_query`, which accepts `SafeSqlParam`
+/// values.  Attempting to pass a `Tainted[String]` directly is a
+/// compile-time type error.
+pub type SqlQuery = struct {
+    template: BoundedInput,
+    param_count: Int where self >= 0 && self <= 32,
+}
+
+// ── Rejection reasons ─────────────────────────────────────────────────
+
+/// Named reasons for rejecting an input before it reaches the query
+/// builder.  The named variants make audit logs and dashboards
+/// discriminable without exposing the underlying string.
+pub type InputRejectReason = enum {
+    LengthExceeded,        // Input longer than the 4096 cap
+    ContainsMetacharacter, // Contains SQL metacharacter (', ;, --)
+    UntrustedOrigin,       // Metacharacter present and not from a trusted zone
+    NoOverride,            // Metacharacter present and no explicit bypass
+    IdentifierMalformed,   // Not a valid SQL identifier
+}
+
+/// Result of admitting an input into the query builder.
+pub type AdmitResult = enum {
+    Accepted(SafeSqlParam),
+    Rejected(InputRejectReason),
+}

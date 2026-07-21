@@ -19,11 +19,15 @@ A refinement-typed HMAC-style tag-verification kernel. Given a signed message an
 `make prove` reports (production file only):
 
 ```
-Summary: 13 proven (L1:10 L2:0 L3:0 L4:0 L5:3), 2 runtime, 0 failed
+Summary: 24 proven (L1:18 L2:0 L3:0 L4:0 L5:6), 2 runtime, 0 failed
 ```
 
-- **L1 (10)** — trivial literal subsumption on inline test-fn call sites.
-- **L5 (3)** — Z3 QF-NIA discharges:
+- **L1 (18)** — trivial literal subsumption: call-site bitwise `requires` predicates (6 new) + existing integer bounds (10) + trivial returns (2).
+- **L5:z3-bv (3)** — Z3 QF-BV discharges (#1928):
+  - `mask_low_nibble: result.bit_and(15) == result` — masking a byte to low 4 bits gives a nibble
+  - `high_nibble_of: result.bit_and(15) == result` — right-shift-4 + mask stays in nibble range
+  - `xor_tag_bytes: result.bit_and(255) == result` — XOR of two bytes stays in byte range
+- **L5:z3 (3)** — Z3 QF-NIA discharges (unchanged from before):
   - `combined_message_fingerprint: result >= 0` (two-variable product positivity)
   - `combined_message_fingerprint: result <= 2_000_000_000` (two-variable product upper bound)
   - `total_verification_ops: result >= 1` (three-variable product positivity from positive factors)
@@ -56,18 +60,22 @@ Audit anchor: `MCDC-CRYPTO-001`.
 
 **Current status:** `make mcdc` returns "No compound boolean conditions found" — the known `#1888` gap. The compound decision is structured to activate MC/DC discovery once #1888 lands.
 
-## Explicitly out of scope for this example
+## QF-BV coverage
 
-The ticket #1908 describes full **QF-BV** reasoning as this case study's most distinctive feature — reasoning over individual bytes of tag material, PKCS#7 padding validation, CRC-32 polynomial arithmetic. These require MVL to surface bit-vector refinement predicates over `List[Byte]` (or an equivalent) as first-class solver-visible operations, plus L5 encoding that emits Z3's BV theory instead of NIA.
+Byte-level bit-vector reasoning over tag material is now exercised via three
+functions with inline `ensures` predicates discharged by the L5 Z3 QF-BV
+encoder (#1928):
 
-That work is not yet in MVL. This case study demonstrates what MVL CAN prove today about a cryptographic-integrity kernel:
+- **`mask_low_nibble`** — `(result & 15) == result`: masking a byte to its low nibble
+- **`high_nibble_of`** — `(result & 15) == result`: extracting bits 7–4 of a byte
+- **`xor_tag_bytes`** — `(result & 255) == result`: XOR of two bytes stays in byte range
 
-- Integer-bounded fingerprint arithmetic — exercises QF-NIA at L5, same class as dose_scheduling
-- IFC discipline on secret material — the *new* dimension this case adds
-- Compound safety decisions on rejection logic — MC/DC target
-- Constant-time-comparison structural discipline — enforced through the type system's refusal to allow branching on individual byte differences (verdict is a single Bool derived from full-tag equality)
+Each proof site appears as `(5:z3-bv)` in `make prove` output, distinct from the
+`(5:z3)` QF-NIA discharges on the fingerprint-arithmetic obligations.
 
-Full byte-level QF-BV reasoning awaits compiler surface work; when that lands, this example's tag-comparison would gain byte-level refinements without changing its overall shape.
+The PKCS#7 padding validation (`(padding_len & 0x0F) == padding_len`) and full
+CRC-32 lane arithmetic over `List[Byte]` require QF-BV over array-indexed byte
+sequences, which awaits the array-content refinement work (#1916).
 
 ## Standard mapping (FIPS 140-3 cryptographic validation)
 

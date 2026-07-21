@@ -70,6 +70,10 @@ pub struct TranspileConfig {
     pub(crate) is_test_file: bool,
     /// How refinement predicates are emitted (`assert!`, `debug_assert!`, or assume).
     pub(crate) assert_mode: AssertMode,
+    /// Elide runtime bounds/refinement checks that the prover certified at type-check time.
+    ///
+    /// Off by default until the optimization stabilises (#1891).
+    pub(crate) optimize_proved: bool,
 }
 
 impl TranspileConfig {
@@ -89,6 +93,7 @@ impl TranspileConfig {
             test_extern_stubs: false,
             is_test_file: false,
             assert_mode: AssertMode::Always,
+            optimize_proved: false,
         }
     }
 
@@ -164,6 +169,12 @@ impl TranspileConfig {
     /// Set the assert mode for refinement predicate emission.
     pub fn with_assert_mode(mut self, mode: AssertMode) -> Self {
         self.assert_mode = mode;
+        self
+    }
+
+    /// Enable elision of runtime bounds checks certified by the prover (#1891).
+    pub fn with_optimize_proved(mut self) -> Self {
+        self.optimize_proved = true;
         self
     }
 }

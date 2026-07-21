@@ -14,8 +14,8 @@
 use super::emitter::RustEmitter;
 use crate::mvl::checker::types::ARRAY_SIZE_UNKNOWN;
 use crate::mvl::ir::{
-    ArithOp, CmpOp, GenericParam, LogicOp, RefExpr, TirExternDecl, TirFieldDecl, TirTypeBody,
-    TirTypeDecl, TirVariant, TirVariantFields, Ty, TypeExpr,
+    ArithOp, CmpOp, GenericParam, LogicOp, RefExpr, StringOp, TirExternDecl, TirFieldDecl,
+    TirTypeBody, TirTypeDecl, TirVariant, TirVariantFields, Ty, TypeExpr,
 };
 
 // ── Security label preamble ───────────────────────────────────────────────
@@ -626,7 +626,10 @@ impl RustEmitter {
 /// call to `emit_ref_expr_for_assert`.
 pub fn is_runtime_checkable(pred: &RefExpr) -> bool {
     match pred {
-        RefExpr::Forall { .. } | RefExpr::Exists { .. } => false,
+        RefExpr::Forall { .. }
+        | RefExpr::Exists { .. }
+        | RefExpr::BoundedForall { .. }
+        | RefExpr::BoundedExists { .. } => false,
         RefExpr::LogicOp { left, right, .. }
         | RefExpr::Compare { left, right, .. }
         | RefExpr::ArithOp { left, right, .. } => {
@@ -641,6 +644,39 @@ pub fn is_runtime_checkable(pred: &RefExpr) -> bool {
         | RefExpr::Float { .. }
         | RefExpr::Bool { .. }
         | RefExpr::Len { .. } => true,
+        RefExpr::BitwiseOp { left, right, .. } => {
+            is_runtime_checkable(left) && is_runtime_checkable(right)
+        }
+        RefExpr::BitwiseNot { inner, .. } => is_runtime_checkable(inner),
+        RefExpr::StringOp { receiver, .. } => is_runtime_checkable(receiver),
+        // ArrayGet is not runtime-checkable: the static checker handles bounds reasoning,
+        // and Rust's Vec::get returns Option<&T> which can't be directly compared. (#1916)
+        RefExpr::ArrayGet { .. } => false,
+        RefExpr::RegexMatch { receiver, .. } => is_runtime_checkable(receiver),
+        RefExpr::Abs { inner, .. } => is_runtime_checkable(inner),
+        RefExpr::Min { left, right, .. } | RefExpr::Max { left, right, .. } => {
+            is_runtime_checkable(left) && is_runtime_checkable(right)
+        }
+    }
+}
+
+/// Returns `true` if any leaf of `expr` is a `RefExpr::Float` node.
+///
+/// Used to detect when a `0 - x` subtraction arises from unary-minus desugaring
+/// of a float literal, so we can emit `(-x)` instead of `(0 - x)` to avoid
+/// a Rust type error ({integer} - {float}).
+fn ref_expr_has_float_leaf(expr: &RefExpr) -> bool {
+    match expr {
+        RefExpr::Float { .. } => true,
+        RefExpr::ArithOp { left, right, .. }
+        | RefExpr::Compare { left, right, .. }
+        | RefExpr::LogicOp { left, right, .. } => {
+            ref_expr_has_float_leaf(left) || ref_expr_has_float_leaf(right)
+        }
+        RefExpr::Not { inner, .. } | RefExpr::Grouped { inner, .. } => {
+            ref_expr_has_float_leaf(inner)
+        }
+        _ => false,
     }
 }
 
@@ -689,6 +725,15 @@ fn emit_ref_expr(pred: &RefExpr, binding: &str) -> String {
         RefExpr::ArithOp {
             op, left, right, ..
         } => {
+            // Unary-minus desugaring (#1777): `-x` is lowered to `0 - x` in the parser.
+            // When `x` is a Float node, emit `-x_str` directly to avoid `(0 - 100.0)`
+            // which produces a Rust type error ({integer} - {float}).
+            if matches!(op, ArithOp::Sub)
+                && matches!(left.as_ref(), RefExpr::Integer { value: 0, .. })
+                && ref_expr_has_float_leaf(right)
+            {
+                return format!("(-{})", emit_ref_expr(right, binding));
+            }
             let op_str = match op {
                 ArithOp::Add => "+",
                 ArithOp::Sub => "-",
@@ -736,8 +781,69 @@ fn emit_ref_expr(pred: &RefExpr, binding: &str) -> String {
         // Full entry-time capture is a future enhancement.
         RefExpr::Old { inner, .. } => emit_ref_expr(inner, binding),
         // Quantifiers are ghost-only and erased before codegen; unreachable here.
-        RefExpr::Forall { .. } | RefExpr::Exists { .. } => {
+        RefExpr::Forall { .. }
+        | RefExpr::Exists { .. }
+        | RefExpr::BoundedForall { .. }
+        | RefExpr::BoundedExists { .. } => {
             unreachable!("quantifiers are ghost-only and must not appear in codegen")
+        }
+        RefExpr::BitwiseOp {
+            op, left, right, ..
+        } => {
+            use crate::mvl::ir::BitwiseOp;
+            let op_str = match op {
+                BitwiseOp::And => "&",
+                BitwiseOp::Or => "|",
+                BitwiseOp::Xor => "^",
+                BitwiseOp::Shl => "<<",
+                BitwiseOp::Shr => ">>",
+            };
+            format!(
+                "({} {op_str} {})",
+                emit_ref_expr(left, binding),
+                emit_ref_expr(right, binding)
+            )
+        }
+        RefExpr::BitwiseNot { inner, .. } => format!("(!{})", emit_ref_expr(inner, binding)),
+        RefExpr::StringOp {
+            op,
+            receiver,
+            literal,
+            ..
+        } => {
+            let recv = emit_ref_expr(receiver, binding);
+            match op {
+                StringOp::Contains => format!("{recv}.contains({literal:?})"),
+                StringOp::StartsWith => format!("{recv}.starts_with({literal:?})"),
+                StringOp::EndsWith => format!("{recv}.ends_with({literal:?})"),
+            }
+        }
+        // ArrayGet is not runtime-checkable; callers must check is_runtime_checkable first.
+        RefExpr::ArrayGet { .. } => {
+            unreachable!("ArrayGet is not runtime-checkable and must not appear in codegen")
+        }
+        RefExpr::RegexMatch {
+            receiver, pattern, ..
+        } => {
+            let recv = emit_ref_expr(receiver, binding);
+            format!("::mvl_runtime::refine::mvl_regex_matches(&{recv}, {pattern:?})")
+        }
+        RefExpr::Abs { inner, .. } => {
+            format!("{}.abs()", emit_ref_expr(inner, binding))
+        }
+        RefExpr::Min { left, right, .. } => {
+            format!(
+                "{}.min({})",
+                emit_ref_expr(left, binding),
+                emit_ref_expr(right, binding)
+            )
+        }
+        RefExpr::Max { left, right, .. } => {
+            format!(
+                "{}.max({})",
+                emit_ref_expr(left, binding),
+                emit_ref_expr(right, binding)
+            )
         }
     }
 }

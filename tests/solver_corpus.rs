@@ -30,6 +30,10 @@ fn expects_failure(path: &str) -> bool {
 fn assert_solver_file(layer: &str, name: &str) {
     let path = solver_file(layer, name);
     let out = Command::new(mvl_bin())
+        // Prevent the cargo-built binary from re-execing to a project-pinned
+        // toolchain — we want the version under test, not whatever is
+        // installed on the developer's machine.
+        .env("MVL_NO_REEXEC", "1")
         .args(["check", &path])
         .output()
         .unwrap_or_else(|e| panic!("failed to run mvl check on {path}: {e}"));
@@ -209,6 +213,26 @@ solver_test!(
     solver_l3_10_violations_one_path,
     "layer3",
     "10_violations_one_path.mvl"
+);
+solver_test!(
+    solver_l3_11_bounded_forall_conjunction,
+    "layer3",
+    "11_bounded_forall_conjunction.mvl"
+);
+solver_test!(
+    solver_l3_12_bounded_exists_disjunction,
+    "layer3",
+    "12_bounded_exists_disjunction.mvl"
+);
+solver_test!(
+    solver_l3_13_bounded_quantifier_violation,
+    "layer3",
+    "13_bounded_quantifier_violation.mvl"
+);
+solver_test!(
+    solver_l3_14_bounded_expansion_cap,
+    "layer3",
+    "14_bounded_expansion_cap.mvl"
 );
 
 // ── Layer 4: Cooper (linear integer arithmetic) ──────────────────────────────

@@ -579,6 +579,54 @@ pub fn is_clause_covered(clause_count: usize, clause_bit: usize, observations: &
     false
 }
 
+/// Return a witness pair `(obs_a, obs_b)` proving `clause_bit` independence.
+///
+/// Applies the same four conditions as `is_clause_covered` but surfaces the
+/// concrete pair so callers can display it.  Returns `None` when no such pair
+/// exists in `observations`.
+pub fn find_independence_pair(
+    clause_count: usize,
+    clause_bit: usize,
+    observations: &[u32],
+) -> Option<(u32, u32)> {
+    let n = clause_count;
+    let eval_shift = n;
+    let outcome_bit = 2 * n;
+
+    for &t1 in observations {
+        for &t2 in observations {
+            if ((t1 >> (eval_shift + clause_bit)) & 1) == 0 {
+                continue;
+            }
+            if ((t2 >> (eval_shift + clause_bit)) & 1) == 0 {
+                continue;
+            }
+            if ((t1 >> clause_bit) & 1) == ((t2 >> clause_bit) & 1) {
+                continue;
+            }
+            if ((t1 >> outcome_bit) & 1) == ((t2 >> outcome_bit) & 1) {
+                continue;
+            }
+            let mut ok = true;
+            for j in 0..n {
+                if j == clause_bit {
+                    continue;
+                }
+                let e1 = (t1 >> (eval_shift + j)) & 1;
+                let e2 = (t2 >> (eval_shift + j)) & 1;
+                if e1 == 1 && e2 == 1 && ((t1 >> j) & 1) != ((t2 >> j) & 1) {
+                    ok = false;
+                    break;
+                }
+            }
+            if ok {
+                return Some((t1, t2));
+            }
+        }
+    }
+    None
+}
+
 /// Check whether match arm `arm_index` was exercised in at least one test.
 ///
 /// Match observations are encoded as the plain arm index (u32), unlike the

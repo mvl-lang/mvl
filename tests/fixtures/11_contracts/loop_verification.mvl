@@ -47,21 +47,20 @@ partial fn loop_with_inv_and_decreases(n: Int where self >= 0) -> Unit {
     }
 }
 
-// ── forall quantifier in requires predicate ───────────────────────────────────
+// ── bounded forall quantifier in requires predicate (#1915) ─────────────────────
 
-// Quantifier is parsed and the solver attempts verification.
-// Since the quantifier has no simple closed form to resolve against call-site
-// args, the outcome is RuntimeCheck — no compile-time error, deferred to runtime.
+// Bounded universal quantifier over a literal range. L3 expansion unrolls this
+// into a conjunction of `x >= 0` for x in {0..9}, each discharged by L1.
 partial fn requires_forall(lo: Int, hi: Int) -> Int
-    requires forall x: Int, x >= lo
+    requires forall x in [0..9]. x >= 0
 {
     lo
 }
 
-// ── exists quantifier in ensures predicate ────────────────────────────────────
+// ── bounded exists quantifier in ensures predicate (#1915) ─────────────────────
 
 partial fn ensures_exists(n: Int where self > 0) -> Int
-    ensures exists x: Int, x > 0
+    ensures exists x in [0..9]. x > 0
 {
     n
 }

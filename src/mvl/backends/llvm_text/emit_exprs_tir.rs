@@ -244,6 +244,25 @@ impl TextEmitter {
         // registered (opaque types).
         match name {
             "path" if args.len() == 1 => return self.emit_path_builtin_tir(&args[0]),
+            "now" if args.is_empty() => {
+                self.ensure_extern("declare ptr @_mvl_time_now()");
+                let r = self.next_reg();
+                self.push_instr(&format!("{r} = call ptr @_mvl_time_now()"));
+                self.fn_ctx.reg_types.insert(r.clone(), "ptr".into());
+                return Ok(Some(r));
+            }
+            // Byte construction: `from_int(n)` and `wrapping_from_int(n)` both
+            // truncate an Int (i64) to a Byte (i8) — no runtime call needed.
+            "from_int" | "wrapping_from_int" if args.len() == 1 => {
+                let v = match self.emit_expr_tir(&args[0])? {
+                    Some(v) => v,
+                    None => return Ok(None),
+                };
+                let r = self.next_reg();
+                self.push_instr(&format!("{r} = trunc i64 {v} to i8"));
+                self.fn_ctx.reg_types.insert(r.clone(), "i8".into());
+                return Ok(Some(r));
+            }
             "format_datetime" if args.len() == 2 => {
                 return self.emit_format_datetime_tir(&args[0], &args[1]);
             }
@@ -534,8 +553,19 @@ impl TextEmitter {
                 (name.to_string(), false, args_str)
             };
 
+        // Never-returning functions (e.g. exit) produce `void` in LLVM IR.
+        // After the call, emit `unreachable` so downstream phi nodes don't include
+        // this basic block as a predecessor — otherwise the phi type may mismatch.
+        let is_never =
+            matches!(&ret_ty, crate::mvl::ir::TypeExpr::Base { name, .. } if name == "Never");
+
         if is_void {
             self.push_instr(&format!("call void @{effective_name}({args_str})"));
+            if is_never {
+                self.ensure_extern("declare void @llvm.trap()");
+                self.push_instr("unreachable");
+                self.fn_ctx.terminated = true;
+            }
             Ok(None)
         } else {
             let reg = self.next_reg();
@@ -623,9 +653,10 @@ impl TextEmitter {
                     // `load %T, ptr payload` in the match arm.
                     self.wrap_result_pair(&disc, &raw_payload)
                 } else {
-                    let slot = self.next_reg();
-                    self.push_instr(&format!("{slot} = alloca ptr"));
-                    self.push_instr(&format!("store ptr {raw_payload}, ptr {slot}"));
+                    // Wrap the C-ABI payload pointer in a heap-allocated slot so
+                    // the pointer survives if the caller returns this Result/Option
+                    // (stack alloca would dangle across the return boundary).
+                    let slot = self.emit_heap_slot("ptr", &raw_payload);
                     self.wrap_result_pair(&disc, &slot)
                 };
                 return Ok(Some(r1));
@@ -835,6 +866,18 @@ impl TextEmitter {
 
         if self.scrutinee_payload_enum_tir(scrutinee).is_some() {
             return self.emit_payload_enum_match_tir(&scrut_val, arms);
+        }
+
+        // String literal match: any arm with a string pattern requires an if-chain
+        // of _mvl_string_eq calls rather than a switch (switches only work on integers).
+        let has_string_literals = arms.iter().any(|a| {
+            matches!(
+                &a.pattern,
+                Pattern::Literal(crate::mvl::ir::Literal::Str(_), _)
+            )
+        });
+        if has_string_literals {
+            return self.emit_string_match_tir(&scrut_val, arms);
         }
 
         // Generic unit-enum / scalar match.
@@ -1256,22 +1299,51 @@ impl TextEmitter {
         self.fn_ctx.reg_types.insert(disc_reg.clone(), "i8".into());
 
         let n = self.fn_ctx.bb;
-        self.fn_ctx.bb += arms.len() + 2;
+        // Collect Err arm indices whose inner pattern is a qualified enum variant
+        // (e.g. `Err(AuthError::InvalidCredentials)`). When there are multiple such
+        // arms they must NOT all emit `i8 1` in the outer switch — LLVM rejects
+        // duplicate case values. Instead route all of them to one `err_dispatch_bb`
+        // which performs a second switch on the inner error discriminant.
+        let qualified_err_indices: Vec<usize> = arms
+            .iter()
+            .enumerate()
+            .filter(|(_, a)| {
+                matches!(&a.pattern, Pattern::Err { inner, .. }
+                    if matches!(inner.as_ref(), Pattern::Ident(qn, _) if qn.contains("::")))
+            })
+            .map(|(i, _)| i)
+            .collect();
+        let use_err_dispatch = qualified_err_indices.len() > 1;
+
+        self.fn_ctx.bb += arms.len() + 2 + usize::from(use_err_dispatch);
         let default_bb = format!("match_default_{n}");
-        let merge_bb = format!("match_merge_{}", n + arms.len() + 1);
+        let merge_bb = format!(
+            "match_merge_{}",
+            n + arms.len() + 1 + usize::from(use_err_dispatch)
+        );
         let arm_bbs: Vec<String> = (0..arms.len())
             .map(|i| format!("match_arm_{}", n + i))
             .collect();
+        let err_dispatch_bb = format!("err_dispatch_{}", n + arms.len());
 
         let mut switch_str = format!("switch i8 {disc_reg}, label %{default_bb} [\n");
         let mut wildcard_arm: Option<usize> = None;
+        let mut err_outer_added = false;
         for (idx, arm) in arms.iter().enumerate() {
             match &arm.pattern {
                 Pattern::Ok { .. } => {
                     switch_str.push_str(&format!("    i8 0, label %{}\n", arm_bbs[idx]));
                 }
                 Pattern::Err { .. } => {
-                    switch_str.push_str(&format!("    i8 1, label %{}\n", arm_bbs[idx]));
+                    if use_err_dispatch {
+                        // Add the single outer Err case only once.
+                        if !err_outer_added {
+                            switch_str.push_str(&format!("    i8 1, label %{err_dispatch_bb}\n"));
+                            err_outer_added = true;
+                        }
+                    } else {
+                        switch_str.push_str(&format!("    i8 1, label %{}\n", arm_bbs[idx]));
+                    }
                 }
                 _ => {
                     wildcard_arm = Some(idx);
@@ -1280,6 +1352,49 @@ impl TextEmitter {
         }
         switch_str.push_str("  ]");
         self.push_instr(&switch_str);
+
+        // Two-level dispatch: load inner error value, switch on its discriminant.
+        if use_err_dispatch {
+            self.fn_ctx.fn_buf.push(format!("{err_dispatch_bb}:"));
+            self.fn_ctx.current_bb = err_dispatch_bb.clone();
+            self.fn_ctx.terminated = false;
+
+            let pp = self.next_reg();
+            self.push_instr(&format!(
+                "{pp} = extractvalue {RESULT_LLVM_TY} {scrut_val}, 1"
+            ));
+            let inner_val = self.next_reg();
+            self.push_instr(&format!("{inner_val} = load {err_load_ty}, ptr {pp}"));
+            self.fn_ctx
+                .reg_types
+                .insert(inner_val.clone(), err_load_ty.clone());
+
+            let inner_default = format!("err_dispatch_default_{}", n + arms.len());
+            let mut inner_sw =
+                format!("switch {err_load_ty} {inner_val}, label %{inner_default} [\n");
+            for &idx in &qualified_err_indices {
+                if let Pattern::Err { inner, .. } = &arms[idx].pattern {
+                    if let Pattern::Ident(qname, _) = inner.as_ref() {
+                        if let Some(disc) = self.pattern_discriminant(qname) {
+                            inner_sw.push_str(&format!(
+                                "    {err_load_ty} {disc}, label %{}\n",
+                                arm_bbs[idx]
+                            ));
+                        }
+                    }
+                }
+            }
+            inner_sw.push_str("  ]");
+            self.push_instr(&inner_sw);
+
+            self.fn_ctx.fn_buf.push(format!("{inner_default}:"));
+            self.fn_ctx.current_bb = inner_default.clone();
+            self.fn_ctx.terminated = false;
+            self.ensure_extern("declare void @llvm.trap()");
+            self.push_instr("call void @llvm.trap()");
+            self.push_instr("unreachable");
+            self.fn_ctx.terminated = true;
+        }
 
         let mut phi_entries: Vec<(String, String, String)> = Vec::new();
         let mut no_val_arms: Vec<String> = Vec::new();
@@ -1322,7 +1437,11 @@ impl TextEmitter {
                         .reg_types
                         .insert(err_val.clone(), err_load_ty.clone());
                     if let Pattern::Ident(var_name, _) = inner.as_ref() {
-                        if var_name != "_" {
+                        // Qualified names (e.g. `AuthError::InvalidCredentials`) are
+                        // discriminant checks, not variable bindings — the dispatch is
+                        // already done in err_dispatch_bb. Plain names (e.g. `e`) ARE
+                        // variable bindings and must be bound for arm body use.
+                        if var_name != "_" && !var_name.contains("::") {
                             self.fn_ctx.locals.insert(var_name.clone(), err_val.clone());
                             bound_var = Some(var_name.clone());
                         }
@@ -1811,20 +1930,29 @@ impl TextEmitter {
             let inferred_ty = self.ty_to_llvm_ctx(&arg.ty);
             if inferred_ty == "void" {
                 let _ = self.emit_expr_tir(arg)?;
+                // Unit payload — heap-allocate a 1-byte sentinel so the ptr
+                // field is non-null (the match arm never loads it for unit Ok).
+                self.ensure_extern("declare ptr @_mvl_alloc(i64)");
                 slot = self.next_reg();
-                self.push_instr(&format!("{slot} = alloca i8"));
+                self.push_instr(&format!("{slot} = call ptr @_mvl_alloc(i64 1)"));
             } else {
                 let arg_val = match self.emit_expr_tir(arg)? {
                     Some(v) => v,
                     None => return Ok(None),
                 };
-                slot = self.next_reg();
-                self.push_instr(&format!("{slot} = alloca {inferred_ty}"));
-                self.push_instr(&format!("store {inferred_ty} {arg_val}, ptr {slot}"));
+                // Transfer ownership: if the argument is a heap-tracked local,
+                // remove it from heap_locals so it isn't dropped at function
+                // exit — the caller owns it through the Result payload.
+                self.exclude_returned_value_tir(arg);
+                // Heap-allocate the payload so the pointer survives after this
+                // function returns (stack alloca would dangle).
+                slot = self.emit_heap_slot(&inferred_ty, &arg_val);
             }
         } else {
+            // No argument (e.g. bare Ok() — treat as unit payload).
+            self.ensure_extern("declare ptr @_mvl_alloc(i64)");
             slot = self.next_reg();
-            self.push_instr(&format!("{slot} = alloca i8"));
+            self.push_instr(&format!("{slot} = call ptr @_mvl_alloc(i64 1)"));
         };
         let r1 = self.wrap_result_pair(&disc.to_string(), &slot);
         Ok(Some(r1))
@@ -1841,9 +1969,11 @@ impl TextEmitter {
             Some(v) => v,
             None => return Ok(None),
         };
-        let slot = self.next_reg();
-        self.push_instr(&format!("{slot} = alloca {arg_ty}"));
-        self.push_instr(&format!("store {arg_ty} {arg_val}, ptr {slot}"));
+        // Transfer ownership of any heap-tracked local to the caller.
+        self.exclude_returned_value_tir(arg);
+        // Heap-allocate so the payload pointer survives if this Option escapes
+        // the current function's stack frame.
+        let slot = self.emit_heap_slot(&arg_ty, &arg_val);
         let r1 = self.wrap_result_pair("0", &slot);
         Ok(Some(r1))
     }
@@ -2148,6 +2278,224 @@ impl TextEmitter {
         ));
         self.fn_ctx.reg_types.insert(r.clone(), "ptr".into());
         Ok(Some(r))
+    }
+
+    /// Convert an `i64` sentinel value (-1 = None, >= 0 = Some(value)) into
+    /// an `{ i8, ptr }` Option tagged union. Used by `String::find` and any
+    /// other C-ABI function that returns an optional index as -1/index.
+    /// Emit a match on a string scrutinee by chaining `_mvl_string_eq` comparisons.
+    ///
+    /// LLVM `switch` only works on integers, so string literal patterns need an
+    /// if-else chain. Each literal arm emits:
+    ///   `%cmp = call i1 @_mvl_string_eq(ptr scrutinee, ptr @str.literal)`
+    ///   `br i1 %cmp, label %arm_bb, label %next_cmp_bb`
+    /// Wildcard / variable arms become the final else branch.
+    fn emit_string_match_tir(
+        &mut self,
+        scrut_val: &str,
+        arms: &[TirMatchArm],
+    ) -> Result<Option<String>, String> {
+        let n = self.fn_ctx.bb;
+        self.fn_ctx.bb += arms.len() + 2;
+        let default_bb = format!("match_default_{n}");
+        let merge_bb = format!("match_merge_{}", n + arms.len() + 1);
+        let arm_bbs: Vec<String> = (0..arms.len())
+            .map(|i| format!("match_arm_{}", n + i))
+            .collect();
+
+        // Build the comparison chain: for each literal arm, emit a _mvl_string_eq
+        // check and branch; wildcard arms become the final else.
+        let mut wildcard_arm: Option<usize> = None;
+        let first_cmp_bb = format!("str_cmp_{n}_0");
+        self.push_instr(&format!("br label %{first_cmp_bb}"));
+        self.fn_ctx.fn_buf.push(format!("{first_cmp_bb}:"));
+        self.fn_ctx.current_bb = first_cmp_bb;
+        self.fn_ctx.terminated = false;
+
+        for (idx, arm) in arms.iter().enumerate() {
+            match &arm.pattern {
+                Pattern::Literal(crate::mvl::ir::Literal::Str(s), _) => {
+                    let next_cmp_bb = format!("str_cmp_{n}_{}", idx + 1);
+                    let lit_global = self.emit_str_global(s);
+                    let lit_ptr = self.next_reg();
+                    self.push_instr(&format!(
+                        "{lit_ptr} = call ptr @_mvl_string_new(ptr @{lit_global}, i64 {})",
+                        s.len()
+                    ));
+                    self.fn_ctx.reg_types.insert(lit_ptr.clone(), "ptr".into());
+                    self.ensure_extern("declare i1 @_mvl_string_eq(ptr, ptr)");
+                    let cmp = self.next_reg();
+                    self.push_instr(&format!(
+                        "{cmp} = call i1 @_mvl_string_eq(ptr {scrut_val}, ptr {lit_ptr})"
+                    ));
+                    self.fn_ctx.reg_types.insert(cmp.clone(), "i1".into());
+                    self.push_instr(&format!(
+                        "br i1 {cmp}, label %{}, label %{next_cmp_bb}",
+                        arm_bbs[idx]
+                    ));
+                    self.fn_ctx.terminated = true;
+                    self.fn_ctx.fn_buf.push(format!("{next_cmp_bb}:"));
+                    self.fn_ctx.current_bb = next_cmp_bb.clone();
+                    self.fn_ctx.terminated = false;
+                }
+                Pattern::Wildcard(_) | Pattern::Ident(_, _) => {
+                    wildcard_arm = Some(idx);
+                    // Fall through: jump to this arm from the last cmp block
+                }
+                _ => {}
+            }
+        }
+        // After all literal checks fall through, jump to default or wildcard
+        self.push_instr(&format!("br label %{default_bb}"));
+
+        // Emit each arm body
+        let mut phi_entries: Vec<(String, String, String)> = Vec::new();
+        let mut no_val_arms: Vec<String> = Vec::new();
+
+        for (idx, arm) in arms.iter().enumerate() {
+            let arm_bb = &arm_bbs[idx];
+            self.fn_ctx.fn_buf.push(format!("{arm_bb}:"));
+            self.fn_ctx.current_bb = arm_bb.clone();
+            self.fn_ctx.terminated = false;
+
+            if let Pattern::Ident(name, _) = &arm.pattern {
+                if !name.contains("::") {
+                    self.fn_ctx
+                        .locals
+                        .insert(name.clone(), scrut_val.to_string());
+                }
+            }
+
+            let heap_snapshot = self.fn_ctx.heap_locals.len();
+            let arm_val = self.emit_match_arm_body_tir(&arm.body)?;
+            let end_bb = self.fn_ctx.current_bb.clone();
+            if !self.fn_ctx.terminated {
+                self.drop_scope_locals(heap_snapshot, arm_val.as_deref());
+                self.push_instr(&format!("br label %{merge_bb}"));
+                if let Some(v) = arm_val {
+                    let ty = self.infer_val_type(&v);
+                    phi_entries.push((v, ty, end_bb));
+                } else {
+                    no_val_arms.push(end_bb);
+                }
+            } else {
+                self.fn_ctx.heap_locals.truncate(heap_snapshot);
+            }
+        }
+
+        // Default block → wildcard arm or trap
+        self.fn_ctx.fn_buf.push(format!("{default_bb}:"));
+        self.fn_ctx.current_bb = default_bb.clone();
+        self.fn_ctx.terminated = false;
+        if let Some(wild_idx) = wildcard_arm {
+            let arm_bb = &arm_bbs[wild_idx];
+            self.push_instr(&format!("br label %{arm_bb}"));
+        } else {
+            self.ensure_extern("declare void @llvm.trap()");
+            self.push_instr("call void @llvm.trap()");
+            self.push_instr("unreachable");
+            self.fn_ctx.terminated = true;
+        }
+
+        // Merge block
+        self.fn_ctx.fn_buf.push(format!("{merge_bb}:"));
+        self.fn_ctx.current_bb = merge_bb.clone();
+        self.fn_ctx.terminated = false;
+        let total_incoming = phi_entries.len() + no_val_arms.len();
+        if total_incoming >= 2 && !phi_entries.is_empty() {
+            let phi_ty = phi_entries
+                .iter()
+                .find(|(_, ty, _)| ty != "i64")
+                .map(|(_, ty, _)| ty.clone())
+                .unwrap_or_else(|| phi_entries[0].1.clone());
+            let mut parts: Vec<String> = phi_entries
+                .iter()
+                .map(|(v, _, from)| format!("[ {v}, %{from} ]"))
+                .collect();
+            for from in &no_val_arms {
+                parts.push(format!("[ undef, %{from} ]"));
+            }
+            let result = self.next_reg();
+            self.push_instr(&format!("{result} = phi {phi_ty} {}", parts.join(", ")));
+            self.fn_ctx.reg_types.insert(result.clone(), phi_ty);
+            Ok(Some(result))
+        } else if phi_entries.len() == 1 && no_val_arms.is_empty() {
+            Ok(Some(phi_entries.remove(0).0))
+        } else {
+            Ok(None)
+        }
+    }
+
+    fn emit_i64_sentinel_none_to_option(&mut self, raw: &str) -> String {
+        let is_none = self.next_reg();
+        self.push_instr(&format!("{is_none} = icmp eq i64 {raw}, -1"));
+        self.fn_ctx.reg_types.insert(is_none.clone(), "i1".into());
+
+        let none_bb = self.next_bb("opt_none");
+        let some_bb = self.next_bb("opt_some");
+        let merge_bb = self.next_bb("opt_merge");
+        let result_slot = self.next_reg();
+        self.push_instr(&format!("{result_slot} = alloca {RESULT_LLVM_TY}"));
+        self.fn_ctx
+            .reg_types
+            .insert(result_slot.clone(), "ptr".into());
+        self.push_instr(&format!(
+            "br i1 {is_none}, label %{none_bb}, label %{some_bb}"
+        ));
+
+        // None branch
+        self.start_bb(&none_bb);
+        let nr0 = self.next_reg();
+        self.push_instr(&format!(
+            "{nr0} = insertvalue {RESULT_LLVM_TY} zeroinitializer, i8 1, 0"
+        ));
+        self.fn_ctx
+            .reg_types
+            .insert(nr0.clone(), RESULT_LLVM_TY.into());
+        let nr1 = self.next_reg();
+        self.push_instr(&format!(
+            "{nr1} = insertvalue {RESULT_LLVM_TY} {nr0}, ptr null, 1"
+        ));
+        self.fn_ctx
+            .reg_types
+            .insert(nr1.clone(), RESULT_LLVM_TY.into());
+        self.push_instr(&format!("store {RESULT_LLVM_TY} {nr1}, ptr {result_slot}"));
+        self.push_instr(&format!("br label %{merge_bb}"));
+        self.fn_ctx.terminated = true;
+
+        // Some branch — store the i64 index
+        self.start_bb(&some_bb);
+        let idx_slot = self.next_reg();
+        self.push_instr(&format!("{idx_slot} = alloca i64"));
+        self.push_instr(&format!("store i64 {raw}, ptr {idx_slot}"));
+        let sr0 = self.next_reg();
+        self.push_instr(&format!(
+            "{sr0} = insertvalue {RESULT_LLVM_TY} zeroinitializer, i8 0, 0"
+        ));
+        self.fn_ctx
+            .reg_types
+            .insert(sr0.clone(), RESULT_LLVM_TY.into());
+        let sr1 = self.next_reg();
+        self.push_instr(&format!(
+            "{sr1} = insertvalue {RESULT_LLVM_TY} {sr0}, ptr {idx_slot}, 1"
+        ));
+        self.fn_ctx
+            .reg_types
+            .insert(sr1.clone(), RESULT_LLVM_TY.into());
+        self.push_instr(&format!("store {RESULT_LLVM_TY} {sr1}, ptr {result_slot}"));
+        self.push_instr(&format!("br label %{merge_bb}"));
+        self.fn_ctx.terminated = true;
+
+        // Merge
+        self.start_bb(&merge_bb);
+        let result = self.next_reg();
+        self.push_instr(&format!(
+            "{result} = load {RESULT_LLVM_TY}, ptr {result_slot}"
+        ));
+        self.fn_ctx
+            .reg_types
+            .insert(result.clone(), RESULT_LLVM_TY.into());
+        result
     }
 
     /// TIR variant of [`Self::emit_choice_call`].
@@ -2628,11 +2976,10 @@ impl TextEmitter {
                     Some(v) => v,
                     None => return Ok(None),
                 };
-                Ok(Some(self.emit_c_call_simple(
-                    "find",
-                    &val,
-                    &[("ptr", &needle)],
-                )))
+                // _mvl_str_find returns i64: index if found, -1 if not found.
+                // Convert to Option[Int] = { i8, ptr } tagged union (Some=0, None=1).
+                let raw = self.emit_c_call_simple("find", &val, &[("ptr", &needle)]);
+                Ok(Some(self.emit_i64_sentinel_none_to_option(&raw)))
             }
             ("contains", "ptr")
                 if args.len() == 1 && matches!(unwrap_labels(&receiver.ty), Ty::String) =>

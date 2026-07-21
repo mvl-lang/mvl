@@ -248,6 +248,10 @@ pub fn check_with_two_preludes_mode(
     // #836: Merge contract sites (requires/ensures) into the refinement sites
     // so they show up in `mvl prove` output alongside call-site refinement checks.
     refinement_counts.sites.extend(contract_counts.sites);
+    // #1931 (Axis 2): merge tightening candidates so `mvl harden` can surface them.
+    refinement_counts
+        .tightening_candidates
+        .extend(contract_counts.tightening_candidates);
     // #1498: Merge contract fn counts so ensures/requires contribute to Req 10 verdict.
     refinement_counts.fn_total += contract_counts.fn_total;
     refinement_counts.fully_verified_fns += contract_counts.fully_verified_fns;

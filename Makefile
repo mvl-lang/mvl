@@ -130,6 +130,11 @@ install: ## Install all artifacts (mvl, stdlib, rust/llvm/wasm runtimes) from lo
 
 # === Build ===
 
+# Prevent the mvl binary from re-execing to the installed pinned toolchain.
+# Without this, `make test` would silently run the installed release binary
+# instead of the freshly-built debug binary, making local test runs useless.
+export MVL_NO_REEXEC := 1
+
 # BUILD=debug (default) or BUILD=release
 BUILD              ?= debug
 BUILD_CARGO_FLAGS  := $(if $(filter release,$(BUILD)),--release)
@@ -142,6 +147,9 @@ build: ## Build the MVL compiler + LLVM runtime (BUILD=debug|release, default de
 # === Test ===
 
 MVL ?= ./target/debug/mvl
+# All test targets use the freshly built dev binary. Prevent it from re-execing
+# to a project-pinned toolchain (see src/main.rs and CLAUDE.md).
+export MVL_NO_REEXEC = 1
 # mvlr — matrix run driver. Prefer the in-tree copy when it exists so a
 # dev checkout always runs the mvlr matching this source (the emitter
 # under test needs the mvlr that knows how to drive it — the installed
@@ -370,6 +378,7 @@ WASM_CORPUS := \
 	tests/corpus/01_expressions \
 	tests/corpus/02_control_flow \
 	tests/corpus/03_functions/basic_test.mvl \
+	tests/corpus/03_functions/total_partial_test.mvl \
 	tests/corpus/04_types/enum_test.mvl \
 	tests/corpus/04_types/struct_test.mvl \
 	tests/corpus/04_types/enum_payload_test.mvl \
@@ -379,6 +388,16 @@ WASM_CORPUS := \
 	tests/corpus/05_collections/list_get_test.mvl \
 	tests/corpus/05_collections/set_test.mvl \
 	tests/corpus/05_collections/map_test.mvl \
+	tests/corpus/06_effects/pure_test.mvl \
+	tests/corpus/07_ownership/ref_test.mvl \
+	tests/corpus/09_refinements/type_alias_test.mvl \
+	tests/corpus/09_refinements/array_index_refinement_test.mvl \
+	tests/corpus/09_refinements/bitwise_refinement_test.mvl \
+	tests/corpus/10_termination/total_fn_test.mvl \
+	tests/corpus/10_termination/decreases_test.mvl \
+	tests/corpus/11_contracts/requires_test.mvl \
+	tests/corpus/11_contracts/ensures_test.mvl \
+	tests/corpus/11_contracts/invariant_test.mvl \
 	tests/corpus/13_stdlib/string_test.mvl
 
 test-rust-wasm: build build-runtime-wasm ## rust/wasm — WASM-supported corpus subset (via runtime/wasm/ preload)

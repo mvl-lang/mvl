@@ -152,11 +152,13 @@ pub(super) fn try_symbolic(
             .or_else(|| layer2::try_interval(pred, &return_expr, &path_var_refs));
 
         match result {
-            Some(RefResult::Proven) => {}
+            Some(RefResult::Proven | RefResult::ProvenBv) => {}
             Some(RefResult::Failed { counterexample }) => {
                 return Some(RefResult::Failed { counterexample })
             }
-            Some(RefResult::RuntimeCheck) | None => any_undecided = true,
+            Some(RefResult::RuntimeCheck | RefResult::RuntimeCheckWithWitness { .. }) | None => {
+                any_undecided = true
+            }
         }
     }
 
@@ -193,11 +195,13 @@ fn check_direct_paths(
         let result = layer1::try_trivial(pred, &return_expr, &path_var_refs, fn_decls)
             .or_else(|| layer2::try_interval(pred, &return_expr, &path_var_refs));
         match result {
-            Some(RefResult::Proven) => {}
+            Some(RefResult::Proven | RefResult::ProvenBv) => {}
             Some(RefResult::Failed { counterexample }) => {
                 return Some(RefResult::Failed { counterexample })
             }
-            Some(RefResult::RuntimeCheck) | None => any_undecided = true,
+            Some(RefResult::RuntimeCheck | RefResult::RuntimeCheckWithWitness { .. }) | None => {
+                any_undecided = true
+            }
         }
     }
     if any_undecided {

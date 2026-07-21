@@ -231,13 +231,6 @@ const RUNTIME_IMPORTS: &[(&str, &str)] = &[
     // Returns *MvlOption (Some(value) in bounds, None otherwise).
     ("_mvl_array_get_option_i64", "(param i32 i64) (result i32)"),
     ("_mvl_array_get_option_i32", "(param i32 i64) (result i32)"),
-    // Group D2 — MvlResult (#1821). Heap-allocated `Result[T, E]`.
-    // Tag 0 = Ok, 1 = Err. Ok payload is i64; Err payload is *MvlString (i32).
-    ("_mvl_result_ok_i64", "(param i64) (result i32)"),
-    ("_mvl_result_err_str", "(param i32 i32) (result i32)"),
-    ("_mvl_result_tag", "(param i32) (result i32)"),
-    ("_mvl_result_value_i64", "(param i32) (result i64)"),
-    ("_mvl_result_drop", "(param i32)"),
     // Group G — struct heap allocation (#1821). `_mvl_struct_alloc(size)`
     // bump-allocates `size` bytes and returns the pointer as i32. Used for
     // both struct construction and payload-enum header + payload blocks.
@@ -261,6 +254,18 @@ const RUNTIME_IMPORTS: &[(&str, &str)] = &[
         "(param i32 i32 i32) (result i32)",
     ),
     ("_mvl_map_drop_si64", "(param i32)"),
+    // Group G — Result ops (#1821 extension). i32 pointer to heap-allocated
+    // MvlResult. Ok = tag 0, Err = tag 1. Corpus scope: Result[Int, String].
+    ("_mvl_result_ok_i64", "(param i64) (result i32)"),
+    ("_mvl_result_ok_i32", "(param i32) (result i32)"),
+    ("_mvl_result_err_str", "(param i32 i32) (result i32)"),
+    ("_mvl_result_tag", "(param i32) (result i32)"),
+    ("_mvl_result_value_i64", "(param i32) (result i64)"),
+    ("_mvl_result_value_i32", "(param i32) (result i32)"),
+    ("_mvl_result_drop", "(param i32)"),
+    // Group H — String parse ops. Take raw (ptr, len) byte slice; return
+    // heap-allocated MvlResult pointer.
+    ("_mvl_string_parse_int", "(param i32 i32) (result i32)"),
 ];
 
 /// Layout offsets on `MvlString` — mirrors `runtime/wasm/src/lib.rs` /
@@ -416,6 +421,15 @@ fn effective_name(f: &TirFn, needs_wasi: bool) -> (&str, &str) {
 }
 
 fn emit_fn(out: &mut String, f: &TirFn, ctx: &Ctx) {
+    // Update the per-function String-param registry so that `Var` accesses
+    // to these params emit two `local.get` ops instead of one.
+    *ctx.string_params.borrow_mut() = f
+        .params
+        .iter()
+        .filter(|p| matches!(&p.ty, Ty::String))
+        .map(|p| p.name.clone())
+        .collect();
+
     let (wasm_name, _) = effective_name(f, ctx.needs_wasi);
     // Populate the per-function String-param set so the Var emitter knows
     // which String locals are split (ptr, len) params vs unsupported locals.
@@ -505,15 +519,33 @@ fn emit_fn(out: &mut String, f: &TirFn, ctx: &Ctx) {
                 // here is defense-in-depth without double-free risk.
                 out.push_str(&format!("    local.get ${name}\n"));
                 out.push_str("    call $_mvl_option_drop\n");
+            } else if name.starts_with("__mr_") {
+                // Same as __mo_*: Result.unwrap_or drops inline; re-drop is
+                // null-safe defense-in-depth.
+                out.push_str(&format!("    local.get ${name}\n"));
+                out.push_str("    call $_mvl_result_drop\n");
             } else if name.starts_with("__match_") && option_inner_ty(ty).is_some() {
                 // Match scrutinee that was an Option — drop the box the
                 // arms consumed by value.
                 out.push_str(&format!("    local.get ${name}\n"));
                 out.push_str("    call $_mvl_option_drop\n");
+            } else if name.starts_with("__match_") && result_ok_ty(ty).is_some() {
+                // Match scrutinee that was a Result — drop the box.
+                out.push_str(&format!("    local.get ${name}\n"));
+                out.push_str("    call $_mvl_result_drop\n");
+            } else if name.starts_with("__pr_") {
+                // `?`-operator temp — the Result was already propagated (Ok
+                // or Err) so drop its box here at fn exit. Null-safe.
+                out.push_str(&format!("    local.get ${name}\n"));
+                out.push_str("    call $_mvl_result_drop\n");
             } else if !name.starts_with("__") && option_inner_ty(ty).is_some() {
                 // User-bound `let opt: Option[T] = …`. Rare in corpus.
                 out.push_str(&format!("    local.get ${name}\n"));
                 out.push_str("    call $_mvl_option_drop\n");
+            } else if !name.starts_with("__") && result_ok_ty(ty).is_some() {
+                // User-bound `let r: Result[T, E] = …`.
+                out.push_str(&format!("    local.get ${name}\n"));
+                out.push_str("    call $_mvl_result_drop\n");
             } else if !name.starts_with("__")
                 && collection_elem_ty(ty).is_some()
                 && collection_elem_ty(ty)
@@ -568,7 +600,9 @@ fn collect_locals_ctx_stmt(stmt: &TirStmt, locals: &mut Vec<(String, Ty)>, ctx: 
         TirStmt::Assign { value, .. } => collect_locals_ctx_expr(value, locals, ctx),
         TirStmt::Return { value: Some(v), .. } => collect_locals_ctx_expr(v, locals, ctx),
         TirStmt::Expr { expr, .. } => collect_locals_ctx_expr(expr, locals, ctx),
-        TirStmt::If { cond, then, else_, .. } => {
+        TirStmt::If {
+            cond, then, else_, ..
+        } => {
             collect_locals_ctx_expr(cond, locals, ctx);
             collect_locals_ctx(then, locals, ctx);
             match else_ {
@@ -585,7 +619,9 @@ fn collect_locals_ctx_stmt(stmt: &TirStmt, locals: &mut Vec<(String, Ty)>, ctx: 
             collect_locals_ctx_expr(iter, locals, ctx);
             collect_locals_ctx(body, locals, ctx);
         }
-        TirStmt::Match { scrutinee, arms, .. } => {
+        TirStmt::Match {
+            scrutinee, arms, ..
+        } => {
             collect_locals_ctx_expr(scrutinee, locals, ctx);
             for arm in arms {
                 match &arm.body {
@@ -604,7 +640,11 @@ fn collect_locals_ctx_expr(expr: &TirExpr, locals: &mut Vec<(String, Ty)>, ctx: 
             // Payload-enum unit-variant used as a value: `Shape::Point`.
             if let Some((type_name, _)) = name.split_once("::") {
                 if let Some(info) = ctx.payload_enums.get(type_name) {
-                    if info.variants.iter().any(|v| v.name == *name && v.fields.is_empty()) {
+                    if info
+                        .variants
+                        .iter()
+                        .any(|v| v.name == *name && v.fields.is_empty())
+                    {
                         // __ev_<off>: i32 pointer from _mvl_struct_alloc.
                         locals.push((format!("__ev_{}", expr.span.offset), Ty::Bool));
                     }
@@ -800,7 +840,13 @@ fn collect_locals_stmt(stmt: &TirStmt, locals: &mut Vec<(String, Ty)>) {
             collect_locals_expr(scrutinee, locals);
             let inner_ty = option_inner_ty(&scrutinee.ty).cloned();
             for arm in arms {
-                collect_match_arm_locals(arm, &scrutinee.ty, inner_ty.as_ref(), span.offset, locals);
+                collect_match_arm_locals(
+                    arm,
+                    &scrutinee.ty,
+                    inner_ty.as_ref(),
+                    span.offset,
+                    locals,
+                );
                 match &arm.body {
                     TirMatchBody::Expr(e) => collect_locals_expr(e, locals),
                     TirMatchBody::Block(b) => collect_locals_block(b, locals),
@@ -891,6 +937,10 @@ fn collect_locals_expr(expr: &TirExpr, locals: &mut Vec<(String, Ty)>) {
             if option_inner_ty(&receiver.ty).is_some() && method == "unwrap_or" {
                 locals.push((mvl_option_temp_name(expr), Ty::Bool));
             }
+            // Same for Result.unwrap_or — stashes the Result pointer in __mr_*.
+            if result_ok_ty(&receiver.ty).is_some() && method == "unwrap_or" {
+                locals.push((mvl_result_temp_name(expr), Ty::Bool));
+            }
         }
         // List / Set literals stash their `*MvlArray` pointer in a temp
         // during the per-element push sequence. Declare it here.
@@ -932,7 +982,9 @@ fn emit_stmt(out: &mut String, stmt: &TirStmt, ctx: &Ctx) {
         // `let x: T = init;`  (or `let x: ref T = init;` — same lowering)
         // The local was already declared in the fn prelude via
         // `collect_locals_block`. Here we just evaluate the init and store.
-        TirStmt::Let { pattern, ty, init, .. } => {
+        TirStmt::Let {
+            pattern, ty, init, ..
+        } => {
             if let Pattern::Ident(name, _) = pattern {
                 emit_expr(out, init, ctx);
                 if matches!(ty, Ty::String) {
@@ -1108,12 +1160,10 @@ fn emit_expr(out: &mut String, expr: &TirExpr, ctx: &Ctx) {
         TirExprKind::Binary { op, left, right } => {
             // String equality/inequality — route through runtime, same as
             // assert_eq[String]. Leaves i32 (0 or 1) on the stack.
-            if matches!(&left.ty, Ty::String)
-                && matches!(op, BinaryOp::Eq | BinaryOp::Ne)
-            {
+            if matches!(&left.ty, Ty::String) && matches!(op, BinaryOp::Eq | BinaryOp::Ne) {
                 ctx.needs_runtime.set(true);
-                emit_expr(out, left, ctx);   // (ptr1, len1)
-                emit_expr(out, right, ctx);  // (ptr2, len2)
+                emit_expr(out, left, ctx); // (ptr1, len1)
+                emit_expr(out, right, ctx); // (ptr2, len2)
                 out.push_str("    call $_mvl_string_eq\n");
                 if matches!(op, BinaryOp::Ne) {
                     out.push_str("    i32.eqz\n");
@@ -1176,22 +1226,26 @@ fn emit_expr(out: &mut String, expr: &TirExpr, ctx: &Ctx) {
                     return;
                 }
             }
-            // `Ok(v)` — Result constructor, corpus scope: Ok payload is Int (i64).
+            // `Ok(x)` constructor — dispatch to the typed result constructor.
             if name == "Ok" && args.len() == 1 && matches!(&expr.ty, Ty::Result(_, _)) {
                 ctx.needs_runtime.set(true);
                 emit_expr(out, &args[0], ctx);
-                // Widen i32 payloads (Bool/enum) to i64 for the runtime slot.
-                if is_i32(&args[0].ty, ctx) {
-                    out.push_str("    i64.extend_i32_s\n");
-                }
-                out.push_str("    call $_mvl_result_ok_i64\n");
+                let ok_ty = result_ok_ty(&expr.ty).cloned().unwrap_or(Ty::Int);
+                let (ok_ctor, _) = result_ops_for_ok(&ok_ty, ctx);
+                out.push_str(&format!("    call ${ok_ctor}\n"));
                 return;
             }
-            // `Err(e)` — Result constructor. Corpus scope: Err payload is String.
+            // `Err(x)` constructor — `Err(s: String)` routes to
+            // `_mvl_result_err_str`. Other error types not yet supported.
             if name == "Err" && args.len() == 1 && matches!(&expr.ty, Ty::Result(_, _)) {
-                ctx.needs_runtime.set(true);
-                emit_expr(out, &args[0], ctx); // pushes (ptr, len) for String
-                out.push_str("    call $_mvl_result_err_str\n");
+                let err_ty = result_err_ty(&expr.ty).cloned().unwrap_or(Ty::String);
+                if matches!(err_ty, Ty::String) {
+                    ctx.needs_runtime.set(true);
+                    emit_expr(out, &args[0], ctx);
+                    out.push_str("    call $_mvl_result_err_str\n");
+                } else {
+                    out.push_str("    ;; unsupported Err type (only String errors supported)\n");
+                }
                 return;
             }
             for a in args {
@@ -1265,6 +1319,43 @@ fn emit_expr(out: &mut String, expr: &TirExpr, ctx: &Ctx) {
             }
             out.push_str(&format!("    call $_mvl_string_{method}\n"));
             emit_unpack_mvl_string(out, expr);
+        }
+        // `String.parse_int()` — returns a heap-allocated MvlResult pointer
+        // (Group H import). Receiver is the raw (ptr, len) string on the stack.
+        TirExprKind::MethodCall {
+            receiver,
+            method,
+            args,
+        } if matches!(&receiver.ty, Ty::String) && method == "parse_int" && args.is_empty() => {
+            ctx.needs_runtime.set(true);
+            emit_expr(out, receiver, ctx);
+            out.push_str("    call $_mvl_string_parse_int\n");
+        }
+        // `Result[T, E].unwrap_or(default)` — inline if/else on the tag,
+        // then drop the Result box. Mirrors the Option.unwrap_or handler.
+        TirExprKind::MethodCall {
+            receiver,
+            method,
+            args,
+        } if result_ok_ty(&receiver.ty).is_some() && method == "unwrap_or" && args.len() == 1 => {
+            ctx.needs_runtime.set(true);
+            let ok_ty = result_ok_ty(&receiver.ty).cloned().unwrap_or(Ty::Int);
+            let (_, getter) = result_ops_for_ok(&ok_ty, ctx);
+            let result_wasm_ty = wasm_ty(&ok_ty, ctx);
+            let temp = mvl_result_temp_name(expr);
+            emit_expr(out, receiver, ctx);
+            out.push_str(&format!("    local.tee ${temp}\n"));
+            out.push_str("    call $_mvl_result_tag\n");
+            // tag == 0 → Ok. i32.eqz maps 0→1, non-zero→0.
+            out.push_str("    i32.eqz\n");
+            out.push_str(&format!("    if (result {result_wasm_ty})\n"));
+            out.push_str(&format!("    local.get ${temp}\n"));
+            out.push_str(&format!("    call ${getter}\n"));
+            out.push_str("    else\n");
+            emit_expr(out, &args[0], ctx);
+            out.push_str("    end\n");
+            out.push_str(&format!("    local.get ${temp}\n"));
+            out.push_str("    call $_mvl_result_drop\n");
         }
         // Map[String, Int] methods (#1820). Guarded by `map_key_val_ty` so
         // these never fire on List / Set receivers.
@@ -1836,9 +1927,11 @@ fn emit_match_impl(
                 out.push_str("    else\n");
                 open_ifs += 1;
             }
-            // `Ok(inner)` pattern on Result[T, E]. Check tag == 0.
+            // `Ok(inner)` pattern on Result[T, E]. Check tag == 0, bind inner.
             Pattern::Ok { inner, .. } => {
                 ctx.needs_runtime.set(true);
+                let ok_ty = result_ok_ty(&scrutinee.ty).cloned().unwrap_or(Ty::Int);
+                let (_, getter) = result_ops_for_ok(&ok_ty, ctx);
                 out.push_str(&format!("    local.get ${temp}\n"));
                 out.push_str("    call $_mvl_result_tag\n");
                 out.push_str("    i32.eqz\n"); // 1 when tag == 0 (Ok)
@@ -1846,7 +1939,7 @@ fn emit_match_impl(
                 if let Pattern::Ident(name, _) = inner.as_ref() {
                     if name != "_" {
                         out.push_str(&format!("    local.get ${temp}\n"));
-                        out.push_str("    call $_mvl_result_value_i64\n");
+                        out.push_str(&format!("    call ${getter}\n"));
                         out.push_str(&format!("    local.set ${name}\n"));
                     }
                 }
@@ -1879,7 +1972,11 @@ fn emit_match_impl(
             }
             // `Variant(f1, f2, …)` — payload enum pattern (#1821).
             // `Pattern::TupleStruct { name: "Shape::Circle", fields: [pat] }`
-            Pattern::TupleStruct { name: variant_name, fields: pats, .. } => {
+            Pattern::TupleStruct {
+                name: variant_name,
+                fields: pats,
+                ..
+            } => {
                 // Find the variant in the payload-enum registry.
                 let type_name = variant_name.split_once("::").map(|(t, _)| t).unwrap_or("");
                 let pv_opt = ctx
@@ -1923,10 +2020,14 @@ fn emit_match_impl(
                                 out.push_str("    i32.wrap_i64\n");
                                 let sv_tmp = format!("__sv_{}_{}", byte_off, name.len());
                                 out.push_str(&format!("    local.tee ${sv_tmp}\n"));
-                                out.push_str(&format!("    i32.load offset={MVL_STRING_OFFSET_PTR}\n"));
+                                out.push_str(&format!(
+                                    "    i32.load offset={MVL_STRING_OFFSET_PTR}\n"
+                                ));
                                 out.push_str(&format!("    local.set ${name}_ptr\n"));
                                 out.push_str(&format!("    local.get ${sv_tmp}\n"));
-                                out.push_str(&format!("    i32.load offset={MVL_STRING_OFFSET_LEN}\n"));
+                                out.push_str(&format!(
+                                    "    i32.load offset={MVL_STRING_OFFSET_LEN}\n"
+                                ));
                                 out.push_str(&format!("    local.set ${name}_len\n"));
                             } else {
                                 emit_payload_load(out, &field_ty, byte_off, ctx);
@@ -2081,9 +2182,7 @@ fn emit_enum_variant_construct(
         return;
     };
     let Some(pv) = info.variants.iter().find(|v| v.name == variant_name) else {
-        out.push_str(&format!(
-            "    ;; unknown variant: {variant_name}\n"
-        ));
+        out.push_str(&format!("    ;; unknown variant: {variant_name}\n"));
         return;
     };
     ctx.needs_runtime.set(true);
@@ -2127,13 +2226,7 @@ fn emit_enum_variant_construct(
 
 /// Store a field value into a struct region at `byte_off`. Dispatches on
 /// the field type to choose the correct WASM store opcode.
-fn emit_struct_store(
-    out: &mut String,
-    val: &TirExpr,
-    field_ty: &Ty,
-    byte_off: u32,
-    ctx: &Ctx,
-) {
+fn emit_struct_store(out: &mut String, val: &TirExpr, field_ty: &Ty, byte_off: u32, ctx: &Ctx) {
     match field_ty {
         Ty::String => {
             // String fields are stored as *MvlString (i32 pointer).
@@ -2160,13 +2253,7 @@ fn emit_struct_store(
 }
 
 /// Store a payload-enum field (always 8-byte slots) at `byte_off`.
-fn emit_payload_store(
-    out: &mut String,
-    val: &TirExpr,
-    field_ty: &Ty,
-    byte_off: u32,
-    ctx: &Ctx,
-) {
+fn emit_payload_store(out: &mut String, val: &TirExpr, field_ty: &Ty, byte_off: u32, ctx: &Ctx) {
     match field_ty {
         Ty::String => {
             ctx.needs_runtime.set(true);
@@ -2227,17 +2314,25 @@ fn emit_field_access(out: &mut String, recv: &TirExpr, field: &str, ctx: &Ctx) {
         Ty::Ref(_, inner) => match inner.as_ref() {
             Ty::Named(n, _) => n.clone(),
             _ => {
-                out.push_str(&format!("    ;; unsupported field access recv ty: {:?}\n", recv.ty));
+                out.push_str(&format!(
+                    "    ;; unsupported field access recv ty: {:?}\n",
+                    recv.ty
+                ));
                 return;
             }
         },
         _ => {
-            out.push_str(&format!("    ;; unsupported field access recv ty: {:?}\n", recv.ty));
+            out.push_str(&format!(
+                "    ;; unsupported field access recv ty: {:?}\n",
+                recv.ty
+            ));
             return;
         }
     };
     let Some(layout) = ctx.struct_layouts.get(&struct_name) else {
-        out.push_str(&format!("    ;; unknown struct for field access: {struct_name}\n"));
+        out.push_str(&format!(
+            "    ;; unknown struct for field access: {struct_name}\n"
+        ));
         return;
     };
     let Some(slot) = layout.fields.iter().find(|s| s.name == field) else {
@@ -2339,7 +2434,12 @@ fn collect_match_arm_locals(
                 }
             }
         }
-        Pattern::TupleStruct { name: vname, fields: pats, span, .. } => {
+        Pattern::TupleStruct {
+            name: vname,
+            fields: pats,
+            span,
+            ..
+        } => {
             // Payload pointer temp — uses (match span_offset, pattern span offset)
             // to match the name emitted by emit_match_impl.
             locals.push((
@@ -2351,8 +2451,8 @@ fn collect_match_arm_locals(
                 if let Pattern::Ident(n, _) = pat {
                     if n != "_" {
                         locals.push((n.clone(), Ty::Int)); // i64 for Int/Bool fields
-                        // Speculatively add split String locals and __sv_* temp.
-                        // Redundant for non-String fields but cheap; deduped later.
+                                                           // Speculatively add split String locals and __sv_* temp.
+                                                           // Redundant for non-String fields but cheap; deduped later.
                         locals.push((format!("{n}_ptr"), Ty::Bool)); // i32
                         locals.push((format!("{n}_len"), Ty::Bool)); // i32
                         let byte_off = (slot as u32) * 8;
@@ -2493,6 +2593,13 @@ fn propagate_temp_name(expr: &TirExpr) -> String {
     format!("__pr_{}_{}", expr.span.offset, expr.span.len)
 }
 
+/// Temp local name for the `*MvlResult` pointer stashed during a
+/// `.unwrap_or(default)` invocation on a `Result[T, E]`. Same span-based
+/// scheme as `mvl_option_temp_name`.
+fn mvl_result_temp_name(expr: &TirExpr) -> String {
+    format!("__mr_{}_{}", expr.span.offset, expr.span.len)
+}
+
 /// Peel `Ref` / `Labeled` / `Refined` wrappers and return the inner
 /// `(key_ty, val_ty)` if `ty` is a `Map[K, V]`, else `None`.
 fn map_key_val_ty(ty: &Ty) -> Option<(&Ty, &Ty)> {
@@ -2581,6 +2688,46 @@ fn option_ops_for(inner_ty: &Ty, ctx: &Ctx) -> (&'static str, &'static str) {
     }
 }
 
+/// Extract the Ok-payload type from a `Result[T, E]` type, unwrapping
+/// through `Ref` / `Labeled` / `Refined` wrappers.
+fn result_ok_ty(ty: &Ty) -> Option<&Ty> {
+    let mut cur = ty;
+    loop {
+        match cur {
+            Ty::Ref(_, inner) | Ty::Labeled(_, inner) | Ty::Refined(inner, _) => {
+                cur = inner;
+            }
+            Ty::Result(ok, _) => return Some(ok),
+            _ => return None,
+        }
+    }
+}
+
+/// Extract the Err-payload type from a `Result[T, E]` type.
+fn result_err_ty(ty: &Ty) -> Option<&Ty> {
+    let mut cur = ty;
+    loop {
+        match cur {
+            Ty::Ref(_, inner) | Ty::Labeled(_, inner) | Ty::Refined(inner, _) => {
+                cur = inner;
+            }
+            Ty::Result(_, err) => return Some(err),
+            _ => return None,
+        }
+    }
+}
+
+/// Constructor and value-getter names for a `Result[T, E]` Ok payload of
+/// `ok_ty`. Returns `(ok_ctor, value_getter)` — unprefixed runtime symbol
+/// names (no `$`).
+fn result_ops_for_ok(ok_ty: &Ty, ctx: &Ctx) -> (&'static str, &'static str) {
+    if is_i32(ok_ty, ctx) {
+        ("_mvl_result_ok_i32", "_mvl_result_value_i32")
+    } else {
+        ("_mvl_result_ok_i64", "_mvl_result_value_i64")
+    }
+}
+
 /// Emit `assert_eq(a, b)` or `assert_ne(a, b)` — mirrors the LLVM backend's
 /// `emit_assert_eq_builtin_tir` (#1837). Compares the two values with a
 /// type-directed equality op, then traps via `unreachable` when the check
@@ -2657,6 +2804,19 @@ fn emit_unary(out: &mut String, op: UnaryOp, inner: &TirExpr, ctx: &Ctx) {
 /// Emit a binary operator, picking i64/f64/i32 opcode family from operand type.
 /// Short-circuit `&&` / `||` lower to an inline structured `if` for laziness.
 fn emit_binary(out: &mut String, op: BinaryOp, left: &TirExpr, right: &TirExpr, ctx: &Ctx) {
+    // String equality / inequality — both operands leave (ptr, len) on the
+    // stack; `_mvl_string_eq` consumes all four i32s and returns i32.
+    if matches!(&left.ty, Ty::String) && matches!(op, BinaryOp::Eq | BinaryOp::Ne) {
+        ctx.needs_runtime.set(true);
+        emit_expr(out, left, ctx);
+        emit_expr(out, right, ctx);
+        out.push_str("    call $_mvl_string_eq\n");
+        if matches!(op, BinaryOp::Ne) {
+            out.push_str("    i32.eqz\n"); // flip: 1 → 0, 0 → 1
+        }
+        return;
+    }
+
     // Short-circuit boolean ops — need laziness, can't emit both operands up
     // front. `a && b` ≡ `if a then b else false`; `a || b` ≡ `if a then true else b`.
     if matches!(op, BinaryOp::And | BinaryOp::Or) {
@@ -2839,7 +2999,13 @@ fn collect_structs(types: &[TirTypeDecl]) -> HashMap<String, StructLayout> {
             }
             // Round total to 8-byte boundary.
             let total = (offset + 7) & !7;
-            map.insert(td.name.clone(), StructLayout { total_size: total, fields: slots });
+            map.insert(
+                td.name.clone(),
+                StructLayout {
+                    total_size: total,
+                    fields: slots,
+                },
+            );
         }
     }
     map
@@ -2860,7 +3026,10 @@ fn collect_payload_enums(types: &[TirTypeDecl]) -> HashMap<String, PayloadEnumIn
     for td in types {
         if let TirTypeBody::Enum(vs) = &td.body {
             // Skip pure-unit enums — those are handled by collect_enums.
-            if vs.iter().all(|v| matches!(v.fields, TirVariantFields::Unit)) {
+            if vs
+                .iter()
+                .all(|v| matches!(v.fields, TirVariantFields::Unit))
+            {
                 continue;
             }
             let mut pvs = Vec::new();
@@ -2940,7 +3109,9 @@ fn collect_stmt(stmt: &TirStmt, map: &mut HashMap<String, (u32, u32)>, next: &mu
             collect_expr(iter, map, next);
             collect_block(body, map, next);
         }
-        TirStmt::Match { scrutinee, arms, .. } => {
+        TirStmt::Match {
+            scrutinee, arms, ..
+        } => {
             collect_expr(scrutinee, map, next);
             for arm in arms {
                 match &arm.body {

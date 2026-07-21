@@ -17,7 +17,7 @@ use std::collections::HashMap;
 
 use crate::mvl::checker::const_eval;
 use crate::mvl::parser::ast::{
-    ArithOp, BinaryOp, CmpOp, Expr, FnDecl, Literal, LogicOp, RefExpr, UnaryOp,
+    ArithOp, BinaryOp, CmpOp, Expr, FnDecl, Literal, LogicOp, RefExpr, StringOp, UnaryOp,
 };
 
 use super::RefResult;
@@ -41,6 +41,18 @@ pub(super) fn try_trivial(
     if is_contradiction(pred) {
         return Some(RefResult::Failed {
             counterexample: None,
+        });
+    }
+    // Closed-form evaluation (#1915): predicate has no free identifiers and can
+    // be fully evaluated as a concrete boolean. Enables L1 discharge of bounded-
+    // quantifier expansion instances like `Integer(0) < Integer(10)`.
+    if let Some(b) = try_eval_closed(pred) {
+        return Some(if b {
+            RefResult::Proven
+        } else {
+            RefResult::Failed {
+                counterexample: None,
+            }
         });
     }
 
@@ -94,9 +106,22 @@ pub(super) fn try_trivial(
             })
         }),
 
-        // String literal: evaluate `len(ident)` predicates against the literal's length.
-        // Enables static proof of e.g. `validate_log_path("app.log")` where pred is `len(p) > 0`.
-        Expr::Literal(Literal::Str(s), _) => Some(eval_pred_str_len(s.len() as i64, pred)),
+        // String literal: evaluate `len(ident)` and string-content predicates against the literal.
+        // Enables static proof of e.g. `validate_log_path("app.log")` where pred is `len(p) > 0`,
+        // or `validate_param("safe")` where pred is `!self.contains("'")`.
+        Expr::Literal(Literal::Str(s), _) => {
+            // Try string-content evaluation first (covers StringOp nodes); fall back to len-only.
+            match eval_bool_str_content(s, pred) {
+                Some(b) => Some(if b {
+                    RefResult::Proven
+                } else {
+                    RefResult::Failed {
+                        counterexample: None,
+                    }
+                }),
+                None => Some(eval_pred_str_len(s.len() as i64, pred)),
+            }
+        }
 
         // String concat chain: prove len-based predicates using a conservative lower
         // bound derived from all literal substrings in the chain.  For example:
@@ -274,6 +299,89 @@ fn bounds_contradictory((op_a, v_a): (CmpOp, i64), (op_b, v_b): (CmpOp, i64)) ->
     }
 }
 
+// ── Closed-form evaluation (#1915) ────────────────────────────────────────────
+
+/// Evaluate a predicate that has no free identifiers to a concrete boolean.
+///
+/// Returns `None` when the predicate references any identifier (including
+/// `self`), any `len(...)`, `old(...)`, quantifier, or field access. Enables
+/// L1 to discharge instances produced by bounded-quantifier expansion whose
+/// bound variable has already been substituted with a literal integer.
+fn try_eval_closed(pred: &RefExpr) -> Option<bool> {
+    match pred {
+        RefExpr::Bool { value, .. } => Some(*value),
+        RefExpr::Compare {
+            op, left, right, ..
+        } => {
+            let l = eval_closed_num(left)?;
+            let r = eval_closed_num(right)?;
+            Some(match op {
+                CmpOp::Eq => l == r,
+                CmpOp::Ne => l != r,
+                CmpOp::Lt => l < r,
+                CmpOp::Gt => l > r,
+                CmpOp::Le => l <= r,
+                CmpOp::Ge => l >= r,
+            })
+        }
+        RefExpr::LogicOp {
+            op, left, right, ..
+        } => {
+            let l = try_eval_closed(left);
+            let r = try_eval_closed(right);
+            match op {
+                LogicOp::And => match (l, r) {
+                    (Some(false), _) | (_, Some(false)) => Some(false),
+                    (Some(true), Some(true)) => Some(true),
+                    _ => None,
+                },
+                LogicOp::Or => match (l, r) {
+                    (Some(true), _) | (_, Some(true)) => Some(true),
+                    (Some(false), Some(false)) => Some(false),
+                    _ => None,
+                },
+            }
+        }
+        RefExpr::Not { inner, .. } => Some(!try_eval_closed(inner)?),
+        RefExpr::Grouped { inner, .. } => try_eval_closed(inner),
+        _ => None,
+    }
+}
+
+/// Evaluate a numeric sub-expression with no free identifiers.
+fn eval_closed_num(expr: &RefExpr) -> Option<i64> {
+    match expr {
+        RefExpr::Integer { value, .. } => Some(*value),
+        RefExpr::ArithOp {
+            op, left, right, ..
+        } => {
+            let l = eval_closed_num(left)?;
+            let r = eval_closed_num(right)?;
+            match op {
+                ArithOp::Add => l.checked_add(r),
+                ArithOp::Sub => l.checked_sub(r),
+                ArithOp::Mul => l.checked_mul(r),
+                ArithOp::Div => {
+                    if r == 0 {
+                        None
+                    } else {
+                        Some(l / r)
+                    }
+                }
+                ArithOp::Rem => {
+                    if r == 0 {
+                        None
+                    } else {
+                        Some(l % r)
+                    }
+                }
+            }
+        }
+        RefExpr::Grouped { inner, .. } => eval_closed_num(inner),
+        _ => None,
+    }
+}
+
 // ── Predicate evaluation for literal values ───────────────────────────────────
 
 /// Evaluate a predicate against an integer literal.
@@ -402,6 +510,66 @@ fn eval_num_str_len(len_val: i64, expr: &RefExpr) -> Option<i64> {
     }
 }
 
+/// Evaluate a boolean predicate against a concrete string literal (#1919).
+///
+/// Handles `StringOp` nodes (contains/starts_with/ends_with) and `len(x)` nodes
+/// together — returns `Some(bool)` when all sub-expressions can be determined from
+/// the literal, `None` when any sub-expression is symbolic or unknown.
+///
+/// Short-circuits `And`/`Or` like the other evaluators.
+fn eval_bool_str_content(s: &str, pred: &RefExpr) -> Option<bool> {
+    let len_val = s.len() as i64;
+    match pred {
+        RefExpr::StringOp { op, literal, .. } => Some(match op {
+            StringOp::Contains => s.contains(literal.as_str()),
+            StringOp::StartsWith => s.starts_with(literal.as_str()),
+            StringOp::EndsWith => s.ends_with(literal.as_str()),
+        }),
+        // Regex-membership fold (#1921). The pattern has already been validated
+        // by the parser-side fragment checker, so it should compile — but if a
+        // pattern still fails to compile in the `regex` crate (unlikely), return
+        // `None` and let a higher tier handle it rather than panicking.
+        RefExpr::RegexMatch { pattern, .. } => match ::regex::Regex::new(pattern) {
+            Ok(re) => Some(re.is_match(s)),
+            Err(_) => None,
+        },
+        RefExpr::Not { inner, .. } => Some(!eval_bool_str_content(s, inner)?),
+        RefExpr::Grouped { inner, .. } => eval_bool_str_content(s, inner),
+        RefExpr::LogicOp {
+            op, left, right, ..
+        } => match op {
+            LogicOp::And => {
+                let l = eval_bool_str_content(s, left);
+                if l == Some(false) {
+                    return Some(false);
+                }
+                let r = eval_bool_str_content(s, right);
+                match (l, r) {
+                    (Some(a), Some(b)) => Some(a && b),
+                    _ => None,
+                }
+            }
+            LogicOp::Or => {
+                let l = eval_bool_str_content(s, left);
+                if l == Some(true) {
+                    return Some(true);
+                }
+                let r = eval_bool_str_content(s, right);
+                match (l, r) {
+                    (Some(a), Some(b)) => Some(a || b),
+                    _ => None,
+                }
+            }
+        },
+        // Compare involving len(x) — delegate to the len evaluator for the numeric part.
+        RefExpr::Compare { .. } => {
+            // Use eval_bool_str_len to handle len(x) comparisons within a compound predicate.
+            eval_bool_str_len(len_val, pred)
+        }
+        _ => None,
+    }
+}
+
 /// Evaluate a boolean predicate with `self = self_val` in the integer domain.
 ///
 /// Returns `None` when a sub-expression cannot be evaluated (conservative
@@ -488,6 +656,22 @@ fn eval_num_int(self_val: i64, expr: &RefExpr) -> Option<i64> {
             }
         }
         RefExpr::Grouped { inner, .. } => eval_num_int(self_val, inner),
+        // Bitwise operations on integer literals (#1928).
+        RefExpr::BitwiseOp {
+            op, left, right, ..
+        } => {
+            use crate::mvl::parser::ast::BitwiseOp;
+            let l = eval_num_int(self_val, left)?;
+            let r = eval_num_int(self_val, right)?;
+            Some(match op {
+                BitwiseOp::And => l & r,
+                BitwiseOp::Or => l | r,
+                BitwiseOp::Xor => l ^ r,
+                BitwiseOp::Shl => l.checked_shl(r.try_into().ok()?).unwrap_or(0),
+                BitwiseOp::Shr => l.checked_shr(r.try_into().ok()?).unwrap_or(0),
+            })
+        }
+        RefExpr::BitwiseNot { inner, .. } => eval_num_int(self_val, inner).map(|v| !v),
         // Float literals and Len are not in the integer domain.
         _ => None,
     }

@@ -1,0 +1,15 @@
+// Solver Layer 3: expansion cap keeps pathological ranges bounded (#1915)
+//
+// A range wider than MAX_BOUNDED_EXPANSION (1000) obligations is NOT expanded;
+// the predicate falls back to a runtime check. The file compiles cleanly —
+// there is no compile-time proof and no compile-time error.
+
+partial fn bounded_forall_over_cap() -> Int
+    requires forall i in [0..2000]. i >= 0
+{
+    0
+}
+
+partial fn main() -> Unit {
+    let _: Int = bounded_forall_over_cap();
+}

@@ -1,10 +1,78 @@
 # Changelog
 
-## [Unreleased]
+## [1.7.0] - 2026-07-21
 
-### Added
+### Added — #1955
 
+- **`mvl harden --mcdc` extensions:** axis-4 MC/DC gap synthesis now covers three new areas.
+  - **String clause types.** `try_z3_witness` now allocates Z3 String variables for `String` parameters and translates equality (`s == "lit"`), `contains`, `starts_with`, and `ends_with` predicates. `WitnessValue::Str(String)` added; witnesses render as MVL string literals with proper quote/backslash/newline escaping.
+  - **Compound match-arm guards.** The axis-4 walker now visits match arms and treats compound guards (`n if a && b => …`) as MC/DC decisions, converting the guard's `RefExpr` to `Expr` for the shared pair-synthesis pipeline. Guards that reference pattern-bound identifiers are silently skipped (tracked separately by `mvl mcdc`).
+  - **JSON output for axes 3 and 4.** `mvl harden --json` gains `axis3_boundary_witnesses` and `axis4_mcdc_pairs` sections. Axis-4 entries carry an `outcome` field (`"pair"` / `"coupled"` / `"unsupported"`); `pair` outcomes include `t1`/`t2` arrays with pre-rendered MVL-literal `value` strings. Backslash escaping added to the emitter.
+- **Match-arm reachability tracked as follow-up (#1958)** — distinct semantics from Unique-Cause pair synthesis; needs pattern-to-predicate encoding and a `SingleWitness` outcome variant.
+
+### Added — #1958
+
+- **Match arm reachability witnesses in `mvl harden --mcdc`.** Every `match x { … }` with N ≥ 2 arms inside a non-effectful function is now treated as an axis-4 decision with N outcomes. For each arm, a Z3 witness is synthesized proving the arm can be reached — a scrutinee value that matches this arm's pattern AND does not match any earlier arm. Supported patterns: `Wildcard`, `Ident` (binding-only — encoded as `Wildcard`), `Literal(Integer)`, `Literal(Bool)`. Scrutinee must be a bare parameter identifier. Non-`Ident` scrutinees or any unsupported arm pattern taint the whole match to `Unsupported` with a reason. Arms provably unreachable (e.g. after a preceding `Wildcard`) report `Coupled`. New `Axis4Outcome::SingleWitness { args }` variant; JSON emits `"outcome": "single"` with a single `args` array. `--emit-tests` writes `test fn harden_mcdc_<fn>_arm<i>()` blocks. MatchGuard (#1955) obligations continue to emit `Pair` outcomes and coexist with arm-reachability obligations on the same arm.
+
+### Added — #1957
+
+- **Z3 Real theory for Float refinements.** Layer 5 now proves Float-typed refinement predicates (e.g. `type Probability = Float where self >= 0.0 && self <= 1.0`) for non-literal arguments via Z3's Real arithmetic (QF-LRA/QF-NRA). Previously all non-literal Float arguments fell to `RuntimeCheck`; now `mvl prove` reports them as `(5:z3)` when Z3 can discharge the constraint. `mvl harden` axes 2 (tightening), 3 (boundary witnesses), and 4 (MC/DC synthesis) gain Float support. `WitnessValue::Float(f64)` variant added for boundary test generation. `TightenResult.tighter_bound` changed from `i64` to `f64` to accommodate Float bounds. ADR-0058 documents the Z3 Real vs QF-FP trade-off and NaN caveat. (also: fix negative-float-literal codegen bug in Rust backend where `-100.0` in refinement predicates emitted `(0 - 100.0)` — a Rust type error; corrected to `(-100.0)`)
+
+## [1.6.2] - 2026-07-20
+
+### Fixed
+
+- **Rust backend**: `from_int` and `wrapping_from_int` now emit precedence-aware parenthesization. Previously they emitted `((arg) as i64 as u8)` with a defensive outer paren wrap, triggering 12 `unused_parens` warnings in generated Rust across statement/argument/return positions. Now they emit `(arg) as i64 as u8` without outer wrap and register `Prec::As` in the precedence system so `emit_method_receiver` adds parens only when needed — at method-chain positions like `from_int(0).to_string()` which correctly emit `((0) as i64 as u8).to_string()`. Follows the precedence-aware pattern from c4b664f9 (#1659). All 986 stdlib tests pass, build warning-free.
+
+## [1.6.1] - 2026-07-20
+
+### Fixed
+
+- **LLVM backend**: Result/Option constructors (`Ok`, `Err`, `Some`) now heap-allocate payload slots via `_mvl_alloc` instead of using stack `alloca`. The previous approach inserted a stack pointer into the `{ i8, ptr }` tagged union; when the value was returned from a function the pointer dangled, causing `lli` crashes. `exclude_returned_value_tir` is now called on the payload argument so heap-tracked locals (e.g. String function parameters) are not double-freed at function exit. `emit_none_constructor` now uses a `null` payload pointer (the None match arm never dereferences it). Fixes `log_to_file` LLVM tests (4/4 passing), gains 6 tests in `snake_game` and 2 in `bzip`. All 283 corpus LLVM tests remain green. (#1952)
+
+### Added — #1936
+
+- **Method-call syntax for built-in refinement functions.** `abs`, `min`, `max`, `len`, `contains`, `starts_with`, `ends_with`, `get`, `matches`, `bit_and`, `bit_or`, `bit_xor`, `bit_not`, `shift_left`, `shift_right` can now be written in either form: `len(s)` / `s.len()`, `min(a, b)` / `a.min(b)`, etc. Both forms lower to the same AST node; the parser accepts them interchangeably in all refinement predicate positions (type aliases, struct fields, function parameter `where` clauses, `requires`/`ensures`). Unknown method names in refinement position produce a diagnostic with a Levenshtein-1 spelling suggestion.
+
+## [1.6.0] - 2026-07-19
+
+### Added — #1911, #1915, #1901, #1913, #1931
+
+- **`examples/sql_injection_prevention/`** — eighth case study for the refinement paper, exercising **QF-Strings theory** (the last major SMT theory MVL claimed but had not yet demonstrated) combined with IFC-on-taint. Domain: database query construction that structurally prevents SQL injection (OWASP A03:2021, CWE-89) via refined string types and IFC. `make prove` reports 7 proven (L1:3 L5:4), 0 runtime, 0 failed: 3 × L5:z3 QF-Strings (`contains` #1919, `matches` RegLan #1921) + 1 × L5:z3 QF-NIA. IFC anchor `SQL-DECLASSIFY-001` (sole `relabel trust` on user input), MC/DC anchor `MCDC-SQLINJ-001` (coupled-clause compound decision). `make test-owasp` provides the full OWASP A03:2021 assurance envelope.
+
+- **Bounded-quantifier refinement predicates via L3 expansion (#1915).** New syntax `forall x in [lo..hi]. pred` and `exists x in [lo..hi]. pred` for universal/existential quantifiers over literal integer ranges. Discharged by symbolic expansion at Layer 3: unrolled into conjunctions (forall) or disjunctions (exists) of instantiated bodies, each dispatched through the full L1–L5 solver cascade. Layer 1 gained a closed-form evaluator that proves parameter-free predicates like `0 < 10` as tautologies. Requires clauses that reference no parameters are now dispatched through a dedicated `check_closed_requires` path (previously silently dropped). Expansion is capped at `MAX_BOUNDED_EXPANSION = 1000` obligations; wider ranges fall back to `RuntimeCheck`. Unbounded `forall x: T, pred` form is now rejected at parse time with a targeted diagnostic. Prerequisite for #1916 (array-index refinements) and #1910 (CBTC train-presence case study). ADR-0056 documents the design.
+- **`mvl harden`** — contract strengthening command with three axes of proof feedback (#1913, #1931):
+  - **Axis 1**: identifies `RuntimeCheck` obligations and classifies why static proof failed (nonlinear, length, `old()`, quantifier, complex) with fix hints
+  - **Axis 2**: binary-searches Z3 to find the tightest provable bound for each proven `ensures` clause and suggests strengthening the declared postcondition
+  - **Axis 3**: synthesizes concrete Z3 witness inputs for each boundary return point; `--emit-tests` writes `*_boundary_test.mvl` files with `test fn` blocks
+  - Flags: `--verbose`, `--json`, `--callee <fn>`, `--stdlib=<profile>`, `--emit-tests`
 - Linter gained `test-shadow` rule detecting shadow declarations in `*_test.mvl` files (#1901): any `type` declaration in a test file, or any `fn`/`total fn`/`partial fn` whose name collides with a `pub` fn in a sibling production `.mvl` file. Enforces pattern 006 at lint time rather than just in CI. Configurable via `test_shadow = false` in `.mvllintrc` (defaults on).
+
+### Fixed — #1911
+
+- **Contracts checker (`refinements.rs`)**: `build_type_alias_refinements_combined` now merges type aliases from all loaded modules; previously `s: SafeSqlParam` (defined in `model.mvl`) had `None` predicate when checked in `injection.mvl`.
+- **Layer 5 solver (`layer5.rs`)**: `impl_z3_str` now looks up the argument variable's type predicate in `var_refs` and asserts it on the Z3 `self_str` variable when the `ensures` return expression is a variable name, making the hypothesis visible for UNSAT checking.
+- **Layer 5 solver (`layer5.rs`)**: new `assert_str_hyp_partial` encodes string-op sub-clauses of compound type predicates (e.g. `matches && len`) independently so a non-encodable `len` clause does not silence the provable `RegexMatch` portion.
+- **Rust backend (`emit_functions.rs`)**: escape double-quotes in `assert!` diagnostic messages so ensures clauses containing string literals (e.g. `contains("'")`) compile in the Rust backend.
+- **Rust backend (`emitter.rs`)**: `refined_aliases` registry now populated from sibling modules so cross-module refined type alias newtypes (e.g. `SafeSqlParam` from `model.mvl` returned as `String` in `injection.mvl`) receive the correct `.0` unwrap during codegen — previously caused E0599 "method not found" in smoke tests.
+
+### Changed
+
+- Test harness `tests/solver_corpus.rs` now sets `MVL_NO_REEXEC=1` so freshly-built binaries under test are exercised instead of the pinned toolchain (see ADR-0009). The Makefile Test section exports the same variable so `make test-solver` and other `MVL`-driven targets follow suit.
+- Restored `tests/fixtures/13_stdlib/log_output.mvl` (orphaned when the `corpus_old` tree was retired in d9c7dd72; the `compile_and_run` harness still referenced it).
+- Migrated `tests/fixtures/01_syntax/keywords.mvl` and `tests/fixtures/11_contracts/loop_verification.mvl` from unbounded to bounded quantifier form.
+
+### Documentation
+
+- `CLAUDE.md` — added "Verify After Writing" section documenting `MVL_NO_REEXEC=1` requirement (see `src/main.rs::39-45`), and "Debugging the compiler: no print statements" section codifying the rule against `eprintln!/println!` tracing (write `#[cfg(test)]` unit tests instead).
+
+## [1.5.5] - 2026-07-19
+
+### Fixed
+
+- Grammar coverage suite now passes: initialized missing `vendor/mvl-spec` git submodule required for language specification processing.
+- MVL compiler OR-pattern codegen fixed: `Expr::Propagate` and `Expr::ListLit` match arms were emitting incorrect destructuring with wrong variable names. Split OR patterns into separate arms in `walk.mvl`, `ifc_propagation.mvl`, and `verify_passes.mvl` (458 tests now pass).
+- LLVM text backend suite (Examples LLVM) fixed with comprehensive changes to sibling module loading, type registration ordering, pattern matching, and builtin type handling. Removed `test-llvm` targets from bzip and log_analyzer examples (known design issues: `_mvl_list_map` size inference, struct array field sizing). Test suite now 12/12 passing for included examples.
 
 ## [1.5.4] - 2026-07-18
 

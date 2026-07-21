@@ -8,6 +8,8 @@ pub mod check;
 pub mod doctor;
 pub mod fmt;
 pub mod fuzz;
+pub mod harden;
+pub mod kloc;
 pub mod lint;
 pub mod llvm_text;
 pub mod mcdc;
@@ -84,6 +86,7 @@ pub(super) fn dispatch(args: &[String]) {
             let backend = args::parse_backend(args);
             let stdlib_profile = args::parse_stdlib_profile(args);
             let assert_mode = args::parse_assert_mode_or_exit(args);
+            let optimize_proved = args::parse_optimize_proved(args);
             let target = args::parse_target_or_exit(args);
             let verbose = args.iter().any(|a| a == "--verbose" || a == "-v");
             if verbose {
@@ -97,7 +100,16 @@ pub(super) fn dispatch(args: &[String]) {
             } else if backend == "wasm" {
                 wasm_text::build_project_wasm(&path);
             } else {
-                build::run(&path, false, &[], assert_mode, target, release, emit_only);
+                build::run(
+                    &path,
+                    false,
+                    &[],
+                    assert_mode,
+                    optimize_proved,
+                    target,
+                    release,
+                    emit_only,
+                );
             }
         }
         "run" => {
@@ -105,6 +117,7 @@ pub(super) fn dispatch(args: &[String]) {
             let backend = args::parse_backend(args);
             let stdlib_profile = args::parse_stdlib_profile(args);
             let assert_mode = args::parse_assert_mode_or_exit(args);
+            let optimize_proved = args::parse_optimize_proved(args);
             let target = args::parse_target_or_exit(args);
             let release = args.iter().any(|a| a == "--release");
             check::maybe_check_proven_stdlib_or_exit(stdlib_profile);
@@ -118,7 +131,16 @@ pub(super) fn dispatch(args: &[String]) {
             if backend == "llvm" {
                 llvm_text::run_project_llvm_text(&path);
             } else {
-                build::run(&path, true, &run_args, assert_mode, target, release, false);
+                build::run(
+                    &path,
+                    true,
+                    &run_args,
+                    assert_mode,
+                    optimize_proved,
+                    target,
+                    release,
+                    false,
+                );
             }
         }
         "test" => {
@@ -202,6 +224,35 @@ pub(super) fn dispatch(args: &[String]) {
             };
             prove::run(&path, verbose, stdlib_profile, callee_filter);
         }
+        "harden" => {
+            let path = args::require_path_arg(args, "harden");
+            let verbose = args.iter().any(|a| a == "--verbose" || a == "-v");
+            let json = args.iter().any(|a| a == "--json");
+            let stdlib_profile = args::parse_stdlib_profile(args);
+            let callee_filter = if let Some(pos) = args.iter().position(|a| a == "--callee") {
+                match args.get(pos + 1).map(|s| s.as_str()) {
+                    Some(name) if !name.starts_with("--") => Some(name),
+                    _ => {
+                        eprintln!("error: --callee requires a function name argument");
+                        eprintln!("usage: mvl harden <file|dir> --callee <fn>");
+                        process::exit(1);
+                    }
+                }
+            } else {
+                None
+            };
+            let emit_tests = args.iter().any(|a| a == "--emit-tests");
+            let mcdc = args.iter().any(|a| a == "--mcdc");
+            harden::run(
+                &path,
+                verbose,
+                json,
+                emit_tests,
+                stdlib_profile,
+                callee_filter,
+                mcdc,
+            );
+        }
         "complexity" => {
             use mvl::mvl::passes::complexity;
             let path = args::require_path_arg(args, "complexity");
@@ -268,6 +319,16 @@ pub(super) fn dispatch(args: &[String]) {
         }
         "doctor" => {
             doctor::run();
+        }
+        "kloc" => {
+            let csv = args.iter().any(|a| a == "--csv");
+            let path = args
+                .iter()
+                .skip(2)
+                .find(|a| !a.starts_with("--"))
+                .map(|s| s.as_str())
+                .unwrap_or(".");
+            kloc::run(path, csv);
         }
         "init" => {
             meta::cmd_init(args);

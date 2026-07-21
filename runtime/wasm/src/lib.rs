@@ -842,6 +842,145 @@ pub unsafe extern "C" fn _mvl_option_drop(opt: i32) {
     }
 }
 
+// ── Result ops (#1821 extension) ─────────────────────────────────────────
+//
+// `Result[T, E]` — tagged union: Ok(v: T) or Err(e: E). Heap-allocated
+// `MvlResult` pointer returned as i32, matching the Option pattern.
+//
+// Layout:
+//   offset 0: i32 tag      — 0 = Ok, 1 = Err
+//   offset 4: i32 rc       — refcount
+//   offset 8: i64 ok_value — Ok payload (i32 types stored upcast to i64)
+//   offset 16: i32 err_ptr  — *MvlString for Err payload (0 when tag == 0)
+//
+// Tag convention: Ok = 0, Err = 1 (matches Option Some=0, None=1).
+
+#[repr(C)]
+pub struct MvlResult {
+    pub tag: i32,
+    pub rc: i32,
+    pub ok_value: i64,
+    pub err_ptr: i32,
+}
+
+/// Construct `Ok(v)` with an i64-typed payload. Returns the `MvlResult`
+/// pointer as i32 with `rc = 1`.
+#[unsafe(no_mangle)]
+pub extern "C" fn _mvl_result_ok_i64(v: i64) -> i32 {
+    let r = Box::new(MvlResult {
+        tag: 0,
+        rc: 1,
+        ok_value: v,
+        err_ptr: 0,
+    });
+    Box::into_raw(r) as i32
+}
+
+/// Construct `Ok(v)` with an i32-typed payload. Upcasts to i64.
+#[unsafe(no_mangle)]
+pub extern "C" fn _mvl_result_ok_i32(v: i32) -> i32 {
+    _mvl_result_ok_i64(v as i64)
+}
+
+/// Construct `Err(s)` from a raw string `(ptr, len)` byte slice.
+/// Copies bytes into a heap-allocated `MvlString`.
+///
+/// # Safety
+/// `ptr..ptr+len` must be valid readable memory.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn _mvl_result_err_str(ptr: i32, len: i32) -> i32 {
+    let err_ptr = unsafe { _mvl_string_new(ptr, len) };
+    let r = Box::new(MvlResult {
+        tag: 1,
+        rc: 1,
+        ok_value: 0,
+        err_ptr,
+    });
+    Box::into_raw(r) as i32
+}
+
+/// `_mvl_result_tag(r)` — 0 for Ok, 1 for Err.
+///
+/// # Safety
+/// `r` must be a valid `MvlResult` pointer.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn _mvl_result_tag(r: i32) -> i32 {
+    if r == 0 {
+        return 1;
+    }
+    let res = unsafe { &*(r as usize as *const MvlResult) };
+    res.tag
+}
+
+/// Read the i64 Ok payload. Only valid when `tag == 0`.
+///
+/// # Safety
+/// `r` must be a valid `MvlResult` pointer.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn _mvl_result_value_i64(r: i32) -> i64 {
+    if r == 0 {
+        return 0;
+    }
+    let res = unsafe { &*(r as usize as *const MvlResult) };
+    res.ok_value
+}
+
+/// Read the i32 Ok payload (downcast from i64 slot).
+///
+/// # Safety
+/// `r` must be a valid `MvlResult` pointer.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn _mvl_result_value_i32(r: i32) -> i32 {
+    if r == 0 {
+        return 0;
+    }
+    let res = unsafe { &*(r as usize as *const MvlResult) };
+    res.ok_value as i32
+}
+
+/// Refcount decrement; free when it reaches zero. Drops the Err string
+/// when present. Null-safe.
+///
+/// # Safety
+/// `r` must be a valid `MvlResult` pointer, not used after drop.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn _mvl_result_drop(r: i32) {
+    if r == 0 {
+        return;
+    }
+    let res = unsafe { &mut *(r as usize as *mut MvlResult) };
+    res.rc -= 1;
+    if res.rc > 0 {
+        return;
+    }
+    if res.tag == 1 && res.err_ptr != 0 {
+        unsafe { _mvl_string_drop(res.err_ptr) };
+    }
+    unsafe {
+        let _ = Box::from_raw(r as usize as *mut MvlResult);
+    }
+}
+
+// ── String parse ops ─────────────────────────────────────────────────────
+
+/// `s.parse_int()` — parse a `(ptr, len)` byte slice as a decimal integer.
+/// Returns a heap-allocated `MvlResult` (tag=0 → Ok(i64), tag=1 → Err(*MvlString)).
+///
+/// # Safety
+/// `ptr..ptr+len` must be valid readable memory (or `len == 0`).
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn _mvl_string_parse_int(ptr: i32, len: i32) -> i32 {
+    let bytes = unsafe { slice_or_empty(ptr, len) };
+    let text = core::str::from_utf8(bytes).unwrap_or("").trim();
+    match text.parse::<i64>() {
+        Ok(n) => _mvl_result_ok_i64(n),
+        Err(e) => {
+            let msg = e.to_string();
+            unsafe { _mvl_result_err_str(msg.as_ptr() as i32, msg.len() as i32) }
+        }
+    }
+}
+
 // ── Set ops (#1820) ──────────────────────────────────────────────────────
 //
 // Set[T] is backed by MvlArray (same as List[T]) but enforces uniqueness.
@@ -1048,79 +1187,7 @@ pub unsafe extern "C" fn _mvl_map_drop_si64(m: i32) {
     }
 }
 
-// ── Result[T, E] (#1821) ─────────────────────────────────────────────────
-//
-// `MvlResult` mirrors `MvlOption`: a heap-allocated tagged union returned
-// as an opaque i32 pointer. Tag 0 = Ok, 1 = Err — matching the LLVM
-// emitter's convention (`wrap_result_pair("0", …)` for Ok).
-//
-// Corpus scope: Ok payload is i64 (Int); Err payload is *MvlString (i32
-// stored in the i64 slot via zero-extension). Typed constructors keep the
-// emitter dispatch simple; only `_mvl_result_ok_i64` and
-// `_mvl_result_err_str` are needed for the current corpus.
-
-#[repr(C)]
-pub struct MvlResult {
-    pub tag: i32,
-    pub rc: i32,
-    pub value: i64,
-}
-
-/// Construct `Ok(v)` wrapping an i64 payload. Returns `*MvlResult` as i32.
-#[unsafe(no_mangle)]
-pub extern "C" fn _mvl_result_ok_i64(v: i64) -> i32 {
-    let r = Box::new(MvlResult {
-        tag: 0,
-        rc: 1,
-        value: v,
-    });
-    Box::into_raw(r) as i32
-}
-
-/// Construct `Err(s)` from a `(ptr, len)` string literal pair. Allocates a
-/// `MvlString` to own the bytes, then wraps it in a `MvlResult` (Err tag).
-/// The emitter uses this for `Err("message")` — string error payloads.
-///
-/// # Safety
-/// `ptr` / `len` must be a valid UTF-8 byte range for the duration of
-/// this call. The resulting `MvlString` owns a copy of the bytes.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn _mvl_result_err_str(ptr: i32, len: i32) -> i32 {
-    let ms_ptr = unsafe { _mvl_string_new(ptr, len) };
-    let r = Box::new(MvlResult {
-        tag: 1,
-        rc: 1,
-        value: ms_ptr as i64,
-    });
-    Box::into_raw(r) as i32
-}
-
-/// `_mvl_result_tag(r)` — 0 for Ok, 1 for Err. Null-safe (returns 1 for
-/// null pointer to avoid Ok false-positive).
-///
-/// # Safety
-/// `r` must be a valid `MvlResult` pointer or 0.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn _mvl_result_tag(r: i32) -> i32 {
-    if r == 0 {
-        return 1;
-    }
-    let res = unsafe { &*(r as usize as *const MvlResult) };
-    res.tag
-}
-
-/// Read the i64 Ok payload. Only valid when `tag == 0`.
-///
-/// # Safety
-/// `r` must be a valid `MvlResult` pointer with tag == 0.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn _mvl_result_value_i64(r: i32) -> i64 {
-    if r == 0 {
-        return 0;
-    }
-    let res = unsafe { &*(r as usize as *const MvlResult) };
-    res.value
-}
+// ── Struct / payload allocation (#1821) ──────────────────────────────────
 
 /// Allocate `size` bytes on the Rust heap and return the pointer as i32.
 /// Used by the WASM emitter for struct construction and payload-enum
@@ -1136,29 +1203,6 @@ pub extern "C" fn _mvl_struct_alloc(size: i32) -> i32 {
     let ptr = v.as_mut_ptr() as i32;
     std::mem::forget(v);
     ptr
-}
-
-/// Decrement refcount; free when it reaches zero. Drops the inner
-/// `*MvlString` when the tag is Err (value holds the *MvlString pointer).
-///
-/// # Safety
-/// `r` must be a valid `MvlResult` pointer, not used after drop.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn _mvl_result_drop(r: i32) {
-    if r == 0 {
-        return;
-    }
-    let ptr = r as usize as *mut MvlResult;
-    (*ptr).rc -= 1;
-    if (*ptr).rc > 0 {
-        return;
-    }
-    if (*ptr).tag == 1 && (*ptr).value != 0 {
-        unsafe { _mvl_string_drop((*ptr).value as i32) };
-    }
-    unsafe {
-        let _ = Box::from_raw(ptr);
-    }
 }
 
 // ── Tests ────────────────────────────────────────────────────────────────

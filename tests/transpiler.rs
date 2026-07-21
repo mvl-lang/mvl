@@ -1022,8 +1022,8 @@ fn corpus_bitwise_transpiles() {
     assert_contains(&rust, ".wrapping_shr(");
     // Byte to_int — cast to i64 (no outer parens; </>  callers wrap via is_as_cast_method)
     assert_contains(&rust, " as i64");
-    // from_int — cast to u8
-    assert_contains(&rust, " as u8)");
+    // from_int — cast to u8 (no outer parens since 5072b4b4)
+    assert_contains(&rust, " as u8");
     // Byte functions use u8 types. The corpus file declares each Byte op as
     // a parameterless `test fn` that materializes values inline, so the byte
     // typing surfaces in the let bindings rather than a top-level signature.
@@ -2191,7 +2191,8 @@ fn lambda_with_return_type_emits_arrow() {
 fn from_int_call_emits_as_u8() {
     let src = "fn f(n: Int) -> Byte { from_int(n) }";
     let rust = transpile_src(src);
-    assert_contains(&rust, " as u8)");
+    // No outer parens since 5072b4b4 — precedence-aware emission.
+    assert_contains(&rust, " as u8");
 }
 
 #[test]
@@ -3312,6 +3313,7 @@ pub partial fn status_reason(healthy: Bool) -> Bool {
         expr_types,
         vec![],
         Default::default(),
+        false,
         &pkg_names,
     );
 
@@ -3363,6 +3365,7 @@ fn main() -> Unit { }
         expr_types,
         vec![],
         Default::default(),
+        false,
         &pkg_names,
     );
 
@@ -3407,6 +3410,7 @@ pub partial fn greet(n: Int) -> Int {
         expr_types,
         vec![],
         Default::default(),
+        false,
         &pkg_names,
     );
 

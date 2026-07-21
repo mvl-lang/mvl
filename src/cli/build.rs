@@ -41,11 +41,13 @@ fn inject_mod_bridge(source: &str) -> String {
 /// binary is executed with its working directory set to the source file's
 /// parent directory so that relative paths in args (e.g. `--file logs.jsonl`)
 /// resolve correctly.
+#[allow(clippy::too_many_arguments)]
 pub fn run(
     path: &str,
     run: bool,
     run_args: &[String],
     assert_mode: AssertMode,
+    optimize_proved: bool,
     target: &str,
     release: bool,
     emit_only: bool,
@@ -249,6 +251,7 @@ pub fn run(
         all_expr_types,
         sibling_expr_types,
         assert_mode,
+        optimize_proved,
         &prelude_pkg_names,
     );
 

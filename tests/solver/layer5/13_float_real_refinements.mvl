@@ -1,0 +1,37 @@
+// Solver Layer 5: Float refinements via Z3 Real theory (ADR-0058, #1957)
+//
+// Before this feature, Float-typed non-literal arguments always fell to
+// RuntimeCheck (L1 only proved concrete literals). With the Z3 Real domain
+// path, variable arguments with Float hypotheses are now proved by Layer 5.
+//
+// Pattern:
+//   p: Float where self >= 0.0 && self <= 1.0
+//   call: require_probability(p)  →  pred: self >= 0.0 && self <= 1.0
+//   Z3 Real query: p >= 0.0 ∧ p <= 1.0 ∧ ¬(p >= 0.0 ∧ p <= 1.0) → UNSAT → Proven
+
+fn require_probability(p: Float where self >= 0.0 && self <= 1.0) -> Float {
+    p
+}
+
+fn require_nonneg(x: Float where self >= 0.0) -> Float {
+    x
+}
+
+fn require_positive(x: Float where self > 0.0) -> Float {
+    x
+}
+
+// Variable argument with matching hypothesis — proved by L5 Real (ADR-0058).
+fn chain_probability(p: Float where self >= 0.0 && self <= 1.0) -> Float {
+    require_probability(p)
+}
+
+// Stronger hypothesis (self >= 0.5 && self <= 1.0) implies weaker pred (self >= 0.0).
+fn chain_nonneg_from_probability(p: Float where self >= 0.5 && self <= 1.0) -> Float {
+    require_nonneg(p)
+}
+
+// Positive hypothesis implies positive pred.
+fn chain_positive(x: Float where self > 0.5) -> Float {
+    require_positive(x)
+}

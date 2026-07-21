@@ -20,6 +20,8 @@ pub mod layer2;
 pub mod layer3;
 pub mod layer4;
 pub mod layer5;
+#[cfg(feature = "z3")]
+pub(crate) mod regex_z3;
 pub(super) mod rewrite;
 
 use std::collections::HashMap;
@@ -65,8 +67,14 @@ impl SolverMode {
 pub(crate) enum RefResult {
     /// The argument statically satisfies the predicate — no runtime check needed.
     Proven,
+    /// The argument satisfies the predicate, proven via Z3 QF-BV (bit-vector theory) (#1928).
+    ProvenBv,
     /// Cannot be proven statically — a runtime assertion must be emitted.
     RuntimeCheck,
+    /// Cannot be proven statically (runtime assertion needed), but Z3 found a
+    /// concrete assignment that witnesses a failure (#1896).
+    /// `counterexample` holds projected source-level names, e.g. `"mins = 241"`.
+    RuntimeCheckWithWitness { counterexample: String },
     /// The argument statically violates the predicate — a compile-time error.
     /// Optionally includes a counterexample extracted by Z3 (Phase 4, #627).
     Failed { counterexample: Option<String> },
@@ -135,6 +143,7 @@ pub(crate) fn try_z3(
     pred: &RefExpr,
     arg: &Expr,
     var_refs: &HashMap<String, Option<RefExpr>>,
+    norm: Option<&atom_norm::AtomNormalizer>,
 ) -> Option<RefResult> {
-    layer5::try_z3(pred, arg, var_refs)
+    layer5::try_z3(pred, arg, var_refs, norm)
 }

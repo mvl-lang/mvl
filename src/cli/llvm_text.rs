@@ -80,22 +80,54 @@ fn prepare_llvm_text_tir_multi(
     let entry_dir = Path::new(path).parent().unwrap_or_else(|| Path::new("."));
     let sibling_modules = loader::load_sibling_modules_transitive(prog, entry_dir);
 
-    if sibling_modules.is_empty() {
+    // Transitively load pkg.* packages the entry or its siblings import (#1905).
+    // Mirrors the frontier walk in `src/cli/build.rs` so pkg-imported enum
+    // variants (e.g. `Key::Char` from pkg.tui) resolve during checking and
+    // emitting.  Without this, the checker reports `UndefinedFunction` and the
+    // emitter falls back to a raw `@Key::Char` call — invalid LLVM IR.
+    // Use the entry file's directory (not cwd) so `mvl test` invoked from any
+    // location finds the project's mvl.lock.
+    let entry_abs = entry_dir
+        .canonicalize()
+        .unwrap_or_else(|_| PathBuf::from(entry_dir));
+    let project_root = super::find_project_root(&entry_abs);
+    let sibling_progs_owned: Vec<Program> =
+        sibling_modules.iter().map(|(_, _, p)| p.clone()).collect();
+    let mut pkg_progs: Vec<Program> = Vec::new();
+    let mut seen_pkgs = std::collections::HashSet::<String>::new();
+    let mut frontier: Vec<Program> = std::iter::once(prog.clone())
+        .chain(sibling_progs_owned.iter().cloned())
+        .collect();
+    loop {
+        let new_pkgs = loader::load_pkg_modules_tagged(&frontier, &project_root, &mut seen_pkgs);
+        if new_pkgs.is_empty() {
+            break;
+        }
+        let new_frontier: Vec<_> = new_pkgs.iter().map(|(_, p)| p.clone()).collect();
+        pkg_progs.extend(new_pkgs.into_iter().map(|(_, p)| p));
+        frontier = new_frontier;
+    }
+
+    if sibling_modules.is_empty() && pkg_progs.is_empty() {
         let (prelude_tirs, entry_tir, compiler) = prepare_llvm_text_tir(prog);
         return (prelude_tirs, entry_tir, vec![], compiler);
     }
 
     let sibling_progs: Vec<&Program> = sibling_modules.iter().map(|(_, _, p)| p).collect();
 
-    // Prelude covers entry + all siblings so stdlib selectors are complete.
+    // Prelude covers entry + siblings + pkg modules so stdlib selectors and
+    // pkg-imported types are all resolved.
     let mut prelude = loader::load_implicit_prelude();
     prelude.extend(load_full_prelude(
-        std::iter::once(prog).chain(sibling_progs.iter().copied()),
+        std::iter::once(prog)
+            .chain(sibling_progs.iter().copied())
+            .chain(pkg_progs.iter()),
         PreludeMode::Transpile,
     ));
     prelude.extend(loader::load_rust_backed_stdlib_fns(std::slice::from_ref(
         prog,
     )));
+    prelude.extend(pkg_progs.iter().cloned());
     let builtins = loader::collect_llvm_text_builtins(std::slice::from_ref(prog));
 
     // Check entry with siblings as cross-sibling prelude (Go model: same-dir files share decls).
@@ -235,13 +267,24 @@ fn compile_llvm_bridge(llvm_rs: &Path) -> Option<PathBuf> {
     // `forget` prevents cleanup so lli can load the .dylib/.so later.
     std::mem::forget(tmp_dir);
 
-    let status = process::Command::new("rustc")
-        .arg("--crate-type=cdylib")
+    // llvm.rs may reference runtime symbols (e.g. `mvl_string_new`).  We
+    // can't statically link against the runtime library at cdylib time —
+    // the naming convention is inconsistent across packages (#1912 open
+    // question).  Instead, use dynamic_lookup on macOS / --unresolved-symbols
+    // on Linux so unresolved symbols are deferred to lli --load= chaining.
+    let mut cmd = process::Command::new("rustc");
+    cmd.arg("--crate-type=cdylib")
         .arg("--edition=2021")
         .arg("-o")
         .arg(&output_path)
-        .arg(llvm_rs)
-        .status();
+        .arg(llvm_rs);
+    if cfg!(target_os = "macos") {
+        cmd.arg("-Clink-arg=-Wl,-undefined,dynamic_lookup");
+    } else {
+        cmd.arg("-Clink-arg=-Wl,--unresolved-symbols=ignore-all");
+    }
+
+    let status = cmd.status();
 
     match status {
         Ok(s) if s.success() => Some(output_path),
@@ -257,6 +300,62 @@ fn compile_llvm_bridge(llvm_rs: &Path) -> Option<PathBuf> {
             None
         }
     }
+}
+
+/// Discover all pkg.* llvm.rs bridges reachable from a test file and compile
+/// them to cdylibs (#1912).  Returns one cdylib path per package that ships
+/// llvm.rs alongside bridge.rs; empty when the project has no pkg deps.
+///
+/// Mirrors the pkg discovery in [`prepare_llvm_text_tir_multi`]: transitively
+/// loads pkg modules, finds an llvm.rs for each one, and compiles it.
+fn discover_and_compile_pkg_bridges(test_path: &str) -> Vec<PathBuf> {
+    let src = match fs::read_to_string(test_path) {
+        Ok(s) => s,
+        Err(_) => return Vec::new(),
+    };
+    let (mut p, _) = Parser::new(&src);
+    let prog = p.parse_program();
+    if !p.errors().is_empty() {
+        return Vec::new();
+    }
+    let entry_dir = Path::new(test_path)
+        .parent()
+        .unwrap_or_else(|| Path::new("."));
+    let entry_abs = entry_dir
+        .canonicalize()
+        .unwrap_or_else(|_| PathBuf::from(entry_dir));
+    let project_root = super::find_project_root(&entry_abs);
+
+    // Walk the pkg frontier the same way build.rs / prepare_llvm_text_tir_multi do.
+    let sibling_modules = loader::load_sibling_modules_transitive(&prog, entry_dir);
+    let sibling_progs: Vec<Program> = sibling_modules.iter().map(|(_, _, p)| p.clone()).collect();
+    let mut seen_pkgs = std::collections::HashSet::<String>::new();
+    let mut pkg_progs: Vec<Program> = Vec::new();
+    let mut frontier: Vec<Program> = std::iter::once(prog.clone())
+        .chain(sibling_progs.iter().cloned())
+        .collect();
+    loop {
+        let new_pkgs = loader::load_pkg_modules_tagged(&frontier, &project_root, &mut seen_pkgs);
+        if new_pkgs.is_empty() {
+            break;
+        }
+        let new_frontier: Vec<_> = new_pkgs.iter().map(|(_, p)| p.clone()).collect();
+        pkg_progs.extend(new_pkgs.into_iter().map(|(_, p)| p));
+        frontier = new_frontier;
+    }
+
+    // For each loaded pkg, find and compile its llvm.rs (if present).
+    let all_progs: Vec<Program> = std::iter::once(prog.clone())
+        .chain(sibling_progs.iter().cloned())
+        .chain(pkg_progs.iter().cloned())
+        .collect();
+    let mut libs: Vec<PathBuf> = Vec::new();
+    if let Some(llvm_rs) = loader::find_pkg_llvm_bridge(&all_progs, &project_root) {
+        if let Some(lib) = compile_llvm_bridge(&llvm_rs) {
+            libs.push(lib);
+        }
+    }
+    libs
 }
 
 /// Compile an MVL file to LLVM IR and run it via `lli`.
@@ -502,8 +601,14 @@ pub(super) fn cmd_test_llvm_text(path: &str, quiet: bool, verbose: bool) {
         if has_test_fns {
             let module_name = loader::stem(&file_str);
             let (prog, _) = super::parse_or_exit(&file_str);
-            let (prelude_tirs, entry_tir, compiler) = prepare_llvm_text_tir(&prog);
-            match compiler.compile_to_ir_test_crate(&prelude_tirs, &entry_tir, &module_name) {
+            let (prelude_tirs, entry_tir, sibling_tirs, compiler) =
+                prepare_llvm_text_tir_multi(&prog, &file_str);
+            match compiler.compile_to_ir_test_crate_with_siblings(
+                &prelude_tirs,
+                &sibling_tirs,
+                &entry_tir,
+                &module_name,
+            ) {
                 Ok((ir, names)) if !names.is_empty() => {
                     testfn_cases.push((file.clone(), ir, names));
                 }
@@ -583,8 +688,26 @@ pub(super) fn cmd_test_llvm_text(path: &str, quiet: bool, verbose: bool) {
             );
         }
 
+        // Discover + compile pkg.* llvm.rs bridges once per test file (#1912).
+        // Each pkg that ships an llvm.rs alongside bridge.rs (#811 convention)
+        // gets compiled to a cdylib; the resulting .so/.dylib is passed to lli
+        // via `--load` so extern "rust" symbols resolve at run time.
+        //
+        // Bridges are keyed by the source file path so pkg-tui, pkg-http, etc.
+        // resolve their `use pkg.tui` imports transitively; we build the same
+        // pkg discovery walk `prepare_llvm_text_tir_multi` does but only care
+        // about the file → Vec<compiled cdylib> mapping.
+        let mut bridge_cache: std::collections::HashMap<PathBuf, Vec<PathBuf>> =
+            std::collections::HashMap::new();
+        for (file, _, _) in &testfn_cases {
+            let file_str = file.display().to_string();
+            let libs = discover_and_compile_pkg_bridges(&file_str);
+            bridge_cache.insert(file.clone(), libs);
+        }
+
         for (file, ir, test_names) in &testfn_cases {
             let file_str = file.display().to_string();
+            let pkg_libs: &[PathBuf] = bridge_cache.get(file).map(|v| v.as_slice()).unwrap_or(&[]);
             // Write IR to a temp file once; reuse for all test fns in this file.
             let tmp = match tempfile::NamedTempFile::with_suffix(".ll") {
                 Ok(t) => t,
@@ -613,6 +736,7 @@ pub(super) fn cmd_test_llvm_text(path: &str, quiet: bool, verbose: bool) {
                     tmp.path(),
                     lli_bin_ref,
                     runtime_lib_ref,
+                    pkg_libs,
                     quiet,
                     verbose,
                 );
@@ -648,12 +772,14 @@ pub(super) fn cmd_test_llvm_text(path: &str, quiet: bool, verbose: bool) {
 
 /// Run one `test fn` by name: invoke `lli <ir_file> <test_name>`.
 /// Exit code 0 = pass; any other exit or signal (e.g. SIGILL from llvm.trap) = fail.
+#[allow(clippy::too_many_arguments)]
 fn run_one_testfn(
     file_str: &str,
     test_name: &str,
     ir_path: &Path,
     lli_bin: &Path,
     runtime_lib: Option<&Path>,
+    pkg_bridge_libs: &[PathBuf],
     quiet: bool,
     verbose: bool,
 ) -> CaseResult {
@@ -661,6 +787,9 @@ fn run_one_testfn(
 
     let mut cmd = process::Command::new(lli_bin);
     if let Some(lib) = runtime_lib {
+        cmd.arg(format!("--load={}", lib.display()));
+    }
+    for lib in pkg_bridge_libs {
         cmd.arg(format!("--load={}", lib.display()));
     }
     cmd.arg(ir_path).arg(test_name);
@@ -752,6 +881,80 @@ mod tests {
         assert!(
             ir.contains("define i64 @add("),
             "@add not in generated IR:\n{ir}"
+        );
+    }
+
+    // Regression: matching on `GameStatus::Won(Side::Left)` and
+    // `GameStatus::Won(Side::Right)` must not emit two switch cases with the
+    // same outer discriminant.  #1887 fixed the emitter; this test guards it.
+    #[test]
+    fn payload_enum_nested_no_duplicate_switch() {
+        let src = "\
+type Side = enum { Left, Right }\n\
+type GameStatus = enum { Playing, Won(Side) }\n\
+fn check(s: Int) -> GameStatus {\n\
+    if s >= 11 { GameStatus::Won(Side::Left) } else { GameStatus::Playing }\n\
+}\n\
+test fn test_won() -> Unit {\n\
+    let g: GameStatus = check(5);\n\
+    match g {\n\
+        GameStatus::Playing         => assert_eq(1, 1),\n\
+        GameStatus::Won(Side::Left)  => assert_eq(1, 0),\n\
+        GameStatus::Won(Side::Right) => assert_eq(1, 0),\n\
+    }\n\
+}\n\
+";
+        let dir = TempDir::new().unwrap();
+        let path = write_file(&dir, "won_test.mvl", src);
+        let (prog, _) = super::super::parse_or_exit(&path);
+        let (prelude_tirs, entry_tir, compiler) = prepare_llvm_text_tir(&prog);
+        let (ir, _) = compiler
+            .compile_to_ir_test_crate(&prelude_tirs, &entry_tir, "won_test")
+            .expect("IR generation failed");
+
+        // A duplicate `i8 1, label` inside a SINGLE switch block would fail lli
+        // verification.  Split the IR on switch openings and check each block.
+        for block in ir.split("switch ").skip(1) {
+            let block_body = block.split("]").next().unwrap_or("");
+            let dup_i8_1 = block_body.matches("i8 1, label").count();
+            assert!(
+                dup_i8_1 <= 1,
+                "duplicate 'i8 1' in a single switch (would fail lli):\n{block_body}"
+            );
+        }
+    }
+
+    // Regression: multi-file test crate must include sibling module IR (#1880).
+    #[test]
+    fn test_crate_includes_sibling_fns() {
+        let dir = TempDir::new().unwrap();
+        write_file(
+            &dir,
+            "helper.mvl",
+            "pub fn add(a: Int, b: Int) -> Int { a + b }",
+        );
+        let test_path = write_file(
+            &dir,
+            "main_test.mvl",
+            "use helper::add;\ntest fn test_add() -> Unit { assert_eq(add(1, 2), 3) }",
+        );
+
+        let (prog, _) = super::super::parse_or_exit(&test_path);
+        let (prelude_tirs, entry_tir, sibling_tirs, compiler) =
+            prepare_llvm_text_tir_multi(&prog, &test_path);
+        assert_eq!(sibling_tirs.len(), 1, "expected 1 sibling TIR (helper)");
+
+        let (ir, _names) = compiler
+            .compile_to_ir_test_crate_with_siblings(
+                &prelude_tirs,
+                &sibling_tirs,
+                &entry_tir,
+                "main_test",
+            )
+            .expect("IR generation failed");
+        assert!(
+            ir.contains("define i64 @add("),
+            "sibling @add not in test-crate IR:\n{ir}"
         );
     }
 }

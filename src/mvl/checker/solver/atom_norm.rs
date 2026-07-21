@@ -107,6 +107,12 @@ impl AtomNormalizer {
                 let name = self.atom_for(key);
                 RefExpr::Ident { name, span: *span }
             }
+            // list.get(i) — opaque array element; normalise to a fresh atom (#1916).
+            RefExpr::ArrayGet { span, .. } => {
+                let key = canon_refexpr(r);
+                let name = self.atom_for(key);
+                RefExpr::Ident { name, span: *span }
+            }
             RefExpr::LogicOp {
                 op,
                 left,
@@ -152,7 +158,10 @@ impl AtomNormalizer {
                 inner: Box::new(self.rewrite_refexpr(inner)),
                 span: *span,
             },
-            // Idents, literals, and quantifiers are left as-is.
+            // StringOp and RegexMatch nodes are left as-is — they are opaque to
+            // the arithmetic layers and are handled by L1 (literal strings) and
+            // L5 (QF-S / RegLan). Idents, literals, and quantifiers are also
+            // left as-is.
             _ => r.clone(),
         }
     }
@@ -198,6 +207,18 @@ impl AtomNormalizer {
     #[cfg(test)]
     pub fn atom_count(&self) -> usize {
         self.next
+    }
+
+    /// Reverse-lookup: given an atom name (`__atom_N`), return the canonical
+    /// source-level key it was synthesized for (e.g. `"b.size"`).
+    ///
+    /// Used by the Z3 counter-example extractor to project internal atom names
+    /// back to source-level variable names in diagnostic output.
+    pub fn source_name_for(&self, atom: &str) -> Option<&str> {
+        self.map
+            .iter()
+            .find(|(_, v)| v.as_str() == atom)
+            .map(|(k, _)| k.as_str())
     }
 }
 
@@ -277,6 +298,49 @@ fn canon_refexpr(r: &RefExpr) -> String {
         }
         RefExpr::Exists { var, body, .. } => {
             format!("∃{var}. {}", canon_refexpr(body))
+        }
+        RefExpr::BitwiseOp {
+            op, left, right, ..
+        } => format!("({} {op:?} {})", canon_refexpr(left), canon_refexpr(right)),
+        RefExpr::BitwiseNot { inner, .. } => format!("(~ {})", canon_refexpr(inner)),
+        RefExpr::BoundedForall {
+            var, lo, hi, body, ..
+        } => {
+            format!("∀{var}∈[{lo}..{hi}]. {}", canon_refexpr(body))
+        }
+        RefExpr::BoundedExists {
+            var, lo, hi, body, ..
+        } => {
+            format!("∃{var}∈[{lo}..{hi}]. {}", canon_refexpr(body))
+        }
+        RefExpr::StringOp {
+            op,
+            receiver,
+            literal,
+            ..
+        } => {
+            use crate::mvl::parser::ast::StringOp;
+            let m = match op {
+                StringOp::Contains => "contains",
+                StringOp::StartsWith => "starts_with",
+                StringOp::EndsWith => "ends_with",
+            };
+            format!("{}.{}({literal:?})", canon_refexpr(receiver), m)
+        }
+        RefExpr::ArrayGet { list, index, .. } => {
+            format!("{}[{}]", canon_refexpr(list), canon_refexpr(index))
+        }
+        RefExpr::RegexMatch {
+            receiver, pattern, ..
+        } => {
+            format!("{}.matches({pattern:?})", canon_refexpr(receiver))
+        }
+        RefExpr::Abs { inner, .. } => format!("abs({})", canon_refexpr(inner)),
+        RefExpr::Min { left, right, .. } => {
+            format!("min({}, {})", canon_refexpr(left), canon_refexpr(right))
+        }
+        RefExpr::Max { left, right, .. } => {
+            format!("max({}, {})", canon_refexpr(left), canon_refexpr(right))
         }
     }
 }
