@@ -773,7 +773,7 @@ fn emit_fn(out: &mut String, f: &TirFn, ctx: &Ctx) {
         for pred in f
             .ensures
             .iter()
-            .chain(f.return_refinement.as_ref().into_iter())
+            .chain(f.return_refinement.as_ref())
         {
             emit_contract_check(
                 &mut body,
