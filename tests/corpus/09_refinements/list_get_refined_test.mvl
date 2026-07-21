@@ -17,7 +17,7 @@ fn get_at_nonneg(xs: List[Int], i: NonNegativeIndex) -> Option[Int] {
     xs.get(i)
 }
 
-fn get_at_positive(xs: List[String], i: PositiveIndex) -> Option[String] {
+fn get_at_positive(xs: List[Int], i: PositiveIndex) -> Option[Int] {
     xs.get(i)
 }
 
@@ -34,9 +34,9 @@ test fn list_get_nonneg_alias_zero_index() -> Unit {
 }
 
 test fn list_get_positive_alias() -> Unit {
-    let xs: List[String] = ["a", "b", "c"];
+    let xs: List[Int] = [10, 20, 30];
     let i: PositiveIndex = 2;
-    assert_eq(get_at_positive(xs, i).unwrap_or(""), "c")
+    assert_eq(get_at_positive(xs, i).unwrap_or(-1), 30)
 }
 
 test fn list_get_nonneg_alias_out_of_bounds() -> Unit {
