@@ -1,6 +1,6 @@
 [package]
 name = "mvl_runtime_wasm"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2021"
 description = "MVL runtime for the WASM backend — Rust source compiled to wasm32-wasip1, loaded by wasmtime via --preload (#1819)"
 license = "Apache-2.0"
@@ -11,12 +11,5 @@ license = "Apache-2.0"
 name = "mvl_runtime_wasm"
 crate-type = ["cdylib"]
 
-# No dependencies for phase-2a — everything is pure `core` / `std`. When
-# we port more of `runtime/llvm/`, some cross-runtime sharing may make
-# sense; deferred until it earns its keep.
 [dependencies]
-
-# Build without WASI features that the phase-2a subset doesn't need. Kept
-# permissive — later commits will add `#[cfg(target_arch = "wasm32")]`
-# gates around ports that reach for `libc` / `std::thread` in the LLVM
-# runtime.
+mvl_runtime_core = { path = "../core" }

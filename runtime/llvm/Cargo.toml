@@ -1,6 +1,6 @@
 [package]
 name = "mvl_runtime_llvm"
-version = "0.197.2"
+version = "0.197.3"
 edition = "2021"
 description = "MVL C-ABI stdlib runtime — cdylib loaded by lli at runtime via --load (merged with mvl_memory)"
 license = "Apache-2.0"
@@ -12,6 +12,7 @@ name = "mvl_runtime_llvm"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
+mvl_runtime_core = { path = "../core" }
 mvl_runtime = { path = "../rust", package = "mvl_runtime_rust" }
 libc = "0.2"
 crossbeam-deque = "0.8"

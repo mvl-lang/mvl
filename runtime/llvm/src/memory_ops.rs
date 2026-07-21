@@ -112,11 +112,6 @@ fn checked_mul_size(a: usize, b: usize) -> usize {
     a.checked_mul(b).unwrap_or_else(|| std::process::abort())
 }
 
-#[inline(always)]
-fn checked_add_size(a: usize, b: usize) -> usize {
-    a.checked_add(b).unwrap_or_else(|| std::process::abort())
-}
-
 /// Growth cap used in `_mvl_array_push` to mirror `crate::memory::ARRAY_INITIAL_CAP`.
 const ARRAY_INITIAL_CAP: usize = 4;
 
@@ -201,18 +196,22 @@ pub unsafe extern "C" fn _mvl_string_concat(
     a: *const MvlString,
     b: *const MvlString,
 ) -> *mut MvlString {
-    let la = if a.is_null() { 0 } else { (*a).len as usize };
-    let lb = if b.is_null() { 0 } else { (*b).len as usize };
-    let total = checked_add_size(la, lb);
-    let cap = checked_add_size(total, 1);
+    let a_bytes = if a.is_null() {
+        &[]
+    } else {
+        std::slice::from_raw_parts((*a).ptr, (*a).len as usize)
+    };
+    let b_bytes = if b.is_null() {
+        &[]
+    } else {
+        std::slice::from_raw_parts((*b).ptr, (*b).len as usize)
+    };
+    let mut merged = mvl_runtime_core::concat_bytes(a_bytes, b_bytes);
+    merged.push(0); // null terminator
+    let total = merged.len() - 1;
+    let cap = merged.len();
     let data = _mvl_alloc(cap);
-    if la > 0 {
-        ptr::copy_nonoverlapping((*a).ptr, data, la);
-    }
-    if lb > 0 {
-        ptr::copy_nonoverlapping((*b).ptr, data.add(la), lb);
-    }
-    *data.add(total) = 0;
+    ptr::copy_nonoverlapping(merged.as_ptr(), data, cap);
     let s = _mvl_alloc(std::mem::size_of::<MvlString>()) as *mut MvlString;
     s.write(MvlString {
         ptr: data,
@@ -760,14 +759,22 @@ pub unsafe extern "C" fn _mvl_list_concat(a: *const MvlArray, b: *const MvlArray
             (*b).len as usize,
         ),
     };
-    let out = _mvl_array_new(es, (la + lb).max(1));
-    for i in 0..la {
-        let src = (*a).ptr.add(i * es);
-        _mvl_array_push(out, src);
-    }
-    for i in 0..lb {
-        let src = (*b).ptr.add(i * es);
-        _mvl_array_push(out, src);
+    let a_bytes = if a.is_null() || la == 0 {
+        &[] as &[u8]
+    } else {
+        std::slice::from_raw_parts((*a).ptr, la * es)
+    };
+    let b_bytes = if b.is_null() || lb == 0 {
+        &[] as &[u8]
+    } else {
+        std::slice::from_raw_parts((*b).ptr, lb * es)
+    };
+    let merged = mvl_runtime_core::concat_bytes(a_bytes, b_bytes);
+    let total = la + lb;
+    let out = _mvl_array_new(es, total.max(1));
+    if !merged.is_empty() {
+        ptr::copy_nonoverlapping(merged.as_ptr(), (*out).ptr, merged.len());
+        (*out).len = total as u64;
     }
     out
 }

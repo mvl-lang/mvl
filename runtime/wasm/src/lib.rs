@@ -254,15 +254,12 @@ pub unsafe extern "C" fn _mvl_string_drop(ms_ptr: i32) {
 }
 
 /// Allocate a fresh `MvlString` whose backing bytes are the concatenation
-/// of `(p1, l1)` and `(p2, l2)`. Fills the buffer with both inputs in
-/// one pass rather than routing through `alloc_mvl_string`.
+/// of `(p1, l1)` and `(p2, l2)`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn _mvl_string_concat(p1: i32, l1: i32, p2: i32, l2: i32) -> i32 {
     let a = unsafe { slice_or_empty(p1, l1) };
     let b = unsafe { slice_or_empty(p2, l2) };
-    let mut bytes = Vec::with_capacity(a.len() + b.len());
-    bytes.extend_from_slice(a);
-    bytes.extend_from_slice(b);
+    let bytes = mvl_runtime_core::concat_bytes(a, b);
     let bytes_ptr = bytes.as_ptr() as i32;
     let bytes_len = bytes.len() as i32;
     let bytes_cap = bytes.capacity() as i32;

@@ -81,7 +81,8 @@ pub fn str_from_bytes(bytes: Vec<u8>) -> String {
 
 /// Concatenate two strings. `str_concat(a, b)` == `a + b`.
 pub fn str_concat(s: String, other: String) -> String {
-    s + &other
+    let bytes = mvl_runtime_core::concat_bytes(s.as_bytes(), other.as_bytes());
+    String::from_utf8(bytes).expect("str_concat: non-UTF-8 input")
 }
 
 /// Remove leading and trailing ASCII whitespace.
@@ -181,9 +182,8 @@ pub fn list_slice<T: Clone>(xs: Vec<T>, start: i64, end: i64) -> Vec<T> {
 }
 
 /// Concatenate two lists.
-pub fn list_concat<T>(mut xs: Vec<T>, ys: Vec<T>) -> Vec<T> {
-    xs.extend(ys);
-    xs
+pub fn list_concat<T>(xs: Vec<T>, ys: Vec<T>) -> Vec<T> {
+    mvl_runtime_core::list_concat(xs, ys)
 }
 
 /// Return true if `xs` contains `x` (requires `PartialEq`).

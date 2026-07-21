@@ -1,5 +1,5 @@
 [workspace]
-members = [".", "runtime/rust", "runtime/rust-tokio", "runtime/llvm", "runtime/wasm"]
+members = [".", "runtime/core", "runtime/rust", "runtime/rust-tokio", "runtime/llvm", "runtime/wasm"]
 exclude = ["fuzz", "tests/spikes/003-gzip/bench"]
 
 [package]
