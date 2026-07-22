@@ -235,6 +235,8 @@ impl TypeChecker {
             "filter" | "sort" | "sort_by" | "collect" | "rev" | "dedup" => {
                 Ty::List(Box::new(elem_ty.clone()))
             }
+            // min_by / max_by (f: fn(T, T) -> Bool) -> Option<T>
+            "min_by" | "max_by" => Ty::Option(Box::new(elem_ty.clone())),
             // fold(init: U, f: fn(U, T) -> U) -> U  — U inferred from init type
             "fold" => {
                 if let Some(init_ty) = arg_tys.first() {

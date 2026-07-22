@@ -241,6 +241,9 @@ pub(crate) const STDLIB_UFCS_METHODS: &[(&str, &str)] = &[
     ("last", "List"),
     ("flatten", "List"),
     ("reverse", "List"),
+    ("sort_by", "List"),
+    ("min_by", "List"),
+    ("max_by", "List"),
     // std/text.mvl — String extension methods returning List[Span] (#1371)
     ("split_spans", "String"),
     ("find_all_spans", "String"),

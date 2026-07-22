@@ -180,13 +180,37 @@ pub fn List[T]::fold[U](self, init: U, f: fn(U, T) -> U) -> U {
 
 /// Sort in ascending order using natural ordering.
 ///
-/// Builtin: promoted from MVL body to avoid LLVM SSA-dominance issues with
-/// ref-variable loops (#992).  Only valid on `List` element types that
-/// support ordering; MVL does not currently express "T is comparable" in
-/// user code (ADR-0053), so this builtin is guarded at dispatch time —
-/// call sites on unsupported element types are rejected by the checker.
-/// C-ABI: `_mvl_list_sort`. Closes #1290.
+/// Builtin because MVL has no user-facing trait system (ADR-0053), so
+/// `a < b` on a generic `T` cannot type-check in an MVL body.  Correct
+/// only for element types with a well-defined ordering (`Int`, `Byte`,
+/// `String`).  For user-defined types or explicit ordering, use
+/// [`sort_by`] and supply a comparator.  C-ABI: `_mvl_list_sort`.
 pub builtin fn List[T]::sort(self) -> List[T]
+
+/// Sort using a user-supplied comparator, ascending in the order defined by `cmp`.
+///
+/// `cmp(a, b)` returns `true` when `a` should come *before* `b`.  This
+/// insertion-sort body is stable: elements comparing equal preserve their
+/// input order.  O(n^2); use [`sort`] for large primitive lists.
+pub fn List[T]::sort_by(self, cmp: fn(T, T) -> Bool) -> List[T] {
+    let result: ref List[T] = [];
+    for x in self {
+        let out: ref List[T] = [];
+        let inserted: ref Bool = false;
+        for y in result {
+            if !inserted && cmp(x.clone(), y.clone()) {
+                out.push(x.clone());
+                inserted = true
+            };
+            out.push(y)
+        };
+        if !inserted {
+            out.push(x)
+        };
+        result = out
+    };
+    result
+}
 
 /// Pair each element with its zero-based index.
 ///
@@ -276,6 +300,62 @@ pub fn List[T]::min(self) -> Option[T] {
 /// MVL body is a fallback for LLVM backend (returns last, not max).
 pub fn List[T]::max(self) -> Option[T] {
     self.last()
+}
+
+/// Smallest element by user-supplied comparator, or None if empty.
+///
+/// `cmp(a, b)` returns `true` when `a` should be considered *less* than `b`.
+/// MVL-expressible alternative to [`min`] that avoids ADR-0053's ban on
+/// comparing unbounded generics.
+pub fn List[T]::min_by(self, cmp: fn(T, T) -> Bool) -> Option[T] {
+    match self.first() {
+        None => None,
+        Some(head) => {
+            let best: ref T = head;
+            let i: ref Int = 1;
+            let n: Int = self.len();
+            while i < n decreases n - i {
+                match self.get(i) {
+                    Some(x) => {
+                        if cmp(x.clone(), best.clone()) {
+                            best = x
+                        }
+                    },
+                    None => {},
+                };
+                i = i + 1
+            };
+            Some(best)
+        },
+    }
+}
+
+/// Largest element by user-supplied comparator, or None if empty.
+///
+/// `cmp(a, b)` returns `true` when `a` should be considered *less* than `b`;
+/// the element for which `cmp(other, self)` is true for every other element
+/// wins.
+pub fn List[T]::max_by(self, cmp: fn(T, T) -> Bool) -> Option[T] {
+    match self.first() {
+        None => None,
+        Some(head) => {
+            let best: ref T = head;
+            let i: ref Int = 1;
+            let n: Int = self.len();
+            while i < n decreases n - i {
+                match self.get(i) {
+                    Some(x) => {
+                        if cmp(best.clone(), x.clone()) {
+                            best = x
+                        }
+                    },
+                    None => {},
+                };
+                i = i + 1
+            };
+            Some(best)
+        },
+    }
 }
 
 /// Join a list of strings with separator `sep`.
