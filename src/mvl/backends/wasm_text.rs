@@ -1305,6 +1305,15 @@ fn emit_stmt(out: &mut String, stmt: &TirStmt, ctx: &Ctx) {
                 } else {
                     out.push_str(&format!("    local.set ${name}\n"));
                 }
+            } else if matches!(pattern, Pattern::Wildcard(_)) {
+                // `let _ = expr` — evaluate for side effects, discard result.
+                emit_expr(out, init, ctx);
+                if matches!(ty, Ty::String) {
+                    // String init leaves two i32s (ptr, len) on the stack.
+                    out.push_str("    drop\n    drop\n");
+                } else {
+                    out.push_str("    drop\n");
+                }
             } else {
                 out.push_str(&format!("    ;; unsupported let pattern: {pattern:?}\n"));
             }
@@ -1983,6 +1992,16 @@ fn emit_expr(out: &mut String, expr: &TirExpr, ctx: &Ctx) {
         // `expr?` — propagate Result failure (#1821).
         TirExprKind::Propagate(inner) => {
             emit_propagate(out, inner, expr, ctx);
+        }
+        // `consume(x)` — ownership transfer is compile-time only; at runtime
+        // just emit the inner value unchanged.
+        TirExprKind::Consume(inner) => {
+            emit_expr(out, inner, ctx);
+        }
+        // `&x` / `&mut x` — borrows are compile-time only for the WASM
+        // backend; the underlying value is passed by its WASM representation.
+        TirExprKind::Borrow { expr: inner, .. } => {
+            emit_expr(out, inner, ctx);
         }
         other => {
             out.push_str(&format!("    ;; unsupported expr: {other:?}\n"));
@@ -3557,6 +3576,11 @@ fn collect_expr(expr: &TirExpr, map: &mut HashMap<String, (u32, u32)>, next: &mu
         TirExprKind::Map { pairs } => {
             for (k, v) in pairs {
                 collect_expr(k, map, next);
+                collect_expr(v, map, next);
+            }
+        }
+        TirExprKind::Construct { fields, .. } => {
+            for (_, v) in fields {
                 collect_expr(v, map, next);
             }
         }
