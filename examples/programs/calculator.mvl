@@ -19,8 +19,10 @@ total fn mul(a: Int, b: Int) -> Int {
     a * b
 }
 
+use std.math.{int_max}
+
 total fn max(a: Int, b: Int) -> Int {
-    if a > b { a } else { b }
+    int_max(a, b)
 }
 
 fn main() -> Unit ! Console {

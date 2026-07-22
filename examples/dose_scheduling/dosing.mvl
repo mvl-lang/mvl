@@ -13,6 +13,7 @@
 use model::Patient;
 use model::DrugOrder;
 use model::InfusionPlan;
+use std.math.{int_clamp}
 
 // ── L5 target: three-variable product with bounded factors ───────────────
 
@@ -207,33 +208,33 @@ pub total fn plan_infusion(p: Patient, o: DrugOrder) -> InfusionPlan {
 total fn clamp_weight(kg: Int) -> Int
     ensures result >= 1 && result <= 200
 {
-    if kg < 1 { 1 } else if kg > 200 { 200 } else { kg }
+    int_clamp(kg, 1, 200)
 }
 
 /// Clamp per-kg-per-hour rate into [1, 50].
 total fn clamp_rate(r: Int) -> Int
     ensures result >= 1 && result <= 50
 {
-    if r < 1 { 1 } else if r > 50 { 50 } else { r }
+    int_clamp(r, 1, 50)
 }
 
 /// Clamp treatment duration into [1, 24] hours.
 total fn clamp_hours(h: Int) -> Int
     ensures result >= 1 && result <= 24
 {
-    if h < 1 { 1 } else if h > 24 { 24 } else { h }
+    int_clamp(h, 1, 24)
 }
 
 /// Clamp bolus count into [1, 100].
 total fn clamp_boluses(b: Int) -> Int
     ensures result >= 1 && result <= 100
 {
-    if b < 1 { 1 } else if b > 100 { 100 } else { b }
+    int_clamp(b, 1, 100)
 }
 
 /// Clamp reconstitution volume into [1, 1000] mL.
 total fn clamp_volume(v: Int) -> Int
     ensures result >= 1 && result <= 1000
 {
-    if v < 1 { 1 } else if v > 1000 { 1000 } else { v }
+    int_clamp(v, 1, 1000)
 }

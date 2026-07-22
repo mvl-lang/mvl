@@ -8,6 +8,7 @@
 
 use model::Priority;
 use model::Consciousness;
+use std.math.{int_clamp}
 use model::BreathingStatus;
 use model::PulseStrength;
 use model::Vitals;
@@ -212,15 +213,7 @@ pub total fn buffered_reassess_max(mins: Int where mins <= 240) -> Int {
 /// combined guard `mins >= 0 && mins <= 240`) and proves each path satisfies
 /// `require_reassess`'s precondition `[0, 240]`.
 pub total fn sanitize_reassess(mins: Int) -> Int {
-    require_reassess(clamp_to_mts_range(mins))
-}
-
-/// Clamp any integer into `[0, 240]` — the callee whose path enumeration
-/// backs `sanitize_reassess`'s L3 obligation.
-total fn clamp_to_mts_range(mins: Int) -> Int {
-    if mins < 0 { 0 }
-    else if mins > 240 { 240 }
-    else { mins }
+    require_reassess(int_clamp(mins, 0, 240))
 }
 
 // ── Full assessment ──────────────────────────────────────────────────────
