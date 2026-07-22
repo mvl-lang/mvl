@@ -381,6 +381,7 @@ WASM_CORPUS := \
 	tests/corpus/01_expressions \
 	tests/corpus/02_control_flow \
 	tests/corpus/03_functions/basic_test.mvl \
+	tests/corpus/03_functions/generic_test.mvl \
 	tests/corpus/03_functions/total_partial_test.mvl \
 	tests/corpus/04_types/enum_test.mvl \
 	tests/corpus/04_types/struct_test.mvl \
@@ -392,12 +393,23 @@ WASM_CORPUS := \
 	tests/corpus/05_collections/set_test.mvl \
 	tests/corpus/05_collections/map_test.mvl \
 	tests/corpus/06_effects/pure_test.mvl \
+	tests/corpus/06_effects/composite_test.mvl \
+	tests/corpus/06_effects/console_test.mvl \
+	tests/corpus/06_effects/user_defined_test.mvl \
 	tests/corpus/07_ownership/ref_test.mvl \
+	tests/corpus/07_ownership/value_test.mvl \
+	tests/corpus/07_ownership/consume_test.mvl \
 	tests/corpus/09_refinements/type_alias_test.mvl \
 	tests/corpus/09_refinements/array_index_refinement_test.mvl \
 	tests/corpus/09_refinements/bitwise_refinement_test.mvl \
+	tests/corpus/09_refinements/float_refinement_test.mvl \
+	tests/corpus/09_refinements/field_refinement_test.mvl \
+	tests/corpus/09_refinements/list_get_refined_test.mvl \
+	tests/corpus/09_refinements/method_call_refinement_test.mvl \
+	tests/corpus/09_refinements/struct_invariant_test.mvl \
 	tests/corpus/10_termination/total_fn_test.mvl \
 	tests/corpus/10_termination/decreases_test.mvl \
+	tests/corpus/10_termination/partial_fn_test.mvl \
 	tests/corpus/11_contracts/requires_test.mvl \
 	tests/corpus/11_contracts/ensures_test.mvl \
 	tests/corpus/11_contracts/invariant_test.mvl \

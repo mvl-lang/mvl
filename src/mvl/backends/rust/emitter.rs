@@ -1443,4 +1443,3 @@ fn collect_fn_typed_struct_fields_tir(
     }
     out
 }
-

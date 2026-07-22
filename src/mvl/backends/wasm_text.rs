@@ -51,9 +51,9 @@ use std::collections::HashMap;
 use super::{AssertMode, Backend};
 use crate::mvl::checker::types::Ty;
 use crate::mvl::ir::{
-    ArithOp, BinaryOp, CmpOp, LValue, Literal, LogicOp, Pattern, RefExpr, TirBlock, TirElseBranch,
-    TirExpr, TirExprKind, TirFn, TirMatchArm, TirMatchBody, TirParam, TirProgram, TirStmt,
-    TirTypeBody, TirTypeDecl, TirVariantFields, UnaryOp,
+    ArithOp, BinaryOp, CmpOp, GenericParam, LValue, Literal, LogicOp, Pattern, RefExpr, TirBlock,
+    TirElseBranch, TirExpr, TirExprKind, TirFn, TirMatchArm, TirMatchBody, TirParam, TirProgram,
+    TirStmt, TirTypeBody, TirTypeDecl, TirVariantFields, UnaryOp,
 };
 
 pub struct WasmTextCompiler {
@@ -131,6 +131,15 @@ struct Ctx<'a> {
     struct_layouts: &'a HashMap<String, StructLayout>,
     /// Heap-layout info for payload-carrying enums (#1821). Key = enum type name.
     payload_enums: &'a HashMap<String, PayloadEnumInfo>,
+    /// Type alias targets: `type Foo = Bar where ...` → `Foo → Ty::Refined(Bar, ...)`.
+    /// Used by `wasm_ty` / `is_float` to resolve named aliases to their base WASM type.
+    type_aliases: &'a HashMap<String, Ty>,
+    /// Type parameter substitution for generic function monomorphization.
+    /// E.g. when emitting `identity[T=Int]`, contains `{"T": Ty::Int}`.
+    /// Empty map for non-generic functions.
+    type_subst: &'a HashMap<String, Ty>,
+    /// Generic function name → (type_params, fn_params) for call-site name mangling.
+    generic_fn_map: &'a HashMap<String, (Vec<GenericParam>, Vec<TirParam>)>,
     /// Monotonic counter for fresh WAT labels (`$while_0`, `$while_1`, …).
     label_counter: Cell<usize>,
     /// Set by emitters that reach for `runtime/wasm/` symbols (#1819).
@@ -295,6 +304,13 @@ impl Backend for WasmTextCompiler {
             .filter(|f| !f.is_builtin && f.receiver_type.is_none() && f.type_params.is_empty())
             .collect();
 
+        // All TirFn entries, including generics — needed for monomorphization lookup.
+        let all_fns: Vec<&TirFn> = tir
+            .fns
+            .iter()
+            .filter(|f| !f.is_builtin && f.receiver_type.is_none())
+            .collect();
+
         // A Unit-returning `main` becomes the WASI `_start` entry point.
         // When present we emit the WASI runtime blob (memory, fd_write import,
         // bump allocator, int-to-string, println).
@@ -306,6 +322,13 @@ impl Backend for WasmTextCompiler {
         let (enum_types, enum_variants) = collect_enums(&tir.types);
         let struct_layouts = collect_structs(&tir.types);
         let payload_enums = collect_payload_enums(&tir.types);
+        let type_aliases = collect_type_aliases(&tir.types);
+        let empty_subst: HashMap<String, Ty> = HashMap::new();
+        let generic_fn_map: HashMap<String, (Vec<GenericParam>, Vec<TirParam>)> = all_fns
+            .iter()
+            .filter(|f| !f.type_params.is_empty())
+            .map(|f| (f.name.clone(), (f.type_params.clone(), f.params.clone())))
+            .collect();
         let ctx = Ctx {
             needs_wasi,
             literals: &literals,
@@ -313,17 +336,29 @@ impl Backend for WasmTextCompiler {
             enum_variants: &enum_variants,
             struct_layouts: &struct_layouts,
             payload_enums: &payload_enums,
+            type_aliases: &type_aliases,
+            type_subst: &empty_subst,
+            generic_fn_map: &generic_fn_map,
             label_counter: Cell::new(0),
             needs_runtime: Cell::new(false),
             string_params: std::cell::RefCell::new(std::collections::HashSet::new()),
             assert_mode: self.assert_mode,
         };
 
+        // Collect unique generic-function instantiations needed by the corpus fns.
+        let instantiations = collect_generic_instantiations(&fns, &all_fns, &ctx);
+
         // Emit fns into a scratch buffer first — `emit_assert_eq` on
         // String flips `ctx.needs_runtime`, and we only know whether to
         // import `runtime` memory + symbols after the whole body has been
         // walked. Fn bodies are self-contained, so buffering is cheap.
         let mut fns_out = String::new();
+
+        // Emit monomorphized copies of generic functions before the regular fns.
+        for (generic_fn, type_subst, mangled) in &instantiations {
+            emit_generic_fn(&mut fns_out, generic_fn, type_subst, mangled, &ctx);
+        }
+
         for f in &fns {
             emit_fn(&mut fns_out, f, &ctx);
         }
@@ -1293,12 +1328,21 @@ fn emit_stmt(out: &mut String, stmt: &TirStmt, ctx: &Ctx) {
         } => {
             if let Pattern::Ident(name, _) = pattern {
                 emit_expr(out, init, ctx);
-                if matches!(ty, Ty::String) {
+                if is_string_ty(ty, ctx) {
                     // Init leaves (ptr, len) on stack — store into split locals.
                     out.push_str(&format!("    local.set ${name}_len\n"));
                     out.push_str(&format!("    local.set ${name}_ptr\n"));
                 } else {
                     out.push_str(&format!("    local.set ${name}\n"));
+                }
+            } else if matches!(pattern, Pattern::Wildcard(_)) {
+                // `let _ = expr` — evaluate for side effects, discard result.
+                emit_expr(out, init, ctx);
+                if is_string_ty(ty, ctx) {
+                    // String init leaves two i32s (ptr, len) on the stack.
+                    out.push_str("    drop\n    drop\n");
+                } else {
+                    out.push_str("    drop\n");
                 }
             } else {
                 out.push_str(&format!("    ;; unsupported let pattern: {pattern:?}\n"));
@@ -1480,7 +1524,9 @@ fn emit_expr(out: &mut String, expr: &TirExpr, ctx: &Ctx) {
             }
             // All String variables (params, let-bindings, match-arm bindings)
             // use split (ptr, len) locals named $name_ptr / $name_len.
-            if matches!(&expr.ty, Ty::String) {
+            // Also handles generic type params (e.g. T=String) by resolving
+            // Named("T") through ctx.type_subst.
+            if is_string_ty(&expr.ty, ctx) {
                 out.push_str(&format!("    local.get ${name}_ptr\n"));
                 out.push_str(&format!("    local.get ${name}_len\n"));
                 return;
@@ -1584,7 +1630,14 @@ fn emit_expr(out: &mut String, expr: &TirExpr, ctx: &Ctx) {
             for a in args {
                 emit_expr(out, a, ctx);
             }
-            out.push_str(&format!("    call ${name}\n"));
+            // If the callee is a generic function, use the mangled monomorphized name.
+            if let Some((type_params, fn_params)) = ctx.generic_fn_map.get(name.as_str()) {
+                let subst = infer_type_subst_from_args(type_params, fn_params, args);
+                let mangled = mangle_generic_name(name, type_params, &subst);
+                out.push_str(&format!("    call ${mangled}\n"));
+            } else {
+                out.push_str(&format!("    call ${name}\n"));
+            }
         }
         TirExprKind::MethodCall {
             receiver, method, ..
@@ -1978,6 +2031,16 @@ fn emit_expr(out: &mut String, expr: &TirExpr, ctx: &Ctx) {
         // `expr?` — propagate Result failure (#1821).
         TirExprKind::Propagate(inner) => {
             emit_propagate(out, inner, expr, ctx);
+        }
+        // `consume(x)` — ownership transfer is compile-time only; at runtime
+        // just emit the inner value unchanged.
+        TirExprKind::Consume(inner) => {
+            emit_expr(out, inner, ctx);
+        }
+        // `&x` / `&mut x` — borrows are compile-time only for the WASM
+        // backend; the underlying value is passed by its WASM representation.
+        TirExprKind::Borrow { expr: inner, .. } => {
+            emit_expr(out, inner, ctx);
         }
         other => {
             out.push_str(&format!("    ;; unsupported expr: {other:?}\n"));
@@ -2803,7 +2866,7 @@ fn collect_match_arm_locals(
 /// but the pattern arm would have hit the unsupported case before this
 /// runs, so nothing hits the wrong branch in practice.
 fn eq_op_for(ty: &Ty, ctx: &Ctx) -> &'static str {
-    if is_float(ty) {
+    if is_float_ctx(ty, ctx) {
         "f64.eq"
     } else if is_i32(ty, ctx) {
         "i32.eq"
@@ -3087,7 +3150,7 @@ fn emit_assert_eq(out: &mut String, left: &TirExpr, right: &TirExpr, negate: boo
 
     emit_expr(out, left, ctx);
     emit_expr(out, right, ctx);
-    let eq_op = if is_float(&left.ty) {
+    let eq_op = if is_float_ctx(&left.ty, ctx) {
         "f64.eq"
     } else if is_i32(&left.ty, ctx) {
         "i32.eq"
@@ -3108,7 +3171,7 @@ fn emit_assert_eq(out: &mut String, left: &TirExpr, right: &TirExpr, negate: boo
 fn emit_unary(out: &mut String, op: UnaryOp, inner: &TirExpr, ctx: &Ctx) {
     match op {
         UnaryOp::Neg => {
-            if is_float(&inner.ty) {
+            if is_float_ctx(&inner.ty, ctx) {
                 emit_expr(out, inner, ctx);
                 out.push_str("    f64.neg\n");
             } else {
@@ -3174,7 +3237,7 @@ fn emit_binary(out: &mut String, op: BinaryOp, left: &TirExpr, right: &TirExpr, 
     emit_expr(out, right, ctx);
     // Pick opcode family from the operand type. Comparisons produce i32
     // regardless of operand type.
-    let (family, is_cmp_operand_float) = if is_float(&left.ty) {
+    let (family, is_cmp_operand_float) = if is_float_ctx(&left.ty, ctx) {
         ("f64", true)
     } else if is_i32(&left.ty, ctx) {
         ("i32", false)
@@ -3215,6 +3278,29 @@ fn wasm_ty(ty: &Ty, ctx: &Ctx) -> &'static str {
         Ty::Int | Ty::UInt => "i64",
         Ty::Float => "f64",
         Ty::Bool | Ty::Byte => "i32",
+        Ty::Named(name, args) if args.is_empty() => {
+            // Generic type parameter substitution (e.g. T → Int in identity[T]).
+            if let Some(concrete) = ctx.type_subst.get(name.as_str()) {
+                return wasm_ty(concrete, ctx);
+            }
+            // Unit-variant enum.
+            if ctx.enum_types.contains(name) {
+                return "i32";
+            }
+            // Heap-allocated struct pointer (#1821).
+            if ctx.struct_layouts.contains_key(name.as_str()) {
+                return "i32";
+            }
+            // Heap-allocated payload-enum pointer (#1821).
+            if ctx.payload_enums.contains_key(name.as_str()) {
+                return "i32";
+            }
+            // Type alias (e.g. `type Probability = Float where ...`).
+            if ctx.type_aliases.contains_key(name.as_str()) {
+                return wasm_ty(&ctx.type_aliases[name.as_str()].clone(), ctx);
+            }
+            "i64"
+        }
         Ty::Named(name, _) if ctx.enum_types.contains(name) => "i32",
         // Heap-allocated struct pointer (#1821).
         Ty::Named(name, _) if ctx.struct_layouts.contains_key(name.as_str()) => "i32",
@@ -3233,10 +3319,38 @@ fn wasm_ty(ty: &Ty, ctx: &Ctx) -> &'static str {
 }
 
 /// True if this MVL type lowers to WASM `f64`.
-fn is_float(ty: &Ty) -> bool {
+fn is_float_ctx(ty: &Ty, ctx: &Ctx) -> bool {
     match ty {
         Ty::Float => true,
-        Ty::Ref(_, inner) | Ty::Labeled(_, inner) | Ty::Refined(inner, _) => is_float(inner),
+        Ty::Named(name, args) if args.is_empty() => {
+            if let Some(concrete) = ctx.type_subst.get(name.as_str()) {
+                return is_float_ctx(concrete, ctx);
+            }
+            if ctx.type_aliases.contains_key(name.as_str()) {
+                return is_float_ctx(&ctx.type_aliases[name.as_str()].clone(), ctx);
+            }
+            false
+        }
+        Ty::Ref(_, inner) | Ty::Labeled(_, inner) | Ty::Refined(inner, _) => {
+            is_float_ctx(inner, ctx)
+        }
+        _ => false,
+    }
+}
+
+/// True if this MVL type is a String (possibly via generic type param resolution).
+fn is_string_ty(ty: &Ty, ctx: &Ctx) -> bool {
+    match ty {
+        Ty::String => true,
+        Ty::Named(name, args) if args.is_empty() => {
+            if let Some(concrete) = ctx.type_subst.get(name.as_str()) {
+                return is_string_ty(concrete, ctx);
+            }
+            false
+        }
+        Ty::Ref(_, inner) | Ty::Labeled(_, inner) | Ty::Refined(inner, _) => {
+            is_string_ty(inner, ctx)
+        }
         _ => false,
     }
 }
@@ -3257,6 +3371,387 @@ fn is_i32(ty: &Ty, ctx: &Ctx) -> bool {
         Ty::Option(_) | Ty::Result(_, _) => true,
         Ty::Ref(_, inner) | Ty::Labeled(_, inner) | Ty::Refined(inner, _) => is_i32(inner, ctx),
         _ => false,
+    }
+}
+
+// ── Type alias registry ─────────────────────────────────────────────────
+//
+// Pre-scan `TirProgram.types` for `TirTypeBody::Alias` declarations.
+// These are transparent type aliases — `type Probability = Float where ...`.
+// `wasm_ty` looks them up to resolve the underlying WASM primitive type so
+// that e.g. a refined Float alias emits `f64` locals, not `i64`.
+
+fn collect_type_aliases(types: &[TirTypeDecl]) -> HashMap<String, Ty> {
+    let mut aliases = HashMap::new();
+    for td in types {
+        if let TirTypeBody::Alias(target) = &td.body {
+            aliases.insert(td.name.clone(), target.clone());
+        }
+    }
+    aliases
+}
+
+// ── Generic function monomorphization ───────────────────────────────────
+//
+// The TIR preserves generic functions in un-substituted form (type params
+// like `T`, `A`, `B` remain as `Ty::Named`). The WASM backend must emit a
+// specialized copy per unique concrete instantiation seen at call sites.
+//
+// Algorithm:
+//   1. Scan all non-generic function bodies for FnCall nodes whose callee
+//      has type_params.
+//   2. Infer the type substitution by matching each generic param type
+//      (e.g. `x: T`) against the corresponding call-site arg expression type.
+//   3. Emit one WASM function per unique (fn_name, type_subst) pair, using
+//      a mangled name (e.g. `identity__Int`, `pair_first__Int__Str`).
+//   4. At call sites, replace `call $fn_name` with `call $mangled_name`.
+
+/// A short tag for a MVL type used in generic name mangling.
+fn mangle_ty_tag(ty: &Ty) -> String {
+    match ty {
+        Ty::Int | Ty::UInt => "Int".to_string(),
+        Ty::Float => "Float".to_string(),
+        Ty::Bool => "Bool".to_string(),
+        Ty::Byte => "Byte".to_string(),
+        Ty::String => "Str".to_string(),
+        Ty::Named(name, _) => name.clone(),
+        Ty::Option(inner) => format!("Opt_{}", mangle_ty_tag(inner)),
+        Ty::List(inner) => format!("List_{}", mangle_ty_tag(inner)),
+        Ty::Ref(_, inner) | Ty::Labeled(_, inner) | Ty::Refined(inner, _) => mangle_ty_tag(inner),
+        _ => "Unknown".to_string(),
+    }
+}
+
+/// Produce the mangled WASM function name for a generic instantiation.
+/// E.g. ("identity", ["T"], {"T": Int}) → "identity__Int"
+fn mangle_generic_name(
+    fn_name: &str,
+    type_params: &[GenericParam],
+    subst: &HashMap<String, Ty>,
+) -> String {
+    let mut name = fn_name.to_string();
+    for gp in type_params {
+        let tag = subst
+            .get(gp.name())
+            .map(mangle_ty_tag)
+            .unwrap_or_else(|| "Unknown".to_string());
+        name.push_str("__");
+        name.push_str(&tag);
+    }
+    name
+}
+
+/// Infer a type substitution for a generic function call from the arg types.
+/// Matches each param type of the form `Ty::Named(param_name)` against the
+/// corresponding arg expression type to build the substitution.
+fn infer_type_subst(generic_fn: &TirFn, args: &[TirExpr]) -> HashMap<String, Ty> {
+    let param_names: std::collections::HashSet<String> = generic_fn
+        .type_params
+        .iter()
+        .map(|gp| gp.name().to_string())
+        .collect();
+
+    let mut subst = HashMap::new();
+    for (param, arg) in generic_fn.params.iter().zip(args.iter()) {
+        if let Ty::Named(ref tname, ref targs) = param.ty {
+            if targs.is_empty() && param_names.contains(tname.as_str()) {
+                subst.entry(tname.clone()).or_insert_with(|| arg.ty.clone());
+            }
+        }
+    }
+    subst
+}
+
+/// Infer a type substitution at a call site by matching param types against arg types.
+/// `fn_params` are the generic function's formal parameters (with generic type names).
+fn infer_type_subst_from_args(
+    type_params: &[GenericParam],
+    fn_params: &[TirParam],
+    args: &[TirExpr],
+) -> HashMap<String, Ty> {
+    let param_names: std::collections::HashSet<String> =
+        type_params.iter().map(|gp| gp.name().to_string()).collect();
+    let mut subst = HashMap::new();
+    for (param, arg) in fn_params.iter().zip(args.iter()) {
+        if let Ty::Named(ref tname, ref targs) = param.ty {
+            if targs.is_empty() && param_names.contains(tname.as_str()) {
+                subst.entry(tname.clone()).or_insert_with(|| arg.ty.clone());
+            }
+        }
+    }
+    subst
+}
+
+/// Scan all non-generic function bodies for calls to generic functions.
+/// Returns unique (generic_fn_ref, type_subst, mangled_name) triples.
+fn collect_generic_instantiations<'a>(
+    fns: &[&'a TirFn],
+    all_fns: &[&'a TirFn],
+    _ctx: &Ctx,
+) -> Vec<(&'a TirFn, HashMap<String, Ty>, String)> {
+    // Build lookup: fn_name → TirFn for generic fns
+    let generic_fns: HashMap<&str, &TirFn> = all_fns
+        .iter()
+        .filter(|f| !f.type_params.is_empty())
+        .map(|f| (f.name.as_str(), *f))
+        .collect();
+
+    if generic_fns.is_empty() {
+        return vec![];
+    }
+
+    let mut seen: std::collections::HashMap<String, ()> = std::collections::HashMap::new();
+    let mut result = vec![];
+
+    for f in fns {
+        collect_instantiations_in_block(&f.body, &generic_fns, &mut seen, &mut result);
+    }
+    result
+}
+
+fn collect_instantiations_in_block<'a>(
+    block: &TirBlock,
+    generic_fns: &HashMap<&str, &'a TirFn>,
+    seen: &mut std::collections::HashMap<String, ()>,
+    result: &mut Vec<(&'a TirFn, HashMap<String, Ty>, String)>,
+) {
+    for stmt in &block.stmts {
+        collect_instantiations_in_stmt(stmt, generic_fns, seen, result);
+    }
+}
+
+fn collect_instantiations_in_stmt<'a>(
+    stmt: &TirStmt,
+    generic_fns: &HashMap<&str, &'a TirFn>,
+    seen: &mut std::collections::HashMap<String, ()>,
+    result: &mut Vec<(&'a TirFn, HashMap<String, Ty>, String)>,
+) {
+    match stmt {
+        TirStmt::Expr { expr, .. }
+        | TirStmt::Return {
+            value: Some(expr), ..
+        } => {
+            collect_instantiations_in_expr(expr, generic_fns, seen, result);
+        }
+        TirStmt::Let { init, .. } | TirStmt::Assign { value: init, .. } => {
+            collect_instantiations_in_expr(init, generic_fns, seen, result);
+        }
+        TirStmt::If {
+            cond, then, else_, ..
+        } => {
+            collect_instantiations_in_expr(cond, generic_fns, seen, result);
+            collect_instantiations_in_block(then, generic_fns, seen, result);
+            match else_ {
+                Some(TirElseBranch::Block(b)) => {
+                    collect_instantiations_in_block(b, generic_fns, seen, result);
+                }
+                Some(TirElseBranch::If(s)) => {
+                    collect_instantiations_in_stmt(s, generic_fns, seen, result);
+                }
+                None => {}
+            }
+        }
+        TirStmt::While { cond, body, .. }
+        | TirStmt::For {
+            iter: cond, body, ..
+        } => {
+            collect_instantiations_in_expr(cond, generic_fns, seen, result);
+            collect_instantiations_in_block(body, generic_fns, seen, result);
+        }
+        TirStmt::Match {
+            scrutinee, arms, ..
+        } => {
+            collect_instantiations_in_expr(scrutinee, generic_fns, seen, result);
+            for arm in arms {
+                match &arm.body {
+                    TirMatchBody::Expr(e) => {
+                        collect_instantiations_in_expr(e, generic_fns, seen, result);
+                    }
+                    TirMatchBody::Block(b) => {
+                        collect_instantiations_in_block(b, generic_fns, seen, result);
+                    }
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+fn collect_instantiations_in_expr<'a>(
+    expr: &TirExpr,
+    generic_fns: &HashMap<&str, &'a TirFn>,
+    seen: &mut std::collections::HashMap<String, ()>,
+    result: &mut Vec<(&'a TirFn, HashMap<String, Ty>, String)>,
+) {
+    if let TirExprKind::FnCall { name, args, .. } = &expr.kind {
+        if let Some(gf) = generic_fns.get(name.as_str()) {
+            let subst = infer_type_subst(gf, args);
+            if subst.len() == gf.type_params.len() {
+                let mangled = mangle_generic_name(&gf.name, &gf.type_params, &subst);
+                if seen.insert(mangled.clone(), ()).is_none() {
+                    result.push((gf, subst, mangled));
+                }
+            }
+        }
+        for a in args {
+            collect_instantiations_in_expr(a, generic_fns, seen, result);
+        }
+    }
+    // Recurse into sub-expressions.
+    match &expr.kind {
+        TirExprKind::Unary { expr: inner, .. }
+        | TirExprKind::Consume(inner)
+        | TirExprKind::Borrow { expr: inner, .. } => {
+            collect_instantiations_in_expr(inner, generic_fns, seen, result);
+        }
+        TirExprKind::Binary { left, right, .. } => {
+            collect_instantiations_in_expr(left, generic_fns, seen, result);
+            collect_instantiations_in_expr(right, generic_fns, seen, result);
+        }
+        TirExprKind::If { cond, then, else_ } => {
+            collect_instantiations_in_expr(cond, generic_fns, seen, result);
+            collect_instantiations_in_block(then, generic_fns, seen, result);
+            if let Some(e) = else_ {
+                collect_instantiations_in_expr(e, generic_fns, seen, result);
+            }
+        }
+        TirExprKind::Block(b) => {
+            collect_instantiations_in_block(b, generic_fns, seen, result);
+        }
+        TirExprKind::Match { scrutinee, arms } => {
+            collect_instantiations_in_expr(scrutinee, generic_fns, seen, result);
+            for arm in arms {
+                match &arm.body {
+                    TirMatchBody::Expr(e) => {
+                        collect_instantiations_in_expr(e, generic_fns, seen, result);
+                    }
+                    TirMatchBody::Block(b) => {
+                        collect_instantiations_in_block(b, generic_fns, seen, result);
+                    }
+                }
+            }
+        }
+        _ => {} // FnCall handled above; others don't need recursion for generics
+    }
+}
+
+/// Emit a monomorphized copy of a generic function.
+/// `type_subst` maps type param names to concrete types.
+/// `mangled_name` is the WASM function name to emit (e.g. "identity__Int").
+fn emit_generic_fn(
+    out: &mut String,
+    f: &TirFn,
+    type_subst: &HashMap<String, Ty>,
+    mangled_name: &str,
+    ctx: &Ctx,
+) {
+    // Build a temporary Ctx with the type_subst active so wasm_ty resolves
+    // type params to their concrete types.
+    let mono_ctx = Ctx {
+        needs_wasi: ctx.needs_wasi,
+        literals: ctx.literals,
+        enum_types: ctx.enum_types,
+        enum_variants: ctx.enum_variants,
+        struct_layouts: ctx.struct_layouts,
+        payload_enums: ctx.payload_enums,
+        type_aliases: ctx.type_aliases,
+        type_subst,
+        generic_fn_map: ctx.generic_fn_map,
+        label_counter: Cell::new(ctx.label_counter.get()),
+        needs_runtime: Cell::new(ctx.needs_runtime.get()),
+        string_params: std::cell::RefCell::new(std::collections::HashSet::new()),
+        assert_mode: ctx.assert_mode,
+    };
+
+    // Set up string_params for params whose concrete type is String.
+    {
+        let mut sp = mono_ctx.string_params.borrow_mut();
+        for p in &f.params {
+            let concrete = resolve_ty_param(&p.ty, type_subst);
+            if matches!(concrete, Ty::String) {
+                sp.insert(p.name.clone());
+            }
+        }
+    }
+
+    // Emit function signature with concrete param/return types.
+    out.push_str(&format!("  (func ${mangled_name}"));
+    for p in &f.params {
+        let concrete = resolve_ty_param(&p.ty, type_subst);
+        if matches!(concrete, Ty::String) {
+            out.push_str(&format!(
+                " (param ${}_ptr i32) (param ${}_len i32)",
+                p.name, p.name
+            ));
+        } else {
+            out.push_str(&format!(
+                " (param ${} {})",
+                p.name,
+                wasm_ty(&concrete, &mono_ctx)
+            ));
+        }
+    }
+    // Return type.
+    let concrete_ret = resolve_ty_param(&f.ret_ty, type_subst);
+    if !matches!(concrete_ret, Ty::Unit) {
+        if matches!(concrete_ret, Ty::String) {
+            out.push_str(" (result i32 i32)");
+        } else {
+            out.push_str(&format!(" (result {})", wasm_ty(&concrete_ret, &mono_ctx)));
+        }
+    }
+    out.push('\n');
+
+    // Emit locals.
+    let mut locals: Vec<(String, Ty)> = Vec::new();
+    collect_locals_block(&f.body, &mut locals);
+    collect_locals_ctx(&f.body, &mut locals, &mono_ctx);
+    for (name, ty) in &locals {
+        let concrete = resolve_ty_param(ty, type_subst);
+        if matches!(concrete, Ty::String) {
+            out.push_str(&format!("    (local ${name}_ptr i32)\n"));
+            out.push_str(&format!("    (local ${name}_len i32)\n"));
+        } else {
+            out.push_str(&format!(
+                "    (local ${name} {})\n",
+                wasm_ty(&concrete, &mono_ctx)
+            ));
+        }
+    }
+
+    // Emit body.
+    let mut body_buf = String::new();
+    emit_block(&mut body_buf, &f.body, &mono_ctx);
+
+    if body_buf.contains(";; unsupported") {
+        out.push_str("    ;; body stubbed — contained unsupported constructs\n");
+        out.push_str("    unreachable\n");
+    } else {
+        out.push_str(&body_buf);
+    }
+    out.push_str("  )\n");
+
+    // Propagate needs_runtime back.
+    if mono_ctx.needs_runtime.get() {
+        ctx.needs_runtime.set(true);
+    }
+}
+
+/// Resolve a type that may be a generic type param name.
+fn resolve_ty_param(ty: &Ty, subst: &HashMap<String, Ty>) -> Ty {
+    match ty {
+        Ty::Named(name, args) if args.is_empty() => {
+            if let Some(concrete) = subst.get(name.as_str()) {
+                concrete.clone()
+            } else {
+                ty.clone()
+            }
+        }
+        Ty::Ref(m, inner) => Ty::Ref(*m, Box::new(resolve_ty_param(inner, subst))),
+        Ty::Refined(inner, pred) => {
+            Ty::Refined(Box::new(resolve_ty_param(inner, subst)), pred.clone())
+        }
+        _ => ty.clone(),
     }
 }
 
@@ -3516,6 +4011,11 @@ fn collect_expr(expr: &TirExpr, map: &mut HashMap<String, (u32, u32)>, next: &mu
         TirExprKind::Map { pairs } => {
             for (k, v) in pairs {
                 collect_expr(k, map, next);
+                collect_expr(v, map, next);
+            }
+        }
+        TirExprKind::Construct { fields, .. } => {
+            for (_, v) in fields {
                 collect_expr(v, map, next);
             }
         }

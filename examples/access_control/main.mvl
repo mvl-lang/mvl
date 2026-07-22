@@ -39,7 +39,8 @@ use std.log.{Logger, default_logger}
 
 use std.ifc.{taint}
 
-use security.{SecurityConfig, default_security_config, clamp_attempts, next_attempt, total_timeout}
+use security.{SecurityConfig, default_security_config, next_attempt, total_timeout}
+use std.math.{int_clamp}
 
 // ── Trust boundary: demo fixture data lives in Rust ───────────────────────
 extern "rust" {
@@ -92,7 +93,7 @@ total fn demo_auth(val logger: Logger) -> Unit ! Log + CryptoRandom {
 total fn main() -> Unit ! Log + CryptoRandom {
     let logger: Logger = default_logger();
     let _config: SecurityConfig = default_security_config();
-    let _clamped: Int = clamp_attempts(5, 3);
+    let _clamped: Int = int_clamp(5, 0, 3);
     let _next: Int = next_attempt(0, 3);
     let _timeout: Int = total_timeout(3600, 60);
     let rbac_done: Unit = demo_rbac(logger);

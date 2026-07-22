@@ -7,6 +7,8 @@
 //   4 * 7 = 28
 //   max(17, 42) = 42
 
+use std.math.{int_max}
+
 total fn add(a: Int, b: Int) -> Int {
     a + b
 }
@@ -18,8 +20,6 @@ total fn sub(a: Int, b: Int) -> Int {
 total fn mul(a: Int, b: Int) -> Int {
     a * b
 }
-
-use std.math.{int_max}
 
 total fn max(a: Int, b: Int) -> Int {
     int_max(a, b)
