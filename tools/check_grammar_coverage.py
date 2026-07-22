@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
 """
-check_grammar_coverage.py — Cross-validate the EBNF grammar against the
-tree-sitter grammar, both pulled in via the mvl-spec submodule at
-vendor/mvl-spec/.
+check_grammar_coverage.py — Cross-validate the EBNF grammar (mvl-spec)
+against the tree-sitter grammar (mvl-lang/tree-sitter-mvl, its own repo).
 
 Extracts all lowercase production rule names from the EBNF and all
 rule names from the tree-sitter grammar, then reports:
@@ -10,12 +9,19 @@ rule names from the tree-sitter grammar, then reports:
   - EBNF rules missing from tree-sitter (likely gaps)
   - Tree-sitter rules not in EBNF (deliberate extensions or renames)
 
+Tree-sitter grammar resolution order:
+  1. $MVL_TREE_SITTER_DIR/grammar.js
+  2. vendor/tree-sitter-mvl/grammar.js (if you vendor it as a submodule)
+  3. ../tree-sitter-mvl/grammar.js (sibling checkout of the mvl repo)
+
 Exit codes:
   0 — no unexpected gaps or unknown extensions
   1 — unexpected gaps found (rules in EBNF with no ts counterpart)
       OR unknown tree-sitter extensions (ts rules not in EBNF or TS_KNOWN_EXTENSIONS)
+  2 — grammar files could not be located
 """
 
+import os
 import re
 import sys
 from pathlib import Path
@@ -23,7 +29,30 @@ from pathlib import Path
 ROOT = Path(__file__).parent.parent
 
 EBNF_PATH = ROOT / "vendor" / "mvl-spec" / "grammar" / "grammar.ebnf"
-GRAMMAR_JS_PATH = ROOT / "vendor" / "mvl-spec" / "tools" / "tree-sitter" / "grammar.js"
+
+
+def resolve_grammar_js() -> Path | None:
+    """Locate tree-sitter-mvl/grammar.js — env override, vendor, then walk up
+    looking for a sibling `tree-sitter-mvl/` (covers both regular checkouts
+    and git worktrees, where the sibling can be a couple of levels above)."""
+    env_dir = os.environ.get("MVL_TREE_SITTER_DIR")
+    candidates = []
+    if env_dir:
+        candidates.append(Path(env_dir).expanduser() / "grammar.js")
+    candidates.append(ROOT / "vendor" / "tree-sitter-mvl" / "grammar.js")
+    parent = ROOT.parent
+    for _ in range(3):
+        candidates.append(parent / "tree-sitter-mvl" / "grammar.js")
+        if parent == parent.parent:
+            break
+        parent = parent.parent
+    for c in candidates:
+        if c.is_file():
+            return c
+    return None
+
+
+GRAMMAR_JS_PATH = resolve_grammar_js()
 
 # ── Known intentional divergences ────────────────────────────────────────────
 # Rules that are in the EBNF but deliberately absent/renamed/inlined in
@@ -69,6 +98,14 @@ EBNF_KNOWN_ABSENT = {
     "fn_name": "tree-sitter fn_decl uses $.identifier; receiver-prefix form not yet supported",
     # path_name = IDENT [TypeList] ["::" IDENT] — covered by path_expr in tree-sitter
     "path_name": "covered by path_expr in tree-sitter (#1417)",
+    # ctor_path = IDENT [ "::" IDENT ] — inlined into constructor_pattern
+    # and struct_pattern in tree-sitter; the two-segment form additionally
+    # surfaces as the standalone `path_pattern` node (see TS_KNOWN_EXTENSIONS).
+    "ctor_path": "inlined into constructor_pattern/struct_pattern head; two-segment form → path_pattern",
+    # field_init = IDENT ":" expr — inlined into construct_expr's field list
+    "field_init": "inlined into construct_expr's repeated field:expr sequence",
+    # field_pattern = IDENT ":" base_pattern — inlined into struct_pattern
+    "field_pattern": "inlined into struct_pattern's repeated field:pattern sequence",
     # session_type = session_op — pure alias, tree-sitter inlines directly to session_op
     "session_type": "inlined: tree-sitter uses session_op directly",
     # type_param = IDENT | "const" IDENT ":" IDENT — const generics not yet in tree-sitter
@@ -110,12 +147,21 @@ TS_KNOWN_EXTENSIONS = {
     "constructor_pattern",
     "struct_pattern",
     "tuple_pattern",
+    # Standalone qualified-variant path pattern (e.g. `Enum::Variant` with no
+    # payload).  Corresponds to EBNF `ctor_path` used as a base_pattern
+    # alternative.
+    "path_pattern",
     "some_pattern",
     "none_pattern",
     "ok_pattern",
     "err_pattern",
     # Renamed from security
     "security_modifier",
+    # Closed-set alias used inside labeled_type to disambiguate the shape from
+    # base_type.  EBNF describes the same construct as `IDENT` with a semantic
+    # constraint (IDENT ∈ declared-label set); ADR-0053 tracks unifying these
+    # so user-defined labels beyond the stdlib four can be highlighted.
+    "security_label",
     # Literal sub-rules (EBNF uses uppercase terminals)
     "integer_literal",
     "float_literal",
@@ -186,13 +232,22 @@ def extract_ts_rules(path: Path) -> set[str]:
 
 
 def main() -> int:
-    if not EBNF_PATH.exists() or not GRAMMAR_JS_PATH.exists():
+    if not EBNF_PATH.exists():
         print(
             f"FAIL: mvl-spec submodule not initialised — missing {EBNF_PATH.relative_to(ROOT)}\n"
             "Fix: git submodule update --init --recursive",
             file=sys.stderr,
         )
-        return 1
+        return 2
+    if GRAMMAR_JS_PATH is None:
+        print(
+            "FAIL: could not locate tree-sitter-mvl/grammar.js.\n"
+            "Set MVL_TREE_SITTER_DIR, vendor the grammar at "
+            "vendor/tree-sitter-mvl/, or check out mvl-lang/tree-sitter-mvl "
+            f"next to {ROOT.name}.",
+            file=sys.stderr,
+        )
+        return 2
     ebnf_rules = extract_ebnf_rules(EBNF_PATH)
     ts_rules = extract_ts_rules(GRAMMAR_JS_PATH)
 
