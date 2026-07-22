@@ -237,6 +237,7 @@ pub fn transpile(tir: &crate::mvl::ir::TirProgram, config: TranspileConfig) -> T
     annotate_prelude_pkg_names(&mut prelude_tirs, &config.prelude_pkg_names);
 
     let mut cg = RustEmitter::new();
+    cg.stdlib_tirs = config.stdlib_tirs;
     cg.assert_mode = config.assert_mode;
     cg.optimize_proved = config.optimize_proved;
     cg.current_file = config.file_stem.clone();

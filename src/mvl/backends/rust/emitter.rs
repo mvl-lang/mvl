@@ -230,6 +230,12 @@ pub struct RustEmitter {
     /// phase 5).
     pub unit_variants_per_enum:
         std::collections::HashMap<String, std::collections::HashSet<String>>,
+    /// Pre-computed TIRs for Rust-backed stdlib modules (`RUST_BACKED_STDLIB`).
+    ///
+    /// Populated from [`TranspileConfig::stdlib_tirs`] before emission starts.
+    /// Used by capability-params scanning and undefined-type collection to avoid
+    /// re-running parse → checker → mono → lower at emit time (ADR-0050).
+    pub stdlib_tirs: Vec<TirProgram>,
 }
 
 impl RustEmitter {
@@ -981,27 +987,13 @@ impl RustEmitter {
         self.capability_params_map =
             build_capability_params_map_tir_with_siblings(tir, sibling_tirs, prelude_tirs);
 
-        // Rust-backed stdlib modules — scan for capability params
-        {
-            use crate::mvl::backends::rust::RUST_BACKED_STDLIB;
-            use crate::mvl::stdlib;
-            let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
-            for ud in &tir.uses {
-                if ud.path.first().map(|s| s == "std").unwrap_or(false) && ud.path.len() >= 2 {
-                    let m = ud.path[1].as_str();
-                    if RUST_BACKED_STDLIB.contains(&m) && seen.insert(m.to_string()) {
-                        let filename = format!("{m}.mvl");
-                        if let Some(content) = stdlib::stdlib_content(&filename) {
-                            let stdlib_tir = load_stdlib_tir(&content);
-                            for f in &stdlib_tir.fns {
-                                if !self.capability_params_map.contains_key(&f.name) {
-                                    let flags = explicit_borrow_flags_tir(f);
-                                    if flags.iter().any(|b| b.is_some()) {
-                                        self.capability_params_map.insert(f.name.clone(), flags);
-                                    }
-                                }
-                            }
-                        }
+        // Rust-backed stdlib modules — extend capability params from pre-computed TIRs (ADR-0050).
+        for stdlib_tir in &self.stdlib_tirs {
+            for f in &stdlib_tir.fns {
+                if !self.capability_params_map.contains_key(&f.name) {
+                    let flags = explicit_borrow_flags_tir(f);
+                    if flags.iter().any(|b| b.is_some()) {
+                        self.capability_params_map.insert(f.name.clone(), flags);
                     }
                 }
             }
@@ -1259,7 +1251,7 @@ impl RustEmitter {
         }
 
         // Emit placeholder stubs for external types referenced but not defined.
-        let stubs = collect_undefined_types_tir(tir, prelude_tirs);
+        let stubs = collect_undefined_types_tir(tir, prelude_tirs, &self.stdlib_tirs);
         if !stubs.is_empty() {
             self.line(
                 "// ── External type stubs (Phase 1 placeholders) ──────────────────────────",
@@ -1311,7 +1303,11 @@ fn is_builtin_label(name: &str) -> bool {
     )
 }
 
-fn collect_undefined_types_tir(tir: &TirProgram, prelude_tirs: &[TirProgram]) -> Vec<String> {
+fn collect_undefined_types_tir(
+    tir: &TirProgram,
+    prelude_tirs: &[TirProgram],
+    stdlib_tirs: &[TirProgram],
+) -> Vec<String> {
     use crate::mvl::ir::Ty;
 
     let builtins: std::collections::HashSet<&str> = [
@@ -1376,18 +1372,10 @@ fn collect_undefined_types_tir(tir: &TirProgram, prelude_tirs: &[TirProgram]) ->
         }
     }
 
-    // Types from Rust-backed stdlib modules — load, check, and lower to TIR so
-    // this pass consumes only TIR (matches the capability-params scan above).
-    for ud in &tir.uses {
-        if ud.path.first().map(|s| s == "std").unwrap_or(false) && ud.path.len() >= 2 {
-            let module = &ud.path[1];
-            let filename = format!("{module}.mvl");
-            if let Some(content) = crate::mvl::stdlib::stdlib_content(&filename) {
-                let stdlib_tir = load_stdlib_tir(&content);
-                for td in &stdlib_tir.types {
-                    defined.insert(td.name.clone());
-                }
-            }
+    // Types from pre-computed Rust-backed stdlib TIRs (ADR-0050).
+    for stdlib_tir in stdlib_tirs {
+        for td in &stdlib_tir.types {
+            defined.insert(td.name.clone());
         }
     }
 
@@ -1456,15 +1444,3 @@ fn collect_fn_typed_struct_fields_tir(
     out
 }
 
-/// Parse, check, and lower a stdlib module source to TIR.
-///
-/// Used by the emitter to extract capability annotations and type declarations
-/// from Rust-backed stdlib files that are not part of the user's prelude.
-fn load_stdlib_tir(content: &str) -> TirProgram {
-    let (mut p, _) = crate::mvl::parser::Parser::new(content);
-    let loaded = p.parse_program();
-    let expr_types = crate::mvl::checker::check(&loaded).expr_types;
-    let all_fns = crate::mvl::passes::mono::collect_fns([&loaded]);
-    let mono = crate::mvl::passes::mono::monomorphize(&loaded, &all_fns, &expr_types);
-    crate::mvl::ir::lower::lower(&loaded, &mono, &expr_types)
-}

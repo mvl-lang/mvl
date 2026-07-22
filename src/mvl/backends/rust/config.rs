@@ -74,6 +74,13 @@ pub struct TranspileConfig {
     ///
     /// Off by default until the optimization stabilises (#1891).
     pub(crate) optimize_proved: bool,
+    /// Pre-computed TIRs for Rust-backed stdlib modules (`RUST_BACKED_STDLIB`) referenced
+    /// by the program under compilation.
+    ///
+    /// Populated by `Pipeline::build()` before emission so the emitter never re-runs
+    /// parse → checker → mono → lower at emit time (ADR-0050: backends are pure
+    /// TIR → target transformers). Empty means no Rust-backed stdlib modules are used.
+    pub(crate) stdlib_tirs: Vec<TirProgram>,
 }
 
 impl TranspileConfig {
@@ -94,7 +101,18 @@ impl TranspileConfig {
             is_test_file: false,
             assert_mode: AssertMode::Always,
             optimize_proved: false,
+            stdlib_tirs: Vec::new(),
         }
+    }
+
+    /// Set pre-computed TIRs for Rust-backed stdlib modules (ADR-0050).
+    ///
+    /// Must be called by callers that compile programs using `RUST_BACKED_STDLIB`
+    /// modules. Use `crate::mvl::pipeline::compute_rust_backed_stdlib_tirs` to
+    /// produce the slice.
+    pub fn with_stdlib_tirs(mut self, tirs: Vec<crate::mvl::ir::TirProgram>) -> Self {
+        self.stdlib_tirs = tirs;
+        self
     }
 
     /// Set the prelude programs (already lowered to TIR).
