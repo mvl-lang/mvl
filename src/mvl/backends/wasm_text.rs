@@ -3356,15 +3356,6 @@ fn is_string_ty(ty: &Ty, ctx: &Ctx) -> bool {
     }
 }
 
-/// True if this MVL type lowers to WASM `f64` (no ctx — conservative, no alias resolution).
-fn is_float(ty: &Ty) -> bool {
-    match ty {
-        Ty::Float => true,
-        Ty::Ref(_, inner) | Ty::Labeled(_, inner) | Ty::Refined(inner, _) => is_float(inner),
-        _ => false,
-    }
-}
-
 /// True if this MVL type lowers to WASM `i32` (Bool, Byte, unit-variant
 /// enums, heap pointers for structs/payload-enums/collections/Option/Result).
 fn is_i32(ty: &Ty, ctx: &Ctx) -> bool {
