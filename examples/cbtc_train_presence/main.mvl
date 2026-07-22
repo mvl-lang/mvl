@@ -6,6 +6,7 @@
 
 use model.{OccupancyTable, PlacementCommand, RemoveCommand, UpdateResult, RejectReason}
 use presence.{apply_placement, apply_removal}
+use std.math.{int_to_string}
 
 // ── Helper: describe the update outcome ──────────────────────────────
 
@@ -17,20 +18,6 @@ total fn describe_result(r: UpdateResult) -> String {
         UpdateResult::Rejected(RejectReason::FleetCapacityReached) => "rejected: fleet capacity reached",
         UpdateResult::Rejected(RejectReason::NotAuthorised)        => "rejected: not authorised",
         UpdateResult::Rejected(RejectReason::NothingToRemove)      => "rejected: nothing to remove",
-    }
-}
-
-total fn int_to_string(n: Int) -> String {
-    if n == 0 { "0" }
-    else if n < 10 { digit(n) }
-    else { int_to_string(n / 10).concat(digit(n % 10)) }
-}
-
-total fn digit(d: Int) -> String {
-    match d {
-        0 => "0", 1 => "1", 2 => "2", 3 => "3", 4 => "4",
-        5 => "5", 6 => "6", 7 => "7", 8 => "8", 9 => "9",
-        _ => "?",
     }
 }
 

@@ -5,6 +5,7 @@
 
 use model.{CurrentMeasurement, ProtectionSetting, BreakerState, FaultType, FeederState, SCADACommand, TripDecision}
 use protection.{overcurrent_margin, thermal_stress, differential_deviation_pct, is_overcurrent_fault, is_differential_fault, should_trip, compute_trip_decision}
+use std.math.{int_to_string}
 
 // ── Output helpers ───────────────────────────────────────────────────
 
@@ -56,26 +57,6 @@ total fn s5_differential_fault() -> String {
 total fn s6_manual_override() -> String {
     // No fault detected but operator forces a trip via SCADA
     describe_decision(compute_trip_decision(false, false, false, true, BreakerState::Closed))
-}
-
-// ── Int-to-string helper (borrowed from cbtc_train_presence) ─────────
-
-total fn int_to_string_pos(n: Int where self >= 0) -> String {
-    if n < 10 { digit(n) }
-    else { int_to_string_pos(n / 10).concat(digit(n % 10)) }
-}
-
-total fn int_to_string(n: Int) -> String {
-    if n >= 0 { int_to_string_pos(n) }
-    else { "-".concat(int_to_string_pos(0 - n)) }
-}
-
-total fn digit(d: Int) -> String {
-    match d {
-        0 => "0", 1 => "1", 2 => "2", 3 => "3", 4 => "4",
-        5 => "5", 6 => "6", 7 => "7", 8 => "8", 9 => "9",
-        _ => "?",
-    }
 }
 
 // ── Entry point ─────────────────────────────────────────────────────

@@ -9,26 +9,12 @@ use model::Patient;
 use model::DrugOrder;
 use model::InfusionPlan;
 use dosing::plan_infusion;
+use std.math.{int_to_string}
 
 total fn describe(p: InfusionPlan) -> String {
     "total=".concat(int_to_string(p.total_dose_mg))
         .concat("mg, per_bolus=").concat(int_to_string(p.per_bolus_mg))
         .concat("mg, conc=").concat(int_to_string(p.concentration_mgml)).concat("mg/ml")
-}
-
-total fn int_to_string(n: Int) -> String {
-    // Simple base-10 print without stdlib for demonstration.
-    if n == 0 { "0" }
-    else if n < 10 { digit(n) }
-    else { int_to_string(n / 10).concat(digit(n % 10)) }
-}
-
-total fn digit(d: Int) -> String {
-    match d {
-        0 => "0", 1 => "1", 2 => "2", 3 => "3", 4 => "4",
-        5 => "5", 6 => "6", 7 => "7", 8 => "8", 9 => "9",
-        _ => "?",
-    }
 }
 
 total fn s1_neonate() -> String {
