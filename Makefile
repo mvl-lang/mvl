@@ -167,6 +167,7 @@ MVLR ?= $(shell test -x tools/mvlr && echo tools/mvlr || command -v mvlr 2>/dev/
 # loop you want to fail fast on every commit. Codegen, parity, MVL compiler, backends,
 # and examples live in `test-full` and run in CI on push-to-main.
 TEST_FAST_SUITES := \
+	"Grammar coverage  |test-grammar-coverage" \
 	"Unit tests        |test-unit" \
 	"Type checker      |test-type-checker" \
 	"Requirements      |test-requirements" \
@@ -174,18 +175,17 @@ TEST_FAST_SUITES := \
 	"Fmt roundtrip     |test-fmt-roundtrip" \
 	"Backend rust/rust |test-rust-rust" \
 	"Solver            |test-solver" \
-	"Grammar coverage  |test-grammar-coverage" \
 	"Stdlib            |test-stdlib"
 
 TEST_FULL_EXTRA_SUITES := \
 	"Checker parity    |test-checker-parity" \
-	"MVL compiler      |test-mvl" \
 	"BDD               |test-bdd" \
 	"Backend rust/llvm |test-rust-llvm" \
-	"Backend mvl/llvm  |test-mvl-llvm" \
 	"Backend rust/wasm |test-rust-wasm" \
 	"Examples (Rust)   |test-examples-rust" \
-	"Examples (LLVM)   |test-examples-llvm"
+	"Examples (LLVM)   |test-examples-llvm" \
+	"MVL compiler      |test-mvl" \
+	"Backend mvl/llvm  |test-mvl-llvm" 
 
 # $(call run_test_suites,SUITES) — accepts a $(...)-expanded suite list and
 # emits a per-suite PASS/FAIL summary, exiting non-zero if any suite failed.
