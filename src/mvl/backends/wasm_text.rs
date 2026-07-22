@@ -3427,9 +3427,7 @@ fn mangle_ty_tag(ty: &Ty) -> String {
         Ty::Named(name, _) => name.clone(),
         Ty::Option(inner) => format!("Opt_{}", mangle_ty_tag(inner)),
         Ty::List(inner) => format!("List_{}", mangle_ty_tag(inner)),
-        Ty::Ref(_, inner) | Ty::Labeled(_, inner) | Ty::Refined(inner, _) => {
-            mangle_ty_tag(inner)
-        }
+        Ty::Ref(_, inner) | Ty::Labeled(_, inner) | Ty::Refined(inner, _) => mangle_ty_tag(inner),
         _ => "Unknown".to_string(),
     }
 }
@@ -3456,10 +3454,7 @@ fn mangle_generic_name(
 /// Infer a type substitution for a generic function call from the arg types.
 /// Matches each param type of the form `Ty::Named(param_name)` against the
 /// corresponding arg expression type to build the substitution.
-fn infer_type_subst(
-    generic_fn: &TirFn,
-    args: &[TirExpr],
-) -> HashMap<String, Ty> {
+fn infer_type_subst(generic_fn: &TirFn, args: &[TirExpr]) -> HashMap<String, Ty> {
     let param_names: std::collections::HashSet<String> = generic_fn
         .type_params
         .iter()
@@ -3542,13 +3537,18 @@ fn collect_instantiations_in_stmt<'a>(
     result: &mut Vec<(&'a TirFn, HashMap<String, Ty>, String)>,
 ) {
     match stmt {
-        TirStmt::Expr { expr, .. } | TirStmt::Return { value: Some(expr), .. } => {
+        TirStmt::Expr { expr, .. }
+        | TirStmt::Return {
+            value: Some(expr), ..
+        } => {
             collect_instantiations_in_expr(expr, generic_fns, seen, result);
         }
         TirStmt::Let { init, .. } | TirStmt::Assign { value: init, .. } => {
             collect_instantiations_in_expr(init, generic_fns, seen, result);
         }
-        TirStmt::If { cond, then, else_, .. } => {
+        TirStmt::If {
+            cond, then, else_, ..
+        } => {
             collect_instantiations_in_expr(cond, generic_fns, seen, result);
             collect_instantiations_in_block(then, generic_fns, seen, result);
             match else_ {
@@ -3561,11 +3561,16 @@ fn collect_instantiations_in_stmt<'a>(
                 None => {}
             }
         }
-        TirStmt::While { cond, body, .. } | TirStmt::For { iter: cond, body, .. } => {
+        TirStmt::While { cond, body, .. }
+        | TirStmt::For {
+            iter: cond, body, ..
+        } => {
             collect_instantiations_in_expr(cond, generic_fns, seen, result);
             collect_instantiations_in_block(body, generic_fns, seen, result);
         }
-        TirStmt::Match { scrutinee, arms, .. } => {
+        TirStmt::Match {
+            scrutinee, arms, ..
+        } => {
             collect_instantiations_in_expr(scrutinee, generic_fns, seen, result);
             for arm in arms {
                 match &arm.body {
@@ -3684,9 +3689,16 @@ fn emit_generic_fn(
     for p in &f.params {
         let concrete = resolve_ty_param(&p.ty, type_subst);
         if matches!(concrete, Ty::String) {
-            out.push_str(&format!(" (param ${}_ptr i32) (param ${}_len i32)", p.name, p.name));
+            out.push_str(&format!(
+                " (param ${}_ptr i32) (param ${}_len i32)",
+                p.name, p.name
+            ));
         } else {
-            out.push_str(&format!(" (param ${} {})", p.name, wasm_ty(&concrete, &mono_ctx)));
+            out.push_str(&format!(
+                " (param ${} {})",
+                p.name,
+                wasm_ty(&concrete, &mono_ctx)
+            ));
         }
     }
     // Return type.
@@ -3710,7 +3722,10 @@ fn emit_generic_fn(
             out.push_str(&format!("    (local ${name}_ptr i32)\n"));
             out.push_str(&format!("    (local ${name}_len i32)\n"));
         } else {
-            out.push_str(&format!("    (local ${name} {})\n", wasm_ty(&concrete, &mono_ctx)));
+            out.push_str(&format!(
+                "    (local ${name} {})\n",
+                wasm_ty(&concrete, &mono_ctx)
+            ));
         }
     }
 
@@ -3743,7 +3758,9 @@ fn resolve_ty_param(ty: &Ty, subst: &HashMap<String, Ty>) -> Ty {
             }
         }
         Ty::Ref(m, inner) => Ty::Ref(*m, Box::new(resolve_ty_param(inner, subst))),
-        Ty::Refined(inner, pred) => Ty::Refined(Box::new(resolve_ty_param(inner, subst)), pred.clone()),
+        Ty::Refined(inner, pred) => {
+            Ty::Refined(Box::new(resolve_ty_param(inner, subst)), pred.clone())
+        }
         _ => ty.clone(),
     }
 }
