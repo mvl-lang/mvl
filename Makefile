@@ -399,6 +399,7 @@ WASM_CORPUS := \
 	tests/corpus/09_refinements/type_alias_test.mvl \
 	tests/corpus/09_refinements/array_index_refinement_test.mvl \
 	tests/corpus/09_refinements/bitwise_refinement_test.mvl \
+	tests/corpus/09_refinements/float_refinement_test.mvl \
 	tests/corpus/09_refinements/list_get_refined_test.mvl \
 	tests/corpus/09_refinements/method_call_refinement_test.mvl \
 	tests/corpus/09_refinements/struct_invariant_test.mvl \

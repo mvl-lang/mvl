@@ -131,6 +131,9 @@ struct Ctx<'a> {
     struct_layouts: &'a HashMap<String, StructLayout>,
     /// Heap-layout info for payload-carrying enums (#1821). Key = enum type name.
     payload_enums: &'a HashMap<String, PayloadEnumInfo>,
+    /// Type alias targets: `type Foo = Bar where ...` → `Foo → Ty::Refined(Bar, ...)`.
+    /// Used by `wasm_ty` / `is_float` to resolve named aliases to their base WASM type.
+    type_aliases: &'a HashMap<String, Ty>,
     /// Monotonic counter for fresh WAT labels (`$while_0`, `$while_1`, …).
     label_counter: Cell<usize>,
     /// Set by emitters that reach for `runtime/wasm/` symbols (#1819).
@@ -306,6 +309,7 @@ impl Backend for WasmTextCompiler {
         let (enum_types, enum_variants) = collect_enums(&tir.types);
         let struct_layouts = collect_structs(&tir.types);
         let payload_enums = collect_payload_enums(&tir.types);
+        let type_aliases = collect_type_aliases(&tir.types);
         let ctx = Ctx {
             needs_wasi,
             literals: &literals,
@@ -313,6 +317,7 @@ impl Backend for WasmTextCompiler {
             enum_variants: &enum_variants,
             struct_layouts: &struct_layouts,
             payload_enums: &payload_enums,
+            type_aliases: &type_aliases,
             label_counter: Cell::new(0),
             needs_runtime: Cell::new(false),
             string_params: std::cell::RefCell::new(std::collections::HashSet::new()),
@@ -2803,7 +2808,7 @@ fn collect_match_arm_locals(
 /// but the pattern arm would have hit the unsupported case before this
 /// runs, so nothing hits the wrong branch in practice.
 fn eq_op_for(ty: &Ty, ctx: &Ctx) -> &'static str {
-    if is_float(ty) {
+    if is_float_ctx(ty, ctx) {
         "f64.eq"
     } else if is_i32(ty, ctx) {
         "i32.eq"
@@ -3087,7 +3092,7 @@ fn emit_assert_eq(out: &mut String, left: &TirExpr, right: &TirExpr, negate: boo
 
     emit_expr(out, left, ctx);
     emit_expr(out, right, ctx);
-    let eq_op = if is_float(&left.ty) {
+    let eq_op = if is_float_ctx(&left.ty, ctx) {
         "f64.eq"
     } else if is_i32(&left.ty, ctx) {
         "i32.eq"
@@ -3108,7 +3113,7 @@ fn emit_assert_eq(out: &mut String, left: &TirExpr, right: &TirExpr, negate: boo
 fn emit_unary(out: &mut String, op: UnaryOp, inner: &TirExpr, ctx: &Ctx) {
     match op {
         UnaryOp::Neg => {
-            if is_float(&inner.ty) {
+            if is_float_ctx(&inner.ty, ctx) {
                 emit_expr(out, inner, ctx);
                 out.push_str("    f64.neg\n");
             } else {
@@ -3174,7 +3179,7 @@ fn emit_binary(out: &mut String, op: BinaryOp, left: &TirExpr, right: &TirExpr, 
     emit_expr(out, right, ctx);
     // Pick opcode family from the operand type. Comparisons produce i32
     // regardless of operand type.
-    let (family, is_cmp_operand_float) = if is_float(&left.ty) {
+    let (family, is_cmp_operand_float) = if is_float_ctx(&left.ty, ctx) {
         ("f64", true)
     } else if is_i32(&left.ty, ctx) {
         ("i32", false)
@@ -3220,6 +3225,11 @@ fn wasm_ty(ty: &Ty, ctx: &Ctx) -> &'static str {
         Ty::Named(name, _) if ctx.struct_layouts.contains_key(name.as_str()) => "i32",
         // Heap-allocated payload-enum pointer (#1821).
         Ty::Named(name, _) if ctx.payload_enums.contains_key(name.as_str()) => "i32",
+        // Type alias (e.g. `type Probability = Float where ...`) — resolve to
+        // the alias target so refined Float aliases emit f64, not i64.
+        Ty::Named(name, _) if ctx.type_aliases.contains_key(name.as_str()) => {
+            wasm_ty(&ctx.type_aliases[name.as_str()].clone(), ctx)
+        }
         // Heap-allocated collection pointers: `*MvlArray` / `*MvlMap` are
         // opaque i32 addresses on the WASM stack. Element access is via
         // `_mvl_array_get(a, idx) -> i32` + a typed `i64.load` / `f64.load`.
@@ -3233,6 +3243,20 @@ fn wasm_ty(ty: &Ty, ctx: &Ctx) -> &'static str {
 }
 
 /// True if this MVL type lowers to WASM `f64`.
+fn is_float_ctx(ty: &Ty, ctx: &Ctx) -> bool {
+    match ty {
+        Ty::Float => true,
+        Ty::Named(name, _) if ctx.type_aliases.contains_key(name.as_str()) => {
+            is_float_ctx(&ctx.type_aliases[name.as_str()].clone(), ctx)
+        }
+        Ty::Ref(_, inner) | Ty::Labeled(_, inner) | Ty::Refined(inner, _) => {
+            is_float_ctx(inner, ctx)
+        }
+        _ => false,
+    }
+}
+
+/// True if this MVL type lowers to WASM `f64` (no ctx — conservative, no alias resolution).
 fn is_float(ty: &Ty) -> bool {
     match ty {
         Ty::Float => true,
@@ -3258,6 +3282,23 @@ fn is_i32(ty: &Ty, ctx: &Ctx) -> bool {
         Ty::Ref(_, inner) | Ty::Labeled(_, inner) | Ty::Refined(inner, _) => is_i32(inner, ctx),
         _ => false,
     }
+}
+
+// ── Type alias registry ─────────────────────────────────────────────────
+//
+// Pre-scan `TirProgram.types` for `TirTypeBody::Alias` declarations.
+// These are transparent type aliases — `type Probability = Float where ...`.
+// `wasm_ty` looks them up to resolve the underlying WASM primitive type so
+// that e.g. a refined Float alias emits `f64` locals, not `i64`.
+
+fn collect_type_aliases(types: &[TirTypeDecl]) -> HashMap<String, Ty> {
+    let mut aliases = HashMap::new();
+    for td in types {
+        if let TirTypeBody::Alias(target) = &td.body {
+            aliases.insert(td.name.clone(), target.clone());
+        }
+    }
+    aliases
 }
 
 // ── Enum registry ───────────────────────────────────────────────────────
