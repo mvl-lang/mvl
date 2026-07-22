@@ -381,6 +381,7 @@ WASM_CORPUS := \
 	tests/corpus/01_expressions \
 	tests/corpus/02_control_flow \
 	tests/corpus/03_functions/basic_test.mvl \
+	tests/corpus/03_functions/generic_test.mvl \
 	tests/corpus/03_functions/total_partial_test.mvl \
 	tests/corpus/04_types/enum_test.mvl \
 	tests/corpus/04_types/struct_test.mvl \
