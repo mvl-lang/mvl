@@ -57,8 +57,8 @@ pub partial fn collect_pred_idents(pred: RefExpr) -> List[String] {
         RefExpr::Grouped { inner: inn, .. } => collect_pred_idents(*inn),
         RefExpr::Old { inner: inn, .. }     => collect_pred_idents(*inn),
         RefExpr::FieldAccess { object: obj, .. } => collect_pred_idents(*obj),
-        RefExpr::Forall { body: b, .. } => collect_pred_idents(*b),
-        RefExpr::Exists { body: b, .. } => collect_pred_idents(*b),
+        RefExpr::BoundedForall { body: b, .. } => collect_pred_idents(*b),
+        RefExpr::BoundedExists { body: b, .. } => collect_pred_idents(*b),
         _                               => [],
     }
 }
