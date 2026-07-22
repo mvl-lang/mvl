@@ -15,6 +15,7 @@
 // by construction.
 
 use model.{TrainState, MovementAuthority, BrakeCurve}
+use std.math.{int_clamp}
 
 // ── Nonlinear kinematic obligations (Z3 QF-NIA at L5) ─────────────────
 
@@ -83,17 +84,11 @@ pub total fn safety_margin_kinematic(
 /// additions saturate at 200 km/h via `min_kmh`).
 pub total fn build_curve(target_kmh: Int) -> BrakeCurve {
     BrakeCurve {
-        supervised_kmh: min_kmh(target_kmh, 185),
-        warning_kmh:    min_kmh(target_kmh + 5, 190),
-        service_kmh:    min_kmh(target_kmh + 10, 195),
-        emergency_kmh:  min_kmh(target_kmh + 15, 200),
+        supervised_kmh: int_clamp(target_kmh, 0, 185),
+        warning_kmh:    int_clamp(target_kmh + 5, 0, 190),
+        service_kmh:    int_clamp(target_kmh + 10, 0, 195),
+        emergency_kmh:  int_clamp(target_kmh + 15, 0, 200),
     }
-}
-
-total fn min_kmh(candidate: Int, cap: Int) -> Int {
-    if candidate < 0 { 0 }
-    else if candidate > cap { cap }
-    else { candidate }
 }
 
 // ── Structural checks ───────────────────────────────────────────────
