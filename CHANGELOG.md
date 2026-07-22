@@ -2,6 +2,13 @@
 
 ## [1.7.0] - 2026-07-21
 
+### Added — #1822 (WASM phase 5)
+
+- **WASM backend gains runtime assertion emission for contracts, refinements, and termination.** Phase 5 of epic #1817: the WAT emitter now generates runtime traps when `requires`, `ensures`, return refinements, or `while ... decreases` checks fail, honouring the configurable `AssertMode` (Always / DebugOnly / Assume).
+  - **Function contracts** — `requires` checks emitted at function entry; `ensures` and `return_refinement` checks emitted before return via `emit_contract_check`.
+  - **Refinement types** — predicates asserted at implicit return boundaries (`is_runtime_checkable` filters ghost-only quantifiers).
+  - **Loop termination** — `decreases` measure asserted to strictly decrease each iteration; `--assert-mode=assume` elides for performance.
+
 ### Added — #1821 (WASM phase 4)
 
 - **WASM backend gains structs, payload enums, `Result[T, E]`, match, and `?` propagation.** The WAT emitter now handles the full algebraic-type surface:
@@ -27,6 +34,16 @@
 ### Added — #1958
 
 - **Match arm reachability witnesses in `mvl harden --mcdc`.** Every `match x { … }` with N ≥ 2 arms inside a non-effectful function is now treated as an axis-4 decision with N outcomes. For each arm, a Z3 witness is synthesized proving the arm can be reached — a scrutinee value that matches this arm's pattern AND does not match any earlier arm. Supported patterns: `Wildcard`, `Ident` (binding-only — encoded as `Wildcard`), `Literal(Integer)`, `Literal(Bool)`. Scrutinee must be a bare parameter identifier. Non-`Ident` scrutinees or any unsupported arm pattern taint the whole match to `Unsupported` with a reason. Arms provably unreachable (e.g. after a preceding `Wildcard`) report `Coupled`. New `Axis4Outcome::SingleWitness { args }` variant; JSON emits `"outcome": "single"` with a single `args` array. `--emit-tests` writes `test fn harden_mcdc_<fn>_arm<i>()` blocks. MatchGuard (#1955) obligations continue to emit `Pair` outcomes and coexist with arm-reachability obligations on the same arm.
+
+### Changed — #1973
+
+- **`runtime/core` extracted as a shared crate.** String and list concatenation helpers previously duplicated between `runtime/rust` and `runtime/rust-tokio` are now unified in `runtime/core` (`mvl_runtime_core`). Both runtime crates depend on it via `path = "../core"`. Installed layout gains a `core/` directory alongside `rust/` and `rust-tokio/`.
+
+### Fixed — #1974, #1975
+
+- **Runtime installer now includes `runtime/core`.** `make install-runtime`, `make install`, and the `package-runtime` release step all previously omitted `runtime/core/`, causing `cargo` to fail with "unable to update .../core — No such file or directory" on any `mvl test` or `mvl build` invocation after installation. (#1974)
+- **`mvl build` copies `runtime/core` into the build temp dir.** The build step that copies `runtime/rust` → `tmp/mvl_runtime` now also copies `runtime/core` → `tmp/core`, satisfying the `path = "../core"` reference in `mvl_runtime/Cargo.toml`. CI smoke-test setup gained the matching `core` symlink. (#1975)
+- **Checker: remove dead `Forall`/`Exists` AST variants; wire `QuantifierOutsideGhost`.** `RefExpr::Forall` and `RefExpr::Exists` (unbounded, type-annotated form) were never produced by the parser since #1915 replaced them with `BoundedForall`/`BoundedExists`. All dead match arms removed across checker, backends, and printer. `QuantifierOutsideGhost` (REQ10) was defined but never emitted — match guards now correctly reject quantifiers with a diagnostic. Grammar spec (`grammar/grammar.ebnf`) updated to document the bounded `forall x in [lo..hi]. pred` form. (#1975)
 
 ## [1.6.2] - 2026-07-20
 
