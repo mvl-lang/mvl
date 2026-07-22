@@ -423,10 +423,10 @@ pub partial fn display_pred(pred: RefExpr) -> String {
         RefExpr::FieldAccess { object: obj, field: f, .. } => {
             format("{}.{}", [display_pred(*obj), f])
         },
-        RefExpr::Forall { var: v, body: b, .. } => {
+        RefExpr::BoundedForall { var: v, body: b, .. } => {
             format("forall {}, {}", [v, display_pred(*b)])
         },
-        RefExpr::Exists { var: v, body: b, .. } => {
+        RefExpr::BoundedExists { var: v, body: b, .. } => {
             format("exists {}, {}", [v, display_pred(*b)])
         },
     }
