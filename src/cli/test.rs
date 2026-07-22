@@ -7,7 +7,9 @@ use mvl::mvl::checker;
 use mvl::mvl::loader;
 use mvl::mvl::parser::ast::Decl;
 use mvl::mvl::parser::Parser;
-use mvl::mvl::pipeline::{load_full_prelude, lower_prelude, PreludeMode};
+use mvl::mvl::pipeline::{
+    compute_rust_backed_stdlib_tirs, load_full_prelude, lower_prelude, PreludeMode,
+};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process;
@@ -594,6 +596,7 @@ pub fn run(path: &str, quiet: bool, verbose: bool, coverage: bool, bdd: bool, us
                 unpaired_emitted = true;
             }
         }
+        let stdlib_tirs = compute_rust_backed_stdlib_tirs(&[&tir]);
         let (out, branches) = if coverage {
             {
                 let r = transpiler::transpile(
@@ -603,6 +606,7 @@ pub fn run(path: &str, quiet: bool, verbose: bool, coverage: bool, bdd: bool, us
                         .with_prelude(lower_prelude(&file_prelude_progs))
                         .with_coverage_prelude(file_prelude_stems, instrument_this)
                         .with_coverage(next_branch_id)
+                        .with_stdlib_tirs(stdlib_tirs)
                         .for_test_crate(),
                 );
                 (r.output, r.branches)
@@ -613,6 +617,7 @@ pub fn run(path: &str, quiet: bool, verbose: bool, coverage: bool, bdd: bool, us
                     &tir,
                     transpiler::TranspileConfig::new(&module_name)
                         .with_prelude(lower_prelude(&file_prelude_progs))
+                        .with_stdlib_tirs(stdlib_tirs)
                         .for_test_crate(),
                 )
                 .output,
@@ -701,6 +706,7 @@ pub fn run(path: &str, quiet: bool, verbose: bool, coverage: bool, bdd: bool, us
             .cloned()
             .chain(file_extras)
             .collect();
+        let stdlib_tirs = compute_rust_backed_stdlib_tirs(&[&tir]);
         let (out, branches) = if coverage {
             {
                 let r = transpiler::transpile(
@@ -709,6 +715,7 @@ pub fn run(path: &str, quiet: bool, verbose: bool, coverage: bool, bdd: bool, us
                         .with_file_stem(&module_name)
                         .with_prelude(lower_prelude(&file_prelude_progs))
                         .with_coverage(next_branch_id)
+                        .with_stdlib_tirs(stdlib_tirs)
                         .for_test_crate(),
                 );
                 (r.output, r.branches)
@@ -719,6 +726,7 @@ pub fn run(path: &str, quiet: bool, verbose: bool, coverage: bool, bdd: bool, us
                     &tir,
                     transpiler::TranspileConfig::new(&module_name)
                         .with_prelude(lower_prelude(&file_prelude_progs))
+                        .with_stdlib_tirs(stdlib_tirs)
                         .for_test_crate(),
                 )
                 .output,
