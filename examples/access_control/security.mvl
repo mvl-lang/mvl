@@ -4,6 +4,8 @@
 // directly without redeclaration.  Everything here is total and pure —
 // no effects.
 
+use std.math.{int_clamp}
+
 pub type SecurityConfig = struct {
     max_attempts: Int where self > 0 && self <= 10,
     session_ttl:  Int where self > 0,
@@ -12,8 +14,6 @@ pub type SecurityConfig = struct {
 pub total fn default_security_config() -> SecurityConfig {
     SecurityConfig { max_attempts: 3, session_ttl: 3600 }
 }
-
-use std.math.{int_clamp}
 
 /// Increment attempt counter, clamped to max.
 /// Call-site proof: current >= 0 ⊢ current + 1 >= 0 (L4 Cooper).

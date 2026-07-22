@@ -7,16 +7,17 @@
 // the shim, not production — see the #96 fossil-sweep commit for the
 // principle.
 
-use security.{SecurityConfig, default_security_config, clamp_attempts, next_attempt, total_timeout}
+use security.{SecurityConfig, default_security_config, next_attempt, total_timeout}
+use std.math.{int_clamp}
 
-// ── clamp_attempts tests ───────────────────────────────────────────────────
+// ── int_clamp tests ────────────────────────────────────────────────────────
 
 test fn clamp_attempts_above_max_returns_max() -> Unit {
-    assert_eq(clamp_attempts(10, 3), 3)
+    assert_eq(int_clamp(10, 0, 3), 3)
 }
 
 test fn clamp_attempts_at_or_below_max_passthrough() -> Unit {
-    assert_eq(clamp_attempts(2, 5), 2)
+    assert_eq(int_clamp(2, 0, 5), 2)
 }
 
 // ── next_attempt tests ─────────────────────────────────────────────────────
