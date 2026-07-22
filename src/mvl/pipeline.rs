@@ -142,6 +142,7 @@ impl Pipeline {
             crate::mvl::passes::mono::collect_fns(std::iter::once(prog).chain(prelude.iter()));
         let mono = crate::mvl::passes::mono::monomorphize(prog, &all_fns, &expr_types);
         let tir = crate::mvl::ir::lower::lower(prog, &mono, &expr_types);
+        config = config.with_stdlib_tirs(compute_rust_backed_stdlib_tirs(&[&tir]));
         transpile(&tir, config)
     }
 
@@ -276,6 +277,50 @@ pub fn lower_prelude(progs: &[Program]) -> Vec<crate::mvl::ir::TirProgram> {
             crate::mvl::ir::lower::lower(p, &m, &expr_types)
         })
         .collect()
+}
+
+/// Pre-compute TIRs for Rust-backed stdlib modules referenced by `tirs`.
+///
+/// Scans all `use std.X` declarations across the given TIR programs, runs the
+/// full parse → checker → mono → lower pipeline on each unique `RUST_BACKED_STDLIB`
+/// module once, and returns the results.
+///
+/// Call this before constructing a [`TranspileConfig`] or [`emitter::RustEmitter`]
+/// so the emitter never invokes analysis passes at emit time (ADR-0050).
+pub fn compute_rust_backed_stdlib_tirs(
+    tirs: &[&crate::mvl::ir::TirProgram],
+) -> Vec<crate::mvl::ir::TirProgram> {
+    use crate::mvl::backends::rust::RUST_BACKED_STDLIB;
+    use crate::mvl::stdlib;
+    let mut seen = std::collections::HashSet::new();
+    let mut result = Vec::new();
+    for tir in tirs {
+        for ud in &tir.uses {
+            if ud.path.first().map(|s| s == "std").unwrap_or(false) && ud.path.len() >= 2 {
+                let module = ud.path[1].as_str();
+                if RUST_BACKED_STDLIB.contains(&module) && seen.insert(module.to_string()) {
+                    let filename = format!("{module}.mvl");
+                    if let Some(content) = stdlib::stdlib_content(&filename) {
+                        result.push(load_stdlib_tir(&content));
+                    }
+                }
+            }
+        }
+    }
+    result
+}
+
+/// Parse, check, and lower a stdlib module source to TIR.
+///
+/// Used by [`compute_rust_backed_stdlib_tirs`] to pre-compute stdlib TIRs
+/// before emission, keeping emitters as pure TIR → target transformers (ADR-0050).
+fn load_stdlib_tir(content: &str) -> crate::mvl::ir::TirProgram {
+    let (mut p, _) = crate::mvl::parser::Parser::new(content);
+    let loaded = p.parse_program();
+    let expr_types = crate::mvl::checker::check(&loaded).expr_types;
+    let all_fns = crate::mvl::passes::mono::collect_fns([&loaded]);
+    let mono = crate::mvl::passes::mono::monomorphize(&loaded, &all_fns, &expr_types);
+    crate::mvl::ir::lower::lower(&loaded, &mono, &expr_types)
 }
 
 // ── AST program inspector helpers (moved from backends/rust.rs) ───────────────
@@ -472,6 +517,11 @@ pub fn transpile_project_with_options(
     cg.assert_mode = assert_mode;
     cg.optimize_proved = optimize_proved;
     cg.test_extern_stubs = extern_stubs;
+    cg.stdlib_tirs = compute_rust_backed_stdlib_tirs(
+        &std::iter::once(&entry_tir)
+            .chain(sibling_tirs.iter())
+            .collect::<Vec<_>>(),
+    );
     cg.emit_program_with_mods_and_siblings(
         &entry_tir,
         &sibling_names,
