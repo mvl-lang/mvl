@@ -20,6 +20,15 @@
   - **Block-type inference** — `if_stmt_result_ty` / `match_arms_result_ty` compare WASM types (not MVL types) so `Result[Int, Unknown]` and `Result[Unknown, String]` unify at the `i32` slot; if/match expressions returning String emit `(result i32 i32)`.
   - Corpus adds `04_types/struct_test.mvl`, `04_types/enum_payload_test.mvl`, `04_types/option_result_test.mvl` to `WASM_CORPUS`.
 
+### Added — #1982 (WASM epic #1817: generic monomorphization + corpus growth)
+
+- **WASM backend adds generic function monomorphization; corpus grows from 25 to 37 files.** The WAT emitter scans all call sites, infers type substitutions, and emits one specialized WASM function per unique `(fn, type-args)` pair, handling scalar types (`i64`, `f64`, `i32`) and String multi-value returns (`(result i32 i32)`). Four emitter bugs were fixed in the process:
+  - **Generic monomorphization** — `collect_generic_instantiations` walks the full function body, `infer_type_subst_from_args` matches call-site argument types to generic params, and `emit_generic_fn` emits a renamed specialized copy. `is_string_ty` resolves `Ty::Named("T")` through `type_subst` so String ABI is correctly applied to generic params bound to `String`. Enables `03_functions/generic_test.mvl`.
+  - **Float type alias** — `collect_type_aliases` pre-scans `TirTypeBody::Alias` declarations; `wasm_ty` now resolves `Ty::Named("Probability", [])` to `f64` instead of falling through to `i64`. Enables `09_refinements/float_refinement_test.mvl`.
+  - **Struct string literals** — `collect_expr` now recurses into `TirExprKind::Construct` fields so string literals inside struct constructors are interned in the WASM data section. Enables `09_refinements/field_refinement_test.mvl`.
+  - **`Consume`/`Borrow` and wildcard `let _`** — `Consume`/`Borrow` are identity ops at runtime; now emit the inner expression. `Pattern::Wildcard` in `let _ = expr` now evaluates the init for side effects and emits one `drop` for scalars or two for String. Enables `07_ownership/consume_test.mvl` and `06_effects/user_defined_test.mvl`.
+  - 12 new `WASM_CORPUS` entries: `06_effects/composite_test.mvl`, `console_test.mvl`, `user_defined_test.mvl`; `07_ownership/value_test.mvl`, `consume_test.mvl`; `09_refinements/float_refinement_test.mvl`, `field_refinement_test.mvl`, `list_get_refined_test.mvl`, `method_call_refinement_test.mvl`, `struct_invariant_test.mvl`; `10_termination/partial_fn_test.mvl`; `03_functions/generic_test.mvl`.
+
 ### Added — #1955
 
 - **`mvl harden --mcdc` extensions:** axis-4 MC/DC gap synthesis now covers three new areas.
@@ -44,6 +53,13 @@
 - **Runtime installer now includes `runtime/core`.** `make install-runtime`, `make install`, and the `package-runtime` release step all previously omitted `runtime/core/`, causing `cargo` to fail with "unable to update .../core — No such file or directory" on any `mvl test` or `mvl build` invocation after installation. (#1974)
 - **`mvl build` copies `runtime/core` into the build temp dir.** The build step that copies `runtime/rust` → `tmp/mvl_runtime` now also copies `runtime/core` → `tmp/core`, satisfying the `path = "../core"` reference in `mvl_runtime/Cargo.toml`. CI smoke-test setup gained the matching `core` symlink. (#1975)
 - **Checker: remove dead `Forall`/`Exists` AST variants; wire `QuantifierOutsideGhost`.** `RefExpr::Forall` and `RefExpr::Exists` (unbounded, type-annotated form) were never produced by the parser since #1915 replaced them with `BoundedForall`/`BoundedExists`. All dead match arms removed across checker, backends, and printer. `QuantifierOutsideGhost` (REQ10) was defined but never emitted — match guards now correctly reject quantifiers with a diagnostic. Grammar spec (`grammar/grammar.ebnf`) updated to document the bounded `forall x in [lo..hi]. pred` form. (#1975)
+- **`mvl test` now passes `stdlib_tirs` to all `TranspileConfig` builders.** `cli/test.rs` previously never called `compute_rust_backed_stdlib_tirs()`, so generated test harnesses had `ProcessError`, `Match`, and other stdlib types stubbed as empty unit structs — causing rustc errors per test run. All four `TranspileConfig` builders (coverage/non-coverage × inline/file tests) now receive the pre-computed stdlib TIRs. (#1984)
+- **Self-hosted compiler: `RefExpr::Forall`/`Exists` → `BoundedForall`/`BoundedExists`.** `compiler/contracts.mvl` and `compiler/refinements.mvl` referenced the pre-#1915 unbounded variant names; corrected to match `compiler/tir.mvl`. (#1985)
+
+### Changed — #1979, #1981, #1980
+
+- **Rust backend stdlib TIR pre-computation moved to pipeline layer.** `compute_rust_backed_stdlib_tirs()` and `load_stdlib_tir()` now live in `pipeline.rs` instead of the emitter; `TranspileConfig` gains a `with_stdlib_tirs()` builder. Type errors in Rust-backed stdlib modules now surface during type-check, not during emit. Enforces ADR-0050 backend purity: the emitter is now a pure TIR→WAT transformer. (#1979, closes #1890)
+- **Examples refactored to use `std.math` equivalents.** Inline `clamp`, `max`, `int_to_string`, and `digit` helpers in `examples/access_control/` and `examples/programs/calculator.mvl` replaced with `std.math.int_clamp`, `std.math.int_max`, and `std.string.int_to_string`. (#1981, #1980)
 
 ## [1.6.2] - 2026-07-20
 
