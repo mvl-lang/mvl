@@ -51,11 +51,10 @@ use std::collections::HashMap;
 use super::{AssertMode, Backend};
 use crate::mvl::checker::types::Ty;
 use crate::mvl::ir::{
-    ArithOp, BinaryOp, CmpOp, LValue, Literal, LogicOp, Pattern, RefExpr, TirBlock, TirElseBranch,
-    TirExpr, TirExprKind, TirFn, TirMatchArm, TirMatchBody, TirParam, TirProgram, TirStmt,
-    TirTypeBody, TirTypeDecl, TirVariantFields, UnaryOp,
+    ArithOp, BinaryOp, CmpOp, GenericParam, LValue, Literal, LogicOp, Pattern, RefExpr, TirBlock,
+    TirElseBranch, TirExpr, TirExprKind, TirFn, TirMatchArm, TirMatchBody, TirParam, TirProgram,
+    TirStmt, TirTypeBody, TirTypeDecl, TirVariantFields, UnaryOp,
 };
-use crate::mvl::parser::ast::GenericParam;
 
 pub struct WasmTextCompiler {
     pub assert_mode: AssertMode,
