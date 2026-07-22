@@ -21,6 +21,7 @@ target
 #.idea/
 site/
 AGENTS.md
+!etc/AGENTS.md
 *.jsonl
 librust_out.rlib
 *.profraw
