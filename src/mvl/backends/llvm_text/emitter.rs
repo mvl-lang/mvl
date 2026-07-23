@@ -221,6 +221,13 @@ const STDLIB_REPLACED_BY_DISPATCH: &[&str] = &[
 /// Mirrors the filtering rules of the AST version: drops non-builtin extension
 /// methods, stdlib functions replaced by C-ABI dispatch, and non-builtin prelude
 /// functions returning `Option`/`Result`.
+///
+/// Generic extension methods (e.g. `List[T]::flatten`) are unaffected here:
+/// they are stashed in `mono.tir_generic_fns` before this filter runs
+/// (see `emit_program_tir` first pass), so their bodies survive the strip
+/// via the monomorphization queue.  Only non-generic extensions are
+/// stripped — dispatched via emitter arms today, or silently dropped
+/// where no arm exists (#1612 remainder, not addressed in this PR).
 fn strip_prelude_extension_methods_tir(prog: &TirProgram) -> TirProgram {
     let mut out = prog.clone();
     out.fns.retain(|f| {

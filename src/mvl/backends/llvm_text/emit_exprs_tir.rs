@@ -4142,10 +4142,47 @@ impl TextEmitter {
                 Ok(Some(result))
             }
 
-            // Fallback matches AST behavior — see #1612 follow-up tracking
-            // the pre-existing silent-drop on user-defined extension methods
-            // (Map::is_empty, Wrapper::peek, etc.) that affects BOTH walkers.
-            _ => Ok(None),
+            // Fallback: dispatch to a generic extension method (#1612 partial).
+            //
+            // If `pub fn Recv[..]::method(self, ...)` is declared for the
+            // receiver's base type AND is generic (has type parameters),
+            // treat the method call as UFCS sugar: call the free-fn form
+            // of the body with the receiver prepended.  Restores parity
+            // with the Rust backend's STDLIB_UFCS_METHODS path for the
+            // methods #1763 targets (List HOFs: flatten, map, filter,
+            // fold, sort_by, ...).
+            //
+            // Non-generic extension methods (e.g. `String::is_empty`) are
+            // NOT handled here — the AST emitter strips them from the
+            // prelude and dispatches them via specialized arms.  Adding a
+            // second dispatch path for those without also un-stripping
+            // their bodies would emit calls to undefined symbols; the
+            // proper fix is scoped separately (see #1612 remainder).
+            //
+            // Generic extension methods survive the prelude strip because
+            // they land in `mono.tir_generic_fns` and are emitted per
+            // mangled instantiation, so this fallback safely dispatches
+            // to a body we know is in the module.
+            _ => {
+                let base = match receiver_base_name(&receiver.ty) {
+                    Some(b) => b,
+                    None => return Ok(None),
+                };
+                let generic_matches = self
+                    .mono
+                    .tir_generic_fns
+                    .get(method)
+                    .and_then(|f| f.receiver_type.as_deref())
+                    .map(|r| r == base)
+                    .unwrap_or(false);
+                if !generic_matches {
+                    return Ok(None);
+                }
+                let mut full_args: Vec<TirExpr> = Vec::with_capacity(args.len() + 1);
+                full_args.push(receiver.clone());
+                full_args.extend(args.iter().cloned());
+                self.emit_monomorphized_call_tir(method, &full_args)
+            }
         }
     }
 }
@@ -4156,4 +4193,28 @@ fn unwrap_labels(ty: &Ty) -> &Ty {
         cur = inner;
     }
     cur
+}
+
+/// Receiver base-type name used to look up extension methods.
+///
+/// The `receiver_type` field on a `TirFn` is a bare identifier ("List",
+/// "Map", "String", "Foo"), never the generic-parameterised spelling.
+/// Mirror that shape when computing the qualified key so the fallback
+/// dispatch in `emit_method_call_tir` can find registered extensions.
+fn receiver_base_name(ty: &Ty) -> Option<String> {
+    match unwrap_labels(ty) {
+        Ty::List(_) | Ty::Array(_, _) => Some("List".into()),
+        Ty::Map(_, _) => Some("Map".into()),
+        Ty::Set(_) => Some("Set".into()),
+        Ty::String => Some("String".into()),
+        Ty::Int => Some("Int".into()),
+        Ty::Float => Some("Float".into()),
+        Ty::Bool => Some("Bool".into()),
+        Ty::Byte => Some("Byte".into()),
+        Ty::UByte => Some("UByte".into()),
+        Ty::UInt => Some("UInt".into()),
+        Ty::Ptr(_) => Some("Ptr".into()),
+        Ty::Named(name, _) => Some(name.clone()),
+        _ => None,
+    }
 }

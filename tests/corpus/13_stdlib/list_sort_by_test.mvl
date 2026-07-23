@@ -1,0 +1,76 @@
+// 13_stdlib/list_sort_by_test.mvl — user-comparator sort/min/max.
+//
+// sort/min/max stay builtin because ADR-0053 blocks `a < b` on unbounded T
+// (no user-facing traits).  sort_by/min_by/max_by close the gap: an MVL body
+// that accepts an explicit comparator, so user-defined types and custom
+// orderings work without leaking Ord back into the language.
+
+test fn sort_by_ascending() -> Unit {
+    let xs: List[Int] = [3, 1, 4, 1, 5, 9, 2, 6];
+    let sorted: List[Int] = xs.sort_by(|a: Int, b: Int| a < b);
+    assert_eq(sorted.len(), 8);
+    assert_eq(sorted.get(0).unwrap_or(0), 1);
+    assert_eq(sorted.get(1).unwrap_or(0), 1);
+    assert_eq(sorted.get(2).unwrap_or(0), 2);
+    assert_eq(sorted.get(7).unwrap_or(0), 9);
+}
+
+test fn sort_by_descending() -> Unit {
+    let xs: List[Int] = [3, 1, 4, 1, 5];
+    let sorted: List[Int] = xs.sort_by(|a: Int, b: Int| a > b);
+    assert_eq(sorted.get(0).unwrap_or(0), 5);
+    assert_eq(sorted.get(1).unwrap_or(0), 4);
+    assert_eq(sorted.get(4).unwrap_or(0), 1);
+}
+
+test fn sort_by_empty() -> Unit {
+    let xs: List[Int] = [];
+    let sorted: List[Int] = xs.sort_by(|a: Int, b: Int| a < b);
+    assert_eq(sorted.len(), 0);
+}
+
+test fn sort_by_single() -> Unit {
+    let xs: List[Int] = [42];
+    let sorted: List[Int] = xs.sort_by(|a: Int, b: Int| a < b);
+    assert_eq(sorted.len(), 1);
+    assert_eq(sorted.get(0).unwrap_or(0), 42);
+}
+
+test fn sort_by_already_sorted() -> Unit {
+    let xs: List[Int] = [1, 2, 3, 4, 5];
+    let sorted: List[Int] = xs.sort_by(|a: Int, b: Int| a < b);
+    assert_eq(sorted.get(0).unwrap_or(0), 1);
+    assert_eq(sorted.get(4).unwrap_or(0), 5);
+}
+
+test fn min_by_returns_min() -> Unit {
+    let xs: List[Int] = [3, 1, 4, 1, 5];
+    match xs.min_by(|a: Int, b: Int| a < b) {
+        Some(m) => assert_eq(m, 1),
+        None => assert(false),
+    }
+}
+
+test fn min_by_empty_is_none() -> Unit {
+    let xs: List[Int] = [];
+    match xs.min_by(|a: Int, b: Int| a < b) {
+        Some(_) => assert(false),
+        None => assert(true),
+    }
+}
+
+test fn max_by_returns_max() -> Unit {
+    let xs: List[Int] = [3, 1, 4, 1, 5, 9, 2, 6];
+    match xs.max_by(|a: Int, b: Int| a < b) {
+        Some(m) => assert_eq(m, 9),
+        None => assert(false),
+    }
+}
+
+test fn max_by_empty_is_none() -> Unit {
+    let xs: List[Int] = [];
+    match xs.max_by(|a: Int, b: Int| a < b) {
+        Some(_) => assert(false),
+        None => assert(true),
+    }
+}

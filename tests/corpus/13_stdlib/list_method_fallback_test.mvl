@@ -1,0 +1,54 @@
+// 13_stdlib/list_method_fallback_test.mvl — regression coverage for
+// the LLVM method-call fallback (#1612 partial fix).
+//
+// Prior to the fallback, `xs.flatten()` and other pure-MVL extension
+// methods on `List` were silently dropped by the LLVM emitter — no arm
+// existed and the terminal `_ => Ok(None)` produced no code, so the
+// LLVM binary computed wrong results with no diagnostic.  This suite
+// exercises method-syntax calls on pure-MVL bodies so both backends
+// stay honest.
+
+test fn flatten_via_method_call() -> Unit {
+    let xs: List[List[Int]] = [[1, 2], [3, 4], [5]];
+    let flat: List[Int] = xs.flatten();
+    assert_eq(flat.len(), 5);
+    assert_eq(flat.get(0).unwrap_or(0), 1);
+    assert_eq(flat.get(4).unwrap_or(0), 5);
+}
+
+test fn flatten_empty_outer() -> Unit {
+    let xs: List[List[Int]] = [];
+    let flat: List[Int] = xs.flatten();
+    assert_eq(flat.len(), 0);
+}
+
+test fn flatten_empty_inner() -> Unit {
+    let xs: List[List[Int]] = [[], [1], [], [2, 3]];
+    let flat: List[Int] = xs.flatten();
+    assert_eq(flat.len(), 3);
+    assert_eq(flat.get(0).unwrap_or(0), 1);
+    assert_eq(flat.get(2).unwrap_or(0), 3);
+}
+
+test fn first_via_method_call() -> Unit {
+    let xs: List[Int] = [10, 20, 30];
+    match xs.first() {
+        Some(v) => assert_eq(v, 10),
+        None => assert(false),
+    }
+}
+
+test fn last_via_method_call() -> Unit {
+    let xs: List[Int] = [10, 20, 30];
+    match xs.last() {
+        Some(v) => assert_eq(v, 30),
+        None => assert(false),
+    }
+}
+
+test fn is_empty_via_method_call() -> Unit {
+    let xs: List[Int] = [];
+    let ys: List[Int] = [1];
+    assert_eq(xs.is_empty(), true);
+    assert_eq(ys.is_empty(), false);
+}
