@@ -299,7 +299,12 @@ pub type RelabelEvent = struct {
     /// Destination label name, `"_"` for bare.
     to_label: String,
     /// Audit tag supplied at the call site, e.g. `"XSS-001"`.
-    tag: String,
+    ///
+    /// Field name is `audit_tag` rather than plain `tag` because `tag` is
+    /// a reserved MVL keyword (the fourth pony capability marker, alongside
+    /// `iso` / `val` / `ref`).  The wire-format JSON key is still `"tag"`
+    /// — the rename is source-only.
+    audit_tag: String,
     /// Source location hint, e.g. `"src/api.mvl"`.
     location: String,
 }
@@ -315,6 +320,6 @@ pub builtin fn emit_relabel_event(
     transition: String,
     from_label: String,
     to_label: String,
-    tag: String,
+    audit_tag: String,
     location: String,
 ) -> Unit ! Audit
