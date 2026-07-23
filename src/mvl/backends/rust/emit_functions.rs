@@ -79,28 +79,24 @@ fn expr_has_select(expr: &crate::mvl::ir::TirExpr) -> bool {
 
 /// Emit a function-parameter type from a resolved `Ty`.
 ///
-/// MVL's `fn(T) -> U` transpiles to `impl Fn(T) -> U` in Rust
-/// parameter position — matching what `emit_fn_return_ty` already
-/// does for return position.  Bare `fn(T) -> U` (a Rust fn pointer)
-/// would reject capturing closures, but MVL semantics treat
-/// `fn(T) -> U` uniformly as "callable value": LLVM lowers every
-/// MVL fn through a closure struct, and MVL closures capture by
-/// value (see `tests/corpus/07_ownership/lambda_capture_test.mvl`
-/// docstring).  Value-capture ⇒ no mutable state through the
-/// closure ⇒ `Fn` (not `FnMut`) is the correct trait — and it
-/// permits nested calls like `f(f(n))` that `FnMut`'s exclusive
-/// borrow would reject.
+/// MVL's `fn(T) -> U` stays as a bare Rust function pointer in parameter
+/// position — enum/struct fields use `fn(T) -> U`, and MVL code that
+/// stores a fn-typed param in an enum variant (e.g. `std/pbt.mvl`
+/// generators) requires the param type to match the variant field type.
 ///
-/// Enum/struct fields and collection elements still emit bare
-/// `fn(T) -> U` via `emit_type_expr` — those need a fixed layout,
-/// and MVL never permitted storing a capturing closure in a struct
-/// field.  Same asymmetry Rust itself uses for iterator adapters
-/// and hasher builders (#1998).
+/// #1998 tried `impl Fn(T) -> U` here so capturing closures could pass
+/// through HOF params without arm interception — but that broke fn-in-
+/// enum-variant storage patterns because Rust rejects assigning an
+/// `impl Fn` value into a fn-pointer variant field.  Reverted (#TBD).
+/// The transpiler continues to rely on the Rust HOF arms in
+/// `emit_method_call.rs` to accept capturing closures for `.map/.filter/
+/// .fold`, and non-HOF pure-MVL bodies (e.g. `sort_by`) type-check
+/// against fn pointers only — capturing closures must use HOF arms.
 fn emit_fn_param_ty(ty: &Ty) -> String {
     match ty {
         Ty::Fn(params, ret, _, _) => {
             let params_str: Vec<String> = params.iter().map(emit_ty).collect();
-            format!("impl Fn({}) -> {}", params_str.join(", "), emit_ty(ret))
+            format!("fn({}) -> {}", params_str.join(", "), emit_ty(ret))
         }
         _ => emit_ty(ty),
     }
