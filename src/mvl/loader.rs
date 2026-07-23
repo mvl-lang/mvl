@@ -88,8 +88,10 @@ fn collect_mvl_files_recursive(dir: &Path, test_only: bool, out: &mut Vec<PathBu
             //   `vendor`          — vendored third-party (mvl-spec, etc.)
             //   `integration`     — Rust integration-test fixtures (intentionally
             //                        broken MVL — see tests/error_messages.rs)
-            let skip = matches!(name, ".mvl" | "target" | "node_modules" | "vendor" | "integration")
-                || name.starts_with('.');
+            let skip = matches!(
+                name,
+                ".mvl" | "target" | "node_modules" | "vendor" | "integration"
+            ) || name.starts_with('.');
             if skip {
                 continue;
             }
