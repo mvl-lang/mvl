@@ -79,13 +79,28 @@ fn expr_has_select(expr: &crate::mvl::ir::TirExpr) -> bool {
 
 /// Emit a function-parameter type from a resolved `Ty`.
 ///
-/// MVL's `fn(T) -> U` stays as a bare Rust function pointer in parameter
-/// position — enum/struct fields use `fn(T) -> U`, and parameters must match.
+/// MVL's `fn(T) -> U` transpiles to `impl Fn(T) -> U` in Rust
+/// parameter position — matching what `emit_fn_return_ty` already
+/// does for return position.  Bare `fn(T) -> U` (a Rust fn pointer)
+/// would reject capturing closures, but MVL semantics treat
+/// `fn(T) -> U` uniformly as "callable value": LLVM lowers every
+/// MVL fn through a closure struct, and MVL closures capture by
+/// value (see `tests/corpus/07_ownership/lambda_capture_test.mvl`
+/// docstring).  Value-capture ⇒ no mutable state through the
+/// closure ⇒ `Fn` (not `FnMut`) is the correct trait — and it
+/// permits nested calls like `f(f(n))` that `FnMut`'s exclusive
+/// borrow would reject.
+///
+/// Enum/struct fields and collection elements still emit bare
+/// `fn(T) -> U` via `emit_type_expr` — those need a fixed layout,
+/// and MVL never permitted storing a capturing closure in a struct
+/// field.  Same asymmetry Rust itself uses for iterator adapters
+/// and hasher builders (#1998).
 fn emit_fn_param_ty(ty: &Ty) -> String {
     match ty {
         Ty::Fn(params, ret, _, _) => {
             let params_str: Vec<String> = params.iter().map(emit_ty).collect();
-            format!("fn({}) -> {}", params_str.join(", "), emit_ty(ret))
+            format!("impl Fn({}) -> {}", params_str.join(", "), emit_ty(ret))
         }
         _ => emit_ty(ty),
     }
