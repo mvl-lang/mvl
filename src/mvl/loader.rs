@@ -74,10 +74,25 @@ fn collect_mvl_files_recursive(dir: &Path, test_only: bool, out: &mut Vec<PathBu
         let path = entry.path();
         let is_dir = entry.file_type().map(|ft| ft.is_dir()).unwrap_or(false);
         if is_dir {
-            // Skip `.mvl/` — the package install directory (analogous to node_modules).
-            // Package files are loaded from the XDG cache via load_pkg_modules; including
-            // them here would double-load them as user programs and corrupt the prelude.
-            if path.file_name().and_then(|n| n.to_str()) == Some(".mvl") {
+            let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+            // Skip conventional non-source directories.  Recursing into these
+            // pulls in generated code, vendored third-party MVL, IDE/tool
+            // metadata, and broken fixtures — none of which represent user
+            // MVL programs to be tested.  #2000.
+            //
+            //   `.mvl`            — package install cache (like node_modules)
+            //   `.*`              — dot-prefixed metadata (.git, .claude,
+            //                        .openspec, .cargo, ...)
+            //   `target`          — cargo build output
+            //   `node_modules`    — JS build output (some packages ship both)
+            //   `vendor`          — vendored third-party (mvl-spec, etc.)
+            //   `integration`     — Rust integration-test fixtures (intentionally
+            //                        broken MVL — see tests/error_messages.rs)
+            let skip = matches!(
+                name,
+                ".mvl" | "target" | "node_modules" | "vendor" | "integration"
+            ) || name.starts_with('.');
+            if skip {
                 continue;
             }
             collect_mvl_files_recursive(&path, test_only, out);
@@ -462,6 +477,11 @@ pub fn find_module_file(entry_dir: &Path, mod_name: &str) -> Option<PathBuf> {
 /// Build the implicit prelude: `core.mvl` + `strings.mvl` + `lists.mvl` + `effects.mvl`.
 /// Every compile path loads these so their builtins and the effect hierarchy
 /// (`Log > Clock`, `IO > Log + …`) are always visible.
+///
+/// Parse errors in stdlib files are fatal — the compiler cannot make forward
+/// progress with a corrupted prelude AST, and silently discarding the errors
+/// hid real syntax problems in `std/*.mvl` for months (#2000).  Surface them
+/// with the same formatting as `parse_file` and abort.
 pub fn load_implicit_prelude() -> Vec<Program> {
     const IMPLICIT: &[&str] = &["core.mvl", "strings.mvl", "lists.mvl", "effects.mvl"];
     let mut progs = Vec::new();
@@ -471,8 +491,24 @@ pub fn load_implicit_prelude() -> Vec<Program> {
                 "stdlib file `{name}` not found — run `make install` or `mvl self install` to install the stdlib"
             )
         });
-        let (mut parser, _) = Parser::new(&content);
-        progs.push(parser.parse_program());
+        let (mut parser, lex_errors) = Parser::new(&content);
+        if !lex_errors.is_empty() {
+            eprintln!("stdlib prelude `{name}` has lex errors:");
+            for e in &lex_errors {
+                eprintln!("{}", format_error_with_source(&content, e.span, &e.message));
+            }
+            std::process::exit(1);
+        }
+        let prog = parser.parse_program();
+        let parse_errors = parser.errors();
+        if !parse_errors.is_empty() {
+            eprintln!("stdlib prelude `{name}` has parse errors:");
+            for e in parse_errors {
+                eprintln!("{}", format_error_with_source(&content, e.span, &e.message));
+            }
+            std::process::exit(1);
+        }
+        progs.push(prog);
     }
     progs
 }

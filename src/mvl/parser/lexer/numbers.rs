@@ -43,6 +43,14 @@ impl<'src> Lexer<'src> {
                     s.push(c);
                     self.advance();
                 }
+                // Digit-group separator: consume but don't include in the value.
+                // Matches the hex/bin/oct behaviour in `lex_integer_base` and
+                // Rust's convention (`1_000_000`, `1.5_e10`).  Only permitted
+                // between digits; a leading or trailing `_` was never reachable
+                // here because the lexer dispatches on `is_ascii_digit` first.
+                Some('_') => {
+                    self.advance();
+                }
                 Some('.') if !is_float => {
                     // Only treat as float if the character after '.' is a digit
                     if self.peek_second().is_some_and(|c| c.is_ascii_digit()) {
@@ -63,10 +71,16 @@ impl<'src> Lexer<'src> {
                         s.push(self.peek_char().unwrap());
                         self.advance();
                     }
-                    // Exponent digits
-                    while self.peek_char().is_some_and(|c| c.is_ascii_digit()) {
-                        s.push(self.peek_char().unwrap());
+                    // Exponent digits (also allow `_` separators)
+                    while self
+                        .peek_char()
+                        .is_some_and(|c| c.is_ascii_digit() || c == '_')
+                    {
+                        let c = self.peek_char().unwrap();
                         self.advance();
+                        if c != '_' {
+                            s.push(c);
+                        }
                     }
                     break;
                 }

@@ -30,6 +30,18 @@ impl Parser {
 
         let mut stmts = Vec::new();
         while !matches!(self.peek_kind(), TokenKind::RBrace | TokenKind::Eof) {
+            // Empty statement: bare `;` between real statements.  Common
+            // after block-terminated statements (for/while/if/match) where
+            // the user wants explicit "end of that thing" punctuation, e.g.
+            //     for x in xs { ... };
+            //     result
+            // MVL follows Rust's convention here — `;` after a block-form
+            // statement is an empty statement, not a syntax error.  Silently
+            // consume and continue (see #2000).
+            if matches!(self.peek_kind(), TokenKind::Semicolon) {
+                self.advance();
+                continue;
+            }
             let pos_before = self.pos;
             match self.parse_stmt() {
                 Ok(s) => stmts.push(s),
