@@ -283,11 +283,45 @@ pub(super) struct TextEmitter {
 }
 
 /// Tracks heap-allocated value types for automatic drop emission.
+///
+/// The plain `Array`/`Map` variants cover scalar-element/scalar-value
+/// collections (unchanged behaviour). The remaining variants carry just
+/// enough information — a payload size and/or a callback symbol name — for
+/// `emit_heap_drops`/`drop_scope_locals` to pick the right typed runtime
+/// helper (#1991). Scoped to one level of nesting whose leaf types are
+/// scalars or `String`; deeper nesting (e.g. `List[Option[List[T]]]`) is left
+/// untracked by `heap_kind()`, same as today's behaviour for unknown element
+/// types.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum HeapKind {
     String,
     Array,
+    /// `List[String]` / `Set[String]` — elements are owned `*mut MvlString`.
+    ArrayOfString,
+    /// `List[List[T]]` / `List[Set[T]]` (T scalar or `String`) — elements are
+    /// owned `*mut MvlArray`; `inner_drop_sym` is the C-ABI symbol to call on
+    /// each one (`_mvl_array_drop` or `_mvl_string_ptr_array_drop`).
+    ArrayOfArray { inner_drop_sym: &'static str },
+    /// `List[Option[T]]` (T scalar or `String`). `payload_size` is the byte
+    /// size of T's heap-allocated payload slot; `payload_drop_sym` is `None`
+    /// for scalar T or `Some("_mvl_string_drop")` for `T = String`.
+    ArrayOfOption {
+        payload_size: u64,
+        payload_drop_sym: Option<&'static str>,
+    },
+    /// `List[Result[T, E]]` (T, E scalar or `String`).
+    ArrayOfResult {
+        ok_size: u64,
+        ok_drop_sym: Option<&'static str>,
+        err_size: u64,
+        err_drop_sym: Option<&'static str>,
+    },
     Map,
+    /// `Map[K, V]` where V is pointer-typed (`String`, `List[..]`, `Set[..]`,
+    /// `Map[..]`) — the map only stores V's 8-byte address, so the value must
+    /// be followed and dropped via `value_drop_sym` before the slot is freed.
+    /// Key type never needs special handling: keys are always deep-copied.
+    MapPtrValues { value_drop_sym: &'static str },
 }
 
 #[derive(Clone)]

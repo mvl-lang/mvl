@@ -108,19 +108,7 @@ impl TextEmitter {
                 // Branch return value — consumed by the surrounding phi.
                 continue;
             }
-            let sym = match kind {
-                HeapKind::String => "_mvl_string_drop",
-                HeapKind::Array => "_mvl_array_drop",
-                HeapKind::Map => "_mvl_map_drop",
-            };
-            self.ensure_extern(&format!("declare void @{sym}(ptr)"));
-            if is_ref {
-                let loaded = self.next_reg();
-                self.push_instr(&format!("{loaded} = load ptr, ptr {ssa}"));
-                self.push_instr(&format!("call void @{sym}(ptr {loaded})"));
-            } else {
-                self.push_instr(&format!("call void @{sym}(ptr {ssa})"));
-            }
+            self.emit_drop_for_heap_local(&ssa, kind, is_ref);
         }
     }
 
@@ -128,20 +116,88 @@ impl TextEmitter {
     /// Called before every `ret` instruction to clean up owned allocations.
     pub(super) fn emit_heap_drops(&mut self) {
         for (ssa, kind, is_ref) in self.fn_ctx.heap_locals.clone() {
-            let sym = match kind {
-                HeapKind::String => "_mvl_string_drop",
-                HeapKind::Array => "_mvl_array_drop",
-                HeapKind::Map => "_mvl_map_drop",
-            };
-            self.ensure_extern(&format!("declare void @{sym}(ptr)"));
-            if is_ref {
-                // For ref locals, the SSA is a stack alloca — load the heap
-                // object pointer before dropping it.
-                let loaded = self.next_reg();
-                self.push_instr(&format!("{loaded} = load ptr, ptr {ssa}"));
-                self.push_instr(&format!("call void @{sym}(ptr {loaded})"));
-            } else {
-                self.push_instr(&format!("call void @{sym}(ptr {ssa})"));
+            self.emit_drop_for_heap_local(&ssa, kind, is_ref);
+        }
+    }
+
+    /// Declare (if needed) and call whatever runtime helper(s) `kind`
+    /// dispatches to, dropping the heap object owned by `ssa`. For `is_ref`
+    /// locals, `ssa` is a stack alloca — the heap pointer is loaded first.
+    fn emit_drop_for_heap_local(&mut self, ssa: &str, kind: HeapKind, is_ref: bool) {
+        let ptr_val = if is_ref {
+            let loaded = self.next_reg();
+            self.push_instr(&format!("{loaded} = load ptr, ptr {ssa}"));
+            loaded
+        } else {
+            ssa.to_string()
+        };
+        // Declares `sym(ptr)` and returns `@sym` for use as a function-pointer
+        // argument, or `null` when `sym` is `None` (scalar payload — no
+        // per-element destructor needed).
+        let fn_value_arg = |this: &mut Self, sym: Option<&'static str>| -> String {
+            match sym {
+                Some(sym) => {
+                    this.ensure_extern(&format!("declare void @{sym}(ptr)"));
+                    format!("@{sym}")
+                }
+                None => "null".to_string(),
+            }
+        };
+        match kind {
+            HeapKind::String => {
+                self.ensure_extern("declare void @_mvl_string_drop(ptr)");
+                self.push_instr(&format!("call void @_mvl_string_drop(ptr {ptr_val})"));
+            }
+            HeapKind::Array => {
+                self.ensure_extern("declare void @_mvl_array_drop(ptr)");
+                self.push_instr(&format!("call void @_mvl_array_drop(ptr {ptr_val})"));
+            }
+            HeapKind::ArrayOfString => {
+                self.ensure_extern("declare void @_mvl_string_ptr_array_drop(ptr)");
+                self.push_instr(&format!(
+                    "call void @_mvl_string_ptr_array_drop(ptr {ptr_val})"
+                ));
+            }
+            HeapKind::ArrayOfArray { inner_drop_sym } => {
+                self.ensure_extern("declare void @_mvl_array_drop_mvlarray(ptr, ptr)");
+                let inner_arg = fn_value_arg(self, Some(inner_drop_sym));
+                self.push_instr(&format!(
+                    "call void @_mvl_array_drop_mvlarray(ptr {ptr_val}, ptr {inner_arg})"
+                ));
+            }
+            HeapKind::ArrayOfOption {
+                payload_size,
+                payload_drop_sym,
+            } => {
+                self.ensure_extern("declare void @_mvl_array_drop_option(ptr, i64, ptr)");
+                let drop_arg = fn_value_arg(self, payload_drop_sym);
+                self.push_instr(&format!(
+                    "call void @_mvl_array_drop_option(ptr {ptr_val}, i64 {payload_size}, ptr {drop_arg})"
+                ));
+            }
+            HeapKind::ArrayOfResult {
+                ok_size,
+                ok_drop_sym,
+                err_size,
+                err_drop_sym,
+            } => {
+                self.ensure_extern("declare void @_mvl_array_drop_result(ptr, i64, ptr, i64, ptr)");
+                let ok_arg = fn_value_arg(self, ok_drop_sym);
+                let err_arg = fn_value_arg(self, err_drop_sym);
+                self.push_instr(&format!(
+                    "call void @_mvl_array_drop_result(ptr {ptr_val}, i64 {ok_size}, ptr {ok_arg}, i64 {err_size}, ptr {err_arg})"
+                ));
+            }
+            HeapKind::Map => {
+                self.ensure_extern("declare void @_mvl_map_drop(ptr)");
+                self.push_instr(&format!("call void @_mvl_map_drop(ptr {ptr_val})"));
+            }
+            HeapKind::MapPtrValues { value_drop_sym } => {
+                self.ensure_extern("declare void @_mvl_map_drop_ptr_values(ptr, ptr)");
+                let value_arg = fn_value_arg(self, Some(value_drop_sym));
+                self.push_instr(&format!(
+                    "call void @_mvl_map_drop_ptr_values(ptr {ptr_val}, ptr {value_arg})"
+                ));
             }
         }
     }
@@ -371,6 +427,36 @@ impl TextEmitter {
         }
     }
 
+    /// Byte size + optional heap-drop symbol for a scalar or `String` leaf
+    /// type, as used inside a `List`/`Option`/`Result`/`Map` element (#1991).
+    /// Returns `None` for anything else (structs, nested collections, …) —
+    /// callers treat that as "not trackable at this nesting depth".
+    fn scalar_leaf(ty: &TypeExpr) -> Option<(u64, Option<&'static str>)> {
+        match ty {
+            TypeExpr::Base { name, args, .. } if args.is_empty() => match name.as_str() {
+                "Int" | "UInt" => Some((8, None)),
+                "Float" => Some((8, None)),
+                "Bool" | "Byte" | "UByte" => Some((1, None)),
+                "Char" => Some((4, None)),
+                "String" => Some((8, Some("_mvl_string_drop"))),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
+    /// Drop symbol for a `List[T]`/`Set[T]` value used as an element or map
+    /// value, where T is a scalar or `String` (#1991). `None` for anything
+    /// deeper (e.g. `List[List[T]]` used as a map value) — out of scope for
+    /// this pass.
+    fn array_drop_sym_for_elem(elem: &TypeExpr) -> Option<&'static str> {
+        match Self::scalar_leaf(elem) {
+            Some((_, None)) => Some("_mvl_array_drop"),
+            Some((_, Some(_))) => Some("_mvl_string_ptr_array_drop"),
+            None => None,
+        }
+    }
+
     /// Classify a type as heap-allocated for drop tracking.
     pub(super) fn heap_kind(ty: &TypeExpr) -> Option<HeapKind> {
         let base = match ty {
@@ -382,26 +468,97 @@ impl TextEmitter {
         match base {
             TypeExpr::Base { name, args, .. } => match name.as_str() {
                 "String" => Some(HeapKind::String),
-                "List" | "Array" | "Set" => {
-                    // Lists whose element type is not a known primitive heap type
-                    // (e.g. List[Match]) require per-element cleanup that the LLVM
-                    // emitter cannot generate.  Skip heap tracking for these to
-                    // avoid SSA dominance violations from out-of-scope drops (#1202).
-                    let elem_is_known = args.first().is_none_or(|a| {
-                        matches!(
-                            a,
-                            TypeExpr::Base { name, .. }
-                            if matches!(name.as_str(), "Int" | "Float" | "Bool" | "String"
-                                | "UInt" | "Byte" | "UByte" | "Char")
-                        )
-                    });
-                    if elem_is_known {
-                        Some(HeapKind::Array)
-                    } else {
-                        None
+                "List" | "Array" | "Set" => match args.first() {
+                    None => Some(HeapKind::Array),
+                    Some(elem) => {
+                        if Self::scalar_leaf(elem).is_some_and(|(_, sym)| sym.is_none()) {
+                            Some(HeapKind::Array)
+                        } else if matches!(elem, TypeExpr::Base { name, .. } if name == "String")
+                        {
+                            Some(HeapKind::ArrayOfString)
+                        } else if let TypeExpr::Base {
+                            name: inner_name,
+                            args: inner_args,
+                            ..
+                        } = elem
+                        {
+                            if matches!(inner_name.as_str(), "List" | "Array" | "Set") {
+                                inner_args.first().and_then(Self::array_drop_sym_for_elem).map(
+                                    |inner_drop_sym| HeapKind::ArrayOfArray { inner_drop_sym },
+                                )
+                            } else {
+                                None
+                            }
+                        } else if let TypeExpr::Option { inner, .. } = elem {
+                            Self::scalar_leaf(inner).map(|(payload_size, payload_drop_sym)| {
+                                HeapKind::ArrayOfOption {
+                                    payload_size,
+                                    payload_drop_sym,
+                                }
+                            })
+                        } else if let TypeExpr::Result { ok, err, .. } = elem {
+                            match (Self::scalar_leaf(ok), Self::scalar_leaf(err)) {
+                                (Some((ok_size, ok_drop_sym)), Some((err_size, err_drop_sym))) => {
+                                    Some(HeapKind::ArrayOfResult {
+                                        ok_size,
+                                        ok_drop_sym,
+                                        err_size,
+                                        err_drop_sym,
+                                    })
+                                }
+                                _ => None,
+                            }
+                        } else {
+                            // Element type not a known primitive heap type
+                            // (e.g. List[Match]) requires per-element cleanup
+                            // the LLVM emitter cannot generate at this nesting
+                            // depth.  Skip heap tracking to avoid SSA dominance
+                            // violations from out-of-scope drops (#1202).
+                            None
+                        }
                     }
-                }
-                "Map" => Some(HeapKind::Map),
+                },
+                "Map" => match args.get(1) {
+                    None => Some(HeapKind::Map),
+                    Some(val) => {
+                        if Self::scalar_leaf(val).is_some_and(|(_, sym)| sym.is_none()) {
+                            Some(HeapKind::Map)
+                        } else if let Some((_, Some(value_drop_sym))) = Self::scalar_leaf(val) {
+                            Some(HeapKind::MapPtrValues { value_drop_sym })
+                        } else if let TypeExpr::Base {
+                            name: inner_name,
+                            args: inner_args,
+                            ..
+                        } = val
+                        {
+                            match inner_name.as_str() {
+                                "List" | "Array" | "Set" => {
+                                    inner_args.first().and_then(Self::array_drop_sym_for_elem).map(
+                                        |value_drop_sym| HeapKind::MapPtrValues { value_drop_sym },
+                                    )
+                                }
+                                "Map" => {
+                                    // Map[K2, V2] as a value: only scalar V2 is in
+                                    // scope (plain _mvl_map_drop suffices — no
+                                    // per-entry cleanup needed).
+                                    let v2_is_scalar = inner_args.get(1).is_none_or(|v2| {
+                                        Self::scalar_leaf(v2).is_some_and(|(_, sym)| sym.is_none())
+                                    });
+                                    if v2_is_scalar {
+                                        Some(HeapKind::MapPtrValues {
+                                            value_drop_sym: "_mvl_map_drop",
+                                        })
+                                    } else {
+                                        None
+                                    }
+                                }
+                                _ => None,
+                            }
+                        } else {
+                            None
+                        }
+                    }
+                },
                 _ => None,
             },
             _ => None,
