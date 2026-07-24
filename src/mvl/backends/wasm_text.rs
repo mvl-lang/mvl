@@ -154,6 +154,10 @@ struct Ctx<'a> {
     /// NOT in this set (e.g. match-arm bindings) emit `;; unsupported`.
     string_params: std::cell::RefCell<std::collections::HashSet<String>>,
     assert_mode: AssertMode,
+    /// All locals collected for the current function body.
+    /// Set by `emit_fn` before body emission; read by `emit_stmt(Return)`
+    /// to emit drops on explicit-return paths and by loop back-edges.
+    fn_locals: std::cell::RefCell<Vec<(String, Ty)>>,
 }
 
 impl Ctx<'_> {
@@ -343,6 +347,7 @@ impl Backend for WasmTextCompiler {
             needs_runtime: Cell::new(false),
             string_params: std::cell::RefCell::new(std::collections::HashSet::new()),
             assert_mode: self.assert_mode,
+            fn_locals: std::cell::RefCell::new(Vec::new()),
         };
 
         // Collect unique generic-function instantiations needed by the corpus fns.
@@ -708,6 +713,66 @@ fn emit_contract_check(
     out.push_str("    if\n      unreachable\n    end\n");
 }
 
+/// Returns the WAT drop-function name for a heap-owning local, or `None`
+/// if the local does not hold an allocation that requires a manual drop call.
+/// Mirrors the logic in the implicit-return drop loop inside `emit_fn`.
+fn local_drop_fn(name: &str, ty: &Ty) -> Option<&'static str> {
+    if name.starts_with("__ms_") {
+        Some("_mvl_string_drop")
+    } else if name.starts_with("__mo_") {
+        Some("_mvl_option_drop")
+    } else if name.starts_with("__mr_") || name.starts_with("__pr_") {
+        Some("_mvl_result_drop")
+    } else if name.starts_with("__match_") && option_inner_ty(ty).is_some() {
+        Some("_mvl_option_drop")
+    } else if name.starts_with("__match_") && result_ok_ty(ty).is_some() {
+        Some("_mvl_result_drop")
+    } else if !name.starts_with("__") && option_inner_ty(ty).is_some() {
+        Some("_mvl_option_drop")
+    } else if !name.starts_with("__") && result_ok_ty(ty).is_some() {
+        Some("_mvl_result_drop")
+    } else if !name.starts_with("__")
+        && collection_elem_ty(ty).is_some()
+        && collection_elem_ty(ty)
+            .map(|e| !matches!(e, Ty::String))
+            .unwrap_or(true)
+    {
+        Some("_mvl_array_drop")
+    } else if !name.starts_with("__") && matches!(map_key_val_ty(ty), Some((Ty::String, Ty::Int))) {
+        Some("_mvl_map_drop_si64")
+    } else {
+        None
+    }
+}
+
+/// Emit `local.get $name; call $drop_fn` for every heap-owning local,
+/// optionally skipping the one named `exclude` (the value being returned).
+/// All drop functions are null-safe, so uninitialized locals (value = 0)
+/// are harmless no-ops.
+fn emit_fn_heap_drops(out: &mut String, locals: &[(String, Ty)], exclude: Option<&str>) {
+    for (name, ty) in locals {
+        if exclude.map(|ex| ex == name.as_str()).unwrap_or(false) {
+            continue;
+        }
+        if let Some(drop_fn) = local_drop_fn(name, ty) {
+            out.push_str(&format!("    local.get ${name}\n"));
+            out.push_str(&format!("    call ${drop_fn}\n"));
+        }
+    }
+}
+
+/// Extract the binding name from a `return expr` expression so the returned
+/// value can be excluded from heap drops (it must survive for the caller).
+/// Mirrors LLVM's `exclude_returned_value_tir`.
+fn exclude_returned_local(expr: &TirExpr) -> Option<&str> {
+    match &expr.kind {
+        TirExprKind::Var(name) => Some(name.as_str()),
+        TirExprKind::Consume(inner) => exclude_returned_local(inner),
+        TirExprKind::Relabel { expr: inner, .. } => exclude_returned_local(inner),
+        _ => None,
+    }
+}
+
 fn emit_fn(out: &mut String, f: &TirFn, ctx: &Ctx) {
     // Update the per-function String-param registry so that `Var` accesses
     // to these params emit two `local.get` ops instead of one.
@@ -796,6 +861,10 @@ fn emit_fn(out: &mut String, f: &TirFn, ctx: &Ctx) {
         }
     }
 
+    // Publish the locals list so emit_stmt(Return) can emit drops on
+    // explicit-return paths without threading locals through every call.
+    *ctx.fn_locals.borrow_mut() = locals.clone();
+
     emit_block(&mut body, &f.body, ctx);
 
     // Emit `ensures` / return_refinement checks before implicit return (#1822).
@@ -823,80 +892,15 @@ fn emit_fn(out: &mut String, f: &TirFn, ctx: &Ctx) {
         out.push_str("    unreachable\n");
     } else {
         out.push_str(&body);
-        // Drop each `__ms_*` temp local at the implicit-return path.
-        // Every allocation from `.concat` / `.substring` / … was stashed
-        // in a temp; freeing at fn exit reclaims the byte buffer + struct.
-        // `_mvl_string_drop` is null-safe, so temps on code paths that
-        // never allocated are harmless.
+        // Emit heap drops for the implicit-return path. All drop functions
+        // are null-safe, so locals that were never initialised (value = 0)
+        // are harmless no-ops. Explicit-return paths emit their own drops
+        // via `emit_stmt(Return)` before the `return` instruction.
         //
-        // For collections (`__ma_*` — MvlArray literal temps) we do NOT
-        // drop, because that temp holds the *same pointer* as the value
-        // that flowed out to the outer expression (typically bound to a
-        // `let xs: List[T] = ...` local). Dropping both would double-free.
-        // Instead, we drop user-bound list locals below.
-        //
-        // Limitation: this only catches implicit-return paths. Explicit
-        // `return` in the middle of the fn skips cleanup and leaks. Fine
-        // for phase-2/3 corpus tests, which all end via implicit return.
-        for (name, ty) in &locals {
-            if name.starts_with("__ms_") {
-                out.push_str(&format!("    local.get ${name}\n"));
-                out.push_str("    call $_mvl_string_drop\n");
-            } else if name.starts_with("__mo_") {
-                // `.unwrap_or` already drops the box inline (see emit_expr).
-                // The __mo_* local's value is 0 after that drop — a second
-                // _mvl_option_drop(0) is a no-op (null-safe), so re-dropping
-                // here is defense-in-depth without double-free risk.
-                out.push_str(&format!("    local.get ${name}\n"));
-                out.push_str("    call $_mvl_option_drop\n");
-            } else if name.starts_with("__mr_") {
-                // Same as __mo_*: Result.unwrap_or drops inline; re-drop is
-                // null-safe defense-in-depth.
-                out.push_str(&format!("    local.get ${name}\n"));
-                out.push_str("    call $_mvl_result_drop\n");
-            } else if name.starts_with("__match_") && option_inner_ty(ty).is_some() {
-                // Match scrutinee that was an Option — drop the box the
-                // arms consumed by value.
-                out.push_str(&format!("    local.get ${name}\n"));
-                out.push_str("    call $_mvl_option_drop\n");
-            } else if name.starts_with("__match_") && result_ok_ty(ty).is_some() {
-                // Match scrutinee that was a Result — drop the box.
-                out.push_str(&format!("    local.get ${name}\n"));
-                out.push_str("    call $_mvl_result_drop\n");
-            } else if name.starts_with("__pr_") {
-                // `?`-operator temp — the Result was already propagated (Ok
-                // or Err) so drop its box here at fn exit. Null-safe.
-                out.push_str(&format!("    local.get ${name}\n"));
-                out.push_str("    call $_mvl_result_drop\n");
-            } else if !name.starts_with("__") && option_inner_ty(ty).is_some() {
-                // User-bound `let opt: Option[T] = …`. Rare in corpus.
-                out.push_str(&format!("    local.get ${name}\n"));
-                out.push_str("    call $_mvl_option_drop\n");
-            } else if !name.starts_with("__") && result_ok_ty(ty).is_some() {
-                // User-bound `let r: Result[T, E] = …`.
-                out.push_str(&format!("    local.get ${name}\n"));
-                out.push_str("    call $_mvl_result_drop\n");
-            } else if !name.starts_with("__")
-                && collection_elem_ty(ty).is_some()
-                && collection_elem_ty(ty)
-                    .map(|e| !matches!(e, Ty::String))
-                    .unwrap_or(true)
-            {
-                // User-bound list / array / set. Drops the array header +
-                // element buffer. Element-level drops (e.g. inner strings)
-                // aren't emitted yet — deferred with List[String].
-                out.push_str(&format!("    local.get ${name}\n"));
-                out.push_str("    call $_mvl_array_drop\n");
-            } else if !name.starts_with("__")
-                && matches!(map_key_val_ty(ty), Some((Ty::String, Ty::Int)))
-            {
-                // User-bound Map[String, Int]. Frees the MvlMap + copied key bytes.
-                // Gate on the concrete type so future Map variants don't emit a
-                // mismatched ABI call before their own drop function exists.
-                out.push_str(&format!("    local.get ${name}\n"));
-                out.push_str("    call $_mvl_map_drop_si64\n");
-            }
-        }
+        // Note: `__ma_*` (MvlArray literal temps) are intentionally absent
+        // from `local_drop_fn` — they alias the same pointer as the
+        // user-bound list local. Dropping both would double-free.
+        emit_fn_heap_drops(out, &locals, None);
     }
     out.push_str("  )\n");
 }
@@ -1315,9 +1319,15 @@ fn emit_stmt(out: &mut String, stmt: &TirStmt, ctx: &Ctx) {
         TirStmt::Expr { expr, .. } => emit_expr(out, expr, ctx),
         TirStmt::Return { value: Some(e), .. } => {
             emit_expr(out, e, ctx);
+            // Drop all heap locals except the one being returned.
+            // The exclude keeps the return value alive for the caller;
+            // all other live heap locals are freed here (not at fn exit).
+            let excluded = exclude_returned_local(e);
+            emit_fn_heap_drops(out, &ctx.fn_locals.borrow(), excluded);
             out.push_str("    return\n");
         }
         TirStmt::Return { value: None, .. } => {
+            emit_fn_heap_drops(out, &ctx.fn_locals.borrow(), None);
             out.push_str("    return\n");
         }
         // `let x: T = init;`  (or `let x: ref T = init;` — same lowering)
@@ -1436,6 +1446,25 @@ fn emit_stmt(out: &mut String, stmt: &TirStmt, ctx: &Ctx) {
                 }
             } else {
                 emit_block(out, body, ctx);
+            }
+            // Drop heap locals introduced in this loop body before the
+            // back-edge so per-iteration allocations don't accumulate.
+            // Zero each out afterward — the function-exit drops re-visit
+            // all fn locals; null-safe drops on zeroed values are no-ops.
+            {
+                let mut loop_locals: Vec<(String, Ty)> = Vec::new();
+                collect_locals_block(body, &mut loop_locals);
+                collect_locals_ctx(body, &mut loop_locals, ctx);
+                let mut seen = std::collections::HashSet::new();
+                loop_locals.retain(|(n, _)| seen.insert(n.clone()));
+                for (name, ty) in &loop_locals {
+                    if let Some(drop_fn) = local_drop_fn(name, ty) {
+                        out.push_str(&format!("    local.get ${name}\n"));
+                        out.push_str(&format!("    call ${drop_fn}\n"));
+                        out.push_str("    i32.const 0\n");
+                        out.push_str(&format!("    local.set ${name}\n"));
+                    }
+                }
             }
             out.push_str(&format!("    br ${cnt}\n"));
             out.push_str("    end\n");
@@ -3661,6 +3690,7 @@ fn emit_generic_fn(
         needs_runtime: Cell::new(ctx.needs_runtime.get()),
         string_params: std::cell::RefCell::new(std::collections::HashSet::new()),
         assert_mode: ctx.assert_mode,
+        fn_locals: std::cell::RefCell::new(Vec::new()),
     };
 
     // Set up string_params for params whose concrete type is String.

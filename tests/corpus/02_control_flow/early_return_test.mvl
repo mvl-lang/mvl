@@ -38,3 +38,23 @@ test partial fn early_return_first_multiple_hits() -> Unit {
 test partial fn early_return_first_multiple_misses() -> Unit {
     assert_eq(first_multiple_of_three(2), -1);
 }
+
+// Exercises explicit return while a heap-allocated __ms_* string temp is live.
+// On the early-return path the temp must be dropped before `return`; on the
+// fall-through path it is dropped at function exit.  Without the fix the early
+// path leaks the allocation.
+fn string_prefix_len(s: String) -> Int {
+    let tagged: String = "prefix: ".concat(s);
+    if tagged.len() > 20 {
+        return -1;
+    }
+    tagged.len()
+}
+
+test fn early_return_drops_string_heap_temp_short() -> Unit {
+    assert_eq(string_prefix_len("hi"), 10);
+}
+
+test fn early_return_drops_string_heap_temp_long() -> Unit {
+    assert_eq(string_prefix_len("a very long string indeed yeah"), -1);
+}
