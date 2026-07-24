@@ -1905,6 +1905,11 @@ impl TextEmitter {
                 Some(v) => v,
                 None => continue,
             };
+            // Transfer ownership: the map's slot stores a byte-copy of the
+            // pointer itself (aliasing the same heap object), not a deep
+            // clone — so a heap-tracked local must not also be dropped at
+            // scope exit once the map owns it too (#1991).
+            self.exclude_returned_value_tir(val_expr);
             let val_ty = self.infer_val_type(&val_val);
             let val_slot = self.next_reg();
             self.push_instr(&format!("{val_slot} = alloca {val_ty}"));
@@ -3157,6 +3162,11 @@ impl TextEmitter {
                     Some(v) => v,
                     None => return Ok(None),
                 };
+                // Transfer ownership: the map's slot stores a byte-copy of the
+                // pointer itself (aliasing the same heap object), not a deep
+                // clone — so a heap-tracked local must not also be dropped at
+                // scope exit once the map owns it too (#1991).
+                self.exclude_returned_value_tir(&args[1]);
                 self.ensure_extern("declare void @_mvl_map_insert(ptr, ptr, i64, ptr, i64)");
                 // Key encoding depends on key type.  String keys use the string's raw
                 // UTF-8 bytes (via _mvl_string_ptr/_mvl_str_len); primitive keys (Int,
