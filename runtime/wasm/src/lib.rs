@@ -655,8 +655,7 @@ pub unsafe extern "C" fn _mvl_array_clone(a: i32) -> i32 {
 /// the `MvlArray` header when refcount hits zero.
 ///
 /// Element-level drops (e.g., strings inside a `List[String]`) are *not*
-/// emitted here — the LLVM backend does per-element drops in the emitter
-/// for now. Follow-up if it becomes a real leak.
+/// handled here — use `_mvl_string_ptr_array_drop` for `List[String]`.
 ///
 /// # Safety
 /// `a` must be a valid `MvlArray` pointer, not used after drop.
@@ -671,6 +670,41 @@ pub unsafe extern "C" fn _mvl_array_drop(a: i32) {
         return;
     }
     let nbytes = (arr.cap as usize) * (arr.elem_size as usize);
+    unsafe { reclaim_byte_buffer(arr.ptr, nbytes, nbytes) };
+    unsafe {
+        let _ = Box::from_raw(a as usize as *mut MvlArray);
+    }
+}
+
+/// `_mvl_string_ptr_array_drop(a)` — refcount decrement for a `List[String]`
+/// array. When the refcount hits zero each element `*MvlString` is dropped
+/// via `_mvl_string_drop`, then the backing buffer and struct are freed.
+///
+/// Use instead of `_mvl_array_drop` whenever the array's elements are
+/// `*MvlString` pointers (`elem_size == 4`).
+///
+/// # Safety
+/// `a` must be a valid `MvlArray` pointer with `elem_size == 4`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn _mvl_string_ptr_array_drop(a: i32) {
+    if a == 0 {
+        return;
+    }
+    let arr = unsafe { &mut *(a as usize as *mut MvlArray) };
+    arr.rc -= 1;
+    if arr.rc > 0 {
+        return;
+    }
+    let len = arr.len as usize;
+    let es = arr.elem_size as usize;
+    let base = arr.ptr as usize;
+    for i in 0..len {
+        let s = unsafe { core::ptr::read((base + i * es) as *const i32) };
+        if s != 0 {
+            unsafe { _mvl_string_drop(s) };
+        }
+    }
+    let nbytes = (arr.cap as usize) * es;
     unsafe { reclaim_byte_buffer(arr.ptr, nbytes, nbytes) };
     unsafe {
         let _ = Box::from_raw(a as usize as *mut MvlArray);
