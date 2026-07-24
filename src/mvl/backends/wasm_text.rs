@@ -234,6 +234,7 @@ const RUNTIME_IMPORTS: &[(&str, &str)] = &[
     ("_mvl_array_get", "(param i32 i64) (result i32)"),
     ("_mvl_array_clone", "(param i32) (result i32)"),
     ("_mvl_array_drop", "(param i32)"),
+    ("_mvl_string_ptr_array_drop", "(param i32)"),
     // Group D — MvlOption (#1821 partial, Phase 4 prelude). Heap-allocated
     // `Option[T]`; emitter treats the pointer as opaque i32 and calls the
     // typed accessors below. Corpus scope: `Option[Int]` (i64 payload) and
@@ -732,6 +733,12 @@ fn local_drop_fn(name: &str, ty: &Ty) -> Option<&'static str> {
     } else if !name.starts_with("__") && result_ok_ty(ty).is_some() {
         Some("_mvl_result_drop")
     } else if !name.starts_with("__")
+        && collection_elem_ty(ty)
+            .map(|e| matches!(e, Ty::String))
+            .unwrap_or(false)
+    {
+        Some("_mvl_string_ptr_array_drop")
+    } else if !name.starts_with("__")
         && collection_elem_ty(ty).is_some()
         && collection_elem_ty(ty)
             .map(|e| !matches!(e, Ty::String))
@@ -1164,7 +1171,15 @@ fn collect_locals_stmt(stmt: &TirStmt, locals: &mut Vec<(String, Ty)>) {
                     collection_elem_ty(&iter.ty).cloned().unwrap_or(Ty::Int),
                 ),
             };
-            locals.push((var_name, var_ty));
+            if matches!(var_ty, Ty::String) {
+                // List[String] element — split into ptr/len locals (i32×2),
+                // plus a *MvlString unpack temp for the loop-body load.
+                locals.push((format!("{var_name}_ptr"), Ty::Bool));
+                locals.push((format!("{var_name}_len"), Ty::Bool));
+                locals.push((format!("__for_ms_{}", span.offset), Ty::Bool));
+            } else {
+                locals.push((var_name, var_ty));
+            }
             // Range form uses only `__for_hi_<off>` (i64); list form uses
             // `__for_arr_<off>` (i32), `__for_idx_<off>` (i64),
             // `__for_len_<off>` (i64). Declaring all four for both shapes is
@@ -1886,7 +1901,9 @@ fn emit_expr(out: &mut String, expr: &TirExpr, ctx: &Ctx) {
         } if collection_elem_ty(&receiver.ty).is_some() && method == "get" && args.len() == 1 => {
             ctx.needs_runtime.set(true);
             let elem_ty = collection_elem_ty(&receiver.ty).cloned().unwrap_or(Ty::Int);
-            let getter = if is_i32(&elem_ty, ctx) {
+            // String elements are stored as *MvlString (i32); Bool/enum/struct are
+            // i32 too. Everything else (Int, Float) is i64.
+            let getter = if is_i32(&elem_ty, ctx) || is_string_ty(&elem_ty, ctx) {
                 "_mvl_array_get_option_i32"
             } else {
                 "_mvl_array_get_option_i64"
@@ -1935,13 +1952,6 @@ fn emit_expr(out: &mut String, expr: &TirExpr, ctx: &Ctx) {
         TirExprKind::List { elems } => {
             ctx.needs_runtime.set(true);
             let elem_ty = collection_elem_ty(&expr.ty).cloned().unwrap_or(Ty::Int);
-            // String elements need a `*MvlString` allocation per element
-            // (they arrive on the WASM stack as two i32s, but the array
-            // stores fixed-width slots). Deferred until Phase 3.2.
-            if matches!(&elem_ty, Ty::String) {
-                out.push_str("    ;; unsupported: List[String] literal (Phase 3.2)\n");
-                return;
-            }
             let elem_size = elem_size_bytes(&elem_ty, ctx);
             let cap = elems.len().max(4) as i32;
             let temp = mvl_array_temp_name(expr);
@@ -1949,11 +1959,22 @@ fn emit_expr(out: &mut String, expr: &TirExpr, ctx: &Ctx) {
             out.push_str(&format!("    i32.const {cap}\n"));
             out.push_str("    call $_mvl_array_new\n");
             out.push_str(&format!("    local.set ${temp}\n"));
-            let push_op = push_op_for(&elem_ty, ctx);
-            for e in elems {
-                out.push_str(&format!("    local.get ${temp}\n"));
-                emit_expr(out, e, ctx);
-                out.push_str(&format!("    call {push_op}\n"));
+            if is_string_ty(&elem_ty, ctx) {
+                // Each String element arrives on the stack as (ptr, len);
+                // wrap it in a *MvlString allocation before pushing (i32).
+                for e in elems {
+                    out.push_str(&format!("    local.get ${temp}\n"));
+                    emit_expr(out, e, ctx);
+                    out.push_str("    call $_mvl_string_new\n");
+                    out.push_str("    call $_mvl_array_push_i32\n");
+                }
+            } else {
+                let push_op = push_op_for(&elem_ty, ctx);
+                for e in elems {
+                    out.push_str(&format!("    local.get ${temp}\n"));
+                    emit_expr(out, e, ctx);
+                    out.push_str(&format!("    call {push_op}\n"));
+                }
             }
             out.push_str(&format!("    local.get ${temp}\n"));
         }
@@ -1963,10 +1984,6 @@ fn emit_expr(out: &mut String, expr: &TirExpr, ctx: &Ctx) {
         TirExprKind::Set { elems } => {
             ctx.needs_runtime.set(true);
             let elem_ty = collection_elem_ty(&expr.ty).cloned().unwrap_or(Ty::Int);
-            if matches!(&elem_ty, Ty::String) {
-                out.push_str("    ;; unsupported: Set[String] literal (Phase 3.2)\n");
-                return;
-            }
             let elem_size = elem_size_bytes(&elem_ty, ctx);
             let cap = elems.len().max(4) as i32;
             let temp = mvl_array_temp_name(expr);
@@ -1974,20 +1991,32 @@ fn emit_expr(out: &mut String, expr: &TirExpr, ctx: &Ctx) {
             out.push_str(&format!("    i32.const {cap}\n"));
             out.push_str("    call $_mvl_array_new\n");
             out.push_str(&format!("    local.set ${temp}\n"));
-            let push_op = push_op_for(&elem_ty, ctx);
-            for e in elems {
+            if is_string_ty(&elem_ty, ctx) {
+                for e in elems {
+                    out.push_str(&format!("    local.get ${temp}\n"));
+                    emit_expr(out, e, ctx);
+                    out.push_str("    call $_mvl_string_new\n");
+                    out.push_str("    call $_mvl_array_push_i32\n");
+                }
+                // Dedup by string pointer value (address-stable in this context).
                 out.push_str(&format!("    local.get ${temp}\n"));
-                emit_expr(out, e, ctx);
-                out.push_str(&format!("    call {push_op}\n"));
-            }
-            // Dedup: sort and remove adjacent duplicates in-place.
-            let dedup_fn = if is_i32(&elem_ty, ctx) {
-                "_mvl_array_dedup_i32"
+                out.push_str("    call $_mvl_array_dedup_i32\n");
             } else {
-                "_mvl_array_dedup_i64"
-            };
-            out.push_str(&format!("    local.get ${temp}\n"));
-            out.push_str(&format!("    call ${dedup_fn}\n"));
+                let push_op = push_op_for(&elem_ty, ctx);
+                for e in elems {
+                    out.push_str(&format!("    local.get ${temp}\n"));
+                    emit_expr(out, e, ctx);
+                    out.push_str(&format!("    call {push_op}\n"));
+                }
+                // Dedup: sort and remove adjacent duplicates in-place.
+                let dedup_fn = if is_i32(&elem_ty, ctx) {
+                    "_mvl_array_dedup_i32"
+                } else {
+                    "_mvl_array_dedup_i64"
+                };
+                out.push_str(&format!("    local.get ${temp}\n"));
+                out.push_str(&format!("    call ${dedup_fn}\n"));
+            }
             out.push_str(&format!("    local.get ${temp}\n"));
         }
         // Map literal — `{"k1": v1, "k2": v2, ...}`. Only `Map[String, Int]`
@@ -2179,7 +2208,6 @@ fn emit_for_list(
     let cnt = ctx.fresh_label("for_cont");
 
     let elem_ty = collection_elem_ty(&iter.ty).cloned().unwrap_or(Ty::Int);
-    let (load_op, _) = list_elem_load_op(&elem_ty, ctx);
 
     ctx.needs_runtime.set(true);
 
@@ -2200,12 +2228,26 @@ fn emit_for_list(
     out.push_str(&format!("    local.get ${len_local}\n"));
     out.push_str("    i64.ge_s\n");
     out.push_str(&format!("    br_if ${brk}\n"));
-    // load element into $var_name
+    // load element into loop variable
     out.push_str(&format!("    local.get ${arr_local}\n"));
     out.push_str(&format!("    local.get ${idx_local}\n"));
     out.push_str("    call $_mvl_array_get\n");
-    out.push_str(&format!("    {load_op}\n"));
-    out.push_str(&format!("    local.set ${var_name}\n"));
+    if is_string_ty(&elem_ty, ctx) {
+        // Each slot holds a *MvlString (i32 pointer). Load it, then unpack
+        // .ptr (offset 0) and .len (offset 4) into the split locals.
+        let ms_temp = format!("__for_ms_{span_offset}");
+        out.push_str("    i32.load offset=0\n");
+        out.push_str(&format!("    local.tee ${ms_temp}\n"));
+        out.push_str("    i32.load offset=0\n");
+        out.push_str(&format!("    local.set ${var_name}_ptr\n"));
+        out.push_str(&format!("    local.get ${ms_temp}\n"));
+        out.push_str("    i32.load offset=4\n");
+        out.push_str(&format!("    local.set ${var_name}_len\n"));
+    } else {
+        let (load_op, _) = list_elem_load_op(&elem_ty, ctx);
+        out.push_str(&format!("    {load_op}\n"));
+        out.push_str(&format!("    local.set ${var_name}\n"));
+    }
     // body
     emit_block(out, body, ctx);
     // idx = idx + 1
@@ -3046,12 +3088,11 @@ fn map_key_val_ty(ty: &Ty) -> Option<(&Ty, &Ty)> {
 ///   `i64` (Int / UInt / …)                     → 8
 ///   `f64` (Float)                              → 8
 fn elem_size_bytes(elem_ty: &Ty, ctx: &Ctx) -> u32 {
-    if is_i32(elem_ty, ctx) {
+    if is_string_ty(elem_ty, ctx) {
+        4 // *MvlString pointer (i32)
+    } else if is_i32(elem_ty, ctx) {
         4
     } else {
-        // Int, Float, and unsupported-so-far element types all end up here.
-        // String elements need a `*MvlString` (i32) wrapper allocation per
-        // element — deferred until Phase 3.2 / 3.3.
         8
     }
 }

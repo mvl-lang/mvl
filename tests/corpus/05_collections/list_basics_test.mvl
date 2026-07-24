@@ -90,3 +90,47 @@ test fn range_for_empty() -> Unit {
     }
     assert_eq(count, 0);
 }
+
+// Phase 3.2 (#1992) — List[String] literals and iteration in the WASM backend.
+
+test fn list_of_strings_len() -> Unit {
+    let names: List[String] = ["alice", "bob", "carol"];
+    assert_eq(names.len(), 3);
+}
+
+test fn list_of_strings_empty_len() -> Unit {
+    let names: List[String] = [];
+    assert_eq(names.len(), 0);
+    assert_eq(names.is_empty(), true);
+}
+
+test fn list_of_strings_for_in_count() -> Unit {
+    let words: List[String] = ["one", "two", "three"];
+    let count: ref Int = 0;
+    for _ in words {
+        count = count + 1;
+    }
+    assert_eq(count, 3);
+}
+
+test fn list_of_strings_for_in_search() -> Unit {
+    let names: List[String] = ["alice", "bob", "carol"];
+    let found: ref Bool = false;
+    for s in names {
+        if s == "bob" {
+            found = true;
+        }
+    }
+    assert_eq(found, true);
+}
+
+test fn list_of_strings_for_in_no_match() -> Unit {
+    let names: List[String] = ["alice", "bob", "carol"];
+    let found: ref Bool = false;
+    for s in names {
+        if s == "dave" {
+            found = true;
+        }
+    }
+    assert_eq(found, false);
+}
