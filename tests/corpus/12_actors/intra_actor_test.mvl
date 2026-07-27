@@ -1,0 +1,68 @@
+// 12_actors/intra_actor_test.mvl — `self.method(…)` inside a behavior body.
+//
+// An intra-actor call is SYNCHRONOUS: the actor already holds exclusive access
+// to its own state while dispatching, so the call runs inline rather than going
+// through the mailbox. Routing it through the mailbox would race the caller's
+// own pending messages.
+//
+// The LLVM backend used to drop these calls silently — `self` is the raw state
+// pointer inside a behavior, not a handle, so the send path evaluated the
+// receiver to nothing and emitted no call at all (#2012).
+
+actor Probe {
+    n: Int
+
+    pub fn step() {
+        self.n = self.n * 10;
+        self.mark()
+    }
+
+    pub fn mark() {
+        self.n = self.n * 2
+    }
+
+    pub fn bump() {
+        self.n = self.n + 1
+    }
+
+    pub test fn get() -> Int {
+        self.n
+    }
+}
+
+actor Chain {
+    n: Int
+
+    pub fn step(val k: Int) {
+        self.n = self.n + 1;
+        if k > 0 {
+            self.step(k - 1)
+        }
+    }
+
+    pub test fn count() -> Int {
+        self.n
+    }
+}
+
+test fn intra_actor_call_runs_inline() -> Unit ! Spawn + Send {
+    let p: Probe = actor Probe { n: 1 };
+    p.step();
+    p.bump();
+    // step runs mark inline: (1 * 10) * 2 = 20, then bump = 21. A dropped
+    // intra-actor call would give 1 * 10 + 1 = 11.
+    assert_eq(p.get(), 21);
+}
+
+test fn intra_actor_call_reaches_private_helper() -> Unit ! Spawn + Send {
+    let p: Probe = actor Probe { n: 3 };
+    p.mark();
+    assert_eq(p.get(), 6);
+}
+
+test fn intra_actor_recursion_completes() -> Unit ! Spawn + Send {
+    let c: Chain = actor Chain { n: 0 };
+    c.step(4);
+    // One increment per level: 4 recursive steps plus the initial one.
+    assert_eq(c.count(), 5);
+}

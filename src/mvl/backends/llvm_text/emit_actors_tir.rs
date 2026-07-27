@@ -495,6 +495,59 @@ impl TextEmitter {
     }
 
     /// TIR variant of [`Self::emit_actor_method_call`].
+    /// Emit `self.method(args…)` inside an actor method body as a direct call
+    /// on the state pointer.
+    ///
+    /// Intra-actor calls are synchronous: the actor already holds exclusive
+    /// access to its own state while dispatching, so there is nothing to
+    /// serialise, and routing through the mailbox would race the caller's own
+    /// pending messages non-deterministically. The Rust backend has always done
+    /// this (all methods live in `impl {Name}State`); WASM's drain-at-send makes
+    /// it observationally identical. LLVM used to drop the call entirely (#2012).
+    pub(super) fn emit_actor_self_call_tir(
+        &mut self,
+        actor_name: &str,
+        method: &str,
+        args: &[TirExpr],
+    ) -> Result<Option<String>, String> {
+        use crate::mvl::backends::rust::emit_actors::actor_name_to_snake;
+
+        let ad = match self.module.tir_actor_decls.get(actor_name).cloned() {
+            Some(a) => a,
+            None => return Ok(None),
+        };
+        let Some(callee) = ad.methods.iter().find(|m| m.name == method).cloned() else {
+            return Ok(None);
+        };
+
+        let fn_name = format!("{}_{}", actor_name_to_snake(actor_name), callee.name);
+        let mut call_parts = vec!["ptr %self".to_string()];
+        for (param, arg) in callee.params.iter().zip(args.iter()) {
+            let ty_str = self.llvm_ty_ctx(&ty_or_unit(&param.ty));
+            if ty_str == "void" {
+                continue;
+            }
+            let Some(val) = self.emit_expr_tir(arg)? else {
+                continue;
+            };
+            call_parts.push(format!("{ty_str} {val}"));
+        }
+        let call_args = call_parts.join(", ");
+
+        let ret_te = ty_or_unit(&callee.ret_ty);
+        let ret_ty_str = self.llvm_ty_ctx(&ret_te);
+        if Self::is_void(&ret_te) || ret_ty_str == "void" {
+            self.push_instr(&format!("call void @{fn_name}({call_args})"));
+            return Ok(None);
+        }
+        let reg = self.next_reg();
+        self.push_instr(&format!(
+            "{reg} = call {ret_ty_str} @{fn_name}({call_args})"
+        ));
+        self.fn_ctx.reg_types.insert(reg.clone(), ret_ty_str);
+        Ok(Some(reg))
+    }
+
     pub(super) fn emit_actor_method_call_tir(
         &mut self,
         handle_val: &str,

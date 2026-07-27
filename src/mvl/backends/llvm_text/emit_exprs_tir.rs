@@ -2939,11 +2939,21 @@ impl TextEmitter {
     ) -> Result<Option<String>, String> {
         // Actor method call — fire-and-forget send.
         if let Some(actor_name) = self.resolve_actor_type_name_tir(receiver) {
+            let actor_name = actor_name.clone();
+            // `self.other_behavior(…)` inside a behavior body is a direct call
+            // on the state, not a mailbox send. `self` there is the raw state
+            // pointer rather than a handle, so the send path used to evaluate
+            // the receiver to nothing and drop the call silently (#2012).
+            // Direct-calling also matches the Rust backend and avoids racing
+            // the caller's own pending messages, which a real self-send would.
+            if matches!(&receiver.kind, TirExprKind::Var(n) if n == "self") {
+                return self.emit_actor_self_call_tir(&actor_name, method, args);
+            }
             let handle_val = match self.emit_expr_tir(receiver)? {
                 Some(v) => v,
                 None => return Ok(None),
             };
-            return self.emit_actor_method_call_tir(&handle_val, &actor_name.clone(), method, args);
+            return self.emit_actor_method_call_tir(&handle_val, &actor_name, method, args);
         }
 
         let recv_ty = self.ty_to_llvm_ctx(&receiver.ty);
