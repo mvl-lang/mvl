@@ -235,6 +235,7 @@ const RUNTIME_IMPORTS: &[(&str, &str)] = &[
     ("_mvl_array_clone", "(param i32) (result i32)"),
     ("_mvl_array_drop", "(param i32)"),
     ("_mvl_string_ptr_array_drop", "(param i32)"),
+    ("_mvl_string_ptr_array_dedup", "(param i32)"),
     // Group D — MvlOption (#1821 partial, Phase 4 prelude). Heap-allocated
     // `Option[T]`; emitter treats the pointer as opaque i32 and calls the
     // typed accessors below. Corpus scope: `Option[Int]` (i64 payload) and
@@ -1174,6 +1175,8 @@ fn collect_locals_stmt(stmt: &TirStmt, locals: &mut Vec<(String, Ty)>) {
             if matches!(var_ty, Ty::String) {
                 // List[String] element — split into ptr/len locals (i32×2),
                 // plus a *MvlString unpack temp for the loop-body load.
+                // Ty::Bool → i32 WASM local (convention for opaque pointer/int
+                // slots; see __for_arr_* below).
                 locals.push((format!("{var_name}_ptr"), Ty::Bool));
                 locals.push((format!("{var_name}_len"), Ty::Bool));
                 locals.push((format!("__for_ms_{}", span.offset), Ty::Bool));
@@ -1998,9 +2001,10 @@ fn emit_expr(out: &mut String, expr: &TirExpr, ctx: &Ctx) {
                     out.push_str("    call $_mvl_string_new\n");
                     out.push_str("    call $_mvl_array_push_i32\n");
                 }
-                // Dedup by string pointer value (address-stable in this context).
+                // Dedup by content — pointer-address dedup misses equal strings
+                // from distinct allocations; use the content-aware variant.
                 out.push_str(&format!("    local.get ${temp}\n"));
-                out.push_str("    call $_mvl_array_dedup_i32\n");
+                out.push_str("    call $_mvl_string_ptr_array_dedup\n");
             } else {
                 let push_op = push_op_for(&elem_ty, ctx);
                 for e in elems {
@@ -3088,9 +3092,9 @@ fn map_key_val_ty(ty: &Ty) -> Option<(&Ty, &Ty)> {
 ///   `i64` (Int / UInt / …)                     → 8
 ///   `f64` (Float)                              → 8
 fn elem_size_bytes(elem_ty: &Ty, ctx: &Ctx) -> u32 {
-    if is_string_ty(elem_ty, ctx) {
-        4 // *MvlString pointer (i32)
-    } else if is_i32(elem_ty, ctx) {
+    // String elements are stored as *MvlString (i32 pointer); is_i32 does not
+    // match Ty::String, so the two conditions are checked together here.
+    if is_string_ty(elem_ty, ctx) || is_i32(elem_ty, ctx) {
         4
     } else {
         8

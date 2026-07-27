@@ -134,3 +134,13 @@ test fn list_of_strings_for_in_no_match() -> Unit {
     }
     assert_eq(found, false);
 }
+
+// Phase 3.2 (#1992) — Set[String] literals in the WASM backend.
+
+test fn set_of_strings_len() -> Unit {
+    let tags: Set[String] = {"alpha", "beta", "gamma"};
+    assert_eq(tags.len(), 3);
+}
+
+// set_of_strings_dedup ({"x","y","x"} → len 2) is deferred until the LLVM
+// backend also has content-equality dedup (#1991).

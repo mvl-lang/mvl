@@ -711,6 +711,48 @@ pub unsafe extern "C" fn _mvl_string_ptr_array_drop(a: i32) {
     }
 }
 
+/// `_mvl_string_ptr_array_dedup(a)` — remove duplicate `*MvlString` elements
+/// by content equality.  Duplicates are freed via `_mvl_string_drop`; the
+/// array is compacted in-place and `arr.len` is updated.  O(n²) — acceptable
+/// for small `Set[String]` literals.
+///
+/// Use instead of `_mvl_array_dedup_i32` whenever elements are `*MvlString`
+/// pointers; pointer-address dedup does not detect equal strings from distinct
+/// allocations.
+///
+/// # Safety
+/// `a` must be a valid `MvlArray` pointer with `elem_size == 4`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn _mvl_string_ptr_array_dedup(a: i32) {
+    if a == 0 {
+        return;
+    }
+    let arr = unsafe { &mut *(a as usize as *mut MvlArray) };
+    let es = arr.elem_size as usize;
+    let base = arr.ptr as usize;
+    let mut write = 0usize;
+    'outer: for read in 0..arr.len as usize {
+        let s = unsafe { core::ptr::read((base + read * es) as *const i32) };
+        for kept in 0..write {
+            let k = unsafe { core::ptr::read((base + kept * es) as *const i32) };
+            // Read raw ptr/len from MvlString (offsets 0 and 4).
+            let s_ptr = unsafe { core::ptr::read(s as usize as *const i32) };
+            let s_len = unsafe { core::ptr::read((s as usize + 4) as *const i32) };
+            let k_ptr = unsafe { core::ptr::read(k as usize as *const i32) };
+            let k_len = unsafe { core::ptr::read((k as usize + 4) as *const i32) };
+            if unsafe { _mvl_string_eq(s_ptr, s_len, k_ptr, k_len) } != 0 {
+                unsafe { _mvl_string_drop(s) };
+                continue 'outer;
+            }
+        }
+        if write != read {
+            unsafe { core::ptr::write((base + write * es) as *mut i32, s) };
+        }
+        write += 1;
+    }
+    arr.len = write as i32;
+}
+
 /// `_mvl_array_get_option_i64(a, idx)` → `*MvlOption` — Some(value) when
 /// `idx` is in `[0, len)`, otherwise None. Returned Option owns its box
 /// (`rc = 1`); caller drops via `_mvl_option_drop`.
