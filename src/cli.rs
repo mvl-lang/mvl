@@ -209,6 +209,7 @@ pub(super) fn dispatch(args: &[String]) {
         "prove" => {
             let path = args::require_path_arg(args, "prove");
             let verbose = args.iter().any(|a| a == "--verbose" || a == "-v");
+            let format_json = args.iter().any(|a| a == "--format=json");
             let stdlib_profile = args::parse_stdlib_profile(args);
             let callee_filter = if let Some(pos) = args.iter().position(|a| a == "--callee") {
                 match args.get(pos + 1).map(|s| s.as_str()) {
@@ -222,7 +223,7 @@ pub(super) fn dispatch(args: &[String]) {
             } else {
                 None
             };
-            prove::run(&path, verbose, stdlib_profile, callee_filter);
+            prove::run(&path, verbose, format_json, stdlib_profile, callee_filter);
         }
         "harden" => {
             let path = args::require_path_arg(args, "harden");

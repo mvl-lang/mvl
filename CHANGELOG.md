@@ -2,6 +2,12 @@
 
 ## [1.7.1] - 2026-07-27
 
+### Fixed — #2003 #2004 #2010
+
+- **`mvl check --format=json` now honours the JSON contract on excluded inputs.** Invoking `mvl check --format=json` on a `*_test.mvl` path (or any path that resolves to zero eligible files) previously emitted plain-text on stderr and exited 1, breaking LSP/editor integrations that JSON-parse stdout. Now exits 0 with `{"errors":[],"warnings":[],"summary":{"errors":0,"warnings":0}}`. Same fix applied to `mvl assurance --format=json`.
+- **LSP: `*_test.mvl` diagnostics restored.** The `_check()` workaround that silently returned `[]` for all test files is removed now that the compiler honours the JSON contract. Linter diagnostics (including `test-shadow` violations) are again surfaced while editing test files.
+- **`mvl prove --format=json` implemented.** Emits a single JSON document with per-file obligation/outcome sites and totals: `{"files":[{"file":"...","sites":[{"line":N,"caller":"...","callee":"...","param":"...","predicate":"...","outcome":"proven|runtime|failed","layer":N,"layer_name":"...","is_bv":false}],"summary":{...}}],"total":{...}}`. The `counterexample` field is included only when `outcome` is `"runtime"` with a witness. Exit 1 when any site failed, exit 0 otherwise.
+
 ### Fixed — #1991
 
 - **LLVM backend: type-aware element drops for nested collections.** `_mvl_array_drop`/`_mvl_map_drop` were type-unaware and never followed into element/value payloads, leaking `List[List[T]]`, `List[Option[T]]`, `List[Result[T,E]]`, `List[String]`/`Set[String]`, and `Map[K, V]` where V is pointer-typed. Adds four typed runtime drop helpers (`_mvl_array_drop_mvlarray`, `_mvl_array_drop_option`, `_mvl_array_drop_result`, `_mvl_map_drop_ptr_values`) and wires up the existing-but-dead `_mvl_string_ptr_array_drop` for `List[String]`/`Set[String]`.
