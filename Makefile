@@ -399,6 +399,9 @@ WASM_CORPUS := \
 	tests/corpus/07_ownership/ref_test.mvl \
 	tests/corpus/07_ownership/value_test.mvl \
 	tests/corpus/07_ownership/consume_test.mvl \
+	tests/corpus/08_ifc/secret_test.mvl \
+	tests/corpus/08_ifc/tainted_test.mvl \
+	tests/corpus/08_ifc/audit_relabel_test.mvl \
 	tests/corpus/09_refinements/type_alias_test.mvl \
 	tests/corpus/09_refinements/array_index_refinement_test.mvl \
 	tests/corpus/09_refinements/bitwise_refinement_test.mvl \

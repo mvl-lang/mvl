@@ -286,6 +286,12 @@ const RUNTIME_IMPORTS: &[(&str, &str)] = &[
     // Group H — String parse ops. Take raw (ptr, len) byte slice; return
     // heap-allocated MvlResult pointer.
     ("_mvl_string_parse_int", "(param i32 i32) (result i32)"),
+    // Group I — IFC audit event (#2013). Five (ptr, len) string pairs:
+    // transition, from_label, to_label, tag, location. No return value.
+    (
+        "_mvl_audit_emit_relabel",
+        "(param i32 i32 i32 i32 i32 i32 i32 i32 i32 i32)",
+    ),
 ];
 
 /// Layout offsets on `MvlString` — mirrors `runtime/wasm/src/lib.rs` /
@@ -769,6 +775,61 @@ fn emit_fn_heap_drops(out: &mut String, locals: &[(String, Ty)], exclude: Option
     }
 }
 
+/// (from_label, to_label) display strings for a relabel transition (#2013).
+/// Mirrors LLVM's `relabel_label_strings_tir` fallback table — the WASM
+/// emitter has no per-module `audit_relabels` declaration registry, so this
+/// covers the built-in relabel names used by the corpus. Unknown names fall
+/// back to `("_", "_")`, same as LLVM's default arm.
+fn relabel_label_strings(name: &str) -> (&'static str, &'static str) {
+    match name {
+        "classify" => ("_", "Secret"),
+        "taint" => ("_", "Tainted"),
+        "trust" => ("Tainted", "_"),
+        "release" => ("Secret", "_"),
+        "config_path" => ("_", "ConfigPath"),
+        "unconfig_path" => ("ConfigPath", "_"),
+        "db_url" => ("_", "DbUrl"),
+        "undb_url" => ("DbUrl", "_"),
+        "api_endpoint" => ("_", "ApiEndpoint"),
+        "unapi_endpoint" => ("ApiEndpoint", "_"),
+        "audit_target" => ("_", "AuditTarget"),
+        "unaudit_target" => ("AuditTarget", "_"),
+        _ => ("_", "_"),
+    }
+}
+
+/// Push a literal string's `(offset, len)` as two `i32.const` operands, for
+/// strings that aren't `TirExprKind::Literal(Literal::Str)` nodes but were
+/// still registered in `ctx.literals` by `collect_expr` (e.g. relabel audit
+/// metadata strings, #2013). Empty strings need no data-section entry —
+/// `(ptr=0, len=0)` mirrors `slice_or_empty`'s null-pointer handling.
+fn emit_literal_str_operands(out: &mut String, s: &str, ctx: &Ctx) {
+    if s.is_empty() {
+        out.push_str("    i32.const 0\n");
+        out.push_str("    i32.const 0\n");
+    } else if let Some(&(offset, len)) = ctx.literals.get(s) {
+        out.push_str(&format!("    i32.const {offset}\n"));
+        out.push_str(&format!("    i32.const {len}\n"));
+    } else {
+        out.push_str(&format!("    ;; missing literal: {s:?}\n"));
+    }
+}
+
+/// True if `ty` is a `String`, possibly wrapped in `Ref`/`Labeled`/`Refined`
+/// layers — e.g. `Tainted[String]`, `Secret[String]`, `ref String` (#2013).
+/// IFC labels are compile-time-only wrappers; a `Secret[String]` fn param or
+/// let-binding needs the same split `(ptr, len)` WASM representation as a
+/// bare `String`. Ctx-free mirror of `is_string_ty`'s `Ref | Labeled |
+/// Refined` peel, usable from `collect_locals_stmt` (runs before `Ctx`
+/// exists) and from `emit_fn`'s param/return-type checks.
+fn peels_to_string(ty: &Ty) -> bool {
+    match ty {
+        Ty::String => true,
+        Ty::Ref(_, inner) | Ty::Labeled(_, inner) | Ty::Refined(inner, _) => peels_to_string(inner),
+        _ => false,
+    }
+}
+
 /// Extract the binding name from a `return expr` expression so the returned
 /// value can be excluded from heap drops (it must survive for the caller).
 /// Mirrors LLVM's `exclude_returned_value_tir`.
@@ -806,8 +867,9 @@ fn emit_fn(out: &mut String, f: &TirFn, ctx: &Ctx) {
 
     out.push_str(&format!("  (func ${wasm_name}"));
     for p in &f.params {
-        if matches!(&p.ty, Ty::String) {
-            // String params split into two i32 WASM params: (ptr, len).
+        if peels_to_string(&p.ty) {
+            // String (or Secret[String]/Tainted[String] — #2013, labels are
+            // compile-time only) params split into two i32 WASM params: (ptr, len).
             out.push_str(&format!(
                 " (param ${}_ptr i32) (param ${}_len i32)",
                 p.name, p.name
@@ -816,7 +878,7 @@ fn emit_fn(out: &mut String, f: &TirFn, ctx: &Ctx) {
             out.push_str(&format!(" (param ${} {})", p.name, wasm_ty(&p.ty, ctx)));
         }
     }
-    if matches!(f.ret_ty, Ty::String) {
+    if peels_to_string(&f.ret_ty) {
         // String returns as two i32s (ptr, len) — WASM multi-value return.
         out.push_str(" (result i32 i32)");
     } else if !matches!(f.ret_ty, Ty::Unit) {
@@ -1111,8 +1173,9 @@ fn collect_locals_stmt(stmt: &TirStmt, locals: &mut Vec<(String, Ty)>) {
             pattern, ty, init, ..
         } => {
             if let Pattern::Ident(name, _) = pattern {
-                if matches!(ty, Ty::String) {
-                    // String variables use split (ptr, len) locals.
+                if peels_to_string(ty) {
+                    // String (or Secret[String]/Tainted[String] — #2013)
+                    // variables use split (ptr, len) locals.
                     locals.push((format!("{name}_ptr"), Ty::Bool)); // i32
                     locals.push((format!("{name}_len"), Ty::Bool)); // i32
                 } else {
@@ -2103,6 +2166,29 @@ fn emit_expr(out: &mut String, expr: &TirExpr, ctx: &Ctx) {
         // backend; the underlying value is passed by its WASM representation.
         TirExprKind::Borrow { expr: inner, .. } => {
             emit_expr(out, inner, ctx);
+        }
+        // `relabel name(expr, "tag")` — IFC relabel transition (#2013).
+        // Labels are compile-time only; the runtime value passes through
+        // unchanged (mirrors LLVM's `emit_relabel_tir`). When `audit` is
+        // set, additionally emit a call to `_mvl_audit_emit_relabel` with
+        // the transition name, from/to label strings, tag, and an empty
+        // location string — same five-string shape as the LLVM runtime's
+        // `_mvl_audit_emit_relabel`.
+        TirExprKind::Relabel {
+            name,
+            expr: inner,
+            tag,
+            audit,
+        } => {
+            emit_expr(out, inner, ctx);
+            if *audit {
+                ctx.needs_runtime.set(true);
+                let (from_lbl, to_lbl) = relabel_label_strings(name);
+                for s in [name.as_str(), from_lbl, to_lbl, tag.as_str(), ""] {
+                    emit_literal_str_operands(out, s, ctx);
+                }
+                out.push_str("    call $_mvl_audit_emit_relabel\n");
+            }
         }
         other => {
             out.push_str(&format!("    ;; unsupported expr: {other:?}\n"));
@@ -4092,6 +4178,28 @@ fn collect_expr(expr: &TirExpr, map: &mut HashMap<String, (u32, u32)>, next: &mu
         TirExprKind::Construct { fields, .. } => {
             for (_, v) in fields {
                 collect_expr(v, map, next);
+            }
+        }
+        // `relabel name(expr, "tag")` (#2013) — recurse into the wrapped
+        // value (may itself be a string literal, e.g. `relabel classify("x", tag)`),
+        // and when `audit` is set, register the audit event's own literal
+        // strings (transition name, from/to labels, tag) for emit_expr.
+        TirExprKind::Relabel {
+            name,
+            expr,
+            tag,
+            audit,
+        } => {
+            collect_expr(expr, map, next);
+            if *audit {
+                let (from_lbl, to_lbl) = relabel_label_strings(name);
+                for s in [name.as_str(), from_lbl, to_lbl, tag.as_str()] {
+                    if !s.is_empty() && !map.contains_key(s) {
+                        let len = s.len() as u32;
+                        map.insert(s.to_string(), (*next, len));
+                        *next += len;
+                    }
+                }
             }
         }
         _ => {}
