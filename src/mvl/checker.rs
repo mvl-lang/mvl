@@ -794,7 +794,9 @@ mod tests {
         }"#;
         let errors = errors_for(src);
         assert!(
-            !errors.iter().any(|e| matches!(e, CheckError::UseAfterMove { .. })),
+            !errors
+                .iter()
+                .any(|e| matches!(e, CheckError::UseAfterMove { .. })),
             "key reuse should not move, got: {errors:?}"
         );
     }
@@ -851,7 +853,9 @@ mod tests {
         }"#;
         let errors = errors_for(src);
         assert!(
-            !errors.iter().any(|e| matches!(e, CheckError::UseAfterMove { .. })),
+            !errors
+                .iter()
+                .any(|e| matches!(e, CheckError::UseAfterMove { .. })),
             "reuse across mutually exclusive branches should not move, got: {errors:?}"
         );
     }
@@ -866,7 +870,9 @@ mod tests {
         }"#;
         let errors = errors_for(src);
         assert!(
-            !errors.iter().any(|e| matches!(e, CheckError::UseAfterMove { .. })),
+            !errors
+                .iter()
+                .any(|e| matches!(e, CheckError::UseAfterMove { .. })),
             "reuse across mutually exclusive match arms should not move, got: {errors:?}"
         );
     }

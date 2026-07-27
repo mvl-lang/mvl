@@ -301,7 +301,9 @@ pub(super) enum HeapKind {
     /// `List[List[T]]` / `List[Set[T]]` (T scalar or `String`) — elements are
     /// owned `*mut MvlArray`; `inner_drop_sym` is the C-ABI symbol to call on
     /// each one (`_mvl_array_drop` or `_mvl_string_ptr_array_drop`).
-    ArrayOfArray { inner_drop_sym: &'static str },
+    ArrayOfArray {
+        inner_drop_sym: &'static str,
+    },
     /// `List[Option[T]]` (T scalar or `String`). `payload_size` is the byte
     /// size of T's heap-allocated payload slot; `payload_drop_sym` is `None`
     /// for scalar T or `Some("_mvl_string_drop")` for `T = String`.
@@ -321,7 +323,9 @@ pub(super) enum HeapKind {
     /// `Map[..]`) — the map only stores V's 8-byte address, so the value must
     /// be followed and dropped via `value_drop_sym` before the slot is freed.
     /// Key type never needs special handling: keys are always deep-copied.
-    MapPtrValues { value_drop_sym: &'static str },
+    MapPtrValues {
+        value_drop_sym: &'static str,
+    },
 }
 
 #[derive(Clone)]

@@ -473,8 +473,7 @@ impl TextEmitter {
                     Some(elem) => {
                         if Self::scalar_leaf(elem).is_some_and(|(_, sym)| sym.is_none()) {
                             Some(HeapKind::Array)
-                        } else if matches!(elem, TypeExpr::Base { name, .. } if name == "String")
-                        {
+                        } else if matches!(elem, TypeExpr::Base { name, .. } if name == "String") {
                             Some(HeapKind::ArrayOfString)
                         } else if let TypeExpr::Base {
                             name: inner_name,
@@ -483,9 +482,10 @@ impl TextEmitter {
                         } = elem
                         {
                             if matches!(inner_name.as_str(), "List" | "Array" | "Set") {
-                                inner_args.first().and_then(Self::array_drop_sym_for_elem).map(
-                                    |inner_drop_sym| HeapKind::ArrayOfArray { inner_drop_sym },
-                                )
+                                inner_args
+                                    .first()
+                                    .and_then(Self::array_drop_sym_for_elem)
+                                    .map(|inner_drop_sym| HeapKind::ArrayOfArray { inner_drop_sym })
                             } else {
                                 None
                             }

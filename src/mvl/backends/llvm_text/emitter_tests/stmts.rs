@@ -203,8 +203,7 @@ fn list_of_option_string_uses_string_drop_payload() {
          }",
     );
     assert!(
-        ir.contains("call void @_mvl_array_drop_option(ptr")
-            && ir.contains("@_mvl_string_drop)"),
+        ir.contains("call void @_mvl_array_drop_option(ptr") && ir.contains("@_mvl_string_drop)"),
         "{ir}"
     );
 }
@@ -231,8 +230,7 @@ fn map_string_value_uses_map_drop_ptr_values() {
          }",
     );
     assert!(
-        ir.contains("call void @_mvl_map_drop_ptr_values(ptr")
-            && ir.contains("@_mvl_string_drop)"),
+        ir.contains("call void @_mvl_map_drop_ptr_values(ptr") && ir.contains("@_mvl_string_drop)"),
         "{ir}"
     );
     assert!(

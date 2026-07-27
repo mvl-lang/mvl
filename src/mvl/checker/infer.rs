@@ -38,6 +38,44 @@ impl TypeChecker {
         }
     }
 
+    /// Mark List/Set/Map-literal elements/values moved when the literal
+    /// itself is bound to a name (`let`/reassignment) — i.e. actually
+    /// retained and heap-tracked at scope exit, not an ephemeral value
+    /// passed straight into a call and never dropped as a container.
+    ///
+    /// Only named bindings get their typed drop followed into elements
+    /// (#1991); a literal used inline as a call argument (e.g.
+    /// `format("{}", [msg])`) is never registered as a heap local, so
+    /// reusing `msg` in a second such literal is safe and must NOT move —
+    /// scoping this to `let`/assignment mirrors the existing `let t: T = s`
+    /// move rule, which is likewise restricted to bound names.
+    pub(super) fn mark_moved_container_literal(&mut self, init: &Expr, init_ty: &Ty) {
+        match (init, init_ty.unlabeled()) {
+            (Expr::List { elems, .. }, Ty::List(inner))
+            | (Expr::Set { elems, .. }, Ty::Set(inner)) => {
+                if inner.is_linear_in_env(&self.env.types) {
+                    for e in elems {
+                        if let Expr::Ident(name, _) = e {
+                            self.env.mark_moved(name);
+                        }
+                    }
+                }
+            }
+            (Expr::Map { pairs, .. }, Ty::Map(_, val_ty)) => {
+                // Only values are stored by pointer copy (#1991) — keys are
+                // always deep-byte-copied at insert time, so reuse stays safe.
+                if val_ty.is_linear_in_env(&self.env.types) {
+                    for (_, v) in pairs {
+                        if let Expr::Ident(name, _) = v {
+                            self.env.mark_moved(name);
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
     pub(super) fn infer_expr(&mut self, expr: &Expr) -> Ty {
         let ty = self.infer_expr_inner(expr);
         let ty = self.env.normalize_ty(ty);
@@ -354,12 +392,8 @@ impl TypeChecker {
                     .first()
                     .map(|e| self.infer_expr(e))
                     .unwrap_or(Ty::Unknown);
-                if let Some(e) = elems.first() {
-                    self.mark_moved_if_linear(e, &elem_ty);
-                }
                 for e in elems.iter().skip(1) {
-                    let t = self.infer_expr(e);
-                    self.mark_moved_if_linear(e, &t);
+                    self.infer_expr(e);
                 }
                 Ty::List(Box::new(elem_ty))
             }
@@ -376,10 +410,6 @@ impl TypeChecker {
                     .map(|(k, v)| {
                         let kt = self.infer_expr(k);
                         let vt = self.infer_expr(v);
-                        // Only the value is stored by pointer copy (#1991) — keys
-                        // are always deep-byte-copied at insert time, so reusing
-                        // a key binding elsewhere remains safe and must not move.
-                        self.mark_moved_if_linear(v, &vt);
                         joined_label = ifc::join_opt(
                             joined_label.clone(),
                             ifc::label_of(&vt).map(|s| s.to_string()),
@@ -390,7 +420,6 @@ impl TypeChecker {
                 for (k, v) in pairs.iter().skip(1) {
                     self.infer_expr(k);
                     let vt = self.infer_expr(v);
-                    self.mark_moved_if_linear(v, &vt);
                     joined_label = ifc::join_opt(
                         joined_label.clone(),
                         ifc::label_of(&vt).map(|s| s.to_string()),
@@ -405,12 +434,8 @@ impl TypeChecker {
                     .first()
                     .map(|e| self.infer_expr(e))
                     .unwrap_or(Ty::Unknown);
-                if let Some(e) = elems.first() {
-                    self.mark_moved_if_linear(e, &elem_ty);
-                }
                 for e in elems.iter().skip(1) {
-                    let t = self.infer_expr(e);
-                    self.mark_moved_if_linear(e, &t);
+                    self.infer_expr(e);
                 }
                 Ty::Set(Box::new(elem_ty))
             }

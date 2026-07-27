@@ -293,8 +293,7 @@ impl TypeChecker {
                 }
             }
             let post_else_snapshot = self.env.snapshot_moved();
-            let merged =
-                TypeEnv::union_moved_snapshots(&post_then_snapshot, &post_else_snapshot);
+            let merged = TypeEnv::union_moved_snapshots(&post_then_snapshot, &post_else_snapshot);
             self.env.restore_moved(&merged);
         }
         result_ty
@@ -332,6 +331,11 @@ impl TypeChecker {
                     // consume() is only for `iso` capability transfers (Spec 014 Req 2).
                     if let Expr::Ident(src, _) = init {
                         self.env.mark_moved(src);
+                    } else {
+                        // List/Set/Map literal bound to a name: its typed drop
+                        // now follows element/value pointers (#1991), so a
+                        // named element/value must move too.
+                        self.mark_moved_container_literal(init, &init_ty);
                     }
                 }
                 // Gap 2 (#1068): check if this binding shadows a live linear value.
@@ -449,6 +453,11 @@ impl TypeChecker {
                 if val_ty.is_linear_in_env(&self.env.types) {
                     if let Expr::Ident(src, _) = value {
                         self.env.mark_moved(src);
+                    } else {
+                        // See Stmt::Let: a List/Set/Map literal reassigned to
+                        // an existing binding also needs its named
+                        // elements/values moved (#1991).
+                        self.mark_moved_container_literal(value, &val_ty);
                     }
                 }
                 self.check_assignment(target, &val_ty, *span);
@@ -517,10 +526,8 @@ impl TypeChecker {
                         ElseBranch::If(s) => self.check_stmt(s, None),
                     }
                     let post_else_snapshot = self.env.snapshot_moved();
-                    let merged = TypeEnv::union_moved_snapshots(
-                        &post_then_snapshot,
-                        &post_else_snapshot,
-                    );
+                    let merged =
+                        TypeEnv::union_moved_snapshots(&post_then_snapshot, &post_else_snapshot);
                     self.env.restore_moved(&merged);
                 }
             }
