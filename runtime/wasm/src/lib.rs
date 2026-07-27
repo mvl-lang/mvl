@@ -1152,18 +1152,20 @@ pub unsafe extern "C" fn _mvl_array_insert_i32(a: i32, val: i32) {
     }
 }
 
-// ── Map[String, Int] ops (#1820) ─────────────────────────────────────────
+// ── Map[String, Int] ops (#1820, #1993) ──────────────────────────────────
 //
 // `MvlMap` is a simple linear-scan map from `String` keys to `i64` values.
-// Backed by `Vec<MvlMapEntry>` allocated on the Rust heap. Keys are byte-
-// copied at insert time so the map owns its keys independently of the
-// caller's string literals. Drop frees the copied key bytes and the Vec.
+// Backed by `Vec<MvlMapEntry>` allocated on the Rust heap.
 //
-// Naming convention: `si64` suffix = String key, i64 (Int) value. Later
-// map types (e.g. String→String, Int→Int) can use different suffixes.
+// Keys are stored as `*MvlString` handles (i32) so that drop correctly
+// releases the key allocation via `_mvl_string_drop`. This matches the
+// List[String] / Set[String] pattern (PR #1992) and is consistent with the
+// LLVM backend's treatment of pointer-typed map keys.
+//
+// Naming convention: `si64` suffix = String key, i64 (Int) value.
 
 struct MvlMapEntry {
-    key: Vec<u8>,
+    key: i32, // *MvlString handle — owned; freed by _mvl_map_drop_si64
     val: i64,
 }
 
@@ -1192,22 +1194,34 @@ pub unsafe extern "C" fn _mvl_map_len(m: i32) -> i64 {
     map.entries.len() as i64
 }
 
-/// `_mvl_map_insert_si64(m, k_ptr, k_len, val)` — insert or overwrite
-/// the entry for the given string key. The key bytes are copied; the
-/// map becomes the sole owner of the key storage.
+/// Compare a `*MvlString` handle's content against raw bytes `(ptr, len)`.
+unsafe fn ms_handle_eq_bytes(handle: i32, k_ptr: i32, k_len: i32) -> bool {
+    if handle == 0 {
+        return k_len == 0;
+    }
+    let ms = &*(handle as usize as *const MvlString);
+    if ms.len != k_len {
+        return false;
+    }
+    slice_or_empty(ms.ptr, ms.len) == slice_or_empty(k_ptr, k_len)
+}
+
+/// `_mvl_map_insert_si64(m, k_ptr, k_len, val)` — insert or overwrite the
+/// entry for the given string key. A new `*MvlString` handle is allocated
+/// for each distinct key; the map owns it until drop.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn _mvl_map_insert_si64(m: i32, k_ptr: i32, k_len: i32, val: i64) {
     if m == 0 {
         return;
     }
     let map = &mut *(m as usize as *mut MvlMap);
-    let key = slice_or_empty(k_ptr, k_len).to_vec();
     for entry in &mut map.entries {
-        if entry.key == key {
+        if ms_handle_eq_bytes(entry.key, k_ptr, k_len) {
             entry.val = val;
             return;
         }
     }
+    let key = _mvl_string_new(k_ptr, k_len);
     map.entries.push(MvlMapEntry { key, val });
 }
 
@@ -1220,9 +1234,8 @@ pub unsafe extern "C" fn _mvl_map_get_si64(m: i32, k_ptr: i32, k_len: i32) -> i3
         return _mvl_option_none();
     }
     let map = &*(m as usize as *const MvlMap);
-    let key = slice_or_empty(k_ptr, k_len);
     for entry in &map.entries {
-        if entry.key.as_slice() == key {
+        if ms_handle_eq_bytes(entry.key, k_ptr, k_len) {
             return _mvl_option_some_i64(entry.val);
         }
     }
@@ -1237,9 +1250,8 @@ pub unsafe extern "C" fn _mvl_map_contains_key_si64(m: i32, k_ptr: i32, k_len: i
         return 0;
     }
     let map = &*(m as usize as *const MvlMap);
-    let key = slice_or_empty(k_ptr, k_len);
     for entry in &map.entries {
-        if entry.key.as_slice() == key {
+        if ms_handle_eq_bytes(entry.key, k_ptr, k_len) {
             return 1;
         }
     }
@@ -1247,7 +1259,7 @@ pub unsafe extern "C" fn _mvl_map_contains_key_si64(m: i32, k_ptr: i32, k_len: i
 }
 
 /// `_mvl_map_drop_si64(m)` — decrement refcount; free when it reaches zero.
-/// Freeing drops all `Vec<u8>` key storage and the `Vec<MvlMapEntry>` itself.
+/// Each key `*MvlString` handle is explicitly dropped before the map is freed.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn _mvl_map_drop_si64(m: i32) {
     if m == 0 {
@@ -1256,6 +1268,9 @@ pub unsafe extern "C" fn _mvl_map_drop_si64(m: i32) {
     let ptr = m as usize as *mut MvlMap;
     (*ptr).rc = (*ptr).rc.saturating_sub(1);
     if (*ptr).rc == 0 {
+        for entry in &(*ptr).entries {
+            _mvl_string_drop(entry.key);
+        }
         let _ = Box::from_raw(ptr);
     }
 }
