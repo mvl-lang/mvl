@@ -14,10 +14,10 @@
 //! - Return refinement → `assert!` at end of body
 
 use super::emitter::RustEmitter;
+use crate::mvl::backends::last_use::compute_last_uses;
 use crate::mvl::backends::rust::emit_types::{
     emit_label, emit_ref_expr_for_assert, emit_ty, is_runtime_checkable,
 };
-use crate::mvl::backends::rust::last_use::compute_last_uses;
 use crate::mvl::backends::rust::mut_analysis::{
     compute_readonly_names, compute_readonly_param_names, compute_unreferenced_binder_spans,
     compute_unused_param_names,

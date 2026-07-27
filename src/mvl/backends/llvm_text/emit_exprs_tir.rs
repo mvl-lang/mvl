@@ -14,7 +14,7 @@
 //! the inner expression's `.ty` carries the cast destination type.
 
 use crate::mvl::ir::{
-    BinaryOp, Pattern, TirExpr, TirExprKind, TirMatchArm, TirMatchBody, Ty, UnaryOp,
+    BinaryOp, Pattern, TirExpr, TirExprKind, TirMatchArm, TirMatchBody, Ty, TypeExpr, UnaryOp,
 };
 
 use super::{TextEmitter, RESULT_LLVM_TY};
@@ -203,6 +203,66 @@ impl TextEmitter {
         }
     }
 
+    /// Decide how to pass an already-evaluated owned heap-typed argument at a
+    /// call site whose parameter type at this position is statically known
+    /// — true of a direct call to a registered TIR fn, an indirect call
+    /// through a `fn`-alias local, and a closure/HOF call through a
+    /// fn-typed local, since all three know the declared parameter list even
+    /// when (for the latter two) the concrete callee body is only known at
+    /// runtime. Returns the LLVM value to actually pass, and whether the
+    /// caller must exclude `arg`'s underlying `Var` from its own
+    /// `heap_locals` (true last use / true move).
+    ///
+    /// Shared by all three call-emission paths so a heap-typed value routed
+    /// through an indirect/closure call gets the same clone-or-move
+    /// treatment as a direct call — see the follow-up to #1994: prior to
+    /// this, the closure/HOF and fn-alias paths never excluded or cloned
+    /// their args at all, which was safe only because callees didn't drop
+    /// their own owned params yet. Once #1994 made callees drop their own
+    /// owned heap-typed params, passing the same pointer through an
+    /// indirect call became a double-free (dropped once by the callee via
+    /// its own param tracking, and again by the caller's own scope-exit
+    /// drop, since the caller never excluded it).
+    fn resolve_owned_call_arg(
+        &mut self,
+        arg: &TirExpr,
+        v: String,
+        param_ty: Option<&TypeExpr>,
+    ) -> (String, bool) {
+        let is_borrow_param = param_ty.is_some_and(|pt| matches!(pt, TypeExpr::Ref { .. }));
+        if is_borrow_param {
+            // Caller retains ownership; the callee never drops a borrow.
+            return (v, false);
+        }
+
+        if let TirExprKind::Var(var_name) = &arg.kind {
+            if !self.fn_ctx.last_uses.contains(&arg.span) {
+                let owning_key = self
+                    .fn_ctx
+                    .ref_locals
+                    .get(var_name)
+                    .map(|rl| rl.ptr.clone())
+                    .or_else(|| self.fn_ctx.locals.get(var_name).cloned());
+                let heap_kind = owning_key.as_ref().and_then(|key| {
+                    self.fn_ctx
+                        .heap_locals
+                        .iter()
+                        .find(|(s, _, _)| s == key)
+                        .map(|(_, hk, _)| *hk)
+                });
+                if let Some(hk) = heap_kind {
+                    // Non-last use of a caller-owned heap local: clone
+                    // instead of moving, so the original stays tracked and
+                    // alive for its later last use / scope exit.
+                    let clone_reg = self.emit_clone_for_heap_kind(&v, hk);
+                    return (clone_reg, false);
+                }
+            }
+        }
+
+        (v, true)
+    }
+
     /// TIR variant of [`Self::emit_fn_call`] — minimum-viable port.
     ///
     /// Handles direct user-defined function calls (the most common case).
@@ -211,8 +271,6 @@ impl TextEmitter {
     /// indirect calls, and local closure calls fall through to errors and
     /// will be ported in subsequent commits.
     fn emit_fn_call_tir(&mut self, name: &str, args: &[TirExpr]) -> Result<Option<String>, String> {
-        use crate::mvl::ir::TypeExpr;
-
         // A bare call inside an actor body may name one of that actor's own
         // methods — how a private helper is invoked, since `self.helper()` is
         // not accepted for non-public methods. Without this it emitted
@@ -386,13 +444,23 @@ impl TextEmitter {
         if is_alias {
             if let Some(fn_ptr) = self.fn_ctx.locals.get(name).cloned() {
                 let alias_fn_ty = local_ty.as_ref().and_then(|t| self.resolve_fn_alias(t));
-                if let Some(TypeExpr::Fn { ret, .. }) = alias_fn_ty {
+                if let Some(TypeExpr::Fn { ret, params, .. }) = alias_fn_ty {
                     let mut call_args: Vec<String> = Vec::new();
-                    for arg in args {
+                    let mut to_exclude: Vec<&TirExpr> = Vec::new();
+                    for (i, arg) in args.iter().enumerate() {
                         let ty = self.ty_to_llvm_ctx(&arg.ty);
-                        if let Some(v) = self.emit_expr_tir(arg)? {
-                            call_args.push(format!("{ty} {v}"));
+                        let Some(v) = self.emit_expr_tir(arg)? else {
+                            continue;
+                        };
+                        let (v, should_exclude) =
+                            self.resolve_owned_call_arg(arg, v, params.get(i));
+                        call_args.push(format!("{ty} {v}"));
+                        if should_exclude {
+                            to_exclude.push(arg);
                         }
+                    }
+                    for arg in to_exclude {
+                        self.exclude_returned_value_tir(arg);
                     }
                     let args_str = call_args.join(", ");
                     let llvm_ret = self.llvm_ty_ctx(&ret);
@@ -432,12 +500,29 @@ impl TextEmitter {
                 let env_ptr = self.next_reg();
                 self.push_instr(&format!("{env_ptr} = load ptr, ptr {env_field}"));
 
+                let closure_param_tys: Vec<TypeExpr> = local_ty
+                    .as_ref()
+                    .and_then(|t| match t {
+                        TypeExpr::Fn { params, .. } => Some(params.clone()),
+                        _ => None,
+                    })
+                    .unwrap_or_default();
                 let mut call_args = vec![format!("ptr {env_ptr}")];
-                for arg in args {
+                let mut to_exclude: Vec<&TirExpr> = Vec::new();
+                for (i, arg) in args.iter().enumerate() {
                     let ty = self.ty_to_llvm_ctx(&arg.ty);
-                    if let Some(v) = self.emit_expr_tir(arg)? {
-                        call_args.push(format!("{ty} {v}"));
+                    let Some(v) = self.emit_expr_tir(arg)? else {
+                        continue;
+                    };
+                    let (v, should_exclude) =
+                        self.resolve_owned_call_arg(arg, v, closure_param_tys.get(i));
+                    call_args.push(format!("{ty} {v}"));
+                    if should_exclude {
+                        to_exclude.push(arg);
                     }
+                }
+                for arg in to_exclude {
+                    self.exclude_returned_value_tir(arg);
                 }
                 let args_str = call_args.join(", ");
 
@@ -468,6 +553,7 @@ impl TextEmitter {
         // `%__closure_type { fn_ptr, env_ptr }` layout — the callee would GEP
         // into the function's machine code and segfault. Wrap the named fn in
         // a shim closure at the call site instead.
+        let callee_known = self.module.fn_param_types.contains_key(name);
         let callee_param_tys: Vec<TypeExpr> = self
             .module
             .fn_param_types
@@ -475,6 +561,10 @@ impl TextEmitter {
             .cloned()
             .unwrap_or_default();
         let mut arg_vals: Vec<(String, String)> = Vec::new();
+        // #1994: args that are truly moved (owned parameter, true last use)
+        // still need caller-side exclusion below; borrow-parameter args and
+        // non-last-use (cloned) args do not — the caller keeps tracking those.
+        let mut to_exclude: Vec<&TirExpr> = Vec::new();
         for (i, arg) in args.iter().enumerate() {
             let param_wants_fn = callee_param_tys
                 .get(i)
@@ -492,17 +582,35 @@ impl TextEmitter {
                 }
             }
             let ty = self.ty_to_llvm_ctx(&arg.ty);
-            if let Some(v) = self.emit_expr_tir(arg)? {
+            let Some(v) = self.emit_expr_tir(arg)? else {
+                continue;
+            };
+
+            // Only apply capability/last-use-aware handling when the callee's
+            // signature is statically known (a registered user-defined TIR
+            // fn) — builtins and unresolved callees keep the original
+            // unconditional move-and-exclude behaviour untouched.
+            if callee_known {
+                let (v, should_exclude) =
+                    self.resolve_owned_call_arg(arg, v, callee_param_tys.get(i));
                 arg_vals.push((ty, v));
+                if should_exclude {
+                    to_exclude.push(arg);
+                }
+                continue;
             }
+
+            arg_vals.push((ty, v));
+            to_exclude.push(arg);
         }
 
-        // #1847: fn arguments transfer ownership to the callee. Remove each
-        // moved arg from `heap_locals` so the caller's scope-exit drops don't
-        // double-free heap allocations the callee will own and drop itself.
-        // Same "transparent wrapper" walk as return-value handling — hops
-        // through `Consume` and `Relabel` to find the underlying `Var`.
-        for arg in args.iter() {
+        // #1847: fn arguments transfer ownership to the callee at their true
+        // last use. Remove each moved arg from `heap_locals` so the caller's
+        // scope-exit drops don't double-free heap allocations the callee now
+        // owns and drops itself. Same "transparent wrapper" walk as
+        // return-value handling — hops through `Consume` and `Relabel` to
+        // find the underlying `Var`.
+        for arg in to_exclude {
             self.exclude_returned_value_tir(arg);
         }
 
@@ -625,7 +733,6 @@ impl TextEmitter {
                 // Heuristic: a struct is a "value struct" (fields accessible) only
                 // when ALL of its fields resolve to non-ptr types (no opaque fields).
                 let struct_ty_for_slot: Option<String> = {
-                    use crate::mvl::ir::TypeExpr;
                     let cloned = self.module.fn_ret_types.get(name).cloned();
                     cloned.and_then(|ret_te| {
                         let inner_te: Option<TypeExpr> = match ret_te {

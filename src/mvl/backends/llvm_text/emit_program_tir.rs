@@ -536,6 +536,7 @@ impl TextEmitter {
         let ret_ty_te = ty_to_type_expr_or_unit(&f.ret_ty);
         self.fn_ctx = FnCtx::new(ret_ty_te.clone());
         self.fn_ctx.current_fn_is_main = f.name == "main";
+        self.fn_ctx.last_uses = crate::mvl::backends::last_use::compute_last_uses(&f.body);
 
         let params: Vec<String> = f
             .params
@@ -588,10 +589,21 @@ impl TextEmitter {
                 };
                 let ssa = format!("%{ssa_name}");
                 self.fn_ctx.locals.insert(p.name.clone(), ssa.clone());
-                self.fn_ctx.reg_types.insert(ssa, ty_str);
+                self.fn_ctx.reg_types.insert(ssa.clone(), ty_str);
+                let param_ty_te = ty_to_type_expr_or_unit(&p.ty);
                 self.fn_ctx
                     .local_mvl_types
-                    .insert(p.name.clone(), ty_to_type_expr_or_unit(&p.ty));
+                    .insert(p.name.clone(), param_ty_te.clone());
+                // #1994: owned (non-`Ty::Ref`) heap-typed parameters must be
+                // tracked so `emit_heap_drops` frees them at scope exit —
+                // otherwise every heap-typed parameter leaks unconditionally.
+                // `Ty::Ref` (`val T` / `ref T`) parameters are borrows: the
+                // callee never owns them and must never drop them.
+                if !matches!(p.ty, Ty::Ref(..)) {
+                    if let Some(hk) = Self::heap_kind(&param_ty_te) {
+                        self.fn_ctx.heap_locals.push((ssa, hk, false));
+                    }
+                }
             }
         }
 

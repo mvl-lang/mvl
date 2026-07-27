@@ -23,6 +23,7 @@ use super::emitter::{HeapKind, RefLocal};
 use super::BuiltinSymbolInfo;
 use crate::mvl::checker::types::Ty;
 use crate::mvl::ir::{TirFn, TypeExpr};
+use crate::mvl::parser::lexer::Span;
 
 // ── Module-global state ──────────────────────────────────────────────────────
 
@@ -200,6 +201,14 @@ pub(super) struct FnCtx {
     /// Heap-allocated locals: (ssa_or_alloca, kind, is_ref).
     pub heap_locals: Vec<(String, HeapKind, bool)>,
 
+    /// Spans that are the textual last use of their variable within this
+    /// function body (#1994). Populated by [`compute_last_uses`] before body
+    /// emission; consulted at call sites to decide clone-vs-move for owned
+    /// heap-typed arguments.
+    ///
+    /// [`compute_last_uses`]: crate::mvl::backends::last_use::compute_last_uses
+    pub last_uses: HashSet<Span>,
+
     // ── Entry-block alloca hoisting ──────────────────────────────────────
     /// Alloca instructions for `ref` locals that must live in the entry block
     /// so they dominate all uses, even when the binding is inside a branch (#1645).
@@ -226,6 +235,7 @@ impl FnCtx {
             enclosing_actor: None,
             spawned_actor_handles: Vec::new(),
             heap_locals: Vec::new(),
+            last_uses: HashSet::new(),
             pre_allocas: Vec::new(),
         }
     }

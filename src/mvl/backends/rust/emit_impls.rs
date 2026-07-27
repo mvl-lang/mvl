@@ -46,8 +46,8 @@
 //! ```
 
 use super::emitter::RustEmitter;
+use crate::mvl::backends::last_use::compute_last_uses;
 use crate::mvl::backends::rust::emit_types::emit_ty;
-use crate::mvl::backends::rust::last_use::compute_last_uses;
 use crate::mvl::ir::{TirImplDecl, TirStmt};
 
 impl RustEmitter {
