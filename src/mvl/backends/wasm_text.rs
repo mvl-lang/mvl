@@ -110,6 +110,13 @@ struct PayloadEnumInfo {
     variants: Vec<PayloadVariant>,
 }
 
+/// Declaration-level `relabel name: A -> B audit` transitions, keyed by
+/// transition name, from `TirProgram.relabel_decls` — mirrors the Rust/LLVM
+/// backends' `audit_relabels` (#896). A call site whose `relabel name(...)`
+/// omits the `audit` keyword still needs an audit event emitted if the
+/// transition itself was declared `audit`.
+type AuditRelabels = HashMap<String, (Option<String>, Option<String>)>;
+
 /// Shared per-emission context. Bundles the flags/tables threaded through
 /// every emit_*  free function so their signatures stay stable as the
 /// spike grows (or shrinks). Uses `Cell` for the label counter so the
@@ -119,6 +126,9 @@ struct Ctx<'a> {
     needs_wasi: bool,
     /// Interned string literals: content → (linear-memory offset, byte length).
     literals: &'a HashMap<String, (u32, u32)>,
+    /// Declaration-level mandatory-audit relabel transitions (#2013). See
+    /// [`AuditRelabels`].
+    audit_relabels: &'a AuditRelabels,
     /// Enum types whose variants are all `Unit` — lower to `i32` discriminant.
     /// Enums with tuple/struct payloads are excluded here (they use the
     /// tagged-union heap layout in `payload_enums`).
@@ -330,7 +340,19 @@ impl Backend for WasmTextCompiler {
             .iter()
             .any(|f| f.name == "main" && matches!(f.ret_ty, Ty::Unit));
 
-        let (literals, heap_start) = collect_literals(&fns, needs_wasi);
+        // Declaration-level mandatory-audit relabel transitions (#2013) —
+        // mirrors Rust/LLVM's `audit_relabels` (#896). A call site's own
+        // `relabel name(...) audit` keyword is OR'd with this at the
+        // Relabel emit site, so a transition declared `audit` gets an audit
+        // event even when call sites omit the keyword.
+        let audit_relabels: AuditRelabels = tir
+            .relabel_decls
+            .iter()
+            .filter(|rd| rd.audit)
+            .map(|rd| (rd.name.clone(), (rd.from.clone(), rd.to.clone())))
+            .collect();
+
+        let (literals, heap_start) = collect_literals(&fns, needs_wasi, &audit_relabels);
         let (enum_types, enum_variants) = collect_enums(&tir.types);
         let struct_layouts = collect_structs(&tir.types);
         let payload_enums = collect_payload_enums(&tir.types);
@@ -344,6 +366,7 @@ impl Backend for WasmTextCompiler {
         let ctx = Ctx {
             needs_wasi,
             literals: &literals,
+            audit_relabels: &audit_relabels,
             enum_types: &enum_types,
             enum_variants: &enum_variants,
             struct_layouts: &struct_layouts,
@@ -740,15 +763,13 @@ fn local_drop_fn(name: &str, ty: &Ty) -> Option<&'static str> {
     } else if !name.starts_with("__") && result_ok_ty(ty).is_some() {
         Some("_mvl_result_drop")
     } else if !name.starts_with("__")
-        && collection_elem_ty(ty)
-            .map(|e| matches!(e, Ty::String))
-            .unwrap_or(false)
+        && collection_elem_ty(ty).map(peels_to_string).unwrap_or(false)
     {
         Some("_mvl_string_ptr_array_drop")
     } else if !name.starts_with("__")
         && collection_elem_ty(ty).is_some()
         && collection_elem_ty(ty)
-            .map(|e| !matches!(e, Ty::String))
+            .map(|e| !peels_to_string(e))
             .unwrap_or(true)
     {
         Some("_mvl_array_drop")
@@ -780,8 +801,18 @@ fn emit_fn_heap_drops(out: &mut String, locals: &[(String, Ty)], exclude: Option
 /// emitter has no per-module `audit_relabels` declaration registry, so this
 /// covers the built-in relabel names used by the corpus. Unknown names fall
 /// back to `("_", "_")`, same as LLVM's default arm.
-fn relabel_label_strings(name: &str) -> (&'static str, &'static str) {
-    match name {
+/// `audit_relabels` (declared transitions) takes precedence over the
+/// built-in table — mirrors LLVM's `relabel_label_strings_tir`, which
+/// prefers `self.module.audit_relabels.get(name)` before falling back to
+/// its own hardcoded match.
+fn relabel_label_strings(name: &str, audit_relabels: &AuditRelabels) -> (String, String) {
+    if let Some((from, to)) = audit_relabels.get(name) {
+        return (
+            from.clone().unwrap_or_else(|| "_".to_string()),
+            to.clone().unwrap_or_else(|| "_".to_string()),
+        );
+    }
+    let (f, t) = match name {
         "classify" => ("_", "Secret"),
         "taint" => ("_", "Tainted"),
         "trust" => ("Tainted", "_"),
@@ -795,7 +826,8 @@ fn relabel_label_strings(name: &str) -> (&'static str, &'static str) {
         "audit_target" => ("_", "AuditTarget"),
         "unaudit_target" => ("AuditTarget", "_"),
         _ => ("_", "_"),
-    }
+    };
+    (f.to_string(), t.to_string())
 }
 
 /// Push a literal string's `(offset, len)` as two `i32.const` operands, for
@@ -848,7 +880,7 @@ fn emit_fn(out: &mut String, f: &TirFn, ctx: &Ctx) {
     *ctx.string_params.borrow_mut() = f
         .params
         .iter()
-        .filter(|p| matches!(&p.ty, Ty::String))
+        .filter(|p| peels_to_string(&p.ty))
         .map(|p| p.name.clone())
         .collect();
 
@@ -859,7 +891,7 @@ fn emit_fn(out: &mut String, f: &TirFn, ctx: &Ctx) {
         let mut sp = ctx.string_params.borrow_mut();
         sp.clear();
         for p in &f.params {
-            if matches!(&p.ty, Ty::String) {
+            if peels_to_string(&p.ty) {
                 sp.insert(p.name.clone());
             }
         }
@@ -905,7 +937,8 @@ fn emit_fn(out: &mut String, f: &TirFn, ctx: &Ctx) {
     // return_refinement (#1822). Skip for Unit and String returns (String is
     // multi-value i32×2 — deferred) and when AssertMode is Assume.
     let has_checkable_ensures = ctx.assert_mode != AssertMode::Assume
-        && !matches!(f.ret_ty, Ty::Unit | Ty::String)
+        && !matches!(f.ret_ty, Ty::Unit)
+        && !peels_to_string(&f.ret_ty)
         && (f.ensures.iter().any(is_runtime_checkable)
             || f.return_refinement
                 .as_ref()
@@ -1072,7 +1105,7 @@ fn collect_locals_ctx_expr(expr: &TirExpr, locals: &mut Vec<(String, Ty)>, ctx: 
             if let Some(sname) = struct_name {
                 if let Some(layout) = ctx.struct_layouts.get(&sname) {
                     if let Some(slot) = layout.fields.iter().find(|s| s.name == *field) {
-                        if matches!(slot.ty, Ty::String) {
+                        if peels_to_string(&slot.ty) {
                             locals.push((
                                 format!("__sf_{}_{}", slot.offset, field.len()),
                                 Ty::Bool, // i32 placeholder
@@ -1235,7 +1268,7 @@ fn collect_locals_stmt(stmt: &TirStmt, locals: &mut Vec<(String, Ty)>) {
                     collection_elem_ty(&iter.ty).cloned().unwrap_or(Ty::Int),
                 ),
             };
-            if matches!(var_ty, Ty::String) {
+            if peels_to_string(&var_ty) {
                 // List[String] element — split into ptr/len locals (i32×2),
                 // plus a *MvlString unpack temp for the loop-body load.
                 // Ty::Bool → i32 WASM local (convention for opaque pointer/int
@@ -1347,7 +1380,7 @@ fn collect_locals_expr(expr: &TirExpr, locals: &mut Vec<(String, Ty)>) {
             // Allocation-returning String methods leave a `*MvlString` on
             // the stack that the emitter unpacks via a temp i32 local.
             // Register it here so the fn prelude declares it.
-            if matches!(&receiver.ty, Ty::String)
+            if peels_to_string(&receiver.ty)
                 && matches!(
                     method.as_str(),
                     "concat" | "substring" | "to_upper" | "to_lower" | "trim" | "replace"
@@ -1460,7 +1493,7 @@ fn emit_stmt(out: &mut String, stmt: &TirStmt, ctx: &Ctx) {
         } => {
             emit_expr(out, cond, ctx);
             match if_stmt_result_ty(then, else_, ctx) {
-                Some(Ty::String) => {
+                Some(ty) if peels_to_string(&ty) => {
                     out.push_str("    if (result i32 i32)\n");
                 }
                 Some(ty) => {
@@ -1649,7 +1682,7 @@ fn emit_expr(out: &mut String, expr: &TirExpr, ctx: &Ctx) {
         TirExprKind::Binary { op, left, right } => {
             // String equality/inequality — route through runtime, same as
             // assert_eq[String]. Leaves i32 (0 or 1) on the stack.
-            if matches!(&left.ty, Ty::String) && matches!(op, BinaryOp::Eq | BinaryOp::Ne) {
+            if peels_to_string(&left.ty) && matches!(op, BinaryOp::Eq | BinaryOp::Ne) {
                 ctx.needs_runtime.set(true);
                 emit_expr(out, left, ctx); // (ptr1, len1)
                 emit_expr(out, right, ctx); // (ptr2, len2)
@@ -1728,7 +1761,7 @@ fn emit_expr(out: &mut String, expr: &TirExpr, ctx: &Ctx) {
             // `_mvl_result_err_str`. Other error types not yet supported.
             if name == "Err" && args.len() == 1 && matches!(&expr.ty, Ty::Result(_, _)) {
                 let err_ty = result_err_ty(&expr.ty).cloned().unwrap_or(Ty::String);
-                if matches!(err_ty, Ty::String) {
+                if peels_to_string(&err_ty) {
                     ctx.needs_runtime.set(true);
                     emit_expr(out, &args[0], ctx);
                     out.push_str("    call $_mvl_result_err_str\n");
@@ -1779,7 +1812,7 @@ fn emit_expr(out: &mut String, expr: &TirExpr, ctx: &Ctx) {
             receiver,
             method,
             args,
-        } if matches!(&receiver.ty, Ty::String)
+        } if peels_to_string(&receiver.ty)
             && matches!(
                 method.as_str(),
                 "len" | "is_empty" | "contains" | "starts_with" | "ends_with" | "find"
@@ -1802,7 +1835,7 @@ fn emit_expr(out: &mut String, expr: &TirExpr, ctx: &Ctx) {
             receiver,
             method,
             args,
-        } if matches!(&receiver.ty, Ty::String)
+        } if peels_to_string(&receiver.ty)
             && matches!(
                 method.as_str(),
                 "concat" | "substring" | "to_upper" | "to_lower" | "trim" | "replace"
@@ -1822,7 +1855,7 @@ fn emit_expr(out: &mut String, expr: &TirExpr, ctx: &Ctx) {
             receiver,
             method,
             args,
-        } if matches!(&receiver.ty, Ty::String) && method == "parse_int" && args.is_empty() => {
+        } if peels_to_string(&receiver.ty) && method == "parse_int" && args.is_empty() => {
             ctx.needs_runtime.set(true);
             emit_expr(out, receiver, ctx);
             out.push_str("    call $_mvl_string_parse_int\n");
@@ -2128,7 +2161,7 @@ fn emit_expr(out: &mut String, expr: &TirExpr, ctx: &Ctx) {
             let is_unit = matches!(expr.ty, Ty::Unit);
             if is_unit {
                 out.push_str("    if\n");
-            } else if matches!(expr.ty, Ty::String) {
+            } else if peels_to_string(&expr.ty) {
                 out.push_str("    if (result i32 i32)\n");
             } else {
                 out.push_str(&format!("    if (result {})\n", wasm_ty(&expr.ty, ctx)));
@@ -2169,11 +2202,12 @@ fn emit_expr(out: &mut String, expr: &TirExpr, ctx: &Ctx) {
         }
         // `relabel name(expr, "tag")` — IFC relabel transition (#2013).
         // Labels are compile-time only; the runtime value passes through
-        // unchanged (mirrors LLVM's `emit_relabel_tir`). When `audit` is
-        // set, additionally emit a call to `_mvl_audit_emit_relabel` with
-        // the transition name, from/to label strings, tag, and an empty
-        // location string — same five-string shape as the LLVM runtime's
-        // `_mvl_audit_emit_relabel`.
+        // unchanged (mirrors LLVM's `emit_relabel_tir`). An audit event is
+        // emitted via `_mvl_audit_emit_relabel` when the call site carries
+        // `audit` OR the transition itself was declared `audit` (#896) —
+        // same needs_audit rule as the Rust/LLVM backends, so a mandatory
+        // audit declaration can't be silently skipped by omitting the
+        // call-site keyword on this backend alone.
         TirExprKind::Relabel {
             name,
             expr: inner,
@@ -2181,10 +2215,17 @@ fn emit_expr(out: &mut String, expr: &TirExpr, ctx: &Ctx) {
             audit,
         } => {
             emit_expr(out, inner, ctx);
-            if *audit {
+            let needs_audit = *audit || ctx.audit_relabels.contains_key(name);
+            if needs_audit {
                 ctx.needs_runtime.set(true);
-                let (from_lbl, to_lbl) = relabel_label_strings(name);
-                for s in [name.as_str(), from_lbl, to_lbl, tag.as_str(), ""] {
+                let (from_lbl, to_lbl) = relabel_label_strings(name, ctx.audit_relabels);
+                for s in [
+                    name.as_str(),
+                    from_lbl.as_str(),
+                    to_lbl.as_str(),
+                    tag.as_str(),
+                    "",
+                ] {
                     emit_literal_str_operands(out, s, ctx);
                 }
                 out.push_str("    call $_mvl_audit_emit_relabel\n");
@@ -2405,7 +2446,7 @@ fn emit_match_impl(
     let if_open: String = result_ty
         .as_ref()
         .map(|t| {
-            if matches!(t, Ty::String) {
+            if peels_to_string(t) {
                 "    if (result i32 i32)\n".to_string()
             } else {
                 format!("    if (result {})\n", wasm_ty(t, ctx))
@@ -2570,7 +2611,7 @@ fn emit_match_impl(
                             let field_ty = pv.fields.get(slot).cloned().unwrap_or(Ty::Int);
                             let byte_off = (slot as u32) * 8;
                             out.push_str(&format!("    local.get ${payload_ptr_local}\n"));
-                            if matches!(field_ty, Ty::String) {
+                            if peels_to_string(&field_ty) {
                                 // String payload: stored as i64-extended *MvlString.
                                 // Load, narrow to i32, unpack to (ptr, len) split locals.
                                 out.push_str(&format!("    i64.load offset={byte_off}\n"));
@@ -2785,7 +2826,7 @@ fn emit_enum_variant_construct(
 /// the field type to choose the correct WASM store opcode.
 fn emit_struct_store(out: &mut String, val: &TirExpr, field_ty: &Ty, byte_off: u32, ctx: &Ctx) {
     match field_ty {
-        Ty::String => {
+        _ if peels_to_string(field_ty) => {
             // String fields are stored as *MvlString (i32 pointer).
             // val pushes (ptr, len); call _mvl_string_new to heap-allocate.
             ctx.needs_runtime.set(true);
@@ -2812,7 +2853,7 @@ fn emit_struct_store(out: &mut String, val: &TirExpr, field_ty: &Ty, byte_off: u
 /// Store a payload-enum field (always 8-byte slots) at `byte_off`.
 fn emit_payload_store(out: &mut String, val: &TirExpr, field_ty: &Ty, byte_off: u32, ctx: &Ctx) {
     match field_ty {
-        Ty::String => {
+        _ if peels_to_string(field_ty) => {
             ctx.needs_runtime.set(true);
             emit_expr(out, val, ctx);
             out.push_str("    call $_mvl_string_new\n");
@@ -2844,7 +2885,7 @@ fn emit_payload_load(out: &mut String, field_ty: &Ty, byte_off: u32, ctx: &Ctx) 
         Ty::Float => {
             out.push_str(&format!("    f64.load offset={byte_off}\n"));
         }
-        Ty::String => {
+        _ if peels_to_string(field_ty) => {
             // Stored as i64-extended *MvlString; narrow back to i32.
             out.push_str(&format!("    i64.load offset={byte_off}\n"));
             out.push_str("    i32.wrap_i64\n");
@@ -2899,7 +2940,7 @@ fn emit_field_access(out: &mut String, recv: &TirExpr, field: &str, ctx: &Ctx) {
     emit_expr(out, recv, ctx); // leaves *struct on stack
     let byte_off = slot.offset;
     match &slot.ty {
-        Ty::String => {
+        _ if peels_to_string(&slot.ty) => {
             // Stored as *MvlString. Load the i32 pointer, then unpack
             // to (ptr, len) so downstream code sees the standard repr.
             ctx.needs_runtime.set(true);
@@ -3296,7 +3337,7 @@ fn emit_assert_eq(out: &mut String, left: &TirExpr, right: &TirExpr, negate: boo
     // String equality: both operands leave (ptr, len) on the stack (four
     // i32s total), then a runtime call reduces it to i32{0,1}. Same trap
     // logic wraps it below.
-    if matches!(&left.ty, Ty::String) {
+    if peels_to_string(&left.ty) {
         ctx.needs_runtime.set(true);
         emit_expr(out, left, ctx);
         emit_expr(out, right, ctx);
@@ -3362,7 +3403,7 @@ fn emit_unary(out: &mut String, op: UnaryOp, inner: &TirExpr, ctx: &Ctx) {
 fn emit_binary(out: &mut String, op: BinaryOp, left: &TirExpr, right: &TirExpr, ctx: &Ctx) {
     // String equality / inequality — both operands leave (ptr, len) on the
     // stack; `_mvl_string_eq` consumes all four i32s and returns i32.
-    if matches!(&left.ty, Ty::String) && matches!(op, BinaryOp::Eq | BinaryOp::Ne) {
+    if peels_to_string(&left.ty) && matches!(op, BinaryOp::Eq | BinaryOp::Ne) {
         ctx.needs_runtime.set(true);
         emit_expr(out, left, ctx);
         emit_expr(out, right, ctx);
@@ -3498,20 +3539,22 @@ fn is_float_ctx(ty: &Ty, ctx: &Ctx) -> bool {
     }
 }
 
-/// True if this MVL type is a String (possibly via generic type param resolution).
+/// True if this MVL type is a String (possibly via generic type param
+/// resolution). Layers `ctx.type_subst` resolution on top of the ctx-free
+/// [`peels_to_string`] peel so the two helpers share one definition of
+/// "String, possibly wrapped in Ref/Labeled/Refined" instead of duplicating
+/// it — `peels_to_string` stays the ctx-free version for call sites (like
+/// `collect_locals_stmt`) that run without a `Ctx` in scope.
 fn is_string_ty(ty: &Ty, ctx: &Ctx) -> bool {
     match ty {
-        Ty::String => true,
-        Ty::Named(name, args) if args.is_empty() => {
-            if let Some(concrete) = ctx.type_subst.get(name.as_str()) {
-                return is_string_ty(concrete, ctx);
-            }
-            false
-        }
+        Ty::Named(name, args) if args.is_empty() => ctx
+            .type_subst
+            .get(name.as_str())
+            .is_some_and(|concrete| is_string_ty(concrete, ctx)),
         Ty::Ref(_, inner) | Ty::Labeled(_, inner) | Ty::Refined(inner, _) => {
             is_string_ty(inner, ctx)
         }
-        _ => false,
+        _ => peels_to_string(ty),
     }
 }
 
@@ -3810,6 +3853,7 @@ fn emit_generic_fn(
     let mono_ctx = Ctx {
         needs_wasi: ctx.needs_wasi,
         literals: ctx.literals,
+        audit_relabels: ctx.audit_relabels,
         enum_types: ctx.enum_types,
         enum_variants: ctx.enum_variants,
         struct_layouts: ctx.struct_layouts,
@@ -3829,7 +3873,7 @@ fn emit_generic_fn(
         let mut sp = mono_ctx.string_params.borrow_mut();
         for p in &f.params {
             let concrete = resolve_ty_param(&p.ty, type_subst);
-            if matches!(concrete, Ty::String) {
+            if peels_to_string(&concrete) {
                 sp.insert(p.name.clone());
             }
         }
@@ -3839,7 +3883,7 @@ fn emit_generic_fn(
     out.push_str(&format!("  (func ${mangled_name}"));
     for p in &f.params {
         let concrete = resolve_ty_param(&p.ty, type_subst);
-        if matches!(concrete, Ty::String) {
+        if peels_to_string(&concrete) {
             out.push_str(&format!(
                 " (param ${}_ptr i32) (param ${}_len i32)",
                 p.name, p.name
@@ -3855,7 +3899,7 @@ fn emit_generic_fn(
     // Return type.
     let concrete_ret = resolve_ty_param(&f.ret_ty, type_subst);
     if !matches!(concrete_ret, Ty::Unit) {
-        if matches!(concrete_ret, Ty::String) {
+        if peels_to_string(&concrete_ret) {
             out.push_str(" (result i32 i32)");
         } else {
             out.push_str(&format!(" (result {})", wasm_ty(&concrete_ret, &mono_ctx)));
@@ -3869,7 +3913,7 @@ fn emit_generic_fn(
     collect_locals_ctx(&f.body, &mut locals, &mono_ctx);
     for (name, ty) in &locals {
         let concrete = resolve_ty_param(ty, type_subst);
-        if matches!(concrete, Ty::String) {
+        if peels_to_string(&concrete) {
             out.push_str(&format!("    (local ${name}_ptr i32)\n"));
             out.push_str(&format!("    (local ${name}_len i32)\n"));
         } else {
@@ -4049,7 +4093,11 @@ fn collect_payload_enums(types: &[TirTypeDecl]) -> HashMap<String, PayloadEnumIn
 /// interning table and the first free offset after all literals — used as
 /// the initial value of the runtime's `$heap` global so bump allocations
 /// don't overwrite the data section.
-fn collect_literals(fns: &[&TirFn], needs_wasi: bool) -> (HashMap<String, (u32, u32)>, u32) {
+fn collect_literals(
+    fns: &[&TirFn],
+    needs_wasi: bool,
+    audit_relabels: &AuditRelabels,
+) -> (HashMap<String, (u32, u32)>, u32) {
     let mut map = HashMap::new();
     let mut next = LITERAL_BASE;
     // Seed "true" / "false" so `Bool.to_string()` has offsets to point at.
@@ -4062,50 +4110,60 @@ fn collect_literals(fns: &[&TirFn], needs_wasi: bool) -> (HashMap<String, (u32, 
         }
     }
     for f in fns {
-        collect_block(&f.body, &mut map, &mut next);
+        collect_block(&f.body, &mut map, &mut next, audit_relabels);
     }
     (map, next)
 }
 
-fn collect_block(block: &TirBlock, map: &mut HashMap<String, (u32, u32)>, next: &mut u32) {
+fn collect_block(
+    block: &TirBlock,
+    map: &mut HashMap<String, (u32, u32)>,
+    next: &mut u32,
+    audit_relabels: &AuditRelabels,
+) {
     for stmt in &block.stmts {
-        collect_stmt(stmt, map, next);
+        collect_stmt(stmt, map, next, audit_relabels);
     }
 }
 
-fn collect_stmt(stmt: &TirStmt, map: &mut HashMap<String, (u32, u32)>, next: &mut u32) {
+fn collect_stmt(
+    stmt: &TirStmt,
+    map: &mut HashMap<String, (u32, u32)>,
+    next: &mut u32,
+    audit_relabels: &AuditRelabels,
+) {
     match stmt {
-        TirStmt::Expr { expr, .. } => collect_expr(expr, map, next),
-        TirStmt::Return { value: Some(v), .. } => collect_expr(v, map, next),
-        TirStmt::Let { init, .. } => collect_expr(init, map, next),
-        TirStmt::Assign { value, .. } => collect_expr(value, map, next),
+        TirStmt::Expr { expr, .. } => collect_expr(expr, map, next, audit_relabels),
+        TirStmt::Return { value: Some(v), .. } => collect_expr(v, map, next, audit_relabels),
+        TirStmt::Let { init, .. } => collect_expr(init, map, next, audit_relabels),
+        TirStmt::Assign { value, .. } => collect_expr(value, map, next, audit_relabels),
         TirStmt::If {
             cond, then, else_, ..
         } => {
-            collect_expr(cond, map, next);
-            collect_block(then, map, next);
+            collect_expr(cond, map, next, audit_relabels);
+            collect_block(then, map, next, audit_relabels);
             match else_ {
-                Some(TirElseBranch::Block(b)) => collect_block(b, map, next),
-                Some(TirElseBranch::If(s)) => collect_stmt(s, map, next),
+                Some(TirElseBranch::Block(b)) => collect_block(b, map, next, audit_relabels),
+                Some(TirElseBranch::If(s)) => collect_stmt(s, map, next, audit_relabels),
                 None => {}
             }
         }
         TirStmt::While { cond, body, .. } => {
-            collect_expr(cond, map, next);
-            collect_block(body, map, next);
+            collect_expr(cond, map, next, audit_relabels);
+            collect_block(body, map, next, audit_relabels);
         }
         TirStmt::For { iter, body, .. } => {
-            collect_expr(iter, map, next);
-            collect_block(body, map, next);
+            collect_expr(iter, map, next, audit_relabels);
+            collect_block(body, map, next, audit_relabels);
         }
         TirStmt::Match {
             scrutinee, arms, ..
         } => {
-            collect_expr(scrutinee, map, next);
+            collect_expr(scrutinee, map, next, audit_relabels);
             for arm in arms {
                 match &arm.body {
-                    TirMatchBody::Expr(e) => collect_expr(e, map, next),
-                    TirMatchBody::Block(b) => collect_block(b, map, next),
+                    TirMatchBody::Expr(e) => collect_expr(e, map, next, audit_relabels),
+                    TirMatchBody::Block(b) => collect_block(b, map, next, audit_relabels),
                 }
             }
         }
@@ -4113,7 +4171,12 @@ fn collect_stmt(stmt: &TirStmt, map: &mut HashMap<String, (u32, u32)>, next: &mu
     }
 }
 
-fn collect_expr(expr: &TirExpr, map: &mut HashMap<String, (u32, u32)>, next: &mut u32) {
+fn collect_expr(
+    expr: &TirExpr,
+    map: &mut HashMap<String, (u32, u32)>,
+    next: &mut u32,
+    audit_relabels: &AuditRelabels,
+) {
     match &expr.kind {
         TirExprKind::Literal(Literal::Str(s)) => {
             if !map.contains_key(s) {
@@ -4122,31 +4185,31 @@ fn collect_expr(expr: &TirExpr, map: &mut HashMap<String, (u32, u32)>, next: &mu
                 *next += len;
             }
         }
-        TirExprKind::Unary { expr, .. } => collect_expr(expr, map, next),
+        TirExprKind::Unary { expr, .. } => collect_expr(expr, map, next, audit_relabels),
         TirExprKind::Binary { left, right, .. } => {
-            collect_expr(left, map, next);
-            collect_expr(right, map, next);
+            collect_expr(left, map, next, audit_relabels);
+            collect_expr(right, map, next, audit_relabels);
         }
         TirExprKind::FnCall { args, .. } => {
             for a in args {
-                collect_expr(a, map, next);
+                collect_expr(a, map, next, audit_relabels);
             }
         }
         TirExprKind::MethodCall { receiver, args, .. } => {
-            collect_expr(receiver, map, next);
+            collect_expr(receiver, map, next, audit_relabels);
             for a in args {
-                collect_expr(a, map, next);
+                collect_expr(a, map, next, audit_relabels);
             }
         }
         TirExprKind::If { cond, then, else_ } => {
-            collect_expr(cond, map, next);
-            collect_block(then, map, next);
+            collect_expr(cond, map, next, audit_relabels);
+            collect_block(then, map, next, audit_relabels);
             if let Some(e) = else_ {
-                collect_expr(e, map, next);
+                collect_expr(e, map, next, audit_relabels);
             }
         }
         TirExprKind::Match { scrutinee, arms } => {
-            collect_expr(scrutinee, map, next);
+            collect_expr(scrutinee, map, next, audit_relabels);
             for arm in arms {
                 // Literal String patterns are compared against the scrutinee
                 // and need a data-section entry too.
@@ -4158,42 +4221,51 @@ fn collect_expr(expr: &TirExpr, map: &mut HashMap<String, (u32, u32)>, next: &mu
                     }
                 }
                 match &arm.body {
-                    TirMatchBody::Expr(e) => collect_expr(e, map, next),
-                    TirMatchBody::Block(b) => collect_block(b, map, next),
+                    TirMatchBody::Expr(e) => collect_expr(e, map, next, audit_relabels),
+                    TirMatchBody::Block(b) => collect_block(b, map, next, audit_relabels),
                 }
             }
         }
-        TirExprKind::Block(block) => collect_block(block, map, next),
+        TirExprKind::Block(block) => collect_block(block, map, next, audit_relabels),
         TirExprKind::List { elems } | TirExprKind::Set { elems } => {
             for e in elems {
-                collect_expr(e, map, next);
+                collect_expr(e, map, next, audit_relabels);
             }
         }
         TirExprKind::Map { pairs } => {
             for (k, v) in pairs {
-                collect_expr(k, map, next);
-                collect_expr(v, map, next);
+                collect_expr(k, map, next, audit_relabels);
+                collect_expr(v, map, next, audit_relabels);
             }
         }
         TirExprKind::Construct { fields, .. } => {
             for (_, v) in fields {
-                collect_expr(v, map, next);
+                collect_expr(v, map, next, audit_relabels);
             }
         }
         // `relabel name(expr, "tag")` (#2013) — recurse into the wrapped
         // value (may itself be a string literal, e.g. `relabel classify("x", tag)`),
-        // and when `audit` is set, register the audit event's own literal
-        // strings (transition name, from/to labels, tag) for emit_expr.
+        // and when the call site's `audit` flag OR a declaration-level
+        // `audit` (#896, via `audit_relabels`) applies, register the audit
+        // event's own literal strings (transition name, from/to labels,
+        // tag) for emit_expr — same `needs_audit` rule as the emit side, so
+        // the two passes agree on which strings must be interned.
         TirExprKind::Relabel {
             name,
             expr,
             tag,
             audit,
         } => {
-            collect_expr(expr, map, next);
-            if *audit {
-                let (from_lbl, to_lbl) = relabel_label_strings(name);
-                for s in [name.as_str(), from_lbl, to_lbl, tag.as_str()] {
+            collect_expr(expr, map, next, audit_relabels);
+            let needs_audit = *audit || audit_relabels.contains_key(name);
+            if needs_audit {
+                let (from_lbl, to_lbl) = relabel_label_strings(name, audit_relabels);
+                for s in [
+                    name.as_str(),
+                    from_lbl.as_str(),
+                    to_lbl.as_str(),
+                    tag.as_str(),
+                ] {
                     if !s.is_empty() && !map.contains_key(s) {
                         let len = s.len() as u32;
                         map.insert(s.to_string(), (*next, len));

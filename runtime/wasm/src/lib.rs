@@ -1064,16 +1064,21 @@ pub unsafe extern "C" fn _mvl_string_parse_int(ptr: i32, len: i32) -> i32 {
 // avoid pulling a native-oriented crate onto the wasm32-wasip1 target.
 
 fn json_escape(s: &str) -> String {
-    s.chars()
-        .flat_map(|c| match c {
-            '"' => vec!['\\', '"'],
-            '\\' => vec!['\\', '\\'],
-            '\n' => vec!['\\', 'n'],
-            '\r' => vec!['\\', 'r'],
-            '\t' => vec!['\\', 't'],
-            c => vec![c],
-        })
-        .collect()
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if (c as u32) < 0x20 => {
+                out.push_str(&format!("\\u{:04x}", c as u32));
+            }
+            c => out.push(c),
+        }
+    }
+    out
 }
 
 fn is_leap(y: u64) -> bool {
@@ -1175,8 +1180,12 @@ pub unsafe extern "C" fn _mvl_audit_emit_relabel(
             .append(true)
             .open(&sink);
         if let Ok(mut f) = opened {
-            let _ = writeln!(f, "{line}");
-            return;
+            // A write failure here (disk full, EIO, broken pipe) still needs
+            // the event surfaced somewhere — fall through to stderr rather
+            // than silently dropping it, same as when `open` itself fails.
+            if writeln!(f, "{line}").is_ok() {
+                return;
+            }
         }
     }
     eprintln!("[mvl-audit] {line}");
