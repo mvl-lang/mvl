@@ -19,8 +19,12 @@ pub fn run(path: &str, json: bool, verbose: bool) {
     let stdlib_dir = stdlib::ensure_stdlib();
     let files = loader::mvl_files(path, false);
     if files.is_empty() {
-        eprintln!("No .mvl files found at: {path}");
-        process::exit(1);
+        if json {
+            println!("{{\"files\":0,\"functions\":{{\"total\":0,\"verified_total\":0,\"partial\":0,\"extern\":0,\"kernel_extern\":0,\"implemented\":0,\"test\":0}},\"types\":{{\"structs\":0,\"enums\":0}},\"summary\":\"no .mvl files found\"}}");
+        } else {
+            eprintln!("No .mvl files found at: {path}");
+        }
+        process::exit(0);
     }
     let all_mvl_count = loader::mvl_files_all(path).len();
     let excluded_count = all_mvl_count - files.len();

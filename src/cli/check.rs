@@ -102,8 +102,14 @@ pub fn run(path: &str, req_filter: Option<u8>, opts: CheckOptions) {
     }
     let files = loader::mvl_files(path, false);
     if files.is_empty() {
-        eprintln!("No .mvl files found at: {path}");
-        process::exit(1);
+        if format_json {
+            println!(
+                "{{\"errors\":[],\"warnings\":[],\"summary\":{{\"errors\":0,\"warnings\":0}}}}"
+            );
+        } else {
+            eprintln!("No .mvl files found at: {path}");
+        }
+        process::exit(0);
     }
     let stdlib_dir = stdlib::ensure_stdlib();
 

@@ -24,11 +24,21 @@ use std::process;
 const LAYER_NAMES: [&str; 6] = ["", "trivial", "interval", "symbolic", "cooper", "z3"];
 
 /// Parse and run the refinement prover over a .mvl file or directory.
-pub fn run(path: &str, verbose: bool, stdlib_profile: &str, callee_filter: Option<&str>) {
+pub fn run(
+    path: &str,
+    verbose: bool,
+    format_json: bool,
+    stdlib_profile: &str,
+    callee_filter: Option<&str>,
+) {
     let files = loader::mvl_files(path, false);
     if files.is_empty() {
-        eprintln!("No .mvl files found at: {path}");
-        process::exit(1);
+        if format_json {
+            println!("{{\"files\":[],\"total\":{{\"proven\":0,\"runtime\":0,\"failed\":0}}}}");
+        } else {
+            eprintln!("No .mvl files found at: {path}");
+        }
+        process::exit(0);
     }
     let stdlib_dir = stdlib::ensure_stdlib();
 
@@ -104,6 +114,9 @@ pub fn run(path: &str, verbose: bool, stdlib_profile: &str, callee_filter: Optio
     let mut total_failed = 0usize;
     let mut total_by_layer = [0usize; 6];
 
+    // JSON output collects all file results before printing.
+    let mut json_files: Vec<String> = Vec::new();
+
     for (idx, (file_str, prog)) in parsed.iter().take(check_count).enumerate() {
         let (before, after_with_self) = all_user_progs.split_at(idx);
         let after = &after_with_self[1..];
@@ -122,6 +135,86 @@ pub fn run(path: &str, verbose: bool, stdlib_profile: &str, callee_filter: Optio
         } else {
             all_sites.iter().collect()
         };
+
+        // Compute per-file outcome counts (always, for both text and JSON).
+        let mut file_proven = 0usize;
+        let mut file_runtime = 0usize;
+        let mut file_failed = 0usize;
+        let mut file_by_layer = [0usize; 6];
+        for site in &sites {
+            match &site.outcome {
+                ProofOutcome::Proven { layer, .. } => {
+                    file_proven += 1;
+                    file_by_layer[*layer] += 1;
+                }
+                ProofOutcome::RuntimeCheck | ProofOutcome::RuntimeCheckWithWitness { .. } => {
+                    file_runtime += 1
+                }
+                ProofOutcome::Failed => file_failed += 1,
+            }
+        }
+        total_proven += file_proven;
+        total_runtime += file_runtime;
+        total_failed += file_failed;
+        for (dst, src) in total_by_layer[1..=5]
+            .iter_mut()
+            .zip(file_by_layer[1..=5].iter())
+        {
+            *dst += src;
+        }
+
+        if format_json {
+            let sites_json: Vec<String> = sites
+                .iter()
+                .map(|site| {
+                    let (outcome_str, layer, layer_name, is_bv, counterexample) =
+                        match &site.outcome {
+                            ProofOutcome::Proven { layer, is_bv } => (
+                                "proven",
+                                *layer,
+                                LAYER_NAMES[*layer],
+                                *is_bv,
+                                String::new(),
+                            ),
+                            ProofOutcome::RuntimeCheck => {
+                                ("runtime", 0, "", false, String::new())
+                            }
+                            ProofOutcome::RuntimeCheckWithWitness { counterexample } => {
+                                ("runtime", 0, "", false, counterexample.clone())
+                            }
+                            ProofOutcome::Failed => ("failed", 0, "", false, String::new()),
+                        };
+                    let ce_field = if counterexample.is_empty() {
+                        String::new()
+                    } else {
+                        format!(
+                            ",\"counterexample\":\"{}\"",
+                            super::json_escape(&counterexample)
+                        )
+                    };
+                    format!(
+                        "{{\"line\":{},\"caller\":\"{}\",\"callee\":\"{}\",\"param\":\"{}\",\"predicate\":\"{}\",\"outcome\":\"{outcome_str}\",\"layer\":{layer},\"layer_name\":\"{layer_name}\",\"is_bv\":{is_bv}{ce_field}}}",
+                        site.span.line,
+                        super::json_escape(&site.caller_fn),
+                        super::json_escape(&site.fn_name),
+                        super::json_escape(&site.param_name),
+                        super::json_escape(&site.predicate),
+                    )
+                })
+                .collect();
+            let layer_obj: String = (1..=5)
+                .map(|i| format!("\"L{i}\":{}", file_by_layer[i]))
+                .collect::<Vec<_>>()
+                .join(",");
+            json_files.push(format!(
+                "{{\"file\":\"{}\",\"sites\":[{}],\"summary\":{{\"proven\":{file_proven},\"runtime\":{file_runtime},\"failed\":{file_failed},\"by_layer\":{{{layer_obj}}}}}}}",
+                super::json_escape(file_str),
+                sites_json.join(","),
+            ));
+            continue;
+        }
+
+        // Text output path below.
         if sites.is_empty() {
             if let Some(callee) = callee_filter {
                 if !all_sites.is_empty() {
@@ -235,32 +328,6 @@ pub fn run(path: &str, verbose: bool, stdlib_profile: &str, callee_filter: Optio
         // numbers always match the lines we just printed.  counts.* still tracks
         // the underlying solver attempts including negation-prove steps for
         // decreases/invariant-preservation that don't correspond to user-visible sites.
-        let mut file_proven = 0usize;
-        let mut file_runtime = 0usize;
-        let mut file_failed = 0usize;
-        let mut file_by_layer = [0usize; 6];
-        for site in sites {
-            match &site.outcome {
-                ProofOutcome::Proven { layer, .. } => {
-                    file_proven += 1;
-                    file_by_layer[*layer] += 1;
-                }
-                ProofOutcome::RuntimeCheck | ProofOutcome::RuntimeCheckWithWitness { .. } => {
-                    file_runtime += 1
-                }
-                ProofOutcome::Failed => file_failed += 1,
-            }
-        }
-        total_proven += file_proven;
-        total_runtime += file_runtime;
-        total_failed += file_failed;
-        for (dst, src) in total_by_layer[1..=5]
-            .iter_mut()
-            .zip(file_by_layer[1..=5].iter())
-        {
-            *dst += src;
-        }
-
         let layer_breakdown: String = (1..=5)
             .map(|i| format!("L{}:{}", i, file_by_layer[i]))
             .collect::<Vec<_>>()
@@ -270,7 +337,23 @@ pub fn run(path: &str, verbose: bool, stdlib_profile: &str, callee_filter: Optio
         );
     }
 
-    // Multi-file grand total.
+    // JSON: emit the collected results.
+    if format_json {
+        let total_layer_obj: String = (1..=5)
+            .map(|i| format!("\"L{i}\":{}", total_by_layer[i]))
+            .collect::<Vec<_>>()
+            .join(",");
+        println!(
+            "{{\"files\":[{}],\"total\":{{\"proven\":{total_proven},\"runtime\":{total_runtime},\"failed\":{total_failed},\"by_layer\":{{{total_layer_obj}}}}}}}",
+            json_files.join(","),
+        );
+        if total_failed > 0 {
+            process::exit(1);
+        }
+        return;
+    }
+
+    // Text: multi-file grand total.
     if check_count > 1 {
         let layer_breakdown: String = (1..=5)
             .map(|i| format!("L{}:{}", i, total_by_layer[i]))
