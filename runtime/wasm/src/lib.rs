@@ -1054,6 +1054,143 @@ pub unsafe extern "C" fn _mvl_string_parse_int(ptr: i32, len: i32) -> i32 {
     }
 }
 
+// ── IFC audit events (#2013) ─────────────────────────────────────────────
+//
+// `relabel name(expr, "tag") audit` emits a JSONL audit line via this call.
+// Mirrors `runtime/rust/src/stdlib/audit.rs::emit_relabel_event` /
+// `runtime/llvm/src/stdlib/audit.rs::_mvl_audit_emit_relabel` — same JSONL
+// shape and same `MVL_AUDIT_SINK`-env-var-or-stderr fallback. Kept as a
+// self-contained copy rather than a dependency on `mvl_runtime_rust` to
+// avoid pulling a native-oriented crate onto the wasm32-wasip1 target.
+
+fn json_escape(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if (c as u32) < 0x20 => {
+                out.push_str(&format!("\\u{:04x}", c as u32));
+            }
+            c => out.push(c),
+        }
+    }
+    out
+}
+
+fn is_leap(y: u64) -> bool {
+    (y % 4 == 0 && y % 100 != 0) || y % 400 == 0
+}
+
+/// Convert Unix epoch seconds to (year, month, day, hour, min, sec) UTC.
+fn epoch_to_ymd_hms(mut secs: u64) -> (u64, u64, u64, u64, u64, u64) {
+    let s = secs % 60;
+    secs /= 60;
+    let mi = secs % 60;
+    secs /= 60;
+    let h = secs % 24;
+    let mut days = secs / 24;
+    let mut y = 1970u64;
+    loop {
+        let days_in_year = if is_leap(y) { 366 } else { 365 };
+        if days < days_in_year {
+            break;
+        }
+        days -= days_in_year;
+        y += 1;
+    }
+    let month_days = [
+        31u64,
+        if is_leap(y) { 29 } else { 28 },
+        31,
+        30,
+        31,
+        30,
+        31,
+        31,
+        30,
+        31,
+        30,
+        31,
+    ];
+    let mut mo = 1u64;
+    for &md in &month_days {
+        if days < md {
+            break;
+        }
+        days -= md;
+        mo += 1;
+    }
+    (y, mo, days + 1, h, mi, s)
+}
+
+/// Emit a structured JSONL audit event for an IFC relabel transition.
+///
+/// Five `(ptr, len)` byte-slice pairs: transition name, from-label,
+/// to-label, tag, and location. Writes to the path in `MVL_AUDIT_SINK`
+/// (env var) if set and reachable, otherwise to stderr.
+///
+/// # Safety
+/// Each `(ptr, len)` pair must describe a live, readable byte range (or
+/// `len == 0`).
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn _mvl_audit_emit_relabel(
+    t_ptr: i32,
+    t_len: i32,
+    from_ptr: i32,
+    from_len: i32,
+    to_ptr: i32,
+    to_len: i32,
+    tag_ptr: i32,
+    tag_len: i32,
+    loc_ptr: i32,
+    loc_len: i32,
+) {
+    let read = |p: i32, l: i32| -> String {
+        String::from_utf8_lossy(unsafe { slice_or_empty(p, l) }).into_owned()
+    };
+    let transition = read(t_ptr, t_len);
+    let from_label = read(from_ptr, from_len);
+    let to_label = read(to_ptr, to_len);
+    let tag = read(tag_ptr, tag_len);
+    let location = read(loc_ptr, loc_len);
+
+    let ts = {
+        let dur = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default();
+        let (y, mo, d, h, mi, s) = epoch_to_ymd_hms(dur.as_secs());
+        format!("{y:04}-{mo:02}-{d:02}T{h:02}:{mi:02}:{s:02}Z")
+    };
+    let line = format!(
+        "{{\"timestamp\":\"{ts}\",\"kind\":\"relabel\",\"transition\":\"{}\",\"from\":\"{}\",\"to\":\"{}\",\"tag\":\"{}\",\"location\":\"{}\"}}",
+        json_escape(&transition),
+        json_escape(&from_label),
+        json_escape(&to_label),
+        json_escape(&tag),
+        json_escape(&location),
+    );
+    if let Ok(sink) = std::env::var("MVL_AUDIT_SINK") {
+        use std::io::Write as _;
+        let opened = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&sink);
+        if let Ok(mut f) = opened {
+            // A write failure here (disk full, EIO, broken pipe) still needs
+            // the event surfaced somewhere — fall through to stderr rather
+            // than silently dropping it, same as when `open` itself fails.
+            if writeln!(f, "{line}").is_ok() {
+                return;
+            }
+        }
+    }
+    eprintln!("[mvl-audit] {line}");
+}
+
 // ── Set ops (#1820) ──────────────────────────────────────────────────────
 //
 // Set[T] is backed by MvlArray (same as List[T]) but enforces uniqueness.
