@@ -1,10 +1,10 @@
 # Changelog
 
-## [Unreleased]
+## [1.7.1] - 2026-07-27
 
 ### Added — #2012
 
-- **WASM backend: actor support (spawn, mailbox, behaviors).** `mvl build --backend=wasm` previously stubbed every actor-related function body to `unreachable`, so all three `tests/corpus/12_actors/` files "compiled" while doing nothing. Actors now work: `actor Name { … }` construction, fire-and-forget behavior sends, and `pub test fn` synchronous state reads. `tests/corpus/12_actors` is in `WASM_CORPUS` and all 24 test fns pass with zero stubs.
+- **WASM backend: actor support (spawn, mailbox, behaviors).** `mvl build --backend=wasm` previously stubbed every actor-related function body to `unreachable`, so all three `tests/corpus/12_actors/` files "compiled" while doing nothing. Actors now work: `actor Name { … }` construction, fire-and-forget behavior sends, and `pub test fn` synchronous state reads. `tests/corpus/12_actors` is in `WASM_CORPUS` and all 30 test fns pass with zero stubs.
 - **ADR-0059 — WASM actor scheduling.** Single-threaded run-to-completion on `wasi_snapshot_preview1`; no move to WASI 0.2 / the component model. The decisive constraint is that a `--preload`ed runtime module cannot call back into the emitted module, so the LLVM contract (hand the runtime a dispatch function pointer) is not expressible on WASM. The mailbox and drain loop are therefore emitted into the module, with dispatch resolved as a static switch on an actor type tag — no funcref table, no `call_indirect`, and no new runtime symbols. `send` drains at the outermost call, which keeps per-actor FIFO and makes a self-send queue instead of recursing until the stack traps. Actors on WASM are concurrent in semantics only; the ADR and spec 015 (L8) record that there is no parallelism.
 - **`tests/corpus/12_actors/ordering_test.mvl`.** The existing actor tests accumulate commutatively, so a scheduler that reordered messages would still produce the right answers. These four tests use order-sensitive arithmetic, pinning the FIFO guarantee on all three backends.
 
@@ -19,7 +19,10 @@
 - **LLVM backend: `self.method(…)` inside an actor behavior was dropped silently.** Inside a behavior body `self` is the raw state pointer, not a handle, so the send path evaluated the receiver to nothing and emitted no call at all — an intra-actor call simply did not happen. Intra-actor calls now lower to a direct call on the state, which is what the Rust backend has always done (all methods live in `impl {Name}State`) and what WASM's drain-at-send produces observationally. A mailbox send would have been wrong here: the actor already holds exclusive access to its own state while dispatching, and queueing would race the caller's own pending messages non-deterministically. Covered by the new `12_actors/intra_actor_test.mvl`, green on all three backends.
 - **`make test-*` linked a stale LLVM runtime.** The backend resolves `libmvl_runtime_llvm` from the installed XDG runtime directory before the build tree, so newly added C-ABI symbols were missing and the failure looked like a codegen bug. The Makefile now pins `MVL_RUNTIME_LLVM_LIB` to the freshly built dylib, mirroring what `test-rust-wasm` already does with `MVL_RUNTIME_WASM`.
 
-## [1.7.1] - 2026-07-27
+- **WASM backend: IFC-labeled `String` actor parameters emitted an unassemblable module.** `emit_actor_method` tested `matches!(ty, Ty::String)` where `emit_fn` uses `peels_to_string`, so a `Tainted[String]` / refined-`String` behavior parameter got a single `$raw` param while the body referenced the split `$raw_ptr` / `$raw_len`. Found at the seam between actor support and the IFC relabel work (#2013) — neither change tested the combination. All the actor-side `String` checks now peel labels, matching `emit_fn`.
+- **WASM backend: temps nested inside `relabel` / `consume` / borrow were never declared.** The ctx-aware locals walker had no arm for those wrappers, so a `String` `self.field` read inside `relabel trust(…)` never registered its unpack temp and the module failed to assemble with `unknown local`.
+- **New `12_actors/ifc_actor_test.mvl`** pins the actor × IFC seam: a `Tainted[String]` behavior parameter, a relabel that reads the field it writes, and repeated reseals. All three bugs below were WASM-only and invisible to every existing test.
+- **WASM backend: use-after-free when a `String` field assignment reads its own field.** `emit_field_assign` released the previous `*MvlString` *before* evaluating the right-hand side, so `self.s = f(self.s)` freed the string the RHS then read — surfacing as `copy_nonoverlapping requires that both pointer arguments are aligned and non-null` inside the runtime. The new handle is now computed into a scratch local first, then the old handle is dropped, then the store happens.
 
 ### Fixed — #2003 #2004 #2010
 

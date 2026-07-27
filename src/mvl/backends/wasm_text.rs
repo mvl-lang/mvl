@@ -1101,7 +1101,17 @@ fn collect_locals_ctx(block: &TirBlock, locals: &mut Vec<(String, Ty)>, ctx: &Ct
 fn collect_locals_ctx_stmt(stmt: &TirStmt, locals: &mut Vec<(String, Ty)>, ctx: &Ctx) {
     match stmt {
         TirStmt::Let { init, .. } => collect_locals_ctx_expr(init, locals, ctx),
-        TirStmt::Assign { value, .. } => collect_locals_ctx_expr(value, locals, ctx),
+        TirStmt::Assign { target, value, .. } => {
+            // `base.field = …` on a String field needs a scratch local to hold
+            // the new handle while the old one is dropped (see
+            // `emit_field_assign`). Registered unconditionally — an unused
+            // local is free, and resolving the field's type here would mean
+            // duplicating the base-type lookup.
+            if matches!(target, LValue::Field { .. }) {
+                locals.push((field_assign_temp_name(value), Ty::Bool)); // i32 placeholder
+            }
+            collect_locals_ctx_expr(value, locals, ctx)
+        }
         TirStmt::Return { value: Some(v), .. } => collect_locals_ctx_expr(v, locals, ctx),
         TirStmt::Expr { expr, .. } => collect_locals_ctx_expr(expr, locals, ctx),
         TirStmt::If {
@@ -1211,7 +1221,14 @@ fn collect_locals_ctx_expr(expr: &TirExpr, locals: &mut Vec<(String, Ty)>, ctx: 
                 collect_locals_ctx_expr(e, locals, ctx);
             }
         }
-        TirExprKind::Propagate(inner) => collect_locals_ctx_expr(inner, locals, ctx),
+        // Wrappers that emit their inner expression unchanged. Without these
+        // arms, a temp-needing expression nested inside one (e.g. a String
+        // `self.field` read inside `relabel trust(…)`) never registers its
+        // local and the module fails to assemble (#2012 × #2013 seam).
+        TirExprKind::Propagate(inner)
+        | TirExprKind::Consume(inner)
+        | TirExprKind::Relabel { expr: inner, .. }
+        | TirExprKind::Borrow { expr: inner, .. } => collect_locals_ctx_expr(inner, locals, ctx),
         TirExprKind::If { cond, then, else_ } => {
             collect_locals_ctx_expr(cond, locals, ctx);
             collect_locals_ctx(then, locals, ctx);
@@ -4282,17 +4299,22 @@ fn emit_actor_decls(out: &mut String, actors: &[TirActorDecl], ctx: &Ctx) {
 /// struct field path — see [`collect_actors`].
 fn emit_actor_method(out: &mut String, info: &ActorInfo, m: &TirActorMethod, ctx: &Ctx) {
     *ctx.self_type.borrow_mut() = Some(info.name.clone());
+    // `peels_to_string`, not `matches!(Ty::String)` — an IFC-labeled or refined
+    // String (`Tainted[String]`, `String where …`) is still a split (ptr, len)
+    // param. Using the bare match emitted a single `$raw` param while the body
+    // referenced `$raw_ptr`, producing a module that would not assemble. Must
+    // stay in step with `emit_fn` (#2012, #2013).
     *ctx.string_params.borrow_mut() = m
         .params
         .iter()
-        .filter(|p| matches!(&p.ty, Ty::String))
+        .filter(|p| peels_to_string(&p.ty))
         .map(|p| p.name.clone())
         .collect();
 
     let fn_name = format!("{}_{}", info.snake, m.name);
     out.push_str(&format!("  (func ${fn_name} (param $self i32)"));
     for p in &m.params {
-        if matches!(&p.ty, Ty::String) {
+        if peels_to_string(&p.ty) {
             out.push_str(&format!(
                 " (param ${}_ptr i32) (param ${}_len i32)",
                 p.name, p.name
@@ -4301,7 +4323,7 @@ fn emit_actor_method(out: &mut String, info: &ActorInfo, m: &TirActorMethod, ctx
             out.push_str(&format!(" (param ${} {})", p.name, wasm_ty(&p.ty, ctx)));
         }
     }
-    if matches!(m.ret_ty, Ty::String) {
+    if peels_to_string(&m.ret_ty) {
         out.push_str(" (result i32 i32)");
     } else if !matches!(m.ret_ty, Ty::Unit) {
         out.push_str(&format!(" (result {})", wasm_ty(&m.ret_ty, ctx)));
@@ -4370,17 +4392,35 @@ fn emit_field_assign(out: &mut String, base: &LValue, field: &str, value: &TirEx
         return;
     };
 
-    // Overwriting a *MvlString handle would leak the old allocation, so release
-    // it first. `_mvl_string_drop` is refcounted and null-safe.
-    if matches!(slot.ty, Ty::String) {
+    // Overwriting a *MvlString handle leaks the old allocation, so it has to be
+    // released — but only AFTER the new value exists. The right-hand side may
+    // read the very field being overwritten (`self.s = f(self.s)`), and dropping
+    // first frees the string the RHS then reads: a use-after-free that shows up
+    // as `copy_nonoverlapping requires ... non-null` inside the runtime.
+    if peels_to_string(&slot.ty) {
         ctx.needs_runtime.set(true);
+        let tmp = field_assign_temp_name(value);
+        emit_expr(out, value, ctx); // leaves (ptr, len)
+        out.push_str("    call $_mvl_string_new\n");
+        out.push_str(&format!("    local.set ${tmp}\n"));
         out.push_str(&format!("    local.get ${base_name}\n"));
         out.push_str(&format!("    i32.load offset={}\n", slot.offset));
         out.push_str("    call $_mvl_string_drop\n");
+        out.push_str(&format!("    local.get ${base_name}\n"));
+        out.push_str(&format!("    local.get ${tmp}\n"));
+        out.push_str(&format!("    i32.store offset={}\n", slot.offset));
+        return;
     }
 
     out.push_str(&format!("    local.get ${base_name}\n"));
     emit_struct_store(out, value, &slot.ty, slot.offset, ctx);
+}
+
+/// Scratch local holding the new `*MvlString` while the previous handle in a
+/// `base.field = …` assignment is released. Span-keyed so the locals-collection
+/// pass and the emit path agree.
+fn field_assign_temp_name(value: &TirExpr) -> String {
+    format!("__fa_{}_{}", value.span.offset, value.span.len)
 }
 
 /// Strip wrappers and return the underlying `Ty::Named` name, if any.
@@ -4418,7 +4458,7 @@ fn emit_actor_dispatch(out: &mut String, info: &ActorInfo, ctx: &Ctx) {
         out.push_str(&format!("      call ${}_{}\n", info.snake, m.name));
         // Behaviours are `Unit`; a non-Unit body value would be left dangling.
         if !matches!(m.ret_ty, Ty::Unit) {
-            if matches!(m.ret_ty, Ty::String) {
+            if peels_to_string(&m.ret_ty) {
                 out.push_str("      drop\n      drop\n");
             } else {
                 out.push_str("      drop\n");
@@ -4434,7 +4474,7 @@ fn emit_actor_dispatch(out: &mut String, info: &ActorInfo, ctx: &Ctx) {
 /// parameter's WASM representation. Slots are uniformly 8 bytes.
 fn emit_actor_arg_load(out: &mut String, ty: &Ty, off: u32, ctx: &Ctx) {
     match ty {
-        Ty::String => {
+        _ if peels_to_string(ty) => {
             // Stored as a *MvlString handle; unpack to (ptr, len).
             ctx.needs_runtime.set(true);
             out.push_str("      local.get $args\n");

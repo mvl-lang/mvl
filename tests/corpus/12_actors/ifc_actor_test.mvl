@@ -1,0 +1,86 @@
+// 12_actors/ifc_actor_test.mvl — IFC labels crossing the actor boundary.
+//
+// This is the seam between actor support (#2012) and IFC relabel emission
+// (#2013). Neither change tested the combination, and all three bugs it hid
+// were WASM-only — the Rust and LLVM backends were always fine:
+//
+//   1. A `Tainted[String]` behavior parameter is still a split (ptr, len)
+//      param. Testing `Ty::String` directly instead of peeling the label
+//      emitted one `$raw` param while the body referenced `$raw_ptr`.
+//   2. A `String` `self.field` read nested inside `relabel trust(…)` needs an
+//      unpack temp, which the locals walker never registered because it had no
+//      arm for the relabel/consume/borrow wrappers.
+//   3. Assigning a `String` field from an expression that reads that same
+//      field freed the old handle before the right-hand side read it.
+//
+// Keep at least one case where a relabel *reads the field it writes* — that is
+// what catches (3), and ordinary label round-tripping does not.
+
+actor Vault {
+    stored: String
+
+    // Labeled parameter crossing into the actor: exercises (1).
+    pub fn accept(val raw: Tainted[String]) {
+        self.stored = relabel trust(raw, "ACTOR-TRUST-001") audit
+    }
+
+    // Reads the field it writes, through two nested relabels: (2) and (3).
+    pub fn reseal() {
+        self.stored = relabel trust(relabel taint(self.stored, "ACTOR-RETAINT"), "ACTOR-SEAL-002") audit
+    }
+
+    pub test fn read() -> String {
+        self.stored
+    }
+}
+
+actor Ledger {
+    entry: String
+
+    // Silent (non-audited) relabel — the audit-literal interning path differs.
+    pub fn record(val raw: Tainted[String]) {
+        self.entry = relabel trust(raw, "LEDGER-SILENT-001")
+    }
+
+    pub test fn read() -> String {
+        self.entry
+    }
+}
+
+test fn labeled_string_crosses_actor_boundary() -> Unit ! Spawn + Send {
+    let v: Vault = actor Vault { stored: "" };
+    v.accept(relabel taint("secret-payload", "ACTOR-IN-001"));
+    assert_eq(v.read(), "secret-payload");
+}
+
+test fn relabel_reading_the_field_it_writes() -> Unit ! Spawn + Send {
+    let v: Vault = actor Vault { stored: "" };
+    v.accept(relabel taint("abc", "ACTOR-IN-002"));
+    v.reseal();
+    // Value passes through both relabels unchanged; labels are compile-time.
+    assert_eq(v.read(), "abc");
+}
+
+test fn repeated_reseal_does_not_corrupt_state() -> Unit ! Spawn + Send {
+    let v: Vault = actor Vault { stored: "" };
+    v.accept(relabel taint("xy", "ACTOR-IN-003"));
+    v.reseal();
+    v.reseal();
+    v.reseal();
+    assert_eq(v.read(), "xy");
+}
+
+test fn silent_relabel_into_actor_state() -> Unit ! Spawn + Send {
+    let l: Ledger = actor Ledger { entry: "" };
+    l.record(relabel taint("line-1", "LEDGER-IN-001"));
+    assert_eq(l.read(), "line-1");
+}
+
+test fn two_labeled_actors_keep_independent_state() -> Unit ! Spawn + Send {
+    let v: Vault = actor Vault { stored: "" };
+    let l: Ledger = actor Ledger { entry: "" };
+    v.accept(relabel taint("in-vault", "ACTOR-IN-004"));
+    l.record(relabel taint("in-ledger", "LEDGER-IN-002"));
+    assert_eq(v.read(), "in-vault");
+    assert_eq(l.read(), "in-ledger");
+}
