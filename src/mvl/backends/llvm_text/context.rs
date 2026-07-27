@@ -189,6 +189,10 @@ pub(super) struct FnCtx {
     // ── Per-function flags ───────────────────────────────────────────────
     /// True while emitting `main` (affects `ret` instruction type).
     pub current_fn_is_main: bool,
+    /// Actor whose method body is being emitted, if any (#2012). A bare call
+    /// inside an actor body may name one of that actor's own methods — how a
+    /// private helper is invoked — and must lower to a direct call on `%self`.
+    pub enclosing_actor: Option<String>,
     /// SSA registers of actor handles spawned in the current function.
     pub spawned_actor_handles: Vec<String>,
 
@@ -219,6 +223,7 @@ impl FnCtx {
             reg_types: HashMap::new(),
             local_mvl_types: HashMap::new(),
             current_fn_is_main: false,
+            enclosing_actor: None,
             spawned_actor_handles: Vec::new(),
             heap_locals: Vec::new(),
             pre_allocas: Vec::new(),

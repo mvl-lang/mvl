@@ -302,12 +302,39 @@ impl TextEmitter {
 
             TirStmt::Assign { target, value, .. } => {
                 let val = self.emit_expr_tir(value)?;
-                if let LValue::Ident(name, _) = target {
-                    if let Some(loc) = self.fn_ctx.ref_locals.get(name).cloned() {
-                        if let Some(v) = val {
-                            let ty_str = self.llvm_ty_ctx(&loc.elem_ty);
-                            self.push_instr(&format!("store {ty_str} {v}, ptr {}", loc.ptr));
+                match target {
+                    LValue::Ident(name, _) => {
+                        if let Some(loc) = self.fn_ctx.ref_locals.get(name).cloned() {
+                            if let Some(v) = val {
+                                let ty_str = self.llvm_ty_ctx(&loc.elem_ty);
+                                self.push_instr(&format!("store {ty_str} {v}, ptr {}", loc.ptr));
+                            }
                         }
+                    }
+                    // `self.field = value` in an actor behavior body. The actor
+                    // emitter binds each state field as a ref_local GEP into
+                    // `%self`, so the store goes straight through that pointer —
+                    // the mirror of the read path in `emit_field_access_tir`.
+                    // Without this the assignment was silently dropped and actor
+                    // state never changed (#2012).
+                    LValue::Field { base, field, .. } => {
+                        if let LValue::Ident(base_name, _) = base.as_ref() {
+                            if base_name == "self" {
+                                if let Some(loc) = self.fn_ctx.ref_locals.get(field).cloned() {
+                                    if let Some(v) = val {
+                                        let ty_str = self.llvm_ty_ctx(&loc.elem_ty);
+                                        self.push_instr(&format!(
+                                            "store {ty_str} {v}, ptr {}",
+                                            loc.ptr
+                                        ));
+                                    }
+                                    return Ok(());
+                                }
+                            }
+                        }
+                        return Err(format!(
+                            "unsupported assignment target: field '{field}' on a non-self base"
+                        ));
                     }
                 }
                 Ok(())

@@ -529,7 +529,7 @@ pub fn run(path: &str, quiet: bool, verbose: bool, coverage: bool, bdd: bool, us
 
     for test_file in &test_files {
         let file_str = test_file.display().to_string();
-        let (prog, _src) = super::parse_or_exit(&file_str);
+        let (prog, src) = super::parse_or_exit(&file_str);
         let module_name = qualified_module_name(&file_str);
         // Bare stem (with `_test` stripped) — used only to intersect with
         // `sibling_stems_set` for coverage instrumentation routing.  The
@@ -548,7 +548,29 @@ pub fn run(path: &str, quiet: bool, verbose: bool, coverage: bool, bdd: bool, us
             }
         }
         let mut expr_types = checker::collect_prelude_expr_types(&stdlib_prelude_progs);
-        expr_types.extend(checker::check_with_prelude(&stdlib_prelude_progs, &prog).expr_types);
+        // Surface checker diagnostics instead of discarding them. Keeping only
+        // `expr_types` meant a genuine type error reached the backend unreported
+        // and surfaced as a raw rustc error pointing into generated code, with
+        // the real MVL diagnostic never printed at all (#2017).
+        //
+        // These are warnings, not failures: `mvl test` deliberately builds a
+        // *filtered* per-file prelude (#1707 phase 3), so the checker here does
+        // not see every stdlib symbol the runtime provides and reports
+        // false-positive `UndefinedFunction`/`MissingEffect` for them. Making
+        // this strict needs a sound prelude first — tracked on #2017.
+        let check_result = checker::check_with_prelude(&stdlib_prelude_progs, &prog);
+        if check_result.has_errors() {
+            eprintln!(
+                "warning: {} checker diagnostic(s) in {file_str} \
+                 (some may be prelude-filtering artifacts; if the build below \
+                 fails, start here):",
+                check_result.errors.len()
+            );
+            for err in &check_result.errors {
+                super::render_diagnostic(&file_str, &src, err);
+            }
+        }
+        expr_types.extend(check_result.expr_types);
         let all_fns = mvl::mvl::passes::mono::collect_fns([&prog]);
         let mono = mvl::mvl::passes::mono::monomorphize(&prog, &all_fns, &expr_types);
         let tir = mvl::mvl::ir::lower::lower(&prog, &mono, &expr_types);
@@ -668,7 +690,7 @@ pub fn run(path: &str, quiet: bool, verbose: bool, coverage: bool, bdd: bool, us
         if covered_stems.contains(&module_name) {
             continue; // already covered by a *_test.mvl file
         }
-        let (prog, _src) = super::parse_or_exit(&file_str);
+        let (prog, src) = super::parse_or_exit(&file_str);
         // Only include if the file has at least one test fn.
         let has_tests = prog.declarations.iter().any(|d| {
             if let Decl::Fn(fd) = d {
@@ -692,7 +714,29 @@ pub fn run(path: &str, quiet: bool, verbose: bool, coverage: bool, bdd: bool, us
             println!("  (inline tests) {file_str}");
         }
         let mut expr_types = checker::collect_prelude_expr_types(&stdlib_prelude_progs);
-        expr_types.extend(checker::check_with_prelude(&stdlib_prelude_progs, &prog).expr_types);
+        // Surface checker diagnostics instead of discarding them. Keeping only
+        // `expr_types` meant a genuine type error reached the backend unreported
+        // and surfaced as a raw rustc error pointing into generated code, with
+        // the real MVL diagnostic never printed at all (#2017).
+        //
+        // These are warnings, not failures: `mvl test` deliberately builds a
+        // *filtered* per-file prelude (#1707 phase 3), so the checker here does
+        // not see every stdlib symbol the runtime provides and reports
+        // false-positive `UndefinedFunction`/`MissingEffect` for them. Making
+        // this strict needs a sound prelude first — tracked on #2017.
+        let check_result = checker::check_with_prelude(&stdlib_prelude_progs, &prog);
+        if check_result.has_errors() {
+            eprintln!(
+                "warning: {} checker diagnostic(s) in {file_str} \
+                 (some may be prelude-filtering artifacts; if the build below \
+                 fails, start here):",
+                check_result.errors.len()
+            );
+            for err in &check_result.errors {
+                super::render_diagnostic(&file_str, &src, err);
+            }
+        }
+        expr_types.extend(check_result.expr_types);
         let all_fns = mvl::mvl::passes::mono::collect_fns([&prog]);
         let mono = mvl::mvl::passes::mono::monomorphize(&prog, &all_fns, &expr_types);
         let tir = mvl::mvl::ir::lower::lower(&prog, &mono, &expr_types);

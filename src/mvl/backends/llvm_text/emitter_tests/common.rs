@@ -63,3 +63,24 @@ pub fn compile(src: &str) -> String {
         .compile_to_ir_tir(&tir, "test")
         .expect("compile_to_ir_tir failed")
 }
+
+/// Compile `src` as a single-file test crate, so `test fn` bodies are emitted
+/// as real functions. Needed to inspect how `pub test fn` actor reads lower —
+/// the plain [`compile`] path filters test fns out entirely.
+pub fn compile_test_crate(src: &str) -> String {
+    let (mut p, errs) = Parser::new(src);
+    assert!(errs.is_empty(), "lex errors: {errs:?}");
+    let prog = p.parse_program();
+    assert!(p.errors().is_empty(), "parse errors: {:?}", p.errors());
+    let mut expr_types = crate::mvl::checker::collect_prelude_expr_types(&[]);
+    let cr = crate::mvl::checker::check(&prog);
+    expr_types.extend(cr.expr_types);
+    let compiler = LlvmTextCompiler::with_context(std::collections::HashMap::new());
+    let all_fns = crate::mvl::passes::mono::collect_fns([&prog]);
+    let mono = crate::mvl::passes::mono::monomorphize(&prog, &all_fns, &expr_types);
+    let tir = crate::mvl::ir::lower::lower(&prog, &mono, &expr_types);
+    compiler
+        .compile_to_ir_test_crate(&[], &tir, "test")
+        .expect("compile_to_ir_test_crate failed")
+        .0
+}

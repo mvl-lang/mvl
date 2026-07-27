@@ -1,0 +1,69 @@
+// 12_actors/ordering_test.mvl — per-actor FIFO ordering is observable.
+//
+// The other 12_actors files accumulate commutatively, so a mailbox that
+// reordered messages would still produce the right answer. These tests use
+// order-sensitive arithmetic, so they fail if per-actor FIFO is violated.
+//
+// This matters most for the WASM backend, whose scheduler is single-threaded
+// run-to-completion (ADR-0059): it drains the queue at the outermost send
+// rather than dispatching eagerly, precisely so ordering behaves the way the
+// threaded backends do.
+
+actor Seq {
+    acc: Int
+
+    pub fn add(val n: Int) {
+        self.acc = self.acc + n
+    }
+
+    pub fn double() {
+        self.acc = self.acc * 2
+    }
+
+    pub fn negate() {
+        self.acc = 0 - self.acc
+    }
+
+    pub test fn get() -> Int {
+        self.acc
+    }
+}
+
+test fn ordering_add_then_double() -> Unit ! Spawn + Send {
+    let s: Seq = actor Seq { acc: 1 };
+    s.add(3);
+    s.double();
+    // FIFO gives (1 + 3) * 2 = 8; the reverse order would give 1 * 2 + 3 = 5.
+    assert_eq(s.get(), 8);
+}
+
+test fn ordering_double_then_add() -> Unit ! Spawn + Send {
+    let s: Seq = actor Seq { acc: 1 };
+    s.double();
+    s.add(3);
+    // Mirror of the above: 1 * 2 + 3 = 5.
+    assert_eq(s.get(), 5);
+}
+
+test fn ordering_longer_chain_is_exact() -> Unit ! Spawn + Send {
+    let s: Seq = actor Seq { acc: 2 };
+    s.double();
+    s.add(1);
+    s.negate();
+    s.add(10);
+    // ((2 * 2) + 1) = 5, negated = -5, + 10 = 5.
+    assert_eq(s.get(), 5);
+}
+
+test fn ordering_is_per_actor_not_global() -> Unit ! Spawn + Send {
+    let x: Seq = actor Seq { acc: 1 };
+    let y: Seq = actor Seq { acc: 1 };
+    // Interleaved sends to two actors. Cross-actor interleaving is
+    // unspecified; each actor's own order is not.
+    x.add(3);
+    y.double();
+    x.double();
+    y.add(3);
+    assert_eq(x.get(), 8);
+    assert_eq(y.get(), 5);
+}

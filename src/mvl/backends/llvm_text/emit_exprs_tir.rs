@@ -213,6 +213,21 @@ impl TextEmitter {
     fn emit_fn_call_tir(&mut self, name: &str, args: &[TirExpr]) -> Result<Option<String>, String> {
         use crate::mvl::ir::TypeExpr;
 
+        // A bare call inside an actor body may name one of that actor's own
+        // methods — how a private helper is invoked, since `self.helper()` is
+        // not accepted for non-public methods. Without this it emitted
+        // `call @helper`, an undefined symbol with no `%self` argument (#2012).
+        if let Some(actor) = self.fn_ctx.enclosing_actor.clone() {
+            let is_own_method = self
+                .module
+                .tir_actor_decls
+                .get(&actor)
+                .is_some_and(|ad| ad.methods.iter().any(|m| m.name == name));
+            if is_own_method {
+                return self.emit_actor_self_call_tir(&actor, name, args);
+            }
+        }
+
         // Builtins ported so far.
         match name {
             "assert" => return self.emit_assert_builtin_tir(args),
@@ -2939,11 +2954,21 @@ impl TextEmitter {
     ) -> Result<Option<String>, String> {
         // Actor method call — fire-and-forget send.
         if let Some(actor_name) = self.resolve_actor_type_name_tir(receiver) {
+            let actor_name = actor_name.clone();
+            // `self.other_behavior(…)` inside a behavior body is a direct call
+            // on the state, not a mailbox send. `self` there is the raw state
+            // pointer rather than a handle, so the send path used to evaluate
+            // the receiver to nothing and drop the call silently (#2012).
+            // Direct-calling also matches the Rust backend and avoids racing
+            // the caller's own pending messages, which a real self-send would.
+            if matches!(&receiver.kind, TirExprKind::Var(n) if n == "self") {
+                return self.emit_actor_self_call_tir(&actor_name, method, args);
+            }
             let handle_val = match self.emit_expr_tir(receiver)? {
                 Some(v) => v,
                 None => return Ok(None),
             };
-            return self.emit_actor_method_call_tir(&handle_val, &actor_name.clone(), method, args);
+            return self.emit_actor_method_call_tir(&handle_val, &actor_name, method, args);
         }
 
         let recv_ty = self.ty_to_llvm_ctx(&receiver.ty);

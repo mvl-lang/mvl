@@ -75,7 +75,9 @@ impl TextEmitter {
 
             let state_name = state_name.clone();
             let method = method.clone();
+            let actor_name_for_ctx = ad.name.clone();
             self.with_fresh_fn_ctx(ret_ty_te.clone(), |this| -> Result<(), String> {
+                this.fn_ctx.enclosing_actor = Some(actor_name_for_ctx);
                 this.fn_ctx
                     .fn_buf
                     .push(format!("define {define_ret} @{fn_name}({params_str})"));
@@ -222,6 +224,18 @@ impl TextEmitter {
                             let truncated = this.next_reg();
                             this.push_instr(&format!("{truncated} = trunc i64 {raw} to i1"));
                             call_parts.push(format!("i1 {truncated}"));
+                        } else if ty_str == "double" {
+                            // Float args travel as raw bits in the i64 slot; a
+                            // bare `double %raw` here was invalid IR (#2012).
+                            let coerced = this.next_reg();
+                            this.push_instr(&format!(
+                                "{coerced} = bitcast i64 {raw} to double"
+                            ));
+                            call_parts.push(format!("double {coerced}"));
+                        } else if ty_str == "i32" {
+                            let coerced = this.next_reg();
+                            this.push_instr(&format!("{coerced} = trunc i64 {raw} to i32"));
+                            call_parts.push(format!("i32 {coerced}"));
                         } else if is_aggregate_llvm_ty(&ty_str) {
                             struct_used = true;
                             let hp = this.next_reg();
@@ -239,7 +253,89 @@ impl TextEmitter {
                     }
 
                     let call_args_str = call_parts.join(", ");
-                    this.push_instr(&format!("call void @{fn_name}({call_args_str})"));
+
+                    // `pub test fn` methods are synchronous reads: call them for
+                    // their value and hand it back through the reply cell whose
+                    // address `_mvl_actor_sync_call` parked in args[argc] (#2012).
+                    // Everything else is fire-and-forget, so its result (if any)
+                    // is discarded.
+                    let ret_te = ty_or_unit(&method.ret_ty);
+                    let ret_ty_str = this.llvm_ty_ctx(&ret_te);
+                    let returns_value = !Self::is_void(&ret_te) && ret_ty_str != "void";
+
+                    if method.is_test && returns_value {
+                        let ret_val = this.next_reg();
+                        this.push_instr(&format!(
+                            "{ret_val} = call {ret_ty_str} @{fn_name}({call_args_str})"
+                        ));
+                        let as_i64 = match ret_ty_str.as_str() {
+                            "i64" => ret_val,
+                            "ptr" => {
+                                let c = this.next_reg();
+                                this.push_instr(&format!(
+                                    "{c} = ptrtoint ptr {ret_val} to i64"
+                                ));
+                                c
+                            }
+                            "i1" => {
+                                let c = this.next_reg();
+                                this.push_instr(&format!("{c} = zext i1 {ret_val} to i64"));
+                                c
+                            }
+                            "double" => {
+                                let c = this.next_reg();
+                                this.push_instr(&format!(
+                                    "{c} = bitcast double {ret_val} to i64"
+                                ));
+                                c
+                            }
+                            "i32" => {
+                                let c = this.next_reg();
+                                this.push_instr(&format!("{c} = sext i32 {ret_val} to i64"));
+                                c
+                            }
+                            s if is_aggregate_llvm_ty(s) => {
+                                // Box the aggregate and pass its address; the
+                                // caller loads it back out.
+                                struct_used = true;
+                                let sz = sizeof_llvm_ty_expr(&ret_ty_str);
+                                let hp = this.next_reg();
+                                this.push_instr(&format!(
+                                    "{hp} = call ptr @_mvl_alloc(i64 {sz})"
+                                ));
+                                this.push_instr(&format!(
+                                    "store {ret_ty_str} {ret_val}, ptr {hp}"
+                                ));
+                                let c = this.next_reg();
+                                this.push_instr(&format!("{c} = ptrtoint ptr {hp} to i64"));
+                                c
+                            }
+                            _ => ret_val,
+                        };
+                        let reply_slot = method.params.len();
+                        let rgep = this.next_reg();
+                        this.push_instr(&format!(
+                            "{rgep} = getelementptr i64, ptr %args, i64 {reply_slot}"
+                        ));
+                        let raw_reply = this.next_reg();
+                        this.push_instr(&format!("{raw_reply} = load i64, ptr {rgep}"));
+                        let reply_ptr = this.next_reg();
+                        this.push_instr(&format!(
+                            "{reply_ptr} = inttoptr i64 {raw_reply} to ptr"
+                        ));
+                        this.push_instr(&format!(
+                            "call void @_mvl_actor_sync_reply(ptr {reply_ptr}, i64 {as_i64})"
+                        ));
+                        this.ensure_extern("declare void @_mvl_actor_sync_reply(ptr, i64)");
+                    } else if returns_value {
+                        let discarded = this.next_reg();
+                        this.push_instr(&format!(
+                            "{discarded} = call {ret_ty_str} @{fn_name}({call_args_str})"
+                        ));
+                    } else {
+                        this.push_instr(&format!("call void @{fn_name}({call_args_str})"));
+                    }
+
                     for (hp, sz) in struct_frees {
                         this.push_instr(&format!(
                             "call void @_mvl_free(ptr {hp}, i64 {sz})"
@@ -413,6 +509,59 @@ impl TextEmitter {
     }
 
     /// TIR variant of [`Self::emit_actor_method_call`].
+    /// Emit `self.method(args…)` inside an actor method body as a direct call
+    /// on the state pointer.
+    ///
+    /// Intra-actor calls are synchronous: the actor already holds exclusive
+    /// access to its own state while dispatching, so there is nothing to
+    /// serialise, and routing through the mailbox would race the caller's own
+    /// pending messages non-deterministically. The Rust backend has always done
+    /// this (all methods live in `impl {Name}State`); WASM's drain-at-send makes
+    /// it observationally identical. LLVM used to drop the call entirely (#2012).
+    pub(super) fn emit_actor_self_call_tir(
+        &mut self,
+        actor_name: &str,
+        method: &str,
+        args: &[TirExpr],
+    ) -> Result<Option<String>, String> {
+        use crate::mvl::backends::rust::emit_actors::actor_name_to_snake;
+
+        let ad = match self.module.tir_actor_decls.get(actor_name).cloned() {
+            Some(a) => a,
+            None => return Ok(None),
+        };
+        let Some(callee) = ad.methods.iter().find(|m| m.name == method).cloned() else {
+            return Ok(None);
+        };
+
+        let fn_name = format!("{}_{}", actor_name_to_snake(actor_name), callee.name);
+        let mut call_parts = vec!["ptr %self".to_string()];
+        for (param, arg) in callee.params.iter().zip(args.iter()) {
+            let ty_str = self.llvm_ty_ctx(&ty_or_unit(&param.ty));
+            if ty_str == "void" {
+                continue;
+            }
+            let Some(val) = self.emit_expr_tir(arg)? else {
+                continue;
+            };
+            call_parts.push(format!("{ty_str} {val}"));
+        }
+        let call_args = call_parts.join(", ");
+
+        let ret_te = ty_or_unit(&callee.ret_ty);
+        let ret_ty_str = self.llvm_ty_ctx(&ret_te);
+        if Self::is_void(&ret_te) || ret_ty_str == "void" {
+            self.push_instr(&format!("call void @{fn_name}({call_args})"));
+            return Ok(None);
+        }
+        let reg = self.next_reg();
+        self.push_instr(&format!(
+            "{reg} = call {ret_ty_str} @{fn_name}({call_args})"
+        ));
+        self.fn_ctx.reg_types.insert(reg.clone(), ret_ty_str);
+        Ok(Some(reg))
+    }
+
     pub(super) fn emit_actor_method_call_tir(
         &mut self,
         handle_val: &str,
@@ -430,11 +579,23 @@ impl TextEmitter {
             Some(d) => d,
             None => return Ok(None),
         };
+        let callee = pub_methods[disc].clone();
+
+        // `pub test fn` is a synchronous read, not a behavior: it must return a
+        // value and must observe every message enqueued before it. The reply
+        // cell address takes a slot in the message's arg array (#2012).
+        let is_sync = callee.is_test;
+        let arg_budget = if is_sync {
+            MAX_ACTOR_ARGS - 1
+        } else {
+            MAX_ACTOR_ARGS
+        };
 
         let argc = args.len();
-        if argc > MAX_ACTOR_ARGS {
+        if argc > arg_budget {
             return Err(format!(
-                "actor behavior '{method}' has {argc} parameters; maximum is {MAX_ACTOR_ARGS}"
+                "actor {} '{method}' has {argc} parameters; maximum is {arg_budget}",
+                if is_sync { "test method" } else { "behavior" }
             ));
         }
 
@@ -461,6 +622,17 @@ impl TextEmitter {
                     "i1" => {
                         let coerced = self.next_reg();
                         self.push_instr(&format!("{coerced} = zext i1 {val} to i64"));
+                        coerced
+                    }
+                    "double" => {
+                        // Store the Float's bits, not a truncated `store i64 2.5`.
+                        let coerced = self.next_reg();
+                        self.push_instr(&format!("{coerced} = bitcast double {val} to i64"));
+                        coerced
+                    }
+                    "i32" => {
+                        let coerced = self.next_reg();
+                        self.push_instr(&format!("{coerced} = sext i32 {val} to i64"));
                         coerced
                     }
                     s if is_aggregate_llvm_ty(s) => {
@@ -490,11 +662,67 @@ impl TextEmitter {
             "null".to_string()
         };
 
-        self.push_instr(&format!(
-            "call void @_mvl_actor_send(ptr {handle_val}, i64 {disc}, i64 {argc}, ptr {args_ptr})"
-        ));
+        if !is_sync {
+            self.push_instr(&format!(
+                "call void @_mvl_actor_send(ptr {handle_val}, i64 {disc}, i64 {argc}, ptr {args_ptr})"
+            ));
+            return Ok(None);
+        }
 
-        Ok(None)
+        // Synchronous path: block on the reply and widen the i64 back to the
+        // method's declared return type. `expr.ty` is `Unknown` for actor method
+        // calls, so the actor registry is the only source for this type.
+        let raw = self.next_reg();
+        self.push_instr(&format!(
+            "{raw} = call i64 @_mvl_actor_sync_call(ptr {handle_val}, i64 {disc}, i64 {argc}, ptr {args_ptr})"
+        ));
+        self.ensure_extern("declare i64 @_mvl_actor_sync_call(ptr, i64, i64, ptr)");
+        self.fn_ctx.reg_types.insert(raw.clone(), "i64".into());
+
+        let ret_te = ty_or_unit(&callee.ret_ty);
+        let ret_ty_str = self.llvm_ty_ctx(&ret_te);
+        if Self::is_void(&ret_te) || ret_ty_str == "void" {
+            return Ok(None);
+        }
+
+        let value = match ret_ty_str.as_str() {
+            "i64" => raw,
+            "ptr" => {
+                let c = self.next_reg();
+                self.push_instr(&format!("{c} = inttoptr i64 {raw} to ptr"));
+                c
+            }
+            "i1" => {
+                let c = self.next_reg();
+                self.push_instr(&format!("{c} = trunc i64 {raw} to i1"));
+                c
+            }
+            "double" => {
+                let c = self.next_reg();
+                self.push_instr(&format!("{c} = bitcast i64 {raw} to double"));
+                c
+            }
+            "i32" => {
+                let c = self.next_reg();
+                self.push_instr(&format!("{c} = trunc i64 {raw} to i32"));
+                c
+            }
+            s if is_aggregate_llvm_ty(s) => {
+                // The dispatch arm boxed the aggregate; load it back and release
+                // the box.
+                let hp = self.next_reg();
+                self.push_instr(&format!("{hp} = inttoptr i64 {raw} to ptr"));
+                let loaded = self.next_reg();
+                self.push_instr(&format!("{loaded} = load {ret_ty_str}, ptr {hp}"));
+                let sz = sizeof_llvm_ty_expr(&ret_ty_str);
+                self.push_instr(&format!("call void @_mvl_free(ptr {hp}, i64 {sz})"));
+                self.ensure_extern("declare void @_mvl_free(ptr, i64)");
+                loaded
+            }
+            _ => raw,
+        };
+        self.fn_ctx.reg_types.insert(value.clone(), ret_ty_str);
+        Ok(Some(value))
     }
 }
 

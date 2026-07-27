@@ -208,6 +208,18 @@ pub enum CheckError {
         span: Span,
     },
 
+    /// A `pub test fn` read was called from inside an actor method body (#2012).
+    /// These reads are synchronous: on the LLVM backend the call blocks a
+    /// scheduler worker thread, and on WASM it cannot observe messages queued
+    /// behind the dispatch that is currently running.
+    TestFnCallFromActor {
+        /// `Actor.method` being read.
+        callee: String,
+        /// The actor whose body contains the call.
+        caller_actor: String,
+        span: Span,
+    },
+
     // ── Effect propagation (#20) ─────────────────────────────────────────
     /// Caller does not declare all effects required by callee.
     MissingEffect {
@@ -578,6 +590,7 @@ impl CheckError {
             | CheckError::UnknownEffectParent { .. }
             | CheckError::EffectCycle { .. }
             | CheckError::UndeclaredEffect { .. }
+            | CheckError::TestFnCallFromActor { .. }
             | CheckError::MissingEffect { .. } => 7,
             // Req 8: Termination
             CheckError::UnboundedLoopInTotal { .. }
@@ -667,6 +680,7 @@ impl CheckError {
             | CheckError::UnknownEffectParent { span, .. }
             | CheckError::EffectCycle { span, .. }
             | CheckError::UndeclaredEffect { span, .. }
+            | CheckError::TestFnCallFromActor { span, .. }
             | CheckError::MissingEffect { span, .. }
             | CheckError::UnboundedLoopInTotal { span }
             | CheckError::PartialCallInTotal { span, .. }
@@ -822,6 +836,15 @@ impl CheckError {
             CheckError::UndeclaredEffect { callee, effect, .. } => {
                 format!(
                     "function has no effect declaration but calls `{callee}` which requires `! {effect}`"
+                )
+            }
+            CheckError::TestFnCallFromActor {
+                callee,
+                caller_actor,
+                ..
+            } => {
+                format!(
+                    "`{callee}` is a `pub test fn` synchronous read; it cannot be called from inside actor `{caller_actor}`. Move the read into a `test fn`, or send a behavior message instead"
                 )
             }
             CheckError::MissingEffect {

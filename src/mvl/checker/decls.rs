@@ -18,7 +18,7 @@ use crate::mvl::parser::lexer::Span;
 use std::collections::{HashMap, HashSet};
 
 use super::capabilities::block_return_flows_from_ref_param;
-use super::{FnContext, TypeChecker};
+use super::{ActorMethodSig, FnContext, TypeChecker};
 
 impl TypeChecker {
     /// Register only type and actor declarations — used as a pre-pass in
@@ -96,6 +96,33 @@ impl TypeChecker {
         );
         // Track actor type name for Spawn/Send effect enforcement (#1126).
         self.actor_type_names.insert(ad.name.clone());
+        // Record method return types so call sites type correctly (#2012).
+        //
+        // Only a `pub fn` behavior is fire-and-forget: the call enqueues a
+        // message and yields `Unit` no matter what the body evaluates to.
+        // `pub test fn` reads and private helpers are both called synchronously
+        // and hand their declared type back — collapsing those to `Unit` broke
+        // `self.helper() + 1` for any private helper returning a value.
+        let sigs: HashMap<String, ActorMethodSig> = ad
+            .methods
+            .iter()
+            .map(|m| {
+                let called_synchronously = m.is_test || !m.is_public;
+                let ret = if called_synchronously {
+                    self.env.normalize_ty(resolve(&m.return_type))
+                } else {
+                    Ty::Unit
+                };
+                (
+                    m.name.clone(),
+                    ActorMethodSig {
+                        is_test: m.is_test,
+                        ret,
+                    },
+                )
+            })
+            .collect();
+        self.actor_method_sigs.insert(ad.name.clone(), sigs);
     }
 
     /// Register a top-level `const NAME: T = expr;` in the type environment
@@ -349,6 +376,7 @@ impl TypeChecker {
                 fn_name: method.name.clone(),
                 return_ty: Some(ret_ty.clone()),
                 effects: method.effects.clone(),
+                enclosing_actor: Some(ad.name.clone()),
                 ..FnContext::default()
             });
             self.infer_block_type(&method.body, Some(&ret_ty));
@@ -555,6 +583,7 @@ impl TypeChecker {
                 .map(|p| p.name().to_string())
                 .collect(),
             type_constraints,
+            enclosing_actor: None,
         });
 
         // Phase D (Spec 009 Req 2): mutable-reference alias check.

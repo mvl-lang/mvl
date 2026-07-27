@@ -49,7 +49,19 @@ fn prepare_llvm_text(
     let check_result = checker::check_with_prelude(&prelude, prog);
     if check_result.has_errors() {
         for err in &check_result.errors {
-            eprintln!("warning: checker: {err:?}");
+            // Rendered, not `{err:?}` — the Debug dump printed the whole
+            // internal variant plus a raw Span, which is unreadable next to the
+            // backend error it precedes (#2017). Kept as a warning rather than
+            // a hard failure because mvlr drives this path with a synthesized
+            // `fn main` whose effect set is deliberately not sound.
+            let span = err.span();
+            eprintln!(
+                "warning: [REQ{}] {} (line {}, col {})",
+                err.requirement_number(),
+                err.message(),
+                span.line,
+                span.col
+            );
         }
     }
     expr_types.extend(check_result.expr_types);
@@ -135,7 +147,19 @@ fn prepare_llvm_text_tir_multi(
     let check_result = checker::check_with_two_preludes(&prelude, &sibling_progs, prog);
     if check_result.has_errors() {
         for err in &check_result.errors {
-            eprintln!("warning: checker: {err:?}");
+            // Rendered, not `{err:?}` — the Debug dump printed the whole
+            // internal variant plus a raw Span, which is unreadable next to the
+            // backend error it precedes (#2017). Kept as a warning rather than
+            // a hard failure because mvlr drives this path with a synthesized
+            // `fn main` whose effect set is deliberately not sound.
+            let span = err.span();
+            eprintln!(
+                "warning: [REQ{}] {} (line {}, col {})",
+                err.requirement_number(),
+                err.message(),
+                span.line,
+                span.col
+            );
         }
     }
     expr_types.extend(check_result.expr_types);
