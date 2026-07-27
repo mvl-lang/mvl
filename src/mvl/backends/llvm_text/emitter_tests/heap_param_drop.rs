@@ -117,3 +117,77 @@ fn owned_string_local_read_by_two_calls_clones_on_non_last_use() {
         "caller must not drop a value it moved away at last use: {ir}"
     );
 }
+
+#[test]
+fn heap_local_read_inside_loop_always_clones_never_moves() {
+    // A heap-typed local passed as a call argument inside a loop body has
+    // only one textual occurrence, but that occurrence executes on every
+    // iteration — `compute_last_uses` excludes any variable read inside a
+    // loop entirely (never eligible as a last use), so the call site must
+    // always clone, and the caller must retain and drop its own binding.
+    let ir = compile(
+        r#"
+        fn make() -> String { "hello" }
+        fn show(s: String) -> Int { s.len() }
+        partial fn main() -> Unit ! Console {
+            let s: String = make();
+            let i: ref Int = 0;
+            let sum: ref Int = 0;
+            while i < 2 {
+                sum = sum + show(s);
+                i = i + 1;
+            }
+            println("done")
+        }
+        "#,
+    );
+    assert!(
+        ir.contains("call ptr @_mvl_string_clone"),
+        "a heap-typed local read inside a loop body must clone at the call site: {ir}"
+    );
+    let main_fn = fn_body(&ir, "@main");
+    assert!(
+        main_fn.contains("call void @_mvl_string_drop"),
+        "caller must still own and drop its local after a loop-only read, since a looped read is never a last use: {ir}"
+    );
+}
+
+#[test]
+fn owned_heap_arg_passed_through_closure_call_is_not_double_freed() {
+    // Regression test for a double-free found while reviewing #1994's fix:
+    // the closure/HOF indirect-call path (`f(s)` where `f` is a fn-typed
+    // parameter) never applied the caller-side last-use exclusion or
+    // borrow/clone gating that direct calls got. Pre-#1994 this was safe by
+    // coincidence (callees never dropped their own params, so the caller's
+    // single scope-exit drop was correct). Once #1994 made callees drop
+    // their own owned heap-typed params, the same pointer routed through an
+    // indirect call got dropped twice: once by the wrapped callee's own
+    // param tracking, once by the indirect caller's untouched heap_locals.
+    let ir = compile(
+        r#"
+        fn make() -> String { "hello" }
+        fn show(s: String) -> Int { s.len() }
+        fn call_with(f: fn(String) -> Int, s: String) -> Int { f(s) }
+        fn main() -> Unit ! Console {
+            let s: String = make();
+            let n: Int = call_with(show, s);
+            if n > 0 { println("done") }
+        }
+        "#,
+    );
+    // Exactly one drop of the string across the whole program: inside
+    // `show`, the true owner once the value is passed through. `call_with`
+    // must not also drop it — it excluded `s` from its own heap_locals at
+    // its true last use (the indirect call), the same as a direct call would.
+    let call_with_fn = fn_body(&ir, "@call_with(");
+    assert!(
+        !call_with_fn.contains("_mvl_string_drop"),
+        "call_with must not double-drop a value it passed away through an indirect call: {ir}"
+    );
+    let show_fn = fn_body(&ir, "@show(");
+    assert_eq!(
+        show_fn.matches("call void @_mvl_string_drop").count(),
+        1,
+        "show must drop the value it actually owns exactly once: {ir}"
+    );
+}

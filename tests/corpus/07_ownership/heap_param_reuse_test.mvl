@@ -1,7 +1,7 @@
 // 07_ownership/heap_param_reuse_test.mvl — a heap-typed local (String,
-// List[Int]) passed to more than one function call must produce correct
-// values from every call, and a `val` (borrow) parameter must leave the
-// caller free to keep reading its own binding afterward.
+// List[Int], Map[String, Int]) passed to more than one function call must
+// produce correct values from every call, and a `val` (borrow) parameter
+// must leave the caller free to keep reading its own binding afterward.
 //
 // Regression coverage for #1994: the LLVM backend used to leak every
 // heap-typed function parameter unconditionally (never tracked for drop),
@@ -23,6 +23,10 @@ fn list_sum_plus(xs: List[Int], extra: Int) -> Int {
 
 fn peek_len(s: val String) -> Int {
     s.len()
+}
+
+fn map_get_plus(m: Map[String, Int], extra: Int) -> Int {
+    m.get("b").unwrap_or(-1) + extra
 }
 
 test fn string_local_read_by_two_calls() -> Unit {
@@ -47,4 +51,12 @@ test fn borrow_param_allows_reuse_after_call() -> Unit {
     let b: Int = s.len();
     assert_eq(a, 5);
     assert_eq(b, 5);
+}
+
+test fn map_local_read_by_two_calls() -> Unit {
+    let m: Map[String, Int] = {"a": 1, "b": 2, "c": 3};
+    let x: Int = map_get_plus(m, 10);
+    let y: Int = map_get_plus(m, 20);
+    assert_eq(x, 12);
+    assert_eq(y, 22);
 }
