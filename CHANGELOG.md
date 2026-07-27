@@ -8,6 +8,7 @@
 - **Double-free fixes found during review.** List/Set literal elements and `.push()`/`.insert()`/`.set()` arguments are now excluded from scope-exit drop tracking once stored in a container, mirroring the existing map-literal/`.insert()` treatment — closes a double-free introduced by the type-aware drops above. Reusing a value across two containers is now a compile-time "use of moved value" error instead of a runtime crash.
 - **Checker: move-tracking is now branch-aware.** `if`/`else` and `match` no longer let a move inside one arm falsely poison a sibling arm — moved-state is snapshotted per branch and merged (union) afterward, matching real mutually-exclusive control flow.
 - **`_mvl_map_insert` value-size truncation.** The map-value payload size was hardcoded to 8 bytes regardless of the actual value type, silently truncating wider inline representations (e.g. `Option`/`Result`'s 16-byte tagged union). Now computed from the real LLVM type size.
+- **WASM backend: Map[String, Int] keys now stored as `*MvlString` handles.** `MvlMapEntry.key` was `Vec<u8>` — freed as raw bytes, never calling `_mvl_string_drop`, leaking the key MvlString allocation on every map scope exit. Keys are now `i32` handles; `_mvl_map_drop_si64` iterates entries and explicitly drops each key, consistent with `List[String]`/`Set[String]` (PR #1992).
 
 ## [1.7.0] - 2026-07-23
 
