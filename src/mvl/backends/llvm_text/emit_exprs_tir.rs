@@ -213,6 +213,21 @@ impl TextEmitter {
     fn emit_fn_call_tir(&mut self, name: &str, args: &[TirExpr]) -> Result<Option<String>, String> {
         use crate::mvl::ir::TypeExpr;
 
+        // A bare call inside an actor body may name one of that actor's own
+        // methods — how a private helper is invoked, since `self.helper()` is
+        // not accepted for non-public methods. Without this it emitted
+        // `call @helper`, an undefined symbol with no `%self` argument (#2012).
+        if let Some(actor) = self.fn_ctx.enclosing_actor.clone() {
+            let is_own_method = self
+                .module
+                .tir_actor_decls
+                .get(&actor)
+                .is_some_and(|ad| ad.methods.iter().any(|m| m.name == name));
+            if is_own_method {
+                return self.emit_actor_self_call_tir(&actor, name, args);
+            }
+        }
+
         // Builtins ported so far.
         match name {
             "assert" => return self.emit_assert_builtin_tir(args),

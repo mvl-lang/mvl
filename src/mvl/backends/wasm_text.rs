@@ -35,13 +35,14 @@
 //! - Bodies containing unsupported constructs stub to `unreachable` so
 //!   sibling fns in the same file can still assemble and run
 //!
+//! Also supported since this list was last accurate: structs and their fields,
+//! payload enums / `Option` / `Result`, `List` / `Set` and their methods, string
+//! equality, `MvlString` refcount + drops, and generic monomorphization.
+//!
 //! Deliberately not supported (later phases of #1817):
-//! - Structs and their fields — needs linear-memory layout
-//! - Enum variants with payloads, `Option`, `Result` — tagged unions +
-//!   memory layout, plus the `?` operator
-//! - Collections (`List`, `Map`, `Set`) — phase 3 with `runtime/wasm/`
-//! - Higher-order fns / closures / generic monomorphization
-//! - String equality / concat / `MvlString` refcount — phase 2 runtime
+//! - Closures / higher-order fns
+//! - `Map` beyond `Map[String, Int]`
+//! - String concat (`_mvl_string_concat` wiring is incomplete)
 //! - Other WASI hostcalls, `extern "wasm"` ABI — separate ticket
 //!
 //! Actors (#2012, ADR-0059): supported for spawn, behaviour sends, and
@@ -144,6 +145,9 @@ struct ActorInfo {
     behaviors: Vec<TirActorMethod>,
     /// `pub test fn` synchronous reads, dispatched as direct calls.
     test_methods: Vec<TirActorMethod>,
+    /// Every method, including private helpers — needed to resolve an
+    /// intra-actor call, which may target a non-public method (#2012).
+    methods: Vec<TirActorMethod>,
 }
 
 /// Byte layout of one queued actor message. Mirrors the LLVM runtime's
@@ -439,7 +443,7 @@ impl Backend for WasmTextCompiler {
         };
 
         // Collect unique generic-function instantiations needed by the corpus fns.
-        let instantiations = collect_generic_instantiations(&fns, &all_fns, &ctx);
+        let instantiations = collect_generic_instantiations(&fns, &all_fns, &tir.actors, &ctx);
 
         // Emit fns into a scratch buffer first — `emit_assert_eq` on
         // String flips `ctx.needs_runtime`, and we only know whether to
@@ -1856,6 +1860,19 @@ fn emit_expr(out: &mut String, expr: &TirExpr, ctx: &Ctx) {
                 }
                 return;
             }
+            // A bare call inside an actor body may name one of the actor's own
+            // methods — that is how a private helper is invoked, since
+            // `self.helper()` is not accepted for non-public methods. Route it
+            // to the emitted `$<actor>_<method>` with the state pointer; without
+            // this it emitted `call $helper`, a symbol that does not exist (#2012).
+            if let Some(actor) = ctx.self_type.borrow().clone() {
+                if let Some(info) = ctx.actors.get(actor.as_str()) {
+                    if info.methods.iter().any(|m| m.name == *name) {
+                        emit_actor_self_call(out, info, name, args, ctx);
+                        return;
+                    }
+                }
+            }
             for a in args {
                 emit_expr(out, a, ctx);
             }
@@ -1879,6 +1896,15 @@ fn emit_expr(out: &mut String, expr: &TirExpr, ctx: &Ctx) {
             let info = actor_name_of(&receiver.ty, ctx)
                 .expect("guarded above")
                 .clone();
+            // `self.method(…)` inside the actor's own body is a direct
+            // synchronous call, never a queued send. Routing it through the
+            // mailbox deferred the call past the rest of the caller's body, so
+            // a self-send followed by more `self.field` writes produced a
+            // different answer than the Rust/LLVM backends (#2012).
+            if matches!(&receiver.kind, TirExprKind::Var(n) if n == "self") {
+                emit_actor_self_call(out, &info, method, args, ctx);
+                return;
+            }
             if !emit_actor_method_call(out, &info, receiver, method, args, expr, ctx) {
                 out.push_str(&format!(
                     "    ;; unsupported actor method: {}.{method}\n",
@@ -3798,6 +3824,7 @@ fn infer_type_subst_from_args(
 fn collect_generic_instantiations<'a>(
     fns: &[&'a TirFn],
     all_fns: &[&'a TirFn],
+    actors: &[TirActorDecl],
     _ctx: &Ctx,
 ) -> Vec<(&'a TirFn, HashMap<String, Ty>, String)> {
     // Build lookup: fn_name → TirFn for generic fns
@@ -3816,6 +3843,15 @@ fn collect_generic_instantiations<'a>(
 
     for f in fns {
         collect_instantiations_in_block(&f.body, &generic_fns, &mut seen, &mut result);
+    }
+    // Actor method bodies are emitted as functions but are not in `tir.fns`, so
+    // a generic called only from a behaviour would never be instantiated and the
+    // module referenced a symbol that was never emitted (#2012). Same gap the
+    // literal walker had.
+    for ad in actors {
+        for m in &ad.methods {
+            collect_instantiations_in_block(&m.body, &generic_fns, &mut seen, &mut result);
+        }
     }
     result
 }
@@ -3975,7 +4011,11 @@ fn emit_generic_fn(
         assert_mode: ctx.assert_mode,
         fn_locals: std::cell::RefCell::new(Vec::new()),
         actors: ctx.actors,
-        self_type: std::cell::RefCell::new(ctx.self_type.borrow().clone()),
+        // A monomorphized instantiation is a different function, not a
+        // continuation of whatever triggered it — reset like `string_params`
+        // and `fn_locals` above, or `self.field` inside the generic body would
+        // resolve against the caller's actor layout (#2012).
+        self_type: std::cell::RefCell::new(None),
     };
 
     // Set up string_params for params whose concrete type is String.
@@ -4212,6 +4252,7 @@ fn collect_actors(
                 tag: idx as i32,
                 behaviors,
                 test_methods,
+                methods: ad.methods.clone(),
             },
         );
     }
@@ -4323,7 +4364,9 @@ fn emit_field_assign(out: &mut String, base: &LValue, field: &str, value: &TirEx
         return;
     };
     let Some(slot) = layout.fields.iter().find(|s| s.name == field).cloned() else {
-        out.push_str(&format!("    ;; unknown field: {type_name}.{field}\n"));
+        out.push_str(&format!(
+            "    ;; unsupported assign target: unknown field {type_name}.{field}\n"
+        ));
         return;
     };
 
@@ -4609,6 +4652,33 @@ fn emit_actor_method_call(
     }
     out.push_str("    call $__mvl_actor_pump\n");
     true
+}
+
+/// Emit `self.method(args…)` inside an actor body as a direct call on `$self`.
+///
+/// Intra-actor calls are synchronous on every backend: the actor already holds
+/// exclusive access to its own state while dispatching, so there is nothing to
+/// serialise, and queueing would defer the call past the rest of the caller's
+/// body. Resolves against every method, so private helpers work too (#2012).
+fn emit_actor_self_call(
+    out: &mut String,
+    info: &ActorInfo,
+    method: &str,
+    args: &[TirExpr],
+    ctx: &Ctx,
+) {
+    let Some(m) = info.methods.iter().find(|m| m.name == method) else {
+        out.push_str(&format!(
+            "    ;; unsupported intra-actor call: {}.{method}\n",
+            info.name
+        ));
+        return;
+    };
+    out.push_str("    local.get $self\n");
+    for a in args {
+        emit_expr(out, a, ctx);
+    }
+    out.push_str(&format!("    call ${}_{}\n", info.snake, m.name));
 }
 
 /// Resolve `ty` to an actor name, stripping label/refinement/ref wrappers.
@@ -5166,6 +5236,77 @@ mod tests {
             "overwriting a String field must drop the old handle\n{write}"
         );
         assert!(write.contains("call $_mvl_string_new"), "{write}");
+    }
+
+    /// The direct guard against the vacuous-assertion class of bug: `assert_eq`
+    /// on an actor read must emit a real comparison. Before #2012 the actor
+    /// method call typed as `Unknown` and the assertion emitted nothing at all,
+    /// so `assert_eq(c.get_count(), 99999)` passed.
+    #[test]
+    fn actor_read_assertion_emits_real_comparison() {
+        let wat = compile(
+            "actor Counter {\n\
+               count: Int\n\
+               pub fn increment(val n: Int) { self.count = self.count + n }\n\
+               pub test fn get_count() -> Int { self.count }\n\
+             }\n\
+             test fn t() -> Unit ! Spawn + Send {\n\
+                 let c: Counter = actor Counter { count: 0 };\n\
+                 c.increment(5);\n\
+                 assert_eq(c.get_count(), 5);\n\
+             }",
+        );
+        assert!(
+            wat.contains("i64.eq"),
+            "assert_eq on an actor read must compare, not no-op\n{wat}"
+        );
+        assert!(
+            wat.contains("unreachable"),
+            "and must trap on mismatch\n{wat}"
+        );
+    }
+
+    /// `self.behaviour()` must be a direct call, not a queued send: queueing
+    /// defers it past the rest of the caller's body, which diverges from the
+    /// Rust and LLVM backends (#2012).
+    #[test]
+    fn intra_actor_call_is_direct_not_queued() {
+        let wat = compile(
+            "actor Probe {\n\
+               n: Int\n\
+               pub fn mark() { self.n = self.n * 2 }\n\
+               pub fn step() { self.n = self.n + 1; self.mark() }\n\
+             }\n",
+        );
+        let step = wat.split("(func $probe_step").nth(1).expect("step emitted");
+        let step = step.split("\n  (func").next().unwrap();
+        assert!(
+            step.contains("call $probe_mark"),
+            "self.mark() must call directly\n{step}"
+        );
+        assert!(
+            !step.contains("$__mvl_actor_slot"),
+            "self-call must not enqueue a message\n{step}"
+        );
+    }
+
+    /// A private helper is invoked by bare name (`helper()`), since
+    /// `self.helper()` is not accepted for non-public methods. It must route to
+    /// the emitted symbol with the state pointer, not `call $helper` (#2012).
+    #[test]
+    fn private_actor_helper_routes_to_emitted_symbol() {
+        let wat = compile(
+            "actor Probe {\n\
+               n: Int\n\
+               fn helper() { self.n = self.n * 2 }\n\
+               pub fn step() { self.n = self.n + 1; helper() }\n\
+             }\n",
+        );
+        assert!(wat.contains("call $probe_helper"), "{wat}");
+        assert!(
+            !wat.contains("call $helper\n"),
+            "must not emit the bare source name\n{wat}"
+        );
     }
 
     /// A behaviour arity above the fixed message-slot count must be reported,

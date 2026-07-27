@@ -563,10 +563,10 @@ impl TypeChecker {
                     // (ADR-0059; all three backends lower it as a direct call).
                     if self_receiver {
                         let ret = self
-                            .actor_method_rets
+                            .actor_method_sigs
                             .get(type_name.as_str())
                             .and_then(|m| m.get(method))
-                            .cloned()
+                            .map(|sig| sig.ret.clone())
                             .unwrap_or(Ty::Unknown);
                         return ifc::apply_label(label, ret);
                     }
@@ -596,12 +596,29 @@ impl TypeChecker {
                     // (their effects run on the actor, not the caller). Returning
                     // the declared type here is what lets `assert_eq(c.get(), 5)`
                     // pick the right comparison — it used to be `Unknown` (#2012).
-                    if let Some(ret) = self
-                        .actor_method_rets
+                    if let Some(sig) = self
+                        .actor_method_sigs
                         .get(type_name.as_str())
                         .and_then(|m| m.get(method))
+                        .cloned()
                     {
-                        return ifc::apply_label(label, ret.clone());
+                        // A `pub test fn` read is synchronous. Calling one from
+                        // inside a behaviour body is not implementable on either
+                        // backend: on LLVM it blocks a scheduler worker thread
+                        // (enough of them deadlocks the pool), and on WASM the
+                        // read cannot observe messages queued behind the dispatch
+                        // that is currently running, silently returning stale
+                        // state. Reads belong in `test fn` bodies (#2012).
+                        if sig.is_test {
+                            if let Some(actor) = self.fn_context().enclosing_actor.clone() {
+                                self.emit(CheckError::TestFnCallFromActor {
+                                    callee: format!("{type_name}.{method}"),
+                                    caller_actor: actor,
+                                    span,
+                                });
+                            }
+                        }
+                        return ifc::apply_label(label, sig.ret);
                     }
                 }
                 // User-defined type-attached method (#868): look up method table.

@@ -1,0 +1,40 @@
+// 12_actors/float_state_test.mvl — Float actor state and behavior arguments.
+//
+// Every other 12_actors file uses Int/Bool/String state. Float travels through
+// the actor message ABI as raw bits in an i64 slot, and the LLVM backend's
+// argument pack/unpack ladders originally had no `double` case at all — they
+// emitted `store i64 2.5` and passed a raw i64 where a `double` was required,
+// which `llvm-as` rejects outright (#2012).
+
+actor Gauge {
+    reading: Float
+
+    pub fn set(val v: Float) {
+        self.reading = v
+    }
+
+    pub fn add(val v: Float) {
+        self.reading = self.reading + v
+    }
+
+    pub test fn get() -> Float {
+        self.reading
+    }
+}
+
+test fn float_actor_initial_state() -> Unit ! Spawn + Send {
+    let g: Gauge = actor Gauge { reading: 1.5 };
+    assert_eq(g.get(), 1.5);
+}
+
+test fn float_actor_behavior_arg_roundtrip() -> Unit ! Spawn + Send {
+    let g: Gauge = actor Gauge { reading: 1.5 };
+    g.add(2.5);
+    assert_eq(g.get(), 4.0);
+}
+
+test fn float_actor_overwrite() -> Unit ! Spawn + Send {
+    let g: Gauge = actor Gauge { reading: 10.0 };
+    g.set(2.0);
+    assert_eq(g.get(), 2.0);
+}

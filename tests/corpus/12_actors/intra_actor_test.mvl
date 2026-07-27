@@ -9,12 +9,20 @@
 // pointer inside a behavior, not a handle, so the send path evaluated the
 // receiver to nothing and emitted no call at all (#2012).
 
+// Generic on purpose: the WASM backend monomorphizes at call sites, and
+// this instantiation is reachable ONLY from an actor method body.
+fn identity[T](x: T) -> T { x }
+
 actor Probe {
     n: Int
 
     pub fn step() {
         self.n = self.n * 10;
-        self.mark()
+        self.mark();
+        // Statements AFTER the intra-actor call are what make this
+        // order-sensitive: a queued self-send would run `mark()` only after
+        // `step()` returned, so this `+ 100` would see the pre-`mark` value.
+        self.n = self.n + 100
     }
 
     pub fn mark() {
@@ -49,9 +57,10 @@ test fn intra_actor_call_runs_inline() -> Unit ! Spawn + Send {
     let p: Probe = actor Probe { n: 1 };
     p.step();
     p.bump();
-    // step runs mark inline: (1 * 10) * 2 = 20, then bump = 21. A dropped
-    // intra-actor call would give 1 * 10 + 1 = 11.
-    assert_eq(p.get(), 21);
+    // Inline: ((1*10)*2) + 100 = 120, then bump = 121.
+    // Deferred (queued self-send): (1*10) + 100 = 110, *2 = 220, bump = 221.
+    // Dropped entirely: (1*10) + 100 = 110, bump = 111.
+    assert_eq(p.get(), 121);
 }
 
 test fn intra_actor_call_reaches_private_helper() -> Unit ! Spawn + Send {
@@ -65,4 +74,26 @@ test fn intra_actor_recursion_completes() -> Unit ! Spawn + Send {
     c.step(4);
     // One increment per level: 4 recursive steps plus the initial one.
     assert_eq(c.count(), 5);
+}
+
+// A generic function called only from an actor body. Actor methods are emitted
+// as functions but are not in `tir.fns`, so the WASM backend's monomorphization
+// walker never saw them and the module referenced `$identity__Int`, a symbol that
+// was never emitted (#2012).
+actor Holder {
+    v: Int
+
+    pub fn put(val n: Int) {
+        self.v = identity(n) * 2
+    }
+
+    pub test fn get() -> Int {
+        self.v
+    }
+}
+
+test fn generic_called_only_from_actor_body() -> Unit ! Spawn + Send {
+    let h: Holder = actor Holder { v: 0 };
+    h.put(7);
+    assert_eq(h.get(), 14);
 }

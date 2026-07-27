@@ -18,7 +18,7 @@ use crate::mvl::parser::lexer::Span;
 use std::collections::{HashMap, HashSet};
 
 use super::capabilities::block_return_flows_from_ref_param;
-use super::{FnContext, TypeChecker};
+use super::{ActorMethodSig, FnContext, TypeChecker};
 
 impl TypeChecker {
     /// Register only type and actor declarations — used as a pre-pass in
@@ -103,20 +103,26 @@ impl TypeChecker {
         // `pub test fn` reads and private helpers are both called synchronously
         // and hand their declared type back — collapsing those to `Unit` broke
         // `self.helper() + 1` for any private helper returning a value.
-        let rets: HashMap<String, Ty> = ad
+        let sigs: HashMap<String, ActorMethodSig> = ad
             .methods
             .iter()
             .map(|m| {
-                let synchronous = m.is_test || !m.is_public;
-                let ret = if synchronous {
+                let called_synchronously = m.is_test || !m.is_public;
+                let ret = if called_synchronously {
                     self.env.normalize_ty(resolve(&m.return_type))
                 } else {
                     Ty::Unit
                 };
-                (m.name.clone(), ret)
+                (
+                    m.name.clone(),
+                    ActorMethodSig {
+                        is_test: m.is_test,
+                        ret,
+                    },
+                )
             })
             .collect();
-        self.actor_method_rets.insert(ad.name.clone(), rets);
+        self.actor_method_sigs.insert(ad.name.clone(), sigs);
     }
 
     /// Register a top-level `const NAME: T = expr;` in the type environment
@@ -370,6 +376,7 @@ impl TypeChecker {
                 fn_name: method.name.clone(),
                 return_ty: Some(ret_ty.clone()),
                 effects: method.effects.clone(),
+                enclosing_actor: Some(ad.name.clone()),
                 ..FnContext::default()
             });
             self.infer_block_type(&method.body, Some(&ret_ty));
@@ -576,6 +583,7 @@ impl TypeChecker {
                 .map(|p| p.name().to_string())
                 .collect(),
             type_constraints,
+            enclosing_actor: None,
         });
 
         // Phase D (Spec 009 Req 2): mutable-reference alias check.

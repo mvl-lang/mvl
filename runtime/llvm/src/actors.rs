@@ -105,7 +105,11 @@ impl MvlMsg {
 /// worker that dispatches it stores the result.
 struct SyncReply {
     value: AtomicI64,
+    /// Set by the first completer to claim the cell (at-most-once guard).
     done: AtomicBool,
+    /// Set after `value` is stored — this is what the waiter spins on, so it
+    /// never reads the value before the completer wrote it.
+    claimed: AtomicBool,
 }
 
 /// Mark a reply cell as answered.  `addr` of 0 is a no-op (fire-and-forget msg).
@@ -115,10 +119,21 @@ fn complete_reply(addr: usize, value: i64) {
     }
     // Safety: the address came from `Box::into_raw` in `_mvl_actor_sync_call`
     // and the blocked caller keeps the allocation alive until it observes
-    // `done == true`.
+    // `claimed == true`.
     let reply = unsafe { &*(addr as *const SyncReply) };
+    // Claim the cell before writing. The blocked caller frees the allocation the
+    // instant it observes `done`, so a second completion would write into freed
+    // memory. Enforcing at-most-once here means that stays true no matter what
+    // runs after the dispatch arm's reply (#2012).
+    if reply
+        .done
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        .is_err()
+    {
+        return;
+    }
     reply.value.store(value, Ordering::Release);
-    reply.done.store(true, Ordering::Release);
+    reply.claimed.store(true, Ordering::Release);
 }
 
 /// Clear `mailbox`, releasing any blocked synchronous callers with a zero value.
@@ -662,6 +677,7 @@ pub unsafe extern "C" fn _mvl_actor_sync_call(
     let reply = Box::into_raw(Box::new(SyncReply {
         value: AtomicI64::new(0),
         done: AtomicBool::new(false),
+        claimed: AtomicBool::new(false),
     }));
 
     let mut msg = MvlMsg::new(disc);
@@ -680,7 +696,7 @@ pub unsafe extern "C" fn _mvl_actor_sync_call(
     }
     actor.cell.schedule();
 
-    while !(*reply).done.load(Ordering::Acquire) {
+    while !(*reply).claimed.load(Ordering::Acquire) {
         thread::yield_now();
     }
     let value = (*reply).value.load(Ordering::Acquire);

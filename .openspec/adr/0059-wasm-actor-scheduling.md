@@ -23,14 +23,16 @@ Three constraints shape the answer.
 to the component model.
 
 **2. The runtime cannot call back into the emitted module.** This is the binding
-constraint, and it is specific to WASM. `wasmtime run --preload runtime=X main.wasm`
+constraint. It follows from the `--preload` split-module linking model this
+project uses, rather than from WebAssembly itself — a single combined module, or
+a different linking strategy, could in principle allow a callback. `wasmtime run --preload runtime=X main.wasm`
 instantiates the preload first and resolves *main's* imports against *its*
 exports. There is no reverse edge: no shared function table, no host callback
 registration, and Rust-generated code in `runtime/wasm` cannot `call_indirect`
 into the emitted module's table. The LLVM contract — `_mvl_actor_spawn(dispatch_fn_ptr, …)`
 handing the runtime a function pointer it later invokes (ADR-0027,
-"Actor runtime interface") — therefore **cannot be ported to WASM at all**. Any
-design where the scheduler owns dispatch is impossible here.
+"Actor runtime interface") — therefore **cannot be expressed under this linking
+model**. Any design where the preloaded runtime owns dispatch is impossible.
 
 **3. The corpus needs message-passing semantics, not parallelism.** All 14 test
 fns are single-threaded and deterministic: spawn, send some behaviours, then read
@@ -90,10 +92,26 @@ recurse into dispatch, or a self-send would grow the WASM stack until it traps
 where a real mailbox would simply queue. With the guard, nested sends enqueue and
 are drained by the outermost loop — true FIFO, bounded stack.
 
-Because the queue is therefore always empty between statements, a `pub test fn`
-read compiles to a **direct call on the state pointer**. No reply cell, no
-blocking. This is a case where the single-threaded target is genuinely simpler
-than LLVM, which needs `_mvl_actor_sync_call` and a reply slot (#2012).
+`self.method(…)` inside the actor's own body is **not** a send. It is a direct
+call on the state pointer — the actor already holds exclusive access to its own
+state while dispatching, so nothing needs serialising, and queueing it would
+defer the call past the rest of the caller's body and diverge from the Rust and
+LLVM backends. Private helpers, which are invoked by bare name, take the same
+path.
+
+At the **top level** (`main`, a `test fn`) the queue is empty at every statement
+boundary, so a `pub test fn` read there compiles to a direct call on the state
+pointer — no reply cell, no blocking, genuinely simpler than LLVM's
+`_mvl_actor_sync_call`.
+
+That property does **not** extend inside a behaviour body: mid-drain, messages
+may still be queued behind the running dispatch, so a direct read there would
+silently observe stale state. Rather than build a selective per-actor drain to
+paper over it, the checker rejects `pub test fn` calls from inside an actor body
+outright (`TestFnCallFromActor`). `pub test fn` is test-only synchronous
+introspection; a behaviour that wants another actor's state should be sent it.
+The same rule removes a worker-thread deadlock on LLVM, where such a call parks
+a scheduler thread and enough of them exhaust the pool.
 
 The end-of-`main` drain required by spec 015 Requirement 8 falls out for free:
 the queue is empty at every statement boundary, so there is nothing left pending
@@ -101,11 +119,13 @@ when `main` returns.
 
 ### 5. Mailbox bounds
 
-`mailbox(N)` / `unbounded` configuration is accepted and recorded but does not
-change behaviour: with drain-at-send the queue depth never exceeds the number of
-messages one behaviour chain enqueues. Overflow of the fixed slot region traps
-via `unreachable` rather than silently dropping, because a silent drop on a
-single-threaded target would be a compiler bug, not backpressure.
+`mailbox(N)` / `unbounded` is parsed into the shared TIR exactly as for the other
+backends, but the WASM emitter **never reads `TirActorDecl.mailbox` at all** — so
+capacity and policy have no effect here. With drain-at-send the queue depth never
+exceeds what one behaviour chain enqueues, so a bound would be inert anyway.
+Overflow of the fixed slot region traps via `unreachable` rather than silently
+dropping, because a silent drop on a single-threaded target would be a compiler
+bug, not backpressure.
 
 ---
 
@@ -131,6 +151,9 @@ single-threaded target would be a compiler bug, not backpressure.
 - `link`/`monitor`/`on_exit`/`on_down`, `select`, and actor panics-as-exit are out
   of scope here; they need the supervision registry, which this ADR does not
   address.
+- `pub test fn` reads are no longer callable from inside an actor body on any
+  backend. That is a capability removal, accepted because the alternative on WASM
+  is a silent stale read and on LLVM a worker-thread deadlock.
 
 **Neutral**
 

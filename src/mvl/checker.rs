@@ -351,6 +351,16 @@ pub fn collect_prelude_expr_types(programs: &[Program]) -> HashMap<Span, Ty> {
 
 // ── FnContext ────────────────────────────────────────────────────────────────
 
+/// How an actor method is called, and what a call site gets back (#2012).
+#[derive(Debug, Clone)]
+struct ActorMethodSig {
+    /// `pub test fn` — a synchronous state read, not a behaviour.
+    is_test: bool,
+    /// Type a call site yields: `Unit` for a fire-and-forget behaviour, the
+    /// declared type for a synchronous read or private helper.
+    ret: Ty,
+}
+
 /// Per-function context saved/restored on function entry/exit (#1258).
 ///
 /// Replaces the former `current_*` fields on `TypeChecker` with an explicit
@@ -369,6 +379,11 @@ struct FnContext {
     type_params: HashSet<String>,
     /// Trait bounds for type params in the current function (from `where` clauses).
     type_constraints: HashMap<String, Vec<String>>,
+    /// Actor whose method body we are checking, if any (#2012). `pub test fn`
+    /// reads are synchronous and must not be called from inside a behaviour —
+    /// on LLVM that blocks a scheduler worker thread, and on WASM the read
+    /// cannot see messages queued behind the running dispatch.
+    enclosing_actor: Option<String>,
 }
 
 // ── TypeChecker ──────────────────────────────────────────────────────────────
@@ -395,12 +410,12 @@ struct TypeChecker {
     method_table: HashMap<String, HashMap<String, FnInfo>>,
     /// Names of all declared actor types — used to enforce Spawn/Send effects (#1126).
     actor_type_names: HashSet<String>,
-    /// Declared return type of each actor method, keyed by actor name → method
-    /// name (#2012). Actor methods are not in `method_table` (their effects must
-    /// not propagate to the caller — the caller only needs `Send`), so without
-    /// this a `pub test fn` read typed as `Unknown` and backends silently
-    /// dropped the value.
-    actor_method_rets: HashMap<String, HashMap<String, Ty>>,
+    /// Signature of each actor method, keyed by actor name → method name
+    /// (#2012). Actor methods are not in `method_table` (their effects must not
+    /// propagate to the caller — the caller only needs `Send`), so without this
+    /// a `pub test fn` read typed as `Unknown` and backends silently dropped
+    /// the value.
+    actor_method_sigs: HashMap<String, HashMap<String, ActorMethodSig>>,
     /// Names of actors declared in the prelude — populated after prelude collection,
     /// before user-program checking, to detect shadowing (#1497).
     prelude_actor_names: HashSet<String>,
@@ -435,7 +450,7 @@ impl TypeChecker {
             iterator_impls: HashMap::new(),
             method_table: HashMap::new(),
             actor_type_names: HashSet::new(),
-            actor_method_rets: HashMap::new(),
+            actor_method_sigs: HashMap::new(),
             prelude_actor_names: HashSet::new(),
             expr_types: HashMap::new(),
             effect_hierarchy: hierarchy,

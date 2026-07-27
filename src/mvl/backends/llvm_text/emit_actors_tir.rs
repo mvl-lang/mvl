@@ -75,7 +75,9 @@ impl TextEmitter {
 
             let state_name = state_name.clone();
             let method = method.clone();
+            let actor_name_for_ctx = ad.name.clone();
             self.with_fresh_fn_ctx(ret_ty_te.clone(), |this| -> Result<(), String> {
+                this.fn_ctx.enclosing_actor = Some(actor_name_for_ctx);
                 this.fn_ctx
                     .fn_buf
                     .push(format!("define {define_ret} @{fn_name}({params_str})"));
@@ -222,6 +224,18 @@ impl TextEmitter {
                             let truncated = this.next_reg();
                             this.push_instr(&format!("{truncated} = trunc i64 {raw} to i1"));
                             call_parts.push(format!("i1 {truncated}"));
+                        } else if ty_str == "double" {
+                            // Float args travel as raw bits in the i64 slot; a
+                            // bare `double %raw` here was invalid IR (#2012).
+                            let coerced = this.next_reg();
+                            this.push_instr(&format!(
+                                "{coerced} = bitcast i64 {raw} to double"
+                            ));
+                            call_parts.push(format!("double {coerced}"));
+                        } else if ty_str == "i32" {
+                            let coerced = this.next_reg();
+                            this.push_instr(&format!("{coerced} = trunc i64 {raw} to i32"));
+                            call_parts.push(format!("i32 {coerced}"));
                         } else if is_aggregate_llvm_ty(&ty_str) {
                             struct_used = true;
                             let hp = this.next_reg();
@@ -608,6 +622,17 @@ impl TextEmitter {
                     "i1" => {
                         let coerced = self.next_reg();
                         self.push_instr(&format!("{coerced} = zext i1 {val} to i64"));
+                        coerced
+                    }
+                    "double" => {
+                        // Store the Float's bits, not a truncated `store i64 2.5`.
+                        let coerced = self.next_reg();
+                        self.push_instr(&format!("{coerced} = bitcast double {val} to i64"));
+                        coerced
+                    }
+                    "i32" => {
+                        let coerced = self.next_reg();
+                        self.push_instr(&format!("{coerced} = sext i32 {val} to i64"));
                         coerced
                     }
                     s if is_aggregate_llvm_ty(s) => {

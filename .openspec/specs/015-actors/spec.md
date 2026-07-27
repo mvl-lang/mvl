@@ -529,6 +529,9 @@ Actor semantics MUST be identical across the Rust and LLVM backends (#698):
 
 - Actor isolation (no shared state) is a checker guarantee — both backends inherit it
 - Message ordering within a single actor MUST be FIFO
+- `self.method(…)` inside an actor body MUST be a direct synchronous call, not a mailbox
+  send — the actor already holds exclusive access to its own state while dispatching
+  (#2012). This includes bare-name calls to private helpers. All three backends agree.
 - Creation/terminate lifecycle MUST behave identically
 - `select` timeout precision is backend-defined but MUST be best-effort
 
@@ -570,3 +573,10 @@ These limitations are accepted for Phase 8 and tracked as follow-up work:
   actors making independent progress (a blocking behavior, a supervisor polling a worker)
   serialises or deadlocks where the Rust/LLVM schedulers would not. Supervision
   (`link`/`monitor`/`on_exit`/`on_down`) and `select` are not implemented on WASM at all.
+  `mailbox(N)` / `unbounded` is parsed but ignored by the WASM emitter.
+- **L9**: `pub test fn` reads cannot be called from inside an actor body, on any backend
+  (`TestFnCallFromActor`, #2012). These reads are synchronous: on LLVM the call parks a
+  scheduler worker thread, and enough concurrent ones exhaust the pool and deadlock; on
+  WASM the read cannot observe messages queued behind the dispatch that is running, so it
+  would silently return stale state. `pub test fn` is test-only introspection — call it
+  from a `test fn`, and send a behavior message when one actor needs to affect another.
