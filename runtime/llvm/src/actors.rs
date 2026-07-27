@@ -19,6 +19,14 @@
 //! - `disc` (discriminant): which public behavior to invoke (0-based index)
 //! - `args`: packed `i64` array — all MVL scalar types map to `i64` at the C ABI
 //!
+//! # Synchronous calls (#2012)
+//!
+//! `pub test fn` methods on an actor are synchronous state reads, not
+//! fire-and-forget behaviors. [`_mvl_actor_sync_call`] enqueues the message with
+//! a reply-cell address in `args[argc]` and blocks until the dispatch arm hands
+//! the result to [`_mvl_actor_sync_reply`]. Going through the mailbox is what
+//! makes the read observe every message the caller sent before it.
+//!
 //! # System discriminants (Phase 9, #1177)
 //!
 //! Negative discriminants are reserved for system messages:
@@ -47,7 +55,7 @@ use std::cell::Cell;
 use std::cell::UnsafeCell;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::panic::{catch_unwind, AssertUnwindSafe};
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::thread::{self, JoinHandle};
 
@@ -71,6 +79,60 @@ const REDUCTION_LIMIT: u64 = 4000;
 struct MvlMsg {
     disc: i64,
     args: [i64; MAX_ARGS],
+    /// Reply cell address for a synchronous `pub test fn` call, else 0 (#2012).
+    /// Tracked out-of-band so the mailbox-clearing paths (shutdown, panic) can
+    /// release a blocked caller instead of leaving it spinning forever.
+    reply: usize,
+}
+
+impl MvlMsg {
+    fn new(disc: i64) -> Self {
+        Self {
+            disc,
+            args: [0i64; MAX_ARGS],
+            reply: 0,
+        }
+    }
+}
+
+// ── Synchronous reply cell (#2012) ─────────────────────────────────────────
+
+/// One-shot reply slot for a synchronous actor call.
+///
+/// `pub test fn` methods on an actor are synchronous state reads: the caller
+/// must observe every message it enqueued earlier, so the read goes through the
+/// mailbox (preserving FIFO) and the caller blocks on this cell until the
+/// worker that dispatches it stores the result.
+struct SyncReply {
+    value: AtomicI64,
+    done: AtomicBool,
+}
+
+/// Mark a reply cell as answered.  `addr` of 0 is a no-op (fire-and-forget msg).
+fn complete_reply(addr: usize, value: i64) {
+    if addr == 0 {
+        return;
+    }
+    // Safety: the address came from `Box::into_raw` in `_mvl_actor_sync_call`
+    // and the blocked caller keeps the allocation alive until it observes
+    // `done == true`.
+    let reply = unsafe { &*(addr as *const SyncReply) };
+    reply.value.store(value, Ordering::Release);
+    reply.done.store(true, Ordering::Release);
+}
+
+/// Clear `mailbox`, releasing any blocked synchronous callers with a zero value.
+///
+/// Used by the shutdown and panic paths: those drop pending messages, and a
+/// dropped sync message would otherwise hang its caller forever.
+fn clear_mailbox_releasing_replies(cell: &ActorCell) {
+    let drained: Vec<usize> = {
+        let mut mb = cell.mailbox.lock().unwrap_or_else(|p| p.into_inner());
+        mb.drain(..).map(|m| m.reply).collect()
+    };
+    for addr in drained {
+        complete_reply(addr, 0);
+    }
 }
 
 // ── C-ABI dispatch function ────────────────────────────────────────────────
@@ -246,10 +308,7 @@ fn process_one_message(cell: Arc<ActorCell>, local: &Worker<Arc<ActorCell>>) {
         // Order matters: keep `scheduled = true` across process_actor_exit so
         // _mvl_actor_join_all's spin-wait observes this cell as busy until the
         // exit cascade finishes (#1602).
-        cell.mailbox
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .clear();
+        clear_mailbox_releasing_replies(&cell);
         process_actor_exit(cell.actor_id, 2); // Killed
         cell.scheduled.store(false, Ordering::Release);
         return;
@@ -270,10 +329,10 @@ fn process_one_message(cell: Arc<ActorCell>, local: &Worker<Arc<ActorCell>>) {
         // Order matters: keep `scheduled = true` across process_actor_exit so
         // _mvl_actor_join_all's spin-wait observes this cell as busy until the
         // exit cascade finishes (#1602).
-        cell.mailbox
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .clear();
+        // The panicking message may itself have been a synchronous call, so
+        // release its reply cell too before draining the rest (#2012).
+        complete_reply(msg.reply, 0);
+        clear_mailbox_releasing_replies(&cell);
         process_actor_exit(cell.actor_id, 1); // Panic
         cell.scheduled.store(false, Ordering::Release);
         return;
@@ -390,33 +449,24 @@ fn process_actor_exit(dead_id: ActorId, reason: i64) {
 
     // Phase 2: inject messages outside the lock.
     for cell in kill_cells {
-        if cell.push_msg(MvlMsg {
-            disc: DISC_SHUTDOWN,
-            args: [0; MAX_ARGS],
-        }) {
+        if cell.push_msg(MvlMsg::new(DISC_SHUTDOWN)) {
             cell.schedule();
         }
     }
     for (cell, exit_reason) in exit_cells {
-        let mut args = [0i64; MAX_ARGS];
-        args[0] = dead_id as i64;
-        args[1] = exit_reason;
-        if cell.push_msg(MvlMsg {
-            disc: DISC_EXIT_SIGNAL,
-            args,
-        }) {
+        let mut msg = MvlMsg::new(DISC_EXIT_SIGNAL);
+        msg.args[0] = dead_id as i64;
+        msg.args[1] = exit_reason;
+        if cell.push_msg(msg) {
             cell.schedule();
         }
     }
     for (cell, mid) in down_cells {
-        let mut args = [0i64; MAX_ARGS];
-        args[0] = dead_id as i64;
-        args[1] = reason;
-        args[2] = mid as i64;
-        if cell.push_msg(MvlMsg {
-            disc: DISC_DOWN_SIGNAL,
-            args,
-        }) {
+        let mut msg = MvlMsg::new(DISC_DOWN_SIGNAL);
+        msg.args[0] = dead_id as i64;
+        msg.args[1] = reason;
+        msg.args[2] = mid as i64;
+        if cell.push_msg(msg) {
             cell.schedule();
         }
     }
@@ -551,10 +601,7 @@ pub unsafe extern "C" fn _mvl_actor_send(handle: *mut u8, disc: i64, argc: i64, 
         return;
     }
     let argc = (argc as usize).min(MAX_ARGS);
-    let mut msg = MvlMsg {
-        disc,
-        args: [0i64; MAX_ARGS],
-    };
+    let mut msg = MvlMsg::new(disc);
     if argc > 0 {
         let src = std::slice::from_raw_parts(args, argc);
         msg.args[..argc].copy_from_slice(src);
@@ -562,6 +609,95 @@ pub unsafe extern "C" fn _mvl_actor_send(handle: *mut u8, disc: i64, argc: i64, 
     if actor.cell.push_msg(msg) {
         actor.cell.schedule();
     }
+}
+
+// ── Synchronous call (#2012) ───────────────────────────────────────────────
+
+/// Send a message and block until the actor has dispatched it, returning the
+/// behavior's result widened to `i64`.
+///
+/// This backs `pub test fn` methods on actors, which are synchronous state
+/// reads rather than fire-and-forget behaviors. Routing the read through the
+/// mailbox (instead of touching `state` directly) is what makes it observe
+/// every message the caller enqueued earlier — the mailbox is FIFO, so the read
+/// runs after them.
+///
+/// The generated dispatch arm reads the reply cell address from `args[argc]`
+/// and hands it to [`_mvl_actor_sync_reply`]; that means `argc + 1` must fit
+/// within [`MAX_ARGS`].
+///
+/// Returns 0 when the call cannot be completed: null handle, argument overflow,
+/// a full bounded mailbox (DropNewest would discard the message), or the actor
+/// dying before it dispatches.
+///
+/// # Deadlock
+///
+/// Must be called from a thread that is not itself running a behavior for
+/// `handle`; a behavior that synchronously calls back into its own actor would
+/// wait on a message only it could dispatch. `pub test fn` calls are emitted in
+/// `test fn` bodies, which run on the main thread, so this holds by
+/// construction.
+///
+/// # Safety
+///
+/// `handle` must be a valid pointer returned by [`_mvl_actor_spawn`] and not yet
+/// dropped. `args` must point to at least `argc` valid `i64` values.
+#[no_mangle]
+pub unsafe extern "C" fn _mvl_actor_sync_call(
+    handle: *mut u8,
+    disc: i64,
+    argc: i64,
+    args: *const i64,
+) -> i64 {
+    if handle.is_null() || argc < 0 {
+        return 0;
+    }
+    let argc = argc as usize;
+    // The reply cell address occupies args[argc], so it needs a slot of its own.
+    if argc >= MAX_ARGS {
+        return 0;
+    }
+    let actor = &*(handle as *const MvlActorHandle);
+
+    let reply = Box::into_raw(Box::new(SyncReply {
+        value: AtomicI64::new(0),
+        done: AtomicBool::new(false),
+    }));
+
+    let mut msg = MvlMsg::new(disc);
+    if argc > 0 {
+        let src = std::slice::from_raw_parts(args, argc);
+        msg.args[..argc].copy_from_slice(src);
+    }
+    msg.args[argc] = reply as i64;
+    msg.reply = reply as usize;
+
+    if !actor.cell.push_msg(msg) {
+        // Bounded mailbox overflowed — DropNewest means this message is gone and
+        // no reply is ever coming, so don't block on it.
+        drop(Box::from_raw(reply));
+        return 0;
+    }
+    actor.cell.schedule();
+
+    while !(*reply).done.load(Ordering::Acquire) {
+        thread::yield_now();
+    }
+    let value = (*reply).value.load(Ordering::Acquire);
+    drop(Box::from_raw(reply));
+    value
+}
+
+/// Store the result of a synchronous call into its reply cell and wake the
+/// blocked caller.  Called from the generated dispatch arm of a `pub test fn`.
+///
+/// # Safety
+///
+/// `reply` must be the address the dispatch arm read out of `args[argc]`, i.e.
+/// a live cell created by [`_mvl_actor_sync_call`]. A null `reply` is a no-op.
+#[no_mangle]
+pub unsafe extern "C" fn _mvl_actor_sync_reply(reply: *mut u8, value: i64) {
+    complete_reply(reply as usize, value);
 }
 
 // ── Self / ID ──────────────────────────────────────────────────────────────
@@ -678,10 +814,7 @@ pub extern "C" fn _mvl_actor_join_all() {
         cell.mailbox
             .lock()
             .unwrap_or_else(|p| p.into_inner())
-            .push_back(MvlMsg {
-                disc: DISC_SHUTDOWN,
-                args: [0; MAX_ARGS],
-            });
+            .push_back(MvlMsg::new(DISC_SHUTDOWN));
         cell.schedule();
     }
 

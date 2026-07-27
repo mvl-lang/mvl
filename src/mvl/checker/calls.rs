@@ -574,6 +574,17 @@ impl TypeChecker {
                             });
                         }
                     }
+                    // Actor methods live in their own registry, not `method_table`
+                    // (their effects run on the actor, not the caller). Returning
+                    // the declared type here is what lets `assert_eq(c.get(), 5)`
+                    // pick the right comparison — it used to be `Unknown` (#2012).
+                    if let Some(ret) = self
+                        .actor_method_rets
+                        .get(type_name.as_str())
+                        .and_then(|m| m.get(method))
+                    {
+                        return ifc::apply_label(label, ret.clone());
+                    }
                 }
                 // User-defined type-attached method (#868): look up method table.
                 // Clone to release the borrow on `self` before calling self.emit().

@@ -395,6 +395,12 @@ struct TypeChecker {
     method_table: HashMap<String, HashMap<String, FnInfo>>,
     /// Names of all declared actor types — used to enforce Spawn/Send effects (#1126).
     actor_type_names: HashSet<String>,
+    /// Declared return type of each actor method, keyed by actor name → method
+    /// name (#2012). Actor methods are not in `method_table` (their effects must
+    /// not propagate to the caller — the caller only needs `Send`), so without
+    /// this a `pub test fn` read typed as `Unknown` and backends silently
+    /// dropped the value.
+    actor_method_rets: HashMap<String, HashMap<String, Ty>>,
     /// Names of actors declared in the prelude — populated after prelude collection,
     /// before user-program checking, to detect shadowing (#1497).
     prelude_actor_names: HashSet<String>,
@@ -429,6 +435,7 @@ impl TypeChecker {
             iterator_impls: HashMap::new(),
             method_table: HashMap::new(),
             actor_type_names: HashSet::new(),
+            actor_method_rets: HashMap::new(),
             prelude_actor_names: HashSet::new(),
             expr_types: HashMap::new(),
             effect_hierarchy: hierarchy,

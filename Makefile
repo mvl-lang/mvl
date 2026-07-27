@@ -153,6 +153,13 @@ MVL ?= ./target/debug/mvl
 # All test targets use the freshly built dev binary. Prevent it from re-execing
 # to a project-pinned toolchain (see src/main.rs and CLAUDE.md).
 export MVL_NO_REEXEC = 1
+# Same trap, one layer down: the LLVM backend resolves libmvl_runtime_llvm from
+# the *installed* XDG runtime dir before the build tree, so a dev with an older
+# runtime installed silently links a stale dylib — a newly added C-ABI symbol
+# then looks like a codegen bug. Pin the freshly built one, mirroring what
+# test-rust-wasm does with MVL_RUNTIME_WASM. Recursively expanded on purpose:
+# the wildcard must run inside the recipe, after `build` has produced the file.
+export MVL_RUNTIME_LLVM_LIB = $(firstword $(wildcard $(CURDIR)/target/$(BUILD)/libmvl_runtime_llvm.dylib $(CURDIR)/target/$(BUILD)/libmvl_runtime_llvm.so))
 # mvlr — matrix run driver. Prefer the in-tree copy when it exists so a
 # dev checkout always runs the mvlr matching this source (the emitter
 # under test needs the mvlr that knows how to drive it — the installed

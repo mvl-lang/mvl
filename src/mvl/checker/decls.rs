@@ -96,6 +96,22 @@ impl TypeChecker {
         );
         // Track actor type name for Spawn/Send effect enforcement (#1126).
         self.actor_type_names.insert(ad.name.clone());
+        // Record method return types so call sites type correctly (#2012).
+        // Behaviors are fire-and-forget and yield `Unit` regardless of what the
+        // body evaluates to; only `pub test fn` reads hand a value back.
+        let rets: HashMap<String, Ty> = ad
+            .methods
+            .iter()
+            .map(|m| {
+                let ret = if m.is_test {
+                    self.env.normalize_ty(resolve(&m.return_type))
+                } else {
+                    Ty::Unit
+                };
+                (m.name.clone(), ret)
+            })
+            .collect();
+        self.actor_method_rets.insert(ad.name.clone(), rets);
     }
 
     /// Register a top-level `const NAME: T = expr;` in the type environment

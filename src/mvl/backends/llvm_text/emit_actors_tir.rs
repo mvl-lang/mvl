@@ -239,7 +239,89 @@ impl TextEmitter {
                     }
 
                     let call_args_str = call_parts.join(", ");
-                    this.push_instr(&format!("call void @{fn_name}({call_args_str})"));
+
+                    // `pub test fn` methods are synchronous reads: call them for
+                    // their value and hand it back through the reply cell whose
+                    // address `_mvl_actor_sync_call` parked in args[argc] (#2012).
+                    // Everything else is fire-and-forget, so its result (if any)
+                    // is discarded.
+                    let ret_te = ty_or_unit(&method.ret_ty);
+                    let ret_ty_str = this.llvm_ty_ctx(&ret_te);
+                    let returns_value = !Self::is_void(&ret_te) && ret_ty_str != "void";
+
+                    if method.is_test && returns_value {
+                        let ret_val = this.next_reg();
+                        this.push_instr(&format!(
+                            "{ret_val} = call {ret_ty_str} @{fn_name}({call_args_str})"
+                        ));
+                        let as_i64 = match ret_ty_str.as_str() {
+                            "i64" => ret_val,
+                            "ptr" => {
+                                let c = this.next_reg();
+                                this.push_instr(&format!(
+                                    "{c} = ptrtoint ptr {ret_val} to i64"
+                                ));
+                                c
+                            }
+                            "i1" => {
+                                let c = this.next_reg();
+                                this.push_instr(&format!("{c} = zext i1 {ret_val} to i64"));
+                                c
+                            }
+                            "double" => {
+                                let c = this.next_reg();
+                                this.push_instr(&format!(
+                                    "{c} = bitcast double {ret_val} to i64"
+                                ));
+                                c
+                            }
+                            "i32" => {
+                                let c = this.next_reg();
+                                this.push_instr(&format!("{c} = sext i32 {ret_val} to i64"));
+                                c
+                            }
+                            s if is_aggregate_llvm_ty(s) => {
+                                // Box the aggregate and pass its address; the
+                                // caller loads it back out.
+                                struct_used = true;
+                                let sz = sizeof_llvm_ty_expr(&ret_ty_str);
+                                let hp = this.next_reg();
+                                this.push_instr(&format!(
+                                    "{hp} = call ptr @_mvl_alloc(i64 {sz})"
+                                ));
+                                this.push_instr(&format!(
+                                    "store {ret_ty_str} {ret_val}, ptr {hp}"
+                                ));
+                                let c = this.next_reg();
+                                this.push_instr(&format!("{c} = ptrtoint ptr {hp} to i64"));
+                                c
+                            }
+                            _ => ret_val,
+                        };
+                        let reply_slot = method.params.len();
+                        let rgep = this.next_reg();
+                        this.push_instr(&format!(
+                            "{rgep} = getelementptr i64, ptr %args, i64 {reply_slot}"
+                        ));
+                        let raw_reply = this.next_reg();
+                        this.push_instr(&format!("{raw_reply} = load i64, ptr {rgep}"));
+                        let reply_ptr = this.next_reg();
+                        this.push_instr(&format!(
+                            "{reply_ptr} = inttoptr i64 {raw_reply} to ptr"
+                        ));
+                        this.push_instr(&format!(
+                            "call void @_mvl_actor_sync_reply(ptr {reply_ptr}, i64 {as_i64})"
+                        ));
+                        this.ensure_extern("declare void @_mvl_actor_sync_reply(ptr, i64)");
+                    } else if returns_value {
+                        let discarded = this.next_reg();
+                        this.push_instr(&format!(
+                            "{discarded} = call {ret_ty_str} @{fn_name}({call_args_str})"
+                        ));
+                    } else {
+                        this.push_instr(&format!("call void @{fn_name}({call_args_str})"));
+                    }
+
                     for (hp, sz) in struct_frees {
                         this.push_instr(&format!(
                             "call void @_mvl_free(ptr {hp}, i64 {sz})"
@@ -430,11 +512,23 @@ impl TextEmitter {
             Some(d) => d,
             None => return Ok(None),
         };
+        let callee = pub_methods[disc].clone();
+
+        // `pub test fn` is a synchronous read, not a behavior: it must return a
+        // value and must observe every message enqueued before it. The reply
+        // cell address takes a slot in the message's arg array (#2012).
+        let is_sync = callee.is_test;
+        let arg_budget = if is_sync {
+            MAX_ACTOR_ARGS - 1
+        } else {
+            MAX_ACTOR_ARGS
+        };
 
         let argc = args.len();
-        if argc > MAX_ACTOR_ARGS {
+        if argc > arg_budget {
             return Err(format!(
-                "actor behavior '{method}' has {argc} parameters; maximum is {MAX_ACTOR_ARGS}"
+                "actor {} '{method}' has {argc} parameters; maximum is {arg_budget}",
+                if is_sync { "test method" } else { "behavior" }
             ));
         }
 
@@ -490,11 +584,67 @@ impl TextEmitter {
             "null".to_string()
         };
 
-        self.push_instr(&format!(
-            "call void @_mvl_actor_send(ptr {handle_val}, i64 {disc}, i64 {argc}, ptr {args_ptr})"
-        ));
+        if !is_sync {
+            self.push_instr(&format!(
+                "call void @_mvl_actor_send(ptr {handle_val}, i64 {disc}, i64 {argc}, ptr {args_ptr})"
+            ));
+            return Ok(None);
+        }
 
-        Ok(None)
+        // Synchronous path: block on the reply and widen the i64 back to the
+        // method's declared return type. `expr.ty` is `Unknown` for actor method
+        // calls, so the actor registry is the only source for this type.
+        let raw = self.next_reg();
+        self.push_instr(&format!(
+            "{raw} = call i64 @_mvl_actor_sync_call(ptr {handle_val}, i64 {disc}, i64 {argc}, ptr {args_ptr})"
+        ));
+        self.ensure_extern("declare i64 @_mvl_actor_sync_call(ptr, i64, i64, ptr)");
+        self.fn_ctx.reg_types.insert(raw.clone(), "i64".into());
+
+        let ret_te = ty_or_unit(&callee.ret_ty);
+        let ret_ty_str = self.llvm_ty_ctx(&ret_te);
+        if Self::is_void(&ret_te) || ret_ty_str == "void" {
+            return Ok(None);
+        }
+
+        let value = match ret_ty_str.as_str() {
+            "i64" => raw,
+            "ptr" => {
+                let c = self.next_reg();
+                self.push_instr(&format!("{c} = inttoptr i64 {raw} to ptr"));
+                c
+            }
+            "i1" => {
+                let c = self.next_reg();
+                self.push_instr(&format!("{c} = trunc i64 {raw} to i1"));
+                c
+            }
+            "double" => {
+                let c = self.next_reg();
+                self.push_instr(&format!("{c} = bitcast i64 {raw} to double"));
+                c
+            }
+            "i32" => {
+                let c = self.next_reg();
+                self.push_instr(&format!("{c} = trunc i64 {raw} to i32"));
+                c
+            }
+            s if is_aggregate_llvm_ty(s) => {
+                // The dispatch arm boxed the aggregate; load it back and release
+                // the box.
+                let hp = self.next_reg();
+                self.push_instr(&format!("{hp} = inttoptr i64 {raw} to ptr"));
+                let loaded = self.next_reg();
+                self.push_instr(&format!("{loaded} = load {ret_ty_str}, ptr {hp}"));
+                let sz = sizeof_llvm_ty_expr(&ret_ty_str);
+                self.push_instr(&format!("call void @_mvl_free(ptr {hp}, i64 {sz})"));
+                self.ensure_extern("declare void @_mvl_free(ptr, i64)");
+                loaded
+            }
+            _ => raw,
+        };
+        self.fn_ctx.reg_types.insert(value.clone(), ret_ty_str);
+        Ok(Some(value))
     }
 }
 

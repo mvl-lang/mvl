@@ -86,7 +86,12 @@ fn find_cdylib(env_var: &str, lib_name: &str) -> Option<PathBuf> {
         if matches!(ext, "dylib" | "so") && p.exists() {
             return Some(p);
         }
-        eprintln!("warning: {env_var} ignored — must end in .dylib or .so and exist: {path}");
+        // An empty value means "no override" — the Makefile sets this from a
+        // wildcard that expands to nothing before the runtime is built. Only
+        // warn about values that look like a real, wrong path.
+        if !path.is_empty() {
+            eprintln!("warning: {env_var} ignored — must end in .dylib or .so and exist: {path}");
+        }
     }
     // XDG runtime dir — the canonical installed location (ADR-0009, #1765).
     let xdg_llvm = mvl_data_home()

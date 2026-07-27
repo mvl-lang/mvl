@@ -105,3 +105,42 @@ fn join_all_emitted_in_main_when_actors_present() {
     );
     assert!(ir.contains("call void @_mvl_actor_join_all"), "{ir}");
 }
+
+// ── Synchronous `pub test fn` reads (#2012) ────────────────────────────────
+
+/// `pub test fn` on an actor is a synchronous read, so the call site must go
+/// through `_mvl_actor_sync_call` and yield a value. Emitting a plain
+/// fire-and-forget `_mvl_actor_send` made every `12_actors` assertion a no-op.
+#[test]
+fn actor_test_fn_read_emits_sync_call() {
+    let ir = super::common::compile_test_crate(
+        "actor Counter {\n\
+           count: Int\n\
+           pub fn increment(val n: Int) { self.count = self.count + n }\n\
+           pub test fn get_count() -> Int { self.count }\n\
+         }\n\
+         test fn reads_state() -> Unit ! Spawn + Send {\n\
+             let c: Counter = actor Counter { count: 0 };\n\
+             c.increment(5);\n\
+             assert_eq(c.get_count(), 5);\n\
+         }",
+    );
+    assert!(
+        ir.contains("call i64 @_mvl_actor_sync_call"),
+        "sync read must block on a reply, not fire-and-forget\n{ir}"
+    );
+    assert!(
+        ir.contains("declare i64 @_mvl_actor_sync_call(ptr, i64, i64, ptr)"),
+        "{ir}"
+    );
+    // The dispatch arm must hand the behavior's result back to the caller.
+    assert!(
+        ir.contains("call void @_mvl_actor_sync_reply"),
+        "dispatch must answer the reply cell\n{ir}"
+    );
+    // And the assertion must actually compare something.
+    assert!(
+        ir.contains("icmp eq i64"),
+        "assert_eq on an actor read must emit a comparison\n{ir}"
+    );
+}
