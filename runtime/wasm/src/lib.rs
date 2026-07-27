@@ -655,8 +655,7 @@ pub unsafe extern "C" fn _mvl_array_clone(a: i32) -> i32 {
 /// the `MvlArray` header when refcount hits zero.
 ///
 /// Element-level drops (e.g., strings inside a `List[String]`) are *not*
-/// emitted here — the LLVM backend does per-element drops in the emitter
-/// for now. Follow-up if it becomes a real leak.
+/// handled here — use `_mvl_string_ptr_array_drop` for `List[String]`.
 ///
 /// # Safety
 /// `a` must be a valid `MvlArray` pointer, not used after drop.
@@ -675,6 +674,83 @@ pub unsafe extern "C" fn _mvl_array_drop(a: i32) {
     unsafe {
         let _ = Box::from_raw(a as usize as *mut MvlArray);
     }
+}
+
+/// `_mvl_string_ptr_array_drop(a)` — refcount decrement for a `List[String]`
+/// array. When the refcount hits zero each element `*MvlString` is dropped
+/// via `_mvl_string_drop`, then the backing buffer and struct are freed.
+///
+/// Use instead of `_mvl_array_drop` whenever the array's elements are
+/// `*MvlString` pointers (`elem_size == 4`).
+///
+/// # Safety
+/// `a` must be a valid `MvlArray` pointer with `elem_size == 4`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn _mvl_string_ptr_array_drop(a: i32) {
+    if a == 0 {
+        return;
+    }
+    let arr = unsafe { &mut *(a as usize as *mut MvlArray) };
+    arr.rc -= 1;
+    if arr.rc > 0 {
+        return;
+    }
+    let len = arr.len as usize;
+    let es = arr.elem_size as usize;
+    let base = arr.ptr as usize;
+    for i in 0..len {
+        let s = unsafe { core::ptr::read((base + i * es) as *const i32) };
+        if s != 0 {
+            unsafe { _mvl_string_drop(s) };
+        }
+    }
+    let nbytes = (arr.cap as usize) * es;
+    unsafe { reclaim_byte_buffer(arr.ptr, nbytes, nbytes) };
+    unsafe {
+        let _ = Box::from_raw(a as usize as *mut MvlArray);
+    }
+}
+
+/// `_mvl_string_ptr_array_dedup(a)` — remove duplicate `*MvlString` elements
+/// by content equality.  Duplicates are freed via `_mvl_string_drop`; the
+/// array is compacted in-place and `arr.len` is updated.  O(n²) — acceptable
+/// for small `Set[String]` literals.
+///
+/// Use instead of `_mvl_array_dedup_i32` whenever elements are `*MvlString`
+/// pointers; pointer-address dedup does not detect equal strings from distinct
+/// allocations.
+///
+/// # Safety
+/// `a` must be a valid `MvlArray` pointer with `elem_size == 4`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn _mvl_string_ptr_array_dedup(a: i32) {
+    if a == 0 {
+        return;
+    }
+    let arr = unsafe { &mut *(a as usize as *mut MvlArray) };
+    let es = arr.elem_size as usize;
+    let base = arr.ptr as usize;
+    let mut write = 0usize;
+    'outer: for read in 0..arr.len as usize {
+        let s = unsafe { core::ptr::read((base + read * es) as *const i32) };
+        for kept in 0..write {
+            let k = unsafe { core::ptr::read((base + kept * es) as *const i32) };
+            // Read raw ptr/len from MvlString (offsets 0 and 4).
+            let s_ptr = unsafe { core::ptr::read(s as usize as *const i32) };
+            let s_len = unsafe { core::ptr::read((s as usize + 4) as *const i32) };
+            let k_ptr = unsafe { core::ptr::read(k as usize as *const i32) };
+            let k_len = unsafe { core::ptr::read((k as usize + 4) as *const i32) };
+            if unsafe { _mvl_string_eq(s_ptr, s_len, k_ptr, k_len) } != 0 {
+                unsafe { _mvl_string_drop(s) };
+                continue 'outer;
+            }
+        }
+        if write != read {
+            unsafe { core::ptr::write((base + write * es) as *mut i32, s) };
+        }
+        write += 1;
+    }
+    arr.len = write as i32;
 }
 
 /// `_mvl_array_get_option_i64(a, idx)` → `*MvlOption` — Some(value) when
