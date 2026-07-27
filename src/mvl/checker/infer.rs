@@ -299,7 +299,8 @@ impl TypeChecker {
                 }
                 // Stdlib method resolution (#43): dispatch on receiver type.
                 // IFC labels propagate through method results via the receiver label.
-                self.infer_method_call(&recv_ty, method, &arg_tys, *span)
+                let self_receiver = matches!(receiver.as_ref(), Expr::Ident(n, _) if n == "self");
+                self.infer_method_call(&recv_ty, method, &arg_tys, *span, self_receiver)
             }
 
             // #13: Match expressions

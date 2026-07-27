@@ -482,12 +482,16 @@ impl TypeChecker {
     /// All collection methods return `Option<T>` where there is any possibility
     /// of absence (e.g. `.get`, `.first`) — never panic on valid input.
     /// IFC labels on the receiver propagate to the result via `apply_label`.
+    /// `self_receiver` is true when the call is written `self.method(…)`, which
+    /// matters only for actor types: an intra-actor call is synchronous and does
+    /// not require the `Send` effect (#2012, ADR-0059).
     pub(super) fn infer_method_call(
         &mut self,
         recv_ty: &Ty,
         method: &str,
         arg_tys: &[Ty],
         span: Span,
+        self_receiver: bool,
     ) -> Ty {
         // Validate concat(other: String) — exactly one String argument.
         // Other String methods have flexible or zero args and don't need pre-validation here.
@@ -551,6 +555,20 @@ impl TypeChecker {
                     // actor_id() is a pure sync read of the handle's ID — no mailbox send (#1128).
                     if method == "actor_id" {
                         return Ty::Int;
+                    }
+                    // `self.method(…)` inside the actor's own body is a direct
+                    // synchronous call, not a send — the actor already holds
+                    // exclusive access to its own state while dispatching, so
+                    // nothing crosses a mailbox and `Send` is not required
+                    // (ADR-0059; all three backends lower it as a direct call).
+                    if self_receiver {
+                        let ret = self
+                            .actor_method_rets
+                            .get(type_name.as_str())
+                            .and_then(|m| m.get(method))
+                            .cloned()
+                            .unwrap_or(Ty::Unknown);
+                        return ifc::apply_label(label, ret);
                     }
                     let send_eff = Effect::new("Send", span);
                     let covered = self

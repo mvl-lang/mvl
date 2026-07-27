@@ -97,13 +97,18 @@ impl TypeChecker {
         // Track actor type name for Spawn/Send effect enforcement (#1126).
         self.actor_type_names.insert(ad.name.clone());
         // Record method return types so call sites type correctly (#2012).
-        // Behaviors are fire-and-forget and yield `Unit` regardless of what the
-        // body evaluates to; only `pub test fn` reads hand a value back.
+        //
+        // Only a `pub fn` behavior is fire-and-forget: the call enqueues a
+        // message and yields `Unit` no matter what the body evaluates to.
+        // `pub test fn` reads and private helpers are both called synchronously
+        // and hand their declared type back — collapsing those to `Unit` broke
+        // `self.helper() + 1` for any private helper returning a value.
         let rets: HashMap<String, Ty> = ad
             .methods
             .iter()
             .map(|m| {
-                let ret = if m.is_test {
+                let synchronous = m.is_test || !m.is_public;
+                let ret = if synchronous {
                     self.env.normalize_ty(resolve(&m.return_type))
                 } else {
                     Ty::Unit
