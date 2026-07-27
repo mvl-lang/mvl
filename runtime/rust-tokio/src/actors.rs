@@ -324,14 +324,15 @@ mod tests {
         enum Msg {
             Increment(i64),
         }
-        fn dispatch(s: &mut State, msg: Msg) {
+        fn dispatch(s: &mut State, msg: Msg) -> bool {
             match msg {
                 Msg::Increment(n) => s.count += n,
             }
+            true
         }
 
         let (tx, rx) = mvl_channel::<Msg>(10, 0);
-        let handle = mvl_actor_run(rx, State { count: 0 }, dispatch);
+        let handle = mvl_actor_run(rx, State { count: 0 }, dispatch, 0);
 
         tx.send(Msg::Increment(1));
         tx.send(Msg::Increment(2));
@@ -350,12 +351,14 @@ mod tests {
         enum Msg {
             Noop,
         }
-        fn dispatch(_s: &mut (), _msg: Msg) {}
+        fn dispatch(_s: &mut (), _msg: Msg) -> bool {
+            true
+        }
 
         let mut handles = Vec::new();
         for _ in 0..4 {
             let (tx, rx) = mvl_channel::<Msg>(16, 0);
-            handles.push(mvl_actor_run(rx, (), dispatch));
+            handles.push(mvl_actor_run(rx, (), dispatch, 0));
             tx.send(Msg::Noop);
             drop(tx);
         }

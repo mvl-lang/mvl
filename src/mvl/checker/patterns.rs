@@ -3,7 +3,7 @@
 
 //! Pattern matching and exhaustiveness checking for the MVL type checker.
 
-use crate::mvl::checker::context::{TypeBodyInfo, VarInfo, VariantFieldsInfo};
+use crate::mvl::checker::context::{TypeBodyInfo, TypeEnv, VarInfo, VariantFieldsInfo};
 use crate::mvl::checker::errors::CheckError;
 use crate::mvl::checker::types::Ty;
 use crate::mvl::parser::ast::{MatchArm, MatchBody, Pattern, RefExpr};
@@ -31,9 +31,18 @@ impl TypeChecker {
         span: Span,
         return_ty: Option<&Ty>,
     ) -> Ty {
-        // Check each arm body
+        // Check each arm body. Arms are mutually exclusive at runtime (only
+        // one pattern matches), so a move inside one arm must not be visible
+        // while checking the next — snapshot before each arm, restore
+        // before the next, and union the outcomes across all arms once
+        // every arm has been checked (#1991 follow-up: branch-aware move
+        // tracking, needed once container literals/`.insert()` started
+        // participating in move semantics).
         let mut arm_tys: Vec<Ty> = Vec::new();
+        let pre_snapshot = self.env.snapshot_moved();
+        let mut merged_snapshot: Option<Vec<std::collections::HashMap<String, bool>>> = None;
         for arm in arms {
+            self.env.restore_moved(&pre_snapshot);
             self.env.push_scope();
             self.bind_match_pattern(&arm.pattern, scrutinee_ty);
             // Validate guard expression variables are in scope (#938).
@@ -49,7 +58,15 @@ impl TypeChecker {
                 MatchBody::Block(b) => self.infer_block_type(b, return_ty),
             };
             self.env.pop_scope();
+            let post_snapshot = self.env.snapshot_moved();
+            merged_snapshot = Some(match merged_snapshot {
+                None => post_snapshot,
+                Some(prev) => TypeEnv::union_moved_snapshots(&prev, &post_snapshot),
+            });
             arm_tys.push(body_ty);
+        }
+        if let Some(final_snapshot) = merged_snapshot {
+            self.env.restore_moved(&final_snapshot);
         }
 
         // Exhaustiveness check

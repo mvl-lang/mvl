@@ -996,6 +996,205 @@ pub unsafe extern "C" fn _mvl_string_ptr_array_drop(arr: *mut MvlArray) {
     }
 }
 
+/// Drop an array whose elements are owned `*mut MvlArray` pointers (e.g.
+/// `List[List[T]]`, `List[Set[T]]`).
+///
+/// Decrements the array's refcount.  When refcount reaches zero, each element
+/// array is dropped via `inner_drop` before the outer array itself is freed.
+/// `inner_drop` must be the correct typed drop for the inner array's own
+/// element type (`_mvl_array_drop` for scalar inner elements,
+/// `_mvl_string_ptr_array_drop` for `String` inner elements) — the emitter
+/// selects it based on the declared type (#1991).
+///
+/// # Safety
+/// `arr` must be a valid non-null `MvlArray` pointer whose elements are
+/// `*mut MvlArray` pointers. `inner_drop` must be a valid, non-null C-ABI
+/// function matching the inner arrays' actual element type.
+#[no_mangle]
+pub unsafe extern "C" fn _mvl_array_drop_mvlarray(
+    arr: *mut MvlArray,
+    inner_drop: unsafe extern "C" fn(*mut u8),
+) {
+    if arr.is_null() {
+        return;
+    }
+    (*arr).refcount = (*arr)
+        .refcount
+        .checked_sub(1)
+        .unwrap_or_else(|| std::process::abort());
+    if (*arr).refcount == 0 {
+        let len = (*arr).len as usize;
+        let es = (*arr).elem_size as usize;
+        for i in 0..len {
+            let elem_ptr = (*arr).ptr.add(i * es) as *mut *mut u8;
+            let inner = *elem_ptr;
+            if !inner.is_null() {
+                inner_drop(inner);
+            }
+        }
+        let data_size = ((*arr).cap as usize)
+            .checked_mul(es)
+            .unwrap_or_else(|| std::process::abort());
+        if data_size > 0 && !(*arr).ptr.is_null() {
+            _mvl_free((*arr).ptr, data_size);
+        }
+        _mvl_free(arr as *mut u8, std::mem::size_of::<MvlArray>());
+    }
+}
+
+/// Drop an array of `Option[T]` elements (`{ i8, ptr }` inline slots, disc
+/// 0 = Some / 1 = None per the LLVM emitter's convention).
+///
+/// For each `Some` slot, frees the heap-allocated payload slot (size
+/// `payload_size`, matching what the emitter allocated via `_mvl_alloc`),
+/// calling `payload_drop` first when `T` is itself heap-owning (e.g.
+/// `String`) — pass `None` for scalar `T`, which needs no destructor before
+/// the payload slot is freed (#1991).
+///
+/// # Safety
+/// `arr` must be a valid non-null `MvlArray` pointer with `elem_size == 16`
+/// (the `{ i8, ptr }` Option representation). `payload_size` must match the
+/// size used to allocate each `Some` payload slot. `payload_drop`, if
+/// present, must be a valid C-ABI function matching the payload's actual type.
+#[no_mangle]
+pub unsafe extern "C" fn _mvl_array_drop_option(
+    arr: *mut MvlArray,
+    payload_size: u64,
+    payload_drop: Option<unsafe extern "C" fn(*mut u8)>,
+) {
+    if arr.is_null() {
+        return;
+    }
+    (*arr).refcount = (*arr)
+        .refcount
+        .checked_sub(1)
+        .unwrap_or_else(|| std::process::abort());
+    if (*arr).refcount == 0 {
+        let len = (*arr).len as usize;
+        let es = (*arr).elem_size as usize;
+        for i in 0..len {
+            let slot = (*arr).ptr.add(i * es);
+            let disc = *slot;
+            if disc == 0 {
+                let payload_ptr = *(slot.add(8) as *mut *mut u8);
+                if !payload_ptr.is_null() {
+                    if let Some(drop_fn) = payload_drop {
+                        drop_fn(payload_ptr);
+                    }
+                    _mvl_free(payload_ptr, payload_size as usize);
+                }
+            }
+        }
+        let data_size = ((*arr).cap as usize)
+            .checked_mul(es)
+            .unwrap_or_else(|| std::process::abort());
+        if data_size > 0 && !(*arr).ptr.is_null() {
+            _mvl_free((*arr).ptr, data_size);
+        }
+        _mvl_free(arr as *mut u8, std::mem::size_of::<MvlArray>());
+    }
+}
+
+/// Drop an array of `Result[T, E]` elements (`{ i8, ptr }` inline slots,
+/// disc 0 = Ok / 1 = Err, each pointing at a heap-allocated payload of its
+/// respective type).
+///
+/// Mirrors [`_mvl_array_drop_option`] but with separate size/drop-fn pairs
+/// for the `Ok` and `Err` payloads, since `T` and `E` may differ (#1991).
+///
+/// # Safety
+/// `arr` must be a valid non-null `MvlArray` pointer with `elem_size == 16`.
+/// `ok_size`/`err_size` must match the sizes used to allocate each payload
+/// slot. `ok_drop`/`err_drop`, if present, must be valid C-ABI functions
+/// matching the respective payload types.
+#[no_mangle]
+pub unsafe extern "C" fn _mvl_array_drop_result(
+    arr: *mut MvlArray,
+    ok_size: u64,
+    ok_drop: Option<unsafe extern "C" fn(*mut u8)>,
+    err_size: u64,
+    err_drop: Option<unsafe extern "C" fn(*mut u8)>,
+) {
+    if arr.is_null() {
+        return;
+    }
+    (*arr).refcount = (*arr)
+        .refcount
+        .checked_sub(1)
+        .unwrap_or_else(|| std::process::abort());
+    if (*arr).refcount == 0 {
+        let len = (*arr).len as usize;
+        let es = (*arr).elem_size as usize;
+        for i in 0..len {
+            let slot = (*arr).ptr.add(i * es);
+            let disc = *slot;
+            let payload_ptr = *(slot.add(8) as *mut *mut u8);
+            if !payload_ptr.is_null() {
+                if disc == 0 {
+                    if let Some(drop_fn) = ok_drop {
+                        drop_fn(payload_ptr);
+                    }
+                    _mvl_free(payload_ptr, ok_size as usize);
+                } else {
+                    if let Some(drop_fn) = err_drop {
+                        drop_fn(payload_ptr);
+                    }
+                    _mvl_free(payload_ptr, err_size as usize);
+                }
+            }
+        }
+        let data_size = ((*arr).cap as usize)
+            .checked_mul(es)
+            .unwrap_or_else(|| std::process::abort());
+        if data_size > 0 && !(*arr).ptr.is_null() {
+            _mvl_free((*arr).ptr, data_size);
+        }
+        _mvl_free(arr as *mut u8, std::mem::size_of::<MvlArray>());
+    }
+}
+
+/// Drop a map whose values are pointer-typed (`String`, `List[..]`,
+/// `Set[..]`, `Map[..]`) — the map stores only the value's 8-byte address, so
+/// each occupied slot's value must be followed and dropped via `value_drop`
+/// before the slot itself is freed. Keys never need this treatment: they are
+/// always deep-copied into the map's own buffer at insert time (#1991).
+///
+/// # Safety
+/// `m` must be a valid non-null `MvlMap` pointer whose values are all
+/// pointers of the same type that `value_drop` expects.
+#[no_mangle]
+pub unsafe extern "C" fn _mvl_map_drop_ptr_values(
+    m: *mut MvlMap,
+    value_drop: unsafe extern "C" fn(*mut u8),
+) {
+    if m.is_null() {
+        return;
+    }
+    (*m).refcount = (*m)
+        .refcount
+        .checked_sub(1)
+        .unwrap_or_else(|| std::process::abort());
+    if (*m).refcount == 0 {
+        let cap = (*m).cap as usize;
+        for i in 0..cap {
+            let slot = &*(*m).slots.add(i);
+            if slot.occupied != 0 {
+                let value_ptr = *(slot.val_ptr as *mut *mut u8);
+                if !value_ptr.is_null() {
+                    value_drop(value_ptr);
+                }
+                _mvl_free(slot.key_ptr, slot.key_len as usize);
+                _mvl_free(slot.val_ptr, slot.val_len as usize);
+            }
+        }
+        let slot_bytes = cap
+            .checked_mul(std::mem::size_of::<MvlMapSlot>())
+            .unwrap_or_else(|| std::process::abort());
+        _mvl_free((*m).slots as *mut u8, slot_bytes);
+        _mvl_free(m as *mut u8, std::mem::size_of::<MvlMap>());
+    }
+}
+
 /// Remove the entry with the given key from the map (no-op if absent).
 ///
 /// # Safety

@@ -875,6 +875,54 @@ impl TypeEnv {
         }
     }
 
+    /// Snapshot the `moved` flag of every currently-in-scope variable.
+    ///
+    /// Used to make move-tracking branch-aware for mutually exclusive
+    /// control flow (`if`/`else`, `match` arms): a move inside one branch
+    /// must not be visible while checking a sibling branch, since only one
+    /// branch executes at runtime. Pair with [`Self::restore_moved`] (to
+    /// reset before checking the next branch) and [`Self::union_moved`] (to
+    /// merge the branches' outcomes once all have been checked).
+    pub fn snapshot_moved(&self) -> Vec<std::collections::HashMap<String, bool>> {
+        self.scopes
+            .iter()
+            .map(|scope| scope.iter().map(|(k, v)| (k.clone(), v.moved)).collect())
+            .collect()
+    }
+
+    /// Reset every variable's `moved` flag to a previously taken snapshot.
+    pub fn restore_moved(&mut self, snapshot: &[std::collections::HashMap<String, bool>]) {
+        for (scope, snap) in self.scopes.iter_mut().zip(snapshot.iter()) {
+            for (name, moved) in snap {
+                if let Some(info) = scope.get_mut(name) {
+                    info.moved = *moved;
+                }
+            }
+        }
+    }
+
+    /// Merge two `moved`-flag snapshots by logical OR (sound merge after
+    /// mutually exclusive branches: a value is unavailable afterward if it
+    /// was moved in *either* branch, since which branch ran isn't known
+    /// statically). Fold this across N branches (e.g. match arms), then
+    /// apply the final result with [`Self::restore_moved`].
+    pub fn union_moved_snapshots(
+        a: &[std::collections::HashMap<String, bool>],
+        b: &[std::collections::HashMap<String, bool>],
+    ) -> Vec<std::collections::HashMap<String, bool>> {
+        a.iter()
+            .zip(b.iter())
+            .map(|(snap_a, snap_b)| {
+                let mut merged = snap_a.clone();
+                for (name, moved_b) in snap_b {
+                    let entry = merged.entry(name.clone()).or_insert(false);
+                    *entry = *entry || *moved_b;
+                }
+                merged
+            })
+            .collect()
+    }
+
     // ── Type table ───────────────────────────────────────────────────────
 
     pub fn define_type(&mut self, name: String, info: TypeInfo) {

@@ -8,7 +8,9 @@
 
 use std::collections::HashSet;
 
-use crate::mvl::checker::context::{CapabilityState, TypeBodyInfo, VarInfo, VariantFieldsInfo};
+use crate::mvl::checker::context::{
+    CapabilityState, TypeBodyInfo, TypeEnv, VarInfo, VariantFieldsInfo,
+};
 use crate::mvl::checker::errors::CheckError;
 use crate::mvl::checker::ifc;
 use crate::mvl::checker::types::{resolve, types_compatible, Ty};
@@ -19,6 +21,60 @@ use super::TypeChecker;
 
 impl TypeChecker {
     // ── Expression type inference ─────────────────────────────────────────
+
+    /// Mark `expr` moved if it's a bare identifier of linear type.
+    ///
+    /// List/Set/Map literals and `.insert()`/`.push()`/`.set()` store the
+    /// element/value by raw pointer copy (aliasing), not a deep clone — the
+    /// LLVM backend's typed drops (#1991) now follow that pointer when the
+    /// container is dropped, so reusing the original binding afterward would
+    /// double-free. Mirrors the existing `let t: T = s` move rule (Spec 001
+    /// Req 4) at these additional ownership-transferring call sites.
+    pub(super) fn mark_moved_if_linear(&mut self, expr: &Expr, ty: &Ty) {
+        if ty.is_linear_in_env(&self.env.types) {
+            if let Expr::Ident(name, _) = expr {
+                self.env.mark_moved(name);
+            }
+        }
+    }
+
+    /// Mark List/Set/Map-literal elements/values moved when the literal
+    /// itself is bound to a name (`let`/reassignment) — i.e. actually
+    /// retained and heap-tracked at scope exit, not an ephemeral value
+    /// passed straight into a call and never dropped as a container.
+    ///
+    /// Only named bindings get their typed drop followed into elements
+    /// (#1991); a literal used inline as a call argument (e.g.
+    /// `format("{}", [msg])`) is never registered as a heap local, so
+    /// reusing `msg` in a second such literal is safe and must NOT move —
+    /// scoping this to `let`/assignment mirrors the existing `let t: T = s`
+    /// move rule, which is likewise restricted to bound names.
+    pub(super) fn mark_moved_container_literal(&mut self, init: &Expr, init_ty: &Ty) {
+        match (init, init_ty.unlabeled()) {
+            (Expr::List { elems, .. }, Ty::List(inner))
+            | (Expr::Set { elems, .. }, Ty::Set(inner)) => {
+                if inner.is_linear_in_env(&self.env.types) {
+                    for e in elems {
+                        if let Expr::Ident(name, _) = e {
+                            self.env.mark_moved(name);
+                        }
+                    }
+                }
+            }
+            // Only values are stored by pointer copy (#1991) — keys are
+            // always deep-byte-copied at insert time, so reuse stays safe.
+            (Expr::Map { pairs, .. }, Ty::Map(_, val_ty))
+                if val_ty.is_linear_in_env(&self.env.types) =>
+            {
+                for (_, v) in pairs {
+                    if let Expr::Ident(name, _) = v {
+                        self.env.mark_moved(name);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
 
     pub(super) fn infer_expr(&mut self, expr: &Expr) -> Ty {
         let ty = self.infer_expr_inner(expr);
@@ -216,6 +272,31 @@ impl TypeChecker {
                         self.check_send_capability(first_arg, *span);
                     }
                 }
+                // Ownership transfer (#1991): List/Set/Map `insert`/`push`/`set`
+                // store the argument by raw pointer copy, not a deep clone — the
+                // LLVM backend's typed drops now follow that pointer when the
+                // container is dropped, so reusing the original binding
+                // afterward would double-free. Mirrors the `let t: T = s` move
+                // rule (Spec 001 Req 4) at these ownership-transferring calls.
+                let recv_base = recv_ty.unlabeled();
+                match (recv_base, method.as_str()) {
+                    (Ty::Set(_), "insert") | (Ty::List(_) | Ty::Array(_, _), "push") => {
+                        if let (Some(a), Some(t)) = (args.first(), arg_tys.first()) {
+                            self.mark_moved_if_linear(a, t);
+                        }
+                    }
+                    (Ty::Map(_, _), "insert") => {
+                        if let (Some(a), Some(t)) = (args.get(1), arg_tys.get(1)) {
+                            self.mark_moved_if_linear(a, t);
+                        }
+                    }
+                    (Ty::List(_) | Ty::Array(_, _) | Ty::Set(_), "set") => {
+                        if let (Some(a), Some(t)) = (args.get(1), arg_tys.get(1)) {
+                            self.mark_moved_if_linear(a, t);
+                        }
+                    }
+                    _ => {}
+                }
                 // Stdlib method resolution (#43): dispatch on receiver type.
                 // IFC labels propagate through method results via the receiver label.
                 self.infer_method_call(&recv_ty, method, &arg_tys, *span)
@@ -249,6 +330,10 @@ impl TypeChecker {
                         span: cond.span(),
                     });
                 }
+                // `then`/`else` are mutually exclusive at runtime — see
+                // Stmt::If for why moves must be branch-scoped (#1991
+                // follow-up).
+                let pre_snapshot = self.env.snapshot_moved();
                 let then_ty = self.infer_block_type(then, None);
                 // Promote branch type by joining with the condition's label (#26 implicit flow).
                 let promoted_then = {
@@ -258,7 +343,9 @@ impl TypeChecker {
                     );
                     ifc::apply_label(label, then_ty.unlabeled().clone())
                 };
+                let post_then_snapshot = self.env.snapshot_moved();
                 if let Some(else_expr) = else_ {
+                    self.env.restore_moved(&pre_snapshot);
                     let else_ty = self.infer_expr(else_expr);
                     let promoted_else = {
                         let label = ifc::join_opt(
@@ -267,6 +354,10 @@ impl TypeChecker {
                         );
                         ifc::apply_label(label, else_ty.unlabeled().clone())
                     };
+                    let post_else_snapshot = self.env.snapshot_moved();
+                    let merged =
+                        TypeEnv::union_moved_snapshots(&post_then_snapshot, &post_else_snapshot);
+                    self.env.restore_moved(&merged);
                     if !matches!(promoted_then, Ty::Unknown)
                         && !matches!(promoted_else, Ty::Unknown)
                         && !types_compatible(&promoted_then, &promoted_else)
