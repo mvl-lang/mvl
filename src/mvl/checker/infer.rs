@@ -61,14 +61,14 @@ impl TypeChecker {
                     }
                 }
             }
-            (Expr::Map { pairs, .. }, Ty::Map(_, val_ty)) => {
-                // Only values are stored by pointer copy (#1991) — keys are
-                // always deep-byte-copied at insert time, so reuse stays safe.
-                if val_ty.is_linear_in_env(&self.env.types) {
-                    for (_, v) in pairs {
-                        if let Expr::Ident(name, _) = v {
-                            self.env.mark_moved(name);
-                        }
+            // Only values are stored by pointer copy (#1991) — keys are
+            // always deep-byte-copied at insert time, so reuse stays safe.
+            (Expr::Map { pairs, .. }, Ty::Map(_, val_ty))
+                if val_ty.is_linear_in_env(&self.env.types) =>
+            {
+                for (_, v) in pairs {
+                    if let Expr::Ident(name, _) = v {
+                        self.env.mark_moved(name);
                     }
                 }
             }
