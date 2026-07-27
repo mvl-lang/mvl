@@ -36,6 +36,11 @@ where reduction counting is transparent to the programmer.
 - **Phase 8 default:** budget is fixed per actor; per-class configuration is deferred to Phase 9
 - **Rust backend:** Tokio task-per-actor with `SyncSender` mailbox
 - **LLVM backend:** C-ABI mailbox runtime (`mvl_actor_spawn`/`send`/`drop`)
+- **WASM backend:** single-threaded run-to-completion, mailbox and drain loop emitted into the
+  module itself, dispatch resolved statically per actor type (ADR-0059, #2012). `send` drains at
+  the outermost call, so per-actor FIFO holds and a self-send queues rather than recursing.
+  **No parallelism** — actors are concurrent in semantics only, because `wasi_snapshot_preview1`
+  has no threads
 - Scheduling semantics are **backend-independent** — programs must not rely on execution order
   across actors
 
@@ -528,7 +533,10 @@ Actor semantics MUST be identical across the Rust and LLVM backends (#698):
 - `select` timeout precision is backend-defined but MUST be best-effort
 
 **Tests:** `tests/corpus/12_actors/` — all files in this directory are run against all active
-backends as part of corpus matrix parity validation (`make test-rust-rust`, `make test-rust-llvm`, `make test-mvl-llvm`).
+backends as part of corpus matrix parity validation (`make test-rust-rust`, `make test-rust-llvm`,
+`make test-rust-wasm`, `make test-mvl-llvm`). `ordering_test.mvl` pins the FIFO guarantee above
+with order-sensitive arithmetic, so a reordering scheduler fails rather than coincidentally
+passing.
 
 ## Known Limitations (Phase 8)
 
@@ -556,3 +564,9 @@ These limitations are accepted for Phase 8 and tracked as follow-up work:
   (the runtime's exit cascade fires before `DISC_SHUTDOWN`, #1602), but ordering
   guarantees beyond "no pending messages after main returns" are not promised.
   Stronger ordered shutdown via `Supervisor.stop()` is tracked under #1621.
+- **L8**: no actor parallelism on the WASM backend — `wasi_snapshot_preview1` has no
+  threads, so actors run to completion on the single available thread (ADR-0059, #2012).
+  Message-passing semantics and per-actor FIFO are preserved, but a program that relies on
+  actors making independent progress (a blocking behavior, a supervisor polling a worker)
+  serialises or deadlocks where the Rust/LLVM schedulers would not. Supervision
+  (`link`/`monitor`/`on_exit`/`on_down`) and `select` are not implemented on WASM at all.

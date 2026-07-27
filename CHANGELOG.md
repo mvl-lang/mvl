@@ -1,5 +1,23 @@
 # Changelog
 
+## [Unreleased]
+
+### Added — #2012
+
+- **WASM backend: actor support (spawn, mailbox, behaviors).** `mvl build --backend=wasm` previously stubbed every actor-related function body to `unreachable`, so all three `tests/corpus/12_actors/` files "compiled" while doing nothing. Actors now work: `actor Name { … }` construction, fire-and-forget behavior sends, and `pub test fn` synchronous state reads. `tests/corpus/12_actors` is in `WASM_CORPUS` and all 18 test fns pass with zero stubs.
+- **ADR-0059 — WASM actor scheduling.** Single-threaded run-to-completion on `wasi_snapshot_preview1`; no move to WASI 0.2 / the component model. The decisive constraint is that a `--preload`ed runtime module cannot call back into the emitted module, so the LLVM contract (hand the runtime a dispatch function pointer) is not expressible on WASM. The mailbox and drain loop are therefore emitted into the module, with dispatch resolved as a static switch on an actor type tag — no funcref table, no `call_indirect`, and no new runtime symbols. `send` drains at the outermost call, which keeps per-actor FIFO and makes a self-send queue instead of recursing until the stack traps. Actors on WASM are concurrent in semantics only; the ADR and spec 015 (L8) record that there is no parallelism.
+- **`tests/corpus/12_actors/ordering_test.mvl`.** The existing actor tests accumulate commutatively, so a scheduler that reordered messages would still produce the right answers. These four tests use order-sensitive arithmetic, pinning the FIFO guarantee on all three backends.
+
+### Fixed — #2012
+
+- **Actor `pub test fn` reads were no-ops on the LLVM backend.** Every assertion in `12_actors/` was vacuous — `assert_eq(c.get_count(), 99999)` passed. Three defects stacked up, each hiding the next:
+  - *Actor method calls typed as `Unknown`.* Actor methods are deliberately absent from the checker's `method_table` (their effects run on the actor, not the caller), so `infer_method_call` fell through to `Unknown`. `assert_eq` bails on an untyped operand and emitted nothing at all. The checker now records actor method return types: behaviors yield `Unit`, `pub test fn` yields its declared type. This also fixes comparison-operator selection for `Bool`/`String` reads on both LLVM and WASM.
+  - *`pub test fn` lowered to a fire-and-forget send.* It occupied a behavior discriminant and discarded the result. It now routes through a new `_mvl_actor_sync_call`, which enqueues the message with a reply-cell address in `args[argc]` and blocks until the dispatch arm answers via `_mvl_actor_sync_reply`. Going through the mailbox is what makes the read observe every message the caller sent before it. The shutdown and panic paths release pending reply cells instead of leaving a caller spinning forever.
+  - *`self.field = value` was silently dropped.* `TirStmt::Assign` handled only `LValue::Ident`; `LValue::Field` fell off the end, so behavior bodies computed the new value and never stored it — actor state never changed. A field assignment on a non-`self` base is now a hard error rather than a silent no-op.
+- **WASM backend: string literals in actor bodies and spawn initialisers were never interned.** The literal-collection walker had no `Spawn` arm and never visited actor method bodies (which are not in `tir.fns`), so `actor Label { text: "" }` emitted a `;; missing literal` marker and produced an invalid module. The walker now covers `Spawn`, `FieldAccess`, `Propagate`, `Consume`, `Borrow`, and every actor method body.
+- **WASM backend: overwriting a `String` actor field leaked the old `MvlString`.** Field assignment now drops the previous handle before storing the new one.
+- **`make test-*` linked a stale LLVM runtime.** The backend resolves `libmvl_runtime_llvm` from the installed XDG runtime directory before the build tree, so newly added C-ABI symbols were missing and the failure looked like a codegen bug. The Makefile now pins `MVL_RUNTIME_LLVM_LIB` to the freshly built dylib, mirroring what `test-rust-wasm` already does with `MVL_RUNTIME_WASM`.
+
 ## [1.7.1] - 2026-07-27
 
 ### Fixed — #2003 #2004 #2010

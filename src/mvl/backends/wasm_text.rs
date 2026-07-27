@@ -43,7 +43,14 @@
 //! - Higher-order fns / closures / generic monomorphization
 //! - String equality / concat / `MvlString` refcount — phase 2 runtime
 //! - Other WASI hostcalls, `extern "wasm"` ABI — separate ticket
-//! - Actors — phase 6+
+//!
+//! Actors (#2012, ADR-0059): supported for spawn, behaviour sends, and
+//! `pub test fn` synchronous reads. Single-threaded run-to-completion — the
+//! mailbox and drain loop are emitted into the module (the `--preload` runtime
+//! cannot call back into it), dispatch is a static switch on an actor type tag,
+//! and `send` drains at the outermost call so per-actor FIFO holds and a
+//! self-send queues instead of recursing. No parallelism, and no
+//! `link`/`monitor`/`select`/`on_exit` supervision yet.
 
 use std::cell::Cell;
 use std::collections::HashMap;
@@ -51,9 +58,10 @@ use std::collections::HashMap;
 use super::{AssertMode, Backend};
 use crate::mvl::checker::types::Ty;
 use crate::mvl::ir::{
-    ArithOp, BinaryOp, CmpOp, GenericParam, LValue, Literal, LogicOp, Pattern, RefExpr, TirBlock,
-    TirElseBranch, TirExpr, TirExprKind, TirFn, TirMatchArm, TirMatchBody, TirParam, TirProgram,
-    TirStmt, TirTypeBody, TirTypeDecl, TirVariantFields, UnaryOp,
+    ArithOp, BinaryOp, CmpOp, GenericParam, LValue, Literal, LogicOp, Pattern, RefExpr,
+    TirActorDecl, TirActorMethod, TirBlock, TirElseBranch, TirExpr, TirExprKind, TirFn,
+    TirMatchArm, TirMatchBody, TirParam, TirProgram, TirStmt, TirTypeBody, TirTypeDecl,
+    TirVariantFields, UnaryOp,
 };
 
 pub struct WasmTextCompiler {
@@ -117,6 +125,41 @@ struct PayloadEnumInfo {
 /// transition itself was declared `audit`.
 type AuditRelabels = HashMap<String, (Option<String>, Option<String>)>;
 
+/// One actor's emission metadata (#2012, ADR-0059).
+///
+/// The handle value on the WASM stack is just the actor's state pointer — the
+/// same `i32` a struct of the same shape would be — so the state layout is
+/// registered in `struct_layouts` under the actor's own name and field
+/// reads/writes go through the ordinary struct path unchanged.
+///
+/// `tag` identifies the actor type inside a queued message, which is what lets
+/// one drain loop dispatch a heterogeneous queue with direct calls instead of a
+/// funcref table (ADR-0059 §2).
+#[derive(Debug, Clone)]
+struct ActorInfo {
+    name: String,
+    snake: String,
+    tag: i32,
+    /// Public non-test behaviours in declaration order; index = discriminant.
+    behaviors: Vec<TirActorMethod>,
+    /// `pub test fn` synchronous reads, dispatched as direct calls.
+    test_methods: Vec<TirActorMethod>,
+}
+
+/// Byte layout of one queued actor message. Mirrors the LLVM runtime's
+/// `MvlMsg` (8 argument slots), plus the receiver and type tag that the
+/// in-module drain loop needs (there is no runtime-side actor cell here).
+const ACTOR_MSG_STATE: u32 = 0; // i32 — receiver state pointer
+const ACTOR_MSG_TAG: u32 = 4; // i32 — actor type tag
+const ACTOR_MSG_DISC: u32 = 8; // i32 — behaviour discriminant
+const ACTOR_MSG_ARGS: u32 = 16; // 8 × i64 argument slots
+const ACTOR_MAX_ARGS: u32 = 8;
+const ACTOR_MSG_SIZE: u32 = ACTOR_MSG_ARGS + ACTOR_MAX_ARGS * 8;
+/// Queue depth. Drain-at-send empties the queue at every statement boundary, so
+/// this only has to cover the messages one behaviour chain enqueues. Overflow
+/// traps rather than silently dropping (ADR-0059 §5).
+const ACTOR_QUEUE_SLOTS: u32 = 256;
+
 /// Shared per-emission context. Bundles the flags/tables threaded through
 /// every emit_*  free function so their signatures stay stable as the
 /// spike grows (or shrinks). Uses `Cell` for the label counter so the
@@ -168,6 +211,13 @@ struct Ctx<'a> {
     /// Set by `emit_fn` before body emission; read by `emit_stmt(Return)`
     /// to emit drops on explicit-return paths and by loop back-edges.
     fn_locals: std::cell::RefCell<Vec<(String, Ty)>>,
+    /// Actor metadata by actor type name (#2012). Empty for programs with no
+    /// actors, which is what keeps the actor scheduler out of every module.
+    actors: &'a HashMap<String, ActorInfo>,
+    /// Type name bound to `self` while emitting an actor method body — the only
+    /// way `self.field = …` can find its layout, since an `LValue` carries no
+    /// type (#2012).
+    self_type: std::cell::RefCell<Option<String>>,
 }
 
 impl Ctx<'_> {
@@ -352,9 +402,14 @@ impl Backend for WasmTextCompiler {
             .map(|rd| (rd.name.clone(), (rd.from.clone(), rd.to.clone())))
             .collect();
 
-        let (literals, heap_start) = collect_literals(&fns, needs_wasi, &audit_relabels);
+        let (literals, heap_start) =
+            collect_literals(&fns, &tir.actors, needs_wasi, &audit_relabels);
         let (enum_types, enum_variants) = collect_enums(&tir.types);
-        let struct_layouts = collect_structs(&tir.types);
+        let mut struct_layouts = collect_structs(&tir.types);
+        // Actor state layouts land in `struct_layouts` so the handle behaves
+        // like a struct pointer everywhere (#2012).
+        let actors = collect_actors(&tir.actors, &mut struct_layouts);
+        let struct_layouts = struct_layouts;
         let payload_enums = collect_payload_enums(&tir.types);
         let type_aliases = collect_type_aliases(&tir.types);
         let empty_subst: HashMap<String, Ty> = HashMap::new();
@@ -379,6 +434,8 @@ impl Backend for WasmTextCompiler {
             string_params: std::cell::RefCell::new(std::collections::HashSet::new()),
             assert_mode: self.assert_mode,
             fn_locals: std::cell::RefCell::new(Vec::new()),
+            actors: &actors,
+            self_type: std::cell::RefCell::new(None),
         };
 
         // Collect unique generic-function instantiations needed by the corpus fns.
@@ -393,6 +450,12 @@ impl Backend for WasmTextCompiler {
         // Emit monomorphized copies of generic functions before the regular fns.
         for (generic_fn, type_subst, mangled) in &instantiations {
             emit_generic_fn(&mut fns_out, generic_fn, type_subst, mangled, &ctx);
+        }
+
+        // Actor behaviours, dispatch, and the in-module scheduler (#2012).
+        if !actors.is_empty() {
+            emit_actor_decls(&mut fns_out, &tir.actors, &ctx);
+            emit_actor_scheduler(&mut fns_out, &ctx);
         }
 
         for f in &fns {
@@ -1136,6 +1199,14 @@ fn collect_locals_ctx_expr(expr: &TirExpr, locals: &mut Vec<(String, Ty)>, ctx: 
                 collect_locals_ctx_expr(e, locals, ctx);
             }
         }
+        // `actor Name { … }` — state-pointer temp, same shape as a struct
+        // construct's `__st_*` (#2012).
+        TirExprKind::Spawn { fields, .. } => {
+            locals.push((struct_temp_name(expr), Ty::Bool)); // i32 placeholder
+            for (_, e) in fields {
+                collect_locals_ctx_expr(e, locals, ctx);
+            }
+        }
         TirExprKind::Propagate(inner) => collect_locals_ctx_expr(inner, locals, ctx),
         TirExprKind::If { cond, then, else_ } => {
             collect_locals_ctx_expr(cond, locals, ctx);
@@ -1179,7 +1250,18 @@ fn collect_locals_ctx_expr(expr: &TirExpr, locals: &mut Vec<(String, Ty)>, ctx: 
                 collect_locals_ctx_expr(a, locals, ctx);
             }
         }
-        TirExprKind::MethodCall { receiver, args, .. } => {
+        TirExprKind::MethodCall {
+            receiver,
+            method,
+            args,
+        } => {
+            // Behaviour sends need a message-slot temp (#2012). Sync `pub test
+            // fn` reads are plain calls and need nothing.
+            if let Some(info) = actor_name_of(&receiver.ty, ctx) {
+                if info.behaviors.iter().any(|m| m.name == *method) {
+                    locals.push((actor_msg_temp_name(expr), Ty::Bool)); // i32 placeholder
+                }
+            }
             collect_locals_ctx_expr(receiver, locals, ctx);
             for a in args {
                 collect_locals_ctx_expr(a, locals, ctx);
@@ -1472,15 +1554,19 @@ fn emit_stmt(out: &mut String, stmt: &TirStmt, ctx: &Ctx) {
                 out.push_str(&format!("    ;; unsupported let pattern: {pattern:?}\n"));
             }
         }
-        // `x = value;` — for `ref` locals. Only bare-identifier targets.
-        TirStmt::Assign { target, value, .. } => {
-            if let LValue::Ident(name, _) = target {
+        // `x = value;` for `ref` locals, and `base.field = value;` for
+        // heap-allocated struct / actor-state pointers (#2012). The latter is
+        // a plain typed store — WASM struct values *are* pointers, so unlike
+        // the LLVM backend there is no SSA-aggregate obstacle here.
+        TirStmt::Assign { target, value, .. } => match target {
+            LValue::Ident(name, _) => {
                 emit_expr(out, value, ctx);
                 out.push_str(&format!("    local.set ${name}\n"));
-            } else {
-                out.push_str(&format!("    ;; unsupported assign target: {target:?}\n"));
             }
-        }
+            LValue::Field { base, field, .. } => {
+                emit_field_assign(out, base, field, value, ctx);
+            }
+        },
         // `if cond { then } else { else_ }` — statement form.
         //
         // The TIR lowerer emits `TirStmt::If` (not `Expr(If)`) for trailing
@@ -1780,6 +1866,24 @@ fn emit_expr(out: &mut String, expr: &TirExpr, ctx: &Ctx) {
                 out.push_str(&format!("    call ${mangled}\n"));
             } else {
                 out.push_str(&format!("    call ${name}\n"));
+            }
+        }
+        // Actor behaviour send / `pub test fn` read. Checked before the builtin
+        // method table so a behaviour never collides with a stdlib method name
+        // (mirrors the LLVM backend's actor fast path).
+        TirExprKind::MethodCall {
+            receiver,
+            method,
+            args,
+        } if actor_name_of(&receiver.ty, ctx).is_some() => {
+            let info = actor_name_of(&receiver.ty, ctx)
+                .expect("guarded above")
+                .clone();
+            if !emit_actor_method_call(out, &info, receiver, method, args, expr, ctx) {
+                out.push_str(&format!(
+                    "    ;; unsupported actor method: {}.{method}\n",
+                    info.name
+                ));
             }
         }
         TirExprKind::MethodCall {
@@ -2230,6 +2334,10 @@ fn emit_expr(out: &mut String, expr: &TirExpr, ctx: &Ctx) {
                 }
                 out.push_str("    call $_mvl_audit_emit_relabel\n");
             }
+        }
+        // `actor Name { field: value }` (#2012).
+        TirExprKind::Spawn { actor_type, fields } => {
+            emit_actor_spawn(out, actor_type, fields, expr, ctx);
         }
         other => {
             out.push_str(&format!("    ;; unsupported expr: {other:?}\n"));
@@ -3866,6 +3974,8 @@ fn emit_generic_fn(
         string_params: std::cell::RefCell::new(std::collections::HashSet::new()),
         assert_mode: ctx.assert_mode,
         fn_locals: std::cell::RefCell::new(Vec::new()),
+        actors: ctx.actors,
+        self_type: std::cell::RefCell::new(ctx.self_type.borrow().clone()),
     };
 
     // Set up string_params for params whose concrete type is String.
@@ -4044,6 +4154,487 @@ fn collect_structs(types: &[TirTypeDecl]) -> HashMap<String, StructLayout> {
     map
 }
 
+// ── Actor collection and emission (#2012, ADR-0059) ─────────────────────
+
+/// Build the actor registry and register each actor's state layout in
+/// `layouts` under the actor's own name.
+///
+/// Registering the layout there is deliberate: an actor handle is represented
+/// as its state pointer, so `wasm_ty`, `emit_field_access`, and `is_i32` all
+/// treat `Counter` exactly as they treat a struct — no actor-specific cases in
+/// any of them.
+fn collect_actors(
+    actors: &[TirActorDecl],
+    layouts: &mut HashMap<String, StructLayout>,
+) -> HashMap<String, ActorInfo> {
+    let mut map = HashMap::new();
+    for (idx, ad) in actors.iter().enumerate() {
+        let mut offset = 0u32;
+        let mut slots = Vec::new();
+        for f in &ad.fields {
+            let size = field_byte_size(&f.ty);
+            let align = field_alignment(&f.ty);
+            offset = (offset + align - 1) & !(align - 1);
+            slots.push(FieldSlot {
+                name: f.name.clone(),
+                offset,
+                ty: f.ty.clone(),
+            });
+            offset += size;
+        }
+        let total = (offset + 7) & !7;
+        layouts.insert(
+            ad.name.clone(),
+            StructLayout {
+                total_size: total.max(8),
+                fields: slots,
+            },
+        );
+
+        let behaviors: Vec<TirActorMethod> = ad
+            .methods
+            .iter()
+            .filter(|m| m.is_public && !m.is_test)
+            .cloned()
+            .collect();
+        let test_methods: Vec<TirActorMethod> = ad
+            .methods
+            .iter()
+            .filter(|m| m.is_public && m.is_test)
+            .cloned()
+            .collect();
+
+        map.insert(
+            ad.name.clone(),
+            ActorInfo {
+                name: ad.name.clone(),
+                snake: actor_name_to_snake(&ad.name),
+                tag: idx as i32,
+                behaviors,
+                test_methods,
+            },
+        );
+    }
+    map
+}
+
+/// Emit every actor's method bodies plus its behaviour-discriminant dispatch.
+fn emit_actor_decls(out: &mut String, actors: &[TirActorDecl], ctx: &Ctx) {
+    // Deterministic order — the emitted WAT must not depend on HashMap
+    // iteration.
+    let mut sorted: Vec<&TirActorDecl> = actors.iter().collect();
+    sorted.sort_by(|a, b| a.name.cmp(&b.name));
+    for ad in sorted {
+        let Some(info) = ctx.actors.get(&ad.name) else {
+            continue;
+        };
+        for m in &ad.methods {
+            emit_actor_method(out, info, m, ctx);
+        }
+        emit_actor_dispatch(out, info, ctx);
+    }
+}
+
+/// Emit one actor method as `$<snake>_<method>(self, params…)`.
+///
+/// `self` is the state pointer, so `self.field` reads and writes reuse the
+/// struct field path — see [`collect_actors`].
+fn emit_actor_method(out: &mut String, info: &ActorInfo, m: &TirActorMethod, ctx: &Ctx) {
+    *ctx.self_type.borrow_mut() = Some(info.name.clone());
+    *ctx.string_params.borrow_mut() = m
+        .params
+        .iter()
+        .filter(|p| matches!(&p.ty, Ty::String))
+        .map(|p| p.name.clone())
+        .collect();
+
+    let fn_name = format!("{}_{}", info.snake, m.name);
+    out.push_str(&format!("  (func ${fn_name} (param $self i32)"));
+    for p in &m.params {
+        if matches!(&p.ty, Ty::String) {
+            out.push_str(&format!(
+                " (param ${}_ptr i32) (param ${}_len i32)",
+                p.name, p.name
+            ));
+        } else {
+            out.push_str(&format!(" (param ${} {})", p.name, wasm_ty(&p.ty, ctx)));
+        }
+    }
+    if matches!(m.ret_ty, Ty::String) {
+        out.push_str(" (result i32 i32)");
+    } else if !matches!(m.ret_ty, Ty::Unit) {
+        out.push_str(&format!(" (result {})", wasm_ty(&m.ret_ty, ctx)));
+    }
+    out.push('\n');
+
+    let mut body = String::new();
+    let mut locals: Vec<(String, Ty)> = Vec::new();
+    collect_locals_block(&m.body, &mut locals);
+    collect_locals_ctx(&m.body, &mut locals, ctx);
+    {
+        let mut seen = std::collections::HashSet::new();
+        locals.retain(|(name, _)| seen.insert(name.clone()));
+    }
+    for (name, ty) in &locals {
+        body.push_str(&format!("    (local ${} {})\n", name, wasm_ty(ty, ctx)));
+    }
+    *ctx.fn_locals.borrow_mut() = locals.clone();
+    emit_block(&mut body, &m.body, ctx);
+
+    if body.contains(";; unsupported") {
+        out.push_str("    ;; body stubbed — contained unsupported constructs\n");
+        out.push_str("    unreachable\n");
+    } else {
+        out.push_str(&body);
+    }
+    out.push_str("  )\n");
+    *ctx.self_type.borrow_mut() = None;
+}
+
+/// Emit `base.field = value` as a typed store through the base pointer.
+///
+/// `LValue` carries no type, so the base's struct name comes from
+/// [`Ctx::self_type`] for `self` and from the collected locals otherwise.
+fn emit_field_assign(out: &mut String, base: &LValue, field: &str, value: &TirExpr, ctx: &Ctx) {
+    let LValue::Ident(base_name, _) = base else {
+        out.push_str("    ;; unsupported nested field assignment target\n");
+        return;
+    };
+
+    let type_name = if base_name == "self" {
+        ctx.self_type.borrow().clone()
+    } else {
+        ctx.fn_locals
+            .borrow()
+            .iter()
+            .find(|(n, _)| n == base_name)
+            .and_then(|(_, ty)| named_type_name(ty))
+    };
+    let Some(type_name) = type_name else {
+        out.push_str(&format!(
+            "    ;; unsupported assign target: unresolved base type for {base_name}.{field}\n"
+        ));
+        return;
+    };
+    let Some(layout) = ctx.struct_layouts.get(&type_name) else {
+        out.push_str(&format!(
+            "    ;; unsupported assign target: unknown struct {type_name}\n"
+        ));
+        return;
+    };
+    let Some(slot) = layout.fields.iter().find(|s| s.name == field).cloned() else {
+        out.push_str(&format!("    ;; unknown field: {type_name}.{field}\n"));
+        return;
+    };
+
+    // Overwriting a *MvlString handle would leak the old allocation, so release
+    // it first. `_mvl_string_drop` is refcounted and null-safe.
+    if matches!(slot.ty, Ty::String) {
+        ctx.needs_runtime.set(true);
+        out.push_str(&format!("    local.get ${base_name}\n"));
+        out.push_str(&format!("    i32.load offset={}\n", slot.offset));
+        out.push_str("    call $_mvl_string_drop\n");
+    }
+
+    out.push_str(&format!("    local.get ${base_name}\n"));
+    emit_struct_store(out, value, &slot.ty, slot.offset, ctx);
+}
+
+/// Strip wrappers and return the underlying `Ty::Named` name, if any.
+fn named_type_name(ty: &Ty) -> Option<String> {
+    let mut cur = ty;
+    loop {
+        match cur {
+            Ty::Labeled(_, inner) | Ty::Refined(inner, _) | Ty::Ref(_, inner) => cur = inner,
+            Ty::Named(n, _) => return Some(n.clone()),
+            _ => return None,
+        }
+    }
+}
+
+/// Emit `$<snake>_dispatch(state, disc, args)` — a discriminant switch that
+/// unpacks each behaviour's arguments from the message slot and calls it.
+fn emit_actor_dispatch(out: &mut String, info: &ActorInfo, ctx: &Ctx) {
+    out.push_str(&format!(
+        "  (func ${}_dispatch (param $state i32) (param $disc i32) (param $args i32)\n",
+        info.snake
+    ));
+    // Scratch for unpacking a *MvlString argument into (ptr, len). Declared
+    // unconditionally — an unused local is free.
+    out.push_str("    (local $__amstr i32)\n");
+    for (disc, m) in info.behaviors.iter().enumerate() {
+        out.push_str("    local.get $disc\n");
+        out.push_str(&format!("    i32.const {disc}\n"));
+        out.push_str("    i32.eq\n");
+        out.push_str("    if\n");
+        out.push_str("      local.get $state\n");
+        for (j, p) in m.params.iter().enumerate() {
+            let off = ACTOR_MSG_ARGS + (j as u32) * 8;
+            emit_actor_arg_load(out, &p.ty, off, ctx);
+        }
+        out.push_str(&format!("      call ${}_{}\n", info.snake, m.name));
+        // Behaviours are `Unit`; a non-Unit body value would be left dangling.
+        if !matches!(m.ret_ty, Ty::Unit) {
+            if matches!(m.ret_ty, Ty::String) {
+                out.push_str("      drop\n      drop\n");
+            } else {
+                out.push_str("      drop\n");
+            }
+        }
+        out.push_str("      return\n");
+        out.push_str("    end\n");
+    }
+    out.push_str("  )\n");
+}
+
+/// Load one behaviour argument out of a message slot, widening back to the
+/// parameter's WASM representation. Slots are uniformly 8 bytes.
+fn emit_actor_arg_load(out: &mut String, ty: &Ty, off: u32, ctx: &Ctx) {
+    match ty {
+        Ty::String => {
+            // Stored as a *MvlString handle; unpack to (ptr, len).
+            ctx.needs_runtime.set(true);
+            out.push_str("      local.get $args\n");
+            out.push_str(&format!("      i32.load offset={off}\n"));
+            out.push_str("      local.set $__amstr\n");
+            out.push_str("      local.get $__amstr\n");
+            out.push_str(&format!("      i32.load offset={MVL_STRING_OFFSET_PTR}\n"));
+            out.push_str("      local.get $__amstr\n");
+            out.push_str(&format!("      i32.load offset={MVL_STRING_OFFSET_LEN}\n"));
+        }
+        Ty::Float => {
+            out.push_str("      local.get $args\n");
+            out.push_str(&format!("      f64.load offset={off}\n"));
+        }
+        _ if is_i32(ty, ctx) => {
+            out.push_str("      local.get $args\n");
+            out.push_str(&format!("      i32.load offset={off}\n"));
+        }
+        _ => {
+            out.push_str("      local.get $args\n");
+            out.push_str(&format!("      i64.load offset={off}\n"));
+        }
+    }
+}
+
+/// Emit the module-wide actor scheduler: message queue globals, the enqueue
+/// helper, and the drain loop with its re-entrancy guard.
+///
+/// Single-threaded run-to-completion (ADR-0059): `send` appends and then drains
+/// unless a drain is already running. The guard is what makes a self-send queue
+/// instead of recursing into dispatch until the stack traps.
+fn emit_actor_scheduler(out: &mut String, ctx: &Ctx) {
+    let queue_bytes = ACTOR_QUEUE_SLOTS * ACTOR_MSG_SIZE;
+
+    out.push_str("  (global $__actor_q (mut i32) (i32.const 0))\n");
+    out.push_str("  (global $__actor_head (mut i32) (i32.const 0))\n");
+    out.push_str("  (global $__actor_tail (mut i32) (i32.const 0))\n");
+    out.push_str("  (global $__actor_draining (mut i32) (i32.const 0))\n");
+
+    // Reserve the next free message slot, allocating the queue on first use.
+    out.push_str("  (func $__mvl_actor_slot (result i32)\n");
+    out.push_str("    (local $slot i32)\n");
+    out.push_str("    global.get $__actor_q\n");
+    out.push_str("    i32.eqz\n");
+    out.push_str("    if\n");
+    out.push_str(&format!("      i32.const {queue_bytes}\n"));
+    out.push_str("      call $_mvl_struct_alloc\n");
+    out.push_str("      global.set $__actor_q\n");
+    out.push_str("    end\n");
+    // Overflow traps — a silent drop on a single-threaded target would be a
+    // compiler bug, not backpressure (ADR-0059 §5).
+    out.push_str("    global.get $__actor_tail\n");
+    out.push_str(&format!("    i32.const {ACTOR_QUEUE_SLOTS}\n"));
+    out.push_str("    i32.ge_u\n");
+    out.push_str("    if\n");
+    out.push_str("      unreachable\n");
+    out.push_str("    end\n");
+    out.push_str("    global.get $__actor_q\n");
+    out.push_str("    global.get $__actor_tail\n");
+    out.push_str(&format!("    i32.const {ACTOR_MSG_SIZE}\n"));
+    out.push_str("    i32.mul\n");
+    out.push_str("    i32.add\n");
+    out.push_str("    local.set $slot\n");
+    out.push_str("    global.get $__actor_tail\n");
+    out.push_str("    i32.const 1\n");
+    out.push_str("    i32.add\n");
+    out.push_str("    global.set $__actor_tail\n");
+    out.push_str("    local.get $slot\n");
+    out.push_str("  )\n");
+
+    // Route one message to its actor type's dispatch. Static switch on the
+    // type tag — no funcref table (ADR-0059 §2).
+    out.push_str("  (func $__mvl_actor_route (param $slot i32)\n");
+    let mut sorted: Vec<&ActorInfo> = ctx.actors.values().collect();
+    sorted.sort_by_key(|a| a.tag);
+    for info in sorted {
+        out.push_str("    local.get $slot\n");
+        out.push_str(&format!("    i32.load offset={ACTOR_MSG_TAG}\n"));
+        out.push_str(&format!("    i32.const {}\n", info.tag));
+        out.push_str("    i32.eq\n");
+        out.push_str("    if\n");
+        out.push_str("      local.get $slot\n");
+        out.push_str(&format!("      i32.load offset={ACTOR_MSG_STATE}\n"));
+        out.push_str("      local.get $slot\n");
+        out.push_str(&format!("      i32.load offset={ACTOR_MSG_DISC}\n"));
+        out.push_str("      local.get $slot\n");
+        out.push_str(&format!("      call ${}_dispatch\n", info.snake));
+        out.push_str("      return\n");
+        out.push_str("    end\n");
+    }
+    out.push_str("  )\n");
+
+    // Drain to exhaustion, unless we are already inside a drain.
+    out.push_str("  (func $__mvl_actor_pump\n");
+    out.push_str("    global.get $__actor_draining\n");
+    out.push_str("    if\n");
+    out.push_str("      return\n");
+    out.push_str("    end\n");
+    out.push_str("    i32.const 1\n");
+    out.push_str("    global.set $__actor_draining\n");
+    out.push_str("    block $done\n");
+    out.push_str("      loop $next\n");
+    out.push_str("        global.get $__actor_head\n");
+    out.push_str("        global.get $__actor_tail\n");
+    out.push_str("        i32.ge_u\n");
+    out.push_str("        br_if $done\n");
+    out.push_str("        global.get $__actor_q\n");
+    out.push_str("        global.get $__actor_head\n");
+    out.push_str(&format!("        i32.const {ACTOR_MSG_SIZE}\n"));
+    out.push_str("        i32.mul\n");
+    out.push_str("        i32.add\n");
+    out.push_str("        global.get $__actor_head\n");
+    out.push_str("        i32.const 1\n");
+    out.push_str("        i32.add\n");
+    out.push_str("        global.set $__actor_head\n");
+    out.push_str("        call $__mvl_actor_route\n");
+    out.push_str("        br $next\n");
+    out.push_str("      end\n");
+    out.push_str("    end\n");
+    // Queue is empty again — reset so the fixed slot region is reusable.
+    out.push_str("    i32.const 0\n");
+    out.push_str("    global.set $__actor_head\n");
+    out.push_str("    i32.const 0\n");
+    out.push_str("    global.set $__actor_tail\n");
+    out.push_str("    i32.const 0\n");
+    out.push_str("    global.set $__actor_draining\n");
+    out.push_str("  )\n");
+}
+
+/// Emit `actor Name { field: value, … }` — allocate state, initialise fields,
+/// leave the state pointer (the handle) on the stack.
+fn emit_actor_spawn(
+    out: &mut String,
+    actor_type: &str,
+    fields: &[(String, TirExpr)],
+    expr: &TirExpr,
+    ctx: &Ctx,
+) {
+    let Some(layout) = ctx.struct_layouts.get(actor_type) else {
+        out.push_str(&format!("    ;; unsupported actor spawn: {actor_type}\n"));
+        return;
+    };
+    ctx.needs_runtime.set(true);
+    let temp = struct_temp_name(expr);
+    out.push_str(&format!("    i32.const {}\n", layout.total_size));
+    out.push_str("    call $_mvl_struct_alloc\n");
+    out.push_str(&format!("    local.set ${temp}\n"));
+    for slot in &layout.fields {
+        let Some(val) = fields.iter().find(|(n, _)| n == &slot.name).map(|(_, e)| e) else {
+            continue;
+        };
+        out.push_str(&format!("    local.get ${temp}\n"));
+        emit_struct_store(out, val, &slot.ty, slot.offset, ctx);
+    }
+    out.push_str(&format!("    local.get ${temp}\n"));
+}
+
+/// Emit a call on an actor handle: either a fire-and-forget behaviour send or a
+/// synchronous `pub test fn` read.
+///
+/// Returns `false` when `method` is not a public method of `actor_type`, so the
+/// caller can fall through to the ordinary method-dispatch table.
+fn emit_actor_method_call(
+    out: &mut String,
+    info: &ActorInfo,
+    receiver: &TirExpr,
+    method: &str,
+    args: &[TirExpr],
+    expr: &TirExpr,
+    ctx: &Ctx,
+) -> bool {
+    // Synchronous read. The queue is empty at every statement boundary
+    // (drain-at-send), so this is a plain direct call — no reply cell needed,
+    // unlike the LLVM backend's `_mvl_actor_sync_call` (ADR-0059 §4).
+    if let Some(m) = info.test_methods.iter().find(|m| m.name == method) {
+        emit_expr(out, receiver, ctx);
+        for a in args {
+            emit_expr(out, a, ctx);
+        }
+        out.push_str(&format!("    call ${}_{}\n", info.snake, m.name));
+        return true;
+    }
+
+    let Some(disc) = info.behaviors.iter().position(|m| m.name == method) else {
+        return false;
+    };
+    let m = &info.behaviors[disc];
+    if m.params.len() as u32 > ACTOR_MAX_ARGS {
+        out.push_str(&format!(
+            "    ;; unsupported actor behavior arity: {}.{method}\n",
+            info.name
+        ));
+        return true;
+    }
+    ctx.needs_runtime.set(true);
+
+    let slot = actor_msg_temp_name(expr);
+    out.push_str("    call $__mvl_actor_slot\n");
+    out.push_str(&format!("    local.set ${slot}\n"));
+    // Receiver, type tag, discriminant.
+    out.push_str(&format!("    local.get ${slot}\n"));
+    emit_expr(out, receiver, ctx);
+    out.push_str(&format!("    i32.store offset={ACTOR_MSG_STATE}\n"));
+    out.push_str(&format!("    local.get ${slot}\n"));
+    out.push_str(&format!("    i32.const {}\n", info.tag));
+    out.push_str(&format!("    i32.store offset={ACTOR_MSG_TAG}\n"));
+    out.push_str(&format!("    local.get ${slot}\n"));
+    out.push_str(&format!("    i32.const {disc}\n"));
+    out.push_str(&format!("    i32.store offset={ACTOR_MSG_DISC}\n"));
+    // Arguments, one 8-byte slot each.
+    for (j, (param, arg)) in m.params.iter().zip(args.iter()).enumerate() {
+        let off = ACTOR_MSG_ARGS + (j as u32) * 8;
+        out.push_str(&format!("    local.get ${slot}\n"));
+        emit_struct_store(out, arg, &param.ty, off, ctx);
+    }
+    out.push_str("    call $__mvl_actor_pump\n");
+    true
+}
+
+/// Resolve `ty` to an actor name, stripping label/refinement/ref wrappers.
+fn actor_name_of<'c>(ty: &Ty, ctx: &'c Ctx) -> Option<&'c ActorInfo> {
+    let mut cur = ty;
+    loop {
+        match cur {
+            Ty::Labeled(_, inner) | Ty::Refined(inner, _) | Ty::Ref(_, inner) => cur = inner,
+            Ty::Named(n, _) => return ctx.actors.get(n.as_str()),
+            _ => return None,
+        }
+    }
+}
+
+/// `actor Name` → `name` (snake_case). Mirrors the Rust backend's
+/// `actor_name_to_snake` so all three backends agree on emitted symbol names.
+fn actor_name_to_snake(name: &str) -> String {
+    crate::mvl::backends::rust::emit_actors::actor_name_to_snake(name)
+}
+
+/// Per-send message-slot local name. Span-keyed so the local-collection pass
+/// and the emit path agree.
+fn actor_msg_temp_name(expr: &TirExpr) -> String {
+    format!("__am_{}_{}", expr.span.offset, expr.span.len)
+}
+
 // ── Payload-enum layout collection (#1821) ──────────────────────────────
 //
 // Enums with at least one non-Unit variant get a heap-allocated layout:
@@ -4095,6 +4686,7 @@ fn collect_payload_enums(types: &[TirTypeDecl]) -> HashMap<String, PayloadEnumIn
 /// don't overwrite the data section.
 fn collect_literals(
     fns: &[&TirFn],
+    actors: &[TirActorDecl],
     needs_wasi: bool,
     audit_relabels: &AuditRelabels,
 ) -> (HashMap<String, (u32, u32)>, u32) {
@@ -4111,6 +4703,13 @@ fn collect_literals(
     }
     for f in fns {
         collect_block(&f.body, &mut map, &mut next, audit_relabels);
+    }
+    // Actor method bodies are emitted as functions but are not in `tir.fns`, so
+    // their literals need interning here too (#2012).
+    for ad in actors {
+        for m in &ad.methods {
+            collect_block(&m.body, &mut map, &mut next, audit_relabels);
+        }
     }
     (map, next)
 }
@@ -4238,7 +4837,7 @@ fn collect_expr(
                 collect_expr(v, map, next, audit_relabels);
             }
         }
-        TirExprKind::Construct { fields, .. } => {
+        TirExprKind::Construct { fields, .. } | TirExprKind::Spawn { fields, .. } => {
             for (_, v) in fields {
                 collect_expr(v, map, next, audit_relabels);
             }
@@ -4273,6 +4872,12 @@ fn collect_expr(
                     }
                 }
             }
+        }
+        TirExprKind::Propagate(inner)
+        | TirExprKind::Consume(inner)
+        | TirExprKind::Borrow { expr: inner, .. } => collect_expr(inner, map, next, audit_relabels),
+        TirExprKind::FieldAccess { expr: inner, .. } => {
+            collect_expr(inner, map, next, audit_relabels)
         }
         _ => {}
     }
@@ -4420,3 +5025,166 @@ const WASI_HELPERS: &str = r#"  (func $mvl_alloc (param $n i32) (result i32)
     (i32.store (i32.const 4) (i32.const 1))
     (drop (call $fd_write (i32.const 2) (i32.const 0) (i32.const 1) (i32.const 8))))
 "#;
+
+// ── Emitter tests ────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::mvl::parser::Parser;
+
+    /// Compile `src` straight to WAT, mirroring the LLVM emitter's test helper.
+    fn compile(src: &str) -> String {
+        let (mut p, errs) = Parser::new(src);
+        assert!(errs.is_empty(), "lex errors: {errs:?}");
+        let prog = p.parse_program();
+        assert!(p.errors().is_empty(), "parse errors: {:?}", p.errors());
+        let mut expr_types = crate::mvl::checker::collect_prelude_expr_types(&[]);
+        expr_types.extend(crate::mvl::checker::check(&prog).expr_types);
+        let all_fns = crate::mvl::passes::mono::collect_fns([&prog]);
+        let mono = crate::mvl::passes::mono::monomorphize(&prog, &all_fns, &expr_types);
+        let tir = crate::mvl::ir::lower::lower(&prog, &mono, &expr_types);
+        WasmTextCompiler::new().emit_program(&tir, "test")
+    }
+
+    const COUNTER: &str = "actor Counter {\n\
+           count: Int\n\
+           pub fn increment(val n: Int) { self.count = self.count + n }\n\
+           pub fn reset() { self.count = 0 }\n\
+           pub test fn get_count() -> Int { self.count }\n\
+         }\n";
+
+    #[test]
+    fn actor_emits_behavior_and_dispatch_fns() {
+        let wat = compile(COUNTER);
+        assert!(
+            wat.contains("(func $counter_increment (param $self i32) (param $n i64)"),
+            "{wat}"
+        );
+        assert!(
+            wat.contains("(func $counter_get_count (param $self i32) (result i64)"),
+            "{wat}"
+        );
+        assert!(
+            wat.contains(
+                "(func $counter_dispatch (param $state i32) (param $disc i32) (param $args i32)"
+            ),
+            "{wat}"
+        );
+    }
+
+    /// `pub test fn` is a synchronous read, so it must NOT occupy a behaviour
+    /// discriminant — only `increment` (0) and `reset` (1) do.
+    #[test]
+    fn actor_test_fn_is_not_a_behavior_discriminant() {
+        let wat = compile(COUNTER);
+        let dispatch = wat
+            .split("(func $counter_dispatch")
+            .nth(1)
+            .expect("dispatch fn emitted");
+        let dispatch = dispatch.split("\n  (func").next().unwrap();
+        assert!(dispatch.contains("call $counter_increment"), "{dispatch}");
+        assert!(dispatch.contains("call $counter_reset"), "{dispatch}");
+        assert!(
+            !dispatch.contains("call $counter_get_count"),
+            "sync read must not be dispatched as a behaviour\n{dispatch}"
+        );
+    }
+
+    /// `self.field = value` must emit a real store. It used to fall through as
+    /// an unsupported assign target, which stubbed the whole body (#2012).
+    #[test]
+    fn actor_field_assignment_emits_store() {
+        let wat = compile(COUNTER);
+        assert!(
+            !wat.contains(";; unsupported"),
+            "actor bodies must not contain unsupported markers\n{wat}"
+        );
+        assert!(
+            !wat.contains("body stubbed"),
+            "actor bodies must not be stubbed\n{wat}"
+        );
+        assert!(wat.contains("i64.store offset=0"), "{wat}");
+    }
+
+    #[test]
+    fn actor_scheduler_emitted_with_reentrancy_guard() {
+        let wat = compile(COUNTER);
+        assert!(wat.contains("(global $__actor_draining"), "{wat}");
+        assert!(wat.contains("(func $__mvl_actor_slot"), "{wat}");
+        assert!(wat.contains("(func $__mvl_actor_pump"), "{wat}");
+        assert!(wat.contains("(func $__mvl_actor_route"), "{wat}");
+        // The guard is what stops a self-send from recursing into dispatch.
+        let pump = wat.split("(func $__mvl_actor_pump").nth(1).unwrap();
+        let pump = pump.split("\n  (func").next().unwrap();
+        assert!(
+            pump.contains("global.get $__actor_draining"),
+            "pump must bail out when a drain is already running\n{pump}"
+        );
+    }
+
+    /// Dispatch is a static switch on the actor type tag — no funcref table
+    /// and no `call_indirect`, because the runtime cannot call back into the
+    /// emitted module (ADR-0059 §2).
+    #[test]
+    fn actor_dispatch_is_static_no_call_indirect() {
+        let wat = compile(
+            "actor A { x: Int  pub fn set(val n: Int) { self.x = n } }\n\
+             actor B { y: Int  pub fn set(val n: Int) { self.y = n } }\n",
+        );
+        assert!(!wat.contains("call_indirect"), "{wat}");
+        assert!(!wat.contains("(table "), "{wat}");
+        let route = wat.split("(func $__mvl_actor_route").nth(1).unwrap();
+        let route = route.split("\n  (func").next().unwrap();
+        assert!(route.contains("call $a_dispatch"), "{route}");
+        assert!(route.contains("call $b_dispatch"), "{route}");
+    }
+
+    /// Programs without actors must not pay for the scheduler.
+    #[test]
+    fn no_actors_means_no_scheduler() {
+        let wat = compile("fn add(a: Int, b: Int) -> Int { a + b }");
+        assert!(!wat.contains("__mvl_actor"), "{wat}");
+        assert!(!wat.contains("__actor_q"), "{wat}");
+    }
+
+    /// String-typed actor state releases the old handle before overwriting, or
+    /// every write leaks an `MvlString`.
+    #[test]
+    fn actor_string_field_reassignment_drops_old_handle() {
+        let wat = compile(
+            "actor Label {\n\
+               text: String\n\
+               pub fn write(val s: String) { self.text = s }\n\
+               pub test fn read() -> String { self.text }\n\
+             }\n",
+        );
+        let write = wat.split("(func $label_write").nth(1).unwrap();
+        let write = write.split("\n  (func").next().unwrap();
+        assert!(
+            write.contains("call $_mvl_string_drop"),
+            "overwriting a String field must drop the old handle\n{write}"
+        );
+        assert!(write.contains("call $_mvl_string_new"), "{write}");
+    }
+
+    /// A behaviour arity above the fixed message-slot count must be reported,
+    /// not silently truncated.
+    #[test]
+    fn actor_arity_over_slot_limit_is_reported() {
+        let wat = compile(
+            "actor Wide {\n\
+               v: Int\n\
+               pub fn many(val a: Int, val b: Int, val c: Int, val d: Int, \
+                           val e: Int, val f: Int, val g: Int, val h: Int, val i: Int) \
+                 { self.v = a }\n\
+             }\n\
+             fn main() -> Unit ! Spawn + Send {\n\
+               let w: Wide = actor Wide { v: 0 };\n\
+               w.many(1, 2, 3, 4, 5, 6, 7, 8, 9);\n\
+             }\n",
+        );
+        // The caller stubs rather than emitting a message that overruns its slot.
+        assert!(wat.contains("body stubbed"), "{wat}");
+    }
+}

@@ -383,6 +383,9 @@ test-runtime-llvm: ## Unit-test runtime/llvm/ crate natively (peer of test-runti
 # in `tests/corpus/` needs collections, MvlString ops, tagged-union enum
 # payloads, closures, or generics-mono — all of which land in later phases.
 # Grow this list as the emitter's coverage grows.
+#
+# 12_actors runs on the single-threaded run-to-completion scheduler emitted
+# into the module itself (#2012, ADR-0059) — semantics only, no parallelism.
 WASM_CORPUS := \
 	tests/corpus/00_smoke \
 	tests/corpus/01_expressions \
@@ -423,6 +426,7 @@ WASM_CORPUS := \
 	tests/corpus/11_contracts/requires_test.mvl \
 	tests/corpus/11_contracts/ensures_test.mvl \
 	tests/corpus/11_contracts/invariant_test.mvl \
+	tests/corpus/12_actors \
 	tests/corpus/13_stdlib/string_test.mvl
 
 test-rust-wasm: build build-runtime-wasm ## rust/wasm — WASM-supported corpus subset (via runtime/wasm/ preload)
