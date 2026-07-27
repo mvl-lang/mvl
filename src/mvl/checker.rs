@@ -745,6 +745,153 @@ mod tests {
         );
     }
 
+    // ── #1991 follow-up: container-literal/insert ownership transfer ─────────
+    // List/Set/Map literals and `.insert()`/`.push()`/`.set()` store the
+    // argument by raw pointer copy, not a deep clone — the LLVM backend's
+    // typed drops now follow that pointer when the container is dropped, so
+    // reusing the original binding afterward must be a move, same as `let`.
+
+    #[test]
+    fn list_literal_element_reuse_rejected() {
+        let src = r#"fn f() -> Unit {
+            let s: String = "hi";
+            let xs: List[String] = [s];
+            let ys: List[String] = [s];
+        }"#;
+        let errors = errors_for(src);
+        assert!(
+            errors
+                .iter()
+                .any(|e| matches!(e, CheckError::UseAfterMove { name, .. } if name == "s")),
+            "expected UseAfterMove(s), got: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn map_literal_value_reuse_rejected() {
+        let src = r#"fn f() -> Unit {
+            let v: String = "hi";
+            let m1: Map[String, String] = {"a": v};
+            let m2: Map[String, String] = {"b": v};
+        }"#;
+        let errors = errors_for(src);
+        assert!(
+            errors
+                .iter()
+                .any(|e| matches!(e, CheckError::UseAfterMove { name, .. } if name == "v")),
+            "expected UseAfterMove(v), got: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn map_literal_key_reuse_allowed() {
+        // Keys are always deep-byte-copied at insert time (unlike values), so
+        // reusing a key binding across two maps must stay legal.
+        let src = r#"fn f() -> Unit {
+            let k: String = "key";
+            let m1: Map[String, Int] = {k: 1};
+            let m2: Map[String, Int] = {k: 2};
+        }"#;
+        let errors = errors_for(src);
+        assert!(
+            !errors.iter().any(|e| matches!(e, CheckError::UseAfterMove { .. })),
+            "key reuse should not move, got: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn list_push_argument_reuse_rejected() {
+        let src = r#"fn f() -> Unit {
+            let s: String = "hi";
+            let xs: ref List[String] = [];
+            xs.push(s);
+            let ys: ref List[String] = [];
+            ys.push(s);
+        }"#;
+        let errors = errors_for(src);
+        assert!(
+            errors
+                .iter()
+                .any(|e| matches!(e, CheckError::UseAfterMove { name, .. } if name == "s")),
+            "expected UseAfterMove(s), got: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn map_insert_value_argument_reuse_rejected() {
+        let src = r#"fn f() -> Unit {
+            let v: String = "hi";
+            let m: ref Map[String, String] = {"seed": "0"};
+            m.insert("a", v);
+            m.insert("b", v);
+        }"#;
+        let errors = errors_for(src);
+        assert!(
+            errors
+                .iter()
+                .any(|e| matches!(e, CheckError::UseAfterMove { name, .. } if name == "v")),
+            "expected UseAfterMove(v), got: {errors:?}"
+        );
+    }
+
+    // ── #1991 follow-up: mutually exclusive branches must not cross-pollute
+    // move state (a move inside `then` is invisible while checking `else`,
+    // since only one of the two ever executes at runtime). This mirrors real
+    // stdlib code (logging.mvl, std/toml.mvl) that stores a value into a
+    // container in each arm of an if/else, never reusing it afterward.
+
+    #[test]
+    fn container_reuse_across_mutually_exclusive_if_else_allowed() {
+        let src = r#"fn f(user_id: String, success: Bool) -> Unit {
+            if success {
+                let m1: Map[String, String] = {"id": user_id};
+            } else {
+                let m2: Map[String, String] = {"id": user_id};
+            }
+        }"#;
+        let errors = errors_for(src);
+        assert!(
+            !errors.iter().any(|e| matches!(e, CheckError::UseAfterMove { .. })),
+            "reuse across mutually exclusive branches should not move, got: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn container_reuse_across_match_arms_allowed() {
+        let src = r#"fn f(user_id: String, code: Int) -> Unit {
+            match code {
+                1 => { let m1: Map[String, String] = {"id": user_id}; },
+                _ => { let m2: Map[String, String] = {"id": user_id}; },
+            }
+        }"#;
+        let errors = errors_for(src);
+        assert!(
+            !errors.iter().any(|e| matches!(e, CheckError::UseAfterMove { .. })),
+            "reuse across mutually exclusive match arms should not move, got: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn container_reuse_after_if_else_still_rejected() {
+        // Unlike the mutually-exclusive-branch case above, using the value
+        // again *after* the if/else is unsound (either branch may have moved
+        // it) and must still be caught.
+        let src = r#"fn f(user_id: String, success: Bool) -> Unit {
+            if success {
+                let m1: Map[String, String] = {"id": user_id};
+            } else {
+            }
+            let m2: Map[String, String] = {"id": user_id};
+        }"#;
+        let errors = errors_for(src);
+        assert!(
+            errors
+                .iter()
+                .any(|e| matches!(e, CheckError::UseAfterMove { name, .. } if name == "user_id")),
+            "expected UseAfterMove(user_id), got: {errors:?}"
+        );
+    }
+
     // ── Fix: enum constructors as expressions ─────────────────────────────
 
     #[test]

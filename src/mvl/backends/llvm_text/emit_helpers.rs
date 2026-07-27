@@ -532,11 +532,19 @@ impl TextEmitter {
                         } = val
                         {
                             match inner_name.as_str() {
-                                "List" | "Array" | "Set" => {
-                                    inner_args.first().and_then(Self::array_drop_sym_for_elem).map(
-                                        |value_drop_sym| HeapKind::MapPtrValues { value_drop_sym },
-                                    )
-                                }
+                                // Falls back to the untyped-but-safe `HeapKind::Map`
+                                // (plain `_mvl_map_drop`, values freed as opaque
+                                // bytes) whenever the value's own nested payload
+                                // is beyond this pass's one-level dispatch — this
+                                // matches the pre-#1991 baseline (outer map/keys
+                                // always freed; only V's nested payload could
+                                // leak) instead of leaking the entire map (#1991
+                                // follow-up fix).
+                                "List" | "Array" | "Set" => inner_args
+                                    .first()
+                                    .and_then(Self::array_drop_sym_for_elem)
+                                    .map(|value_drop_sym| HeapKind::MapPtrValues { value_drop_sym })
+                                    .or(Some(HeapKind::Map)),
                                 "Map" => {
                                     // Map[K2, V2] as a value: only scalar V2 is in
                                     // scope (plain _mvl_map_drop suffices — no
@@ -549,13 +557,13 @@ impl TextEmitter {
                                             value_drop_sym: "_mvl_map_drop",
                                         })
                                     } else {
-                                        None
+                                        Some(HeapKind::Map)
                                     }
                                 }
-                                _ => None,
+                                _ => Some(HeapKind::Map),
                             }
                         } else {
-                            None
+                            Some(HeapKind::Map)
                         }
                     }
                 },

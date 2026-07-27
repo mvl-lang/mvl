@@ -1847,6 +1847,12 @@ impl TextEmitter {
             if let Some(v) = self.emit_expr_tir(e)? {
                 elem_vals.push(v);
             }
+            // Transfer ownership: the array's slot stores a byte-copy of the
+            // element value itself (aliasing the same heap object for
+            // pointer-typed elements), not a deep clone — so a heap-tracked
+            // local must not also be dropped at scope exit once the array
+            // owns it too (#1991, mirrors emit_map_literal_tir).
+            self.exclude_returned_value_tir(e);
         }
 
         let n = elem_vals.len().max(4) as i64;
@@ -1915,8 +1921,13 @@ impl TextEmitter {
             self.push_instr(&format!("{val_slot} = alloca {val_ty}"));
             self.push_instr(&format!("store {val_ty} {val_val}, ptr {val_slot}"));
 
+            // Value size must match val_ty's actual width — a hardcoded 8
+            // silently truncated wider values (e.g. the 16-byte `{ i8, ptr }`
+            // Option/Result tagged-union representation), corrupting the
+            // stored payload.
+            let val_size = Self::llvm_type_size(&val_ty);
             self.push_instr(&format!(
-                "call void @_mvl_map_insert(ptr {map}, ptr {key_ptr}, i64 {key_len}, ptr {val_slot}, i64 8)"
+                "call void @_mvl_map_insert(ptr {map}, ptr {key_ptr}, i64 {key_len}, ptr {val_slot}, i64 {val_size})"
             ));
         }
 
@@ -3126,6 +3137,13 @@ impl TextEmitter {
                 self.push_instr(&format!("store {elem_ty} {needle}, ptr {slot}"));
                 self.ensure_extern("declare i1 @_mvl_array_contains(ptr, ptr)");
                 self.ensure_extern("declare void @_mvl_array_push(ptr, ptr)");
+                // Transfer ownership — see emit_list_literal_tir (#1991). This is
+                // unconditional even though the push below is conditional on
+                // `already`: when the element is already present, the duplicate
+                // is discarded without a matching drop (a leak), which is the
+                // same conservative leak-over-crash trade-off already accepted
+                // elsewhere in this pass rather than a double-free.
+                self.exclude_returned_value_tir(&args[0]);
                 let already = self.next_reg();
                 self.push_instr(&format!(
                     "{already} = call i1 @_mvl_array_contains(ptr {val}, ptr {slot})"
@@ -3204,8 +3222,11 @@ impl TextEmitter {
                 let vs = self.next_reg();
                 self.push_instr(&format!("{vs} = alloca {val_ty}"));
                 self.push_instr(&format!("store {val_ty} {val_arg}, ptr {vs}"));
+                // Value size must match val_ty's actual width — see
+                // emit_map_literal_tir for why a hardcoded 8 is wrong.
+                let val_size = Self::llvm_type_size(&val_ty);
                 self.push_instr(&format!(
-                    "call void @_mvl_map_insert(ptr {val}, ptr {kp}, i64 {kl}, ptr {vs}, i64 8)"
+                    "call void @_mvl_map_insert(ptr {val}, ptr {kp}, i64 {kl}, ptr {vs}, i64 {val_size})"
                 ));
                 // insert returns the map (modified in place)
                 Ok(Some(val))
@@ -3765,6 +3786,8 @@ impl TextEmitter {
                 self.push_instr(&format!(
                     "call void @_mvl_array_push(ptr {val}, ptr {slot})"
                 ));
+                // Transfer ownership — see emit_list_literal_tir (#1991).
+                self.exclude_returned_value_tir(&args[0]);
                 Ok(Some(val))
             }
             ("get", "ptr")
@@ -4064,6 +4087,8 @@ impl TextEmitter {
                 self.push_instr(&format!(
                     "call void @_mvl_array_set(ptr {val}, i64 {idx}, ptr {item_slot})"
                 ));
+                // Transfer ownership — see emit_list_literal_tir (#1991).
+                self.exclude_returned_value_tir(&args[1]);
                 Ok(None)
             }
             ("slice", "ptr")

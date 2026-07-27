@@ -4,7 +4,7 @@
 //! Block, statement, and expression-statement type checking for the MVL type checker.
 //! Also includes field access, struct construction, and alias resolution helpers.
 
-use crate::mvl::checker::context::{CapabilityState, TypeBodyInfo, VariantFieldsInfo};
+use crate::mvl::checker::context::{CapabilityState, TypeBodyInfo, TypeEnv, VariantFieldsInfo};
 use crate::mvl::checker::errors::CheckError;
 use crate::mvl::checker::ifc;
 use crate::mvl::checker::types::{resolve, types_compatible, Ty};
@@ -229,10 +229,15 @@ impl TypeChecker {
             });
         }
         let cond_label = ifc::label_of(&cond_ty).map(|s| s.to_string());
+        // `then`/`else` are mutually exclusive at runtime — see Stmt::If for
+        // why moves must be branch-scoped (#1991 follow-up).
+        let pre_snapshot = self.env.snapshot_moved();
         let then_ty = self.infer_block_type(then, return_ty);
         self.check_branch_label_promotion(cond_label.clone(), &then_ty, return_ty, span);
+        let post_then_snapshot = self.env.snapshot_moved();
         let result_ty = then_ty;
         if let Some(else_branch) = else_ {
+            self.env.restore_moved(&pre_snapshot);
             match else_branch {
                 ElseBranch::Block(b) => {
                     let else_ty = self.infer_block_type(b, return_ty);
@@ -287,6 +292,10 @@ impl TypeChecker {
                     }
                 }
             }
+            let post_else_snapshot = self.env.snapshot_moved();
+            let merged =
+                TypeEnv::union_moved_snapshots(&post_then_snapshot, &post_else_snapshot);
+            self.env.restore_moved(&merged);
         }
         result_ty
     }
@@ -483,13 +492,21 @@ impl TypeChecker {
                 // reveals the condition's value; non-Unit results must be promoted.
                 let cond_label = ifc::label_of(&cond_ty).map(|s| s.to_string());
 
+                // `then`/`else` are mutually exclusive at runtime — a move
+                // inside `then` must not be visible while checking `else`,
+                // and the merged outcome afterward is the union of both
+                // (#1991 follow-up: branch-aware move tracking).
+                let pre_snapshot = self.env.snapshot_moved();
+
                 // Pass None: non-tail if-branch body types don't constrain the
                 // function return. Early `return` inside branches uses
                 // `current_return_ty` as fallback (see Stmt::Return above).
                 let then_ty = self.infer_block_type(then, None);
                 self.check_branch_label_promotion(cond_label.clone(), &then_ty, return_ty, *span);
+                let post_then_snapshot = self.env.snapshot_moved();
 
                 if let Some(else_branch) = else_ {
+                    self.env.restore_moved(&pre_snapshot);
                     match else_branch {
                         ElseBranch::Block(b) => {
                             let else_ty = self.infer_block_type(b, None);
@@ -499,6 +516,12 @@ impl TypeChecker {
                         }
                         ElseBranch::If(s) => self.check_stmt(s, None),
                     }
+                    let post_else_snapshot = self.env.snapshot_moved();
+                    let merged = TypeEnv::union_moved_snapshots(
+                        &post_then_snapshot,
+                        &post_else_snapshot,
+                    );
+                    self.env.restore_moved(&merged);
                 }
             }
 
