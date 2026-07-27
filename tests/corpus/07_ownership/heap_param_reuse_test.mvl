@@ -1,0 +1,50 @@
+// 07_ownership/heap_param_reuse_test.mvl — a heap-typed local (String,
+// List[Int]) passed to more than one function call must produce correct
+// values from every call, and a `val` (borrow) parameter must leave the
+// caller free to keep reading its own binding afterward.
+//
+// Regression coverage for #1994: the LLVM backend used to leak every
+// heap-typed function parameter unconditionally (never tracked for drop),
+// and separately excluded a call argument from the caller's drop-tracking
+// on every call regardless of whether it was the argument's last use —
+// which would corrupt/double-free a local read more than once.
+
+fn string_len_plus(s: String, extra: Int) -> Int {
+    s.len() + extra
+}
+
+fn list_sum_plus(xs: List[Int], extra: Int) -> Int {
+    let acc: ref Int = extra;
+    for x in xs {
+        acc = acc + x;
+    }
+    acc
+}
+
+fn peek_len(s: val String) -> Int {
+    s.len()
+}
+
+test fn string_local_read_by_two_calls() -> Unit {
+    let s: String = "hello";
+    let a: Int = string_len_plus(s, 1);
+    let b: Int = string_len_plus(s, 2);
+    assert_eq(a, 6);
+    assert_eq(b, 7);
+}
+
+test fn list_local_read_by_two_calls() -> Unit {
+    let xs: List[Int] = [1, 2, 3];
+    let a: Int = list_sum_plus(xs, 0);
+    let b: Int = list_sum_plus(xs, 10);
+    assert_eq(a, 6);
+    assert_eq(b, 16);
+}
+
+test fn borrow_param_allows_reuse_after_call() -> Unit {
+    let s: String = "hello";
+    let a: Int = peek_len(s);
+    let b: Int = s.len();
+    assert_eq(a, 5);
+    assert_eq(b, 5);
+}

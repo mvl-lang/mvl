@@ -53,8 +53,8 @@
 //! See Spec 015 (actors), ADR-0027. Phase 8, #695, #1014.
 
 use super::emitter::RustEmitter;
+use crate::mvl::backends::last_use::compute_last_uses;
 use crate::mvl::backends::rust::emit_types::emit_ty;
-use crate::mvl::backends::rust::last_use::compute_last_uses;
 use crate::mvl::backends::rust::mut_analysis::compute_unused_param_names;
 use crate::mvl::ir::{MailboxConfig, MailboxPolicy, TirActorDecl, TirStmt};
 

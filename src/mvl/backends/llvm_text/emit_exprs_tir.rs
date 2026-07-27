@@ -468,6 +468,7 @@ impl TextEmitter {
         // `%__closure_type { fn_ptr, env_ptr }` layout — the callee would GEP
         // into the function's machine code and segfault. Wrap the named fn in
         // a shim closure at the call site instead.
+        let callee_known = self.module.fn_param_types.contains_key(name);
         let callee_param_tys: Vec<TypeExpr> = self
             .module
             .fn_param_types
@@ -475,6 +476,10 @@ impl TextEmitter {
             .cloned()
             .unwrap_or_default();
         let mut arg_vals: Vec<(String, String)> = Vec::new();
+        // #1994: args that are truly moved (owned parameter, true last use)
+        // still need caller-side exclusion below; borrow-parameter args and
+        // non-last-use (cloned) args do not — the caller keeps tracking those.
+        let mut to_exclude: Vec<&TirExpr> = Vec::new();
         for (i, arg) in args.iter().enumerate() {
             let param_wants_fn = callee_param_tys
                 .get(i)
@@ -492,17 +497,62 @@ impl TextEmitter {
                 }
             }
             let ty = self.ty_to_llvm_ctx(&arg.ty);
-            if let Some(v) = self.emit_expr_tir(arg)? {
-                arg_vals.push((ty, v));
+            let Some(v) = self.emit_expr_tir(arg)? else {
+                continue;
+            };
+
+            // Only apply capability/last-use-aware handling when the callee's
+            // signature is statically known (a registered user-defined TIR
+            // fn) — builtins and unresolved callees keep the original
+            // unconditional move-and-exclude behaviour untouched.
+            if callee_known {
+                let is_borrow_param = callee_param_tys
+                    .get(i)
+                    .is_some_and(|pt| matches!(pt, TypeExpr::Ref { .. }));
+                if is_borrow_param {
+                    // Caller retains ownership; the callee never drops a borrow.
+                    arg_vals.push((ty, v));
+                    continue;
+                }
+
+                if let TirExprKind::Var(var_name) = &arg.kind {
+                    if !self.fn_ctx.last_uses.contains(&arg.span) {
+                        let owning_key = self
+                            .fn_ctx
+                            .ref_locals
+                            .get(var_name)
+                            .map(|rl| rl.ptr.clone())
+                            .or_else(|| self.fn_ctx.locals.get(var_name).cloned());
+                        let heap_kind = owning_key.as_ref().and_then(|key| {
+                            self.fn_ctx
+                                .heap_locals
+                                .iter()
+                                .find(|(s, _, _)| s == key)
+                                .map(|(_, hk, _)| *hk)
+                        });
+                        if let Some(hk) = heap_kind {
+                            // Non-last use of a caller-owned heap local: clone
+                            // instead of moving, so the original stays tracked
+                            // and alive for its later last use / scope exit.
+                            let clone_reg = self.emit_clone_for_heap_kind(&v, hk);
+                            arg_vals.push((ty, clone_reg));
+                            continue;
+                        }
+                    }
+                }
             }
+
+            arg_vals.push((ty, v));
+            to_exclude.push(arg);
         }
 
-        // #1847: fn arguments transfer ownership to the callee. Remove each
-        // moved arg from `heap_locals` so the caller's scope-exit drops don't
-        // double-free heap allocations the callee will own and drop itself.
-        // Same "transparent wrapper" walk as return-value handling — hops
-        // through `Consume` and `Relabel` to find the underlying `Var`.
-        for arg in args.iter() {
+        // #1847: fn arguments transfer ownership to the callee at their true
+        // last use. Remove each moved arg from `heap_locals` so the caller's
+        // scope-exit drops don't double-free heap allocations the callee now
+        // owns and drops itself. Same "transparent wrapper" walk as
+        // return-value handling — hops through `Consume` and `Relabel` to
+        // find the underlying `Var`.
+        for arg in to_exclude {
             self.exclude_returned_value_tir(arg);
         }
 

@@ -11,6 +11,7 @@
 //! 2. Implement the `Backend` trait for your emitter type.
 //! 3. Wire it up in `src/main.rs` via `parse_backend`.
 
+pub mod last_use;
 pub mod llvm_text;
 pub mod rust;
 pub mod wasm_text;

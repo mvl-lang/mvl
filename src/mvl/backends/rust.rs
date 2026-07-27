@@ -37,7 +37,6 @@ pub mod emit_method_call;
 pub mod emit_stmts;
 pub mod emit_types;
 pub mod emitter;
-pub mod last_use;
 pub mod mcdc_emit;
 pub mod mut_analysis;
 pub mod mutation_emit;

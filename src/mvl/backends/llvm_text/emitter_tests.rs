@@ -33,6 +33,9 @@ mod construct;
 #[path = "emitter_tests/exprs.rs"]
 mod exprs;
 
+#[path = "emitter_tests/heap_param_drop.rs"]
+mod heap_param_drop;
+
 #[path = "emitter_tests/method_call.rs"]
 mod method_call;
 

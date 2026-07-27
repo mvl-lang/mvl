@@ -120,6 +120,32 @@ impl TextEmitter {
         }
     }
 
+    /// Emit a shallow clone of an already-evaluated heap-typed pointer value
+    /// (bumps the runtime refcount via `mvl_<kind>_clone`, same underlying
+    /// allocation, fresh owning handle). Used at call sites for non-last-use
+    /// reads of an owned heap-typed local (#1994) — the LLVM counterpart of
+    /// the Rust backend's `.clone()` insertion in `emit_expr_as_value_arg`.
+    /// All `HeapKind` variants of a given family (String/Array-like/Map-like)
+    /// share one clone symbol: clone is a shallow refcount bump, so nested
+    /// element typing (only needed to pick the right `_drop` helper) is
+    /// irrelevant here.
+    pub(super) fn emit_clone_for_heap_kind(&mut self, ptr_val: &str, kind: HeapKind) -> String {
+        let sym = match kind {
+            HeapKind::String => "_mvl_string_clone",
+            HeapKind::Array
+            | HeapKind::ArrayOfString
+            | HeapKind::ArrayOfArray { .. }
+            | HeapKind::ArrayOfOption { .. }
+            | HeapKind::ArrayOfResult { .. } => "_mvl_array_clone",
+            HeapKind::Map | HeapKind::MapPtrValues { .. } => "_mvl_map_clone",
+        };
+        self.ensure_extern(&format!("declare ptr @{sym}(ptr)"));
+        let reg = self.next_reg();
+        self.push_instr(&format!("{reg} = call ptr @{sym}(ptr {ptr_val})"));
+        self.fn_ctx.reg_types.insert(reg.clone(), "ptr".to_string());
+        reg
+    }
+
     /// Declare (if needed) and call whatever runtime helper(s) `kind`
     /// dispatches to, dropping the heap object owned by `ssa`. For `is_ref`
     /// locals, `ssa` is a stack alloca — the heap pointer is loaded first.
