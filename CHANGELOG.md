@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.7.3] - 2026-07-28
+
+### Fixed — #2036
+
+- **WASM/LLVM backends: duplicate free-function names across merged sibling modules were never caught before codegen.** `mvl build --backend=wasm`/`--backend=llvm` merge an entry file with its transitively-loaded sibling modules into one flat symbol space. Two files (or two declarations in one file) sharing a free function name previously surfaced very differently, and both badly: WASM's `merge_tir_programs` concatenated every sibling's functions with no dedup, so the emitted module only failed at `wasm-tools parse` time with an opaque "duplicate func identifier" error; LLVM's `emit_fn_tir` silently kept only the first same-named definition and dropped the second's body entirely — no error, just quietly wrong behavior. Added `loader::find_duplicate_free_fn_names`, wired into both backends' multi-file compile paths: a collision now fails loudly and clearly with a `file:line` message for both declaration sites, before any lowering/emission. Not present in the Rust backend, which transpiles each sibling into its own real Rust `mod`.
+
 ## [1.7.2] - 2026-07-28
 
 ### Fixed — #2027
