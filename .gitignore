@@ -13,6 +13,11 @@ target
 # Contains mutation testing data
 **/mutants.out*/
 
+# tools/mvlr's synthesized test-main driver for --backend=wasm (#2033) —
+# written as a hidden sibling of the *_test.mvl source so mvl build's
+# directory-relative sibling loader can still find it, cleaned up on exit.
+.mvlr_synth.*
+
 # RustRover
 #  JetBrains specific template is maintained in a separate JetBrains.gitignore that can
 #  be found at https://github.com/github/gitignore/blob/main/Global/JetBrains.gitignore

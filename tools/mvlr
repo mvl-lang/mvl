@@ -244,9 +244,26 @@ run_rust_wasm_file() {
     input_abs=$(cd "$(dirname "$src")" && pwd)/$(basename "$src")
 
     if [[ "$src" == *_test.mvl ]]; then
-        local out="$tmp/$(basename "$src")"
-        synth_test_main "$src" "$out"
-        input_abs="$out"
+        # Write the synthesized driver as a hidden sibling of $src, not
+        # into the unrelated $tmp scratch dir — `mvl build --backend=wasm`
+        # resolves `use` imports relative to the *entry file's own
+        # directory* (src/cli/wasm_text.rs), so a test file with cross-file
+        # sibling dependencies (e.g. examples/flight_fuel_planning) would
+        # otherwise silently lose access to them (#2033). $tmp still
+        # sequesters the emitted `.wat`/`.wasm` output below.
+        local src_dir synth_file
+        src_dir=$(dirname "$input_abs")
+        synth_file="$src_dir/.mvlr_synth.$$.$(basename "$src")"
+        synth_test_main "$src" "$synth_file"
+        input_abs="$synth_file"
+        # Re-register the trap with both concrete paths baked in via
+        # immediate (double-quoted) expansion, not a deferred lookup — by
+        # the time a RETURN trap actually fires, this function's `local`s
+        # are already out of scope, so a single-quoted `$synth_file`
+        # reference throws "unbound variable" under `set -u` and silently
+        # kills the whole script (masking a real pass as a failure).
+        # shellcheck disable=SC2064
+        trap "rm -rf '$tmp'; rm -f '$synth_file'" RETURN
     fi
 
     stem=$(basename "$input_abs" .mvl)
