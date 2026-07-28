@@ -112,3 +112,36 @@ test fn enum_nested_guard_through_type_alias() -> Unit {
     assert_eq(describe_boxed(Boxed::Full(Inner::C)), "FULL C");
     assert_eq(describe_boxed(Boxed::Full(Inner::D)), "FULL D");
 }
+
+// A payload variant with two or more simultaneous nested-enum guard
+// fields (#2032): the LLVM backend used to dispatch on the raw ordinal of
+// the first guard field only, so two arms sharing that field's variant
+// (`Duo(Weekday::Mon, ...)` here) collided into the same switch case and
+// `lli` rejected the emitted IR. Restored to the shared corpus now that
+// the LLVM backend independently discriminates every guarded slot.
+type Weekday = enum { Mon, Tue, Wed }
+type Season = enum { Spring, Summer, Fall, Winter }
+type Combo = enum { Solo(Weekday), Duo(Weekday, Season) }
+
+fn describe_combo(c: Combo) -> String {
+    match c {
+        Combo::Solo(Weekday::Mon)               => "SOLO MON",
+        Combo::Solo(Weekday::Tue)               => "SOLO TUE",
+        Combo::Solo(Weekday::Wed)               => "SOLO WED",
+        Combo::Duo(Weekday::Mon, Season::Spring) => "MON SPRING",
+        Combo::Duo(Weekday::Mon, Season::Summer) => "MON SUMMER",
+        Combo::Duo(_, Season::Fall)              => "ANY FALL",
+        Combo::Duo(_, _)                         => "OTHER DUO",
+    }
+}
+
+test fn enum_multi_guard_nested_variants() -> Unit {
+    assert_eq(describe_combo(Combo::Solo(Weekday::Mon)), "SOLO MON");
+    assert_eq(describe_combo(Combo::Solo(Weekday::Tue)), "SOLO TUE");
+    assert_eq(describe_combo(Combo::Solo(Weekday::Wed)), "SOLO WED");
+    assert_eq(describe_combo(Combo::Duo(Weekday::Mon, Season::Spring)), "MON SPRING");
+    assert_eq(describe_combo(Combo::Duo(Weekday::Mon, Season::Summer)), "MON SUMMER");
+    assert_eq(describe_combo(Combo::Duo(Weekday::Tue, Season::Fall)), "ANY FALL");
+    assert_eq(describe_combo(Combo::Duo(Weekday::Mon, Season::Fall)), "ANY FALL");
+    assert_eq(describe_combo(Combo::Duo(Weekday::Wed, Season::Winter)), "OTHER DUO");
+}
