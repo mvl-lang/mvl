@@ -12,6 +12,7 @@ use mvl::mvl::backends::llvm_text::lli;
 use mvl::mvl::backends::wasm_text::WasmTextCompiler;
 use mvl::mvl::backends::{AssertMode, Backend};
 use mvl::mvl::checker;
+use mvl::mvl::ir::TirProgram;
 use mvl::mvl::loader;
 use mvl::mvl::parser::ast::Program;
 use mvl::mvl::parser::Parser;
@@ -61,11 +62,145 @@ fn compile_wat(prog: &Program, module_name: &str, assert_mode: AssertMode) -> St
     compiler.emit_program(&entry_tir, module_name)
 }
 
+/// Merge sibling `TirProgram`s into one flat program.
+///
+/// The WASM emitter (`WasmTextCompiler::emit_program`) derives everything —
+/// functions, types, actors — from a single `TirProgram`'s aggregate `Vec`
+/// fields rather than tracking per-module boundaries, so cross-file `use`
+/// imports resolve simply by concatenating the lowered siblings into the
+/// entry program before emission (#2027).
+fn merge_tir_programs(programs: &[TirProgram]) -> TirProgram {
+    let mut merged = TirProgram::default();
+    for p in programs {
+        merged.fns.extend(p.fns.iter().cloned());
+        merged.types.extend(p.types.iter().cloned());
+        merged.externs.extend(p.externs.iter().cloned());
+        merged.actors.extend(p.actors.iter().cloned());
+        merged.impls.extend(p.impls.iter().cloned());
+        merged.consts.extend(p.consts.iter().cloned());
+        merged.uses.extend(p.uses.iter().cloned());
+        merged.effect_decls.extend(p.effect_decls.iter().cloned());
+        merged.label_decls.extend(p.label_decls.iter().cloned());
+        merged.relabel_decls.extend(p.relabel_decls.iter().cloned());
+    }
+    merged
+}
+
+/// Lower `prog` and any sibling modules in the same directory to TIR, merge
+/// them into a single flat program, and emit WAT (#2027).
+///
+/// Mirrors `llvm_text.rs`'s `prepare_llvm_text_tir_multi`: siblings are
+/// checked with the entry + all *other* siblings as prelude (Go model —
+/// same-dir files share declarations without explicit `use` imports), then
+/// each is lowered with its own `expr_types`. Falls back to the single-file
+/// path when there are no sibling modules.
+fn compile_wat_multi(
+    prog: &Program,
+    path: &str,
+    module_name: &str,
+    assert_mode: AssertMode,
+) -> String {
+    let entry_dir = Path::new(path).parent().unwrap_or_else(|| Path::new("."));
+    let sibling_modules = loader::load_sibling_modules_transitive(prog, entry_dir);
+    if sibling_modules.is_empty() {
+        return compile_wat(prog, module_name, assert_mode);
+    }
+
+    let sibling_progs: Vec<&Program> = sibling_modules.iter().map(|(_, _, p)| p).collect();
+
+    let mut prelude = loader::load_implicit_prelude();
+    prelude.extend(load_full_prelude(
+        std::iter::once(prog).chain(sibling_progs.iter().copied()),
+        PreludeMode::Transpile,
+    ));
+    prelude.extend(loader::load_rust_backed_stdlib_fns(std::slice::from_ref(
+        prog,
+    )));
+
+    let mut expr_types = checker::collect_prelude_expr_types(&prelude);
+    let check_result = checker::check_with_two_preludes(&prelude, &sibling_progs, prog);
+    if check_result.has_errors() {
+        for err in &check_result.errors {
+            // See `compile_wat` — warning, not a hard failure (#2017).
+            let span = err.span();
+            eprintln!(
+                "warning: [REQ{}] {} (line {}, col {})",
+                err.requirement_number(),
+                err.message(),
+                span.line,
+                span.col
+            );
+        }
+    }
+    expr_types.extend(check_result.expr_types);
+
+    let all_fns = mvl::mvl::passes::mono::collect_fns(
+        std::iter::once(prog)
+            .chain(sibling_progs.iter().copied())
+            .chain(prelude.iter()),
+    );
+    let mono = mvl::mvl::passes::mono::monomorphize(prog, &all_fns, &expr_types);
+    let entry_tir = mvl::mvl::ir::lower::lower(prog, &mono, &expr_types);
+
+    // Each sibling is checked with the entry + all OTHER siblings as its
+    // prelude, then lowered with its own expr_types.
+    let sibling_tirs: Vec<TirProgram> = sibling_modules
+        .iter()
+        .enumerate()
+        .map(|(i, (_, _, sibling))| {
+            let (before, rest) = sibling_modules.split_at(i);
+            let after = &rest[1..];
+            let sibling_prelude: Vec<&Program> = std::iter::once(prog)
+                .chain(before.iter().map(|(_, _, p)| p))
+                .chain(after.iter().map(|(_, _, p)| p))
+                .collect();
+            let sib_check = checker::check_with_two_preludes(&prelude, &sibling_prelude, sibling);
+            let mut sib_types = checker::collect_prelude_expr_types(&prelude);
+            sib_types.extend(sib_check.expr_types);
+
+            let sib_all_fns =
+                mvl::mvl::passes::mono::collect_fns(std::iter::once(sibling).chain(prelude.iter()));
+            let sib_mono = mvl::mvl::passes::mono::monomorphize(sibling, &sib_all_fns, &sib_types);
+            mvl::mvl::ir::lower::lower(sibling, &sib_mono, &sib_types)
+        })
+        .collect();
+
+    let merged = merge_tir_programs(
+        &std::iter::once(entry_tir)
+            .chain(sibling_tirs)
+            .collect::<Vec<_>>(),
+    );
+
+    let mut compiler = WasmTextCompiler::new();
+    compiler.assert_mode = assert_mode;
+    compiler.emit_program(&merged, module_name)
+}
+
+/// Resolve `path` to an entry `.mvl` file — `path` itself if it's a file, or
+/// `main.mvl` / `lib.mvl` within it if it's a directory (#2027).
+fn resolve_entry_path(path: &str) -> String {
+    let dir = Path::new(path);
+    if !dir.is_dir() {
+        return path.to_string();
+    }
+    ["main.mvl", "lib.mvl"]
+        .iter()
+        .map(|name| dir.join(name))
+        .find(|p| p.exists())
+        .unwrap_or_else(|| {
+            eprintln!("No main.mvl / lib.mvl found in {path}");
+            process::exit(1);
+        })
+        .display()
+        .to_string()
+}
+
 /// `mvl build --backend=wasm <file>` — write `<stem>.wat`.
 pub(super) fn build_project_wasm(path: &str, assert_mode: AssertMode) {
-    let (prog, _src) = super::parse_or_exit(path);
-    let module_name = loader::stem(path);
-    let wat = compile_wat(&prog, &module_name, assert_mode);
+    let file_path = resolve_entry_path(path);
+    let (prog, _src) = super::parse_or_exit(&file_path);
+    let module_name = loader::stem(&file_path);
+    let wat = compile_wat_multi(&prog, &file_path, &module_name, assert_mode);
     let out_path = format!("{module_name}.wat");
     fs::write(&out_path, &wat).unwrap_or_else(|e| {
         eprintln!("error: cannot write {out_path}: {e}");
@@ -124,7 +259,7 @@ fn run_one_case(
         };
     }
 
-    let wat = compile_wat(&prog, &module_name, AssertMode::Always);
+    let wat = compile_wat_multi(&prog, &file_str, &module_name, AssertMode::Always);
 
     let wat_tmp = match tempfile::NamedTempFile::with_suffix(".wat") {
         Ok(t) => t,
