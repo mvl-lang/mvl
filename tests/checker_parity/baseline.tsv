@@ -29,6 +29,7 @@ tests/corpus/06_effects/console_test.mvl	ok
 tests/corpus/06_effects/pure_test.mvl	ok
 tests/corpus/06_effects/user_defined_test.mvl	ok
 tests/corpus/07_ownership/consume_test.mvl	ok
+tests/corpus/07_ownership/heap_param_reuse_test.mvl	ok
 tests/corpus/07_ownership/lambda_capture_test.mvl	ok
 tests/corpus/07_ownership/ref_test.mvl	ok
 tests/corpus/07_ownership/value_test.mvl	ok
@@ -50,6 +51,10 @@ tests/corpus/11_contracts/ensures_test.mvl	ok
 tests/corpus/11_contracts/invariant_test.mvl	ok
 tests/corpus/11_contracts/requires_test.mvl	ok
 tests/corpus/12_actors/behavior_test.mvl	ok
+tests/corpus/12_actors/float_state_test.mvl	ok
+tests/corpus/12_actors/ifc_actor_test.mvl	ok
+tests/corpus/12_actors/intra_actor_test.mvl	ok
+tests/corpus/12_actors/ordering_test.mvl	ok
 tests/corpus/12_actors/spawn_test.mvl	ok
 tests/corpus/12_actors/state_mutation_test.mvl	ok
 tests/corpus/13_stdlib/list_hof_test.mvl	ok
