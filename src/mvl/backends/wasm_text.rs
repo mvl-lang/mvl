@@ -2749,6 +2749,36 @@ fn emit_match_impl(
                 out.push_str("    i32.load offset=0\n");
                 out.push_str(&format!("    i32.const {disc}\n"));
                 out.push_str("    i32.eq\n");
+                // A nested unit-variant enum field (e.g. `Wrapped(Inner::A)`)
+                // narrows further than the outer tag — AND in a comparison
+                // against the payload slot's inline i32 discriminant so arms
+                // sharing an outer discriminant are actually disambiguated
+                // (#2029). Unrecognized qualified names (e.g. a nested
+                // payload-carrying enum's variant) fall through as
+                // unsupported rather than silently matching every arm.
+                for (slot, pat) in pats.iter().enumerate() {
+                    if let Pattern::Ident(name, _) = pat {
+                        if name != "_" && name.contains("::") {
+                            match ctx.enum_variants.get(name) {
+                                Some(&inner_disc) => {
+                                    let field_ty = pv.fields.get(slot).cloned().unwrap_or(Ty::Int);
+                                    let byte_off = (slot as u32) * 8;
+                                    out.push_str(&format!("    local.get ${temp}\n"));
+                                    out.push_str("    i32.load offset=4\n");
+                                    emit_payload_load(out, &field_ty, byte_off, ctx);
+                                    out.push_str(&format!("    i32.const {inner_disc}\n"));
+                                    out.push_str("    i32.eq\n");
+                                    out.push_str("    i32.and\n");
+                                }
+                                None => {
+                                    out.push_str(&format!(
+                                        "    ;; unsupported nested pattern: {name}\n"
+                                    ));
+                                }
+                            }
+                        }
+                    }
+                }
                 out.push_str(&if_open);
                 // Load payload_ptr from header offset 4.
                 let payload_ptr_local = format!("__pp_{span_offset}_{pat_off}");
@@ -2756,9 +2786,12 @@ fn emit_match_impl(
                 out.push_str("    i32.load offset=4\n");
                 out.push_str(&format!("    local.set ${payload_ptr_local}\n"));
                 // Bind each named pattern field from the payload at slot × 8.
+                // Qualified variant references (e.g. `Inner::A`) are guards,
+                // not bindings — the discriminant check above already
+                // consumed them.
                 for (slot, pat) in pats.iter().enumerate() {
                     if let Pattern::Ident(name, _) = pat {
-                        if name != "_" {
+                        if name != "_" && !name.contains("::") {
                             let field_ty = pv.fields.get(slot).cloned().unwrap_or(Ty::Int);
                             let byte_off = (slot as u32) * 8;
                             out.push_str(&format!("    local.get ${payload_ptr_local}\n"));
@@ -3198,7 +3231,10 @@ fn collect_match_arm_locals(
             let _ = vname;
             for (slot, pat) in pats.iter().enumerate() {
                 if let Pattern::Ident(n, _) = pat {
-                    if n != "_" {
+                    // Qualified names (e.g. `Inner::A`) are nested-variant
+                    // guards, not bindings — no local is declared for them
+                    // (#2029).
+                    if n != "_" && !n.contains("::") {
                         locals.push((n.clone(), Ty::Int)); // i64 for Int/Bool fields
                                                            // Speculatively add split String locals and __sv_* temp.
                                                            // Redundant for non-String fields but cheap; deduped later.
@@ -5367,5 +5403,40 @@ mod tests {
         );
         // The caller stubs rather than emitting a message that overruns its slot.
         assert!(wat.contains("body stubbed"), "{wat}");
+    }
+
+    /// A unit-variant enum nested inside a payload-carrying variant (#2029)
+    /// must be independently discriminated per arm, not just the outer tag —
+    /// and must not fabricate a mismatched-type local for the qualified
+    /// variant name.
+    #[test]
+    fn nested_unit_variant_in_payload_gets_distinct_inner_guards() {
+        let wat = compile(
+            "type Inner = enum { A, B, C, D }\n\
+             type Outer = enum { Plain, Wrapped(Inner) }\n\
+             total fn describe(o: Outer) -> String {\n\
+                 match o {\n\
+                     Outer::Plain             => \"PLAIN\",\n\
+                     Outer::Wrapped(Inner::A) => \"WRAPPED A\",\n\
+                     Outer::Wrapped(Inner::B) => \"WRAPPED B\",\n\
+                     Outer::Wrapped(Inner::C) => \"WRAPPED C\",\n\
+                     Outer::Wrapped(Inner::D) => \"WRAPPED D\",\n\
+                 }\n\
+             }\n",
+        );
+        assert!(!wat.contains(";; unsupported"), "{wat}");
+        // Four distinct `Wrapped(Inner::X)` arms must each AND in their own
+        // inner-discriminant comparison, not share one outer-only guard.
+        assert_eq!(
+            wat.matches("i32.and").count(),
+            4,
+            "expected one inner-discriminant AND per Wrapped(Inner::X) arm\n{wat}"
+        );
+        // Qualified variant names are guards, not bindings — no local should
+        // ever be declared for them.
+        assert!(!wat.contains("(local $Inner::A"), "{wat}");
+        assert!(!wat.contains("(local $Inner::B"), "{wat}");
+        assert!(!wat.contains("(local $Inner::C"), "{wat}");
+        assert!(!wat.contains("(local $Inner::D"), "{wat}");
     }
 }
