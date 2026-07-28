@@ -134,6 +134,10 @@ test fn alternate_fuel_upper() -> Unit {
     assert_eq(alternate_fuel_kg(500, 10000, 200), 25000);
 }
 
-test fn total_uplift_ceiling_realistic() -> Unit {
+// Renamed from `total_uplift_ceiling_realistic` (#2033) — calc.mvl already
+// declares a test fn with that exact name; the WASM backend's sibling
+// merge has no per-module namespacing, so two identically-named test fns
+// across files collide as a duplicate symbol.
+test fn dispatch_total_uplift_ceiling_realistic() -> Unit {
     assert_eq(total_uplift_ceiling(3000, 5, 150), 22500);
 }
