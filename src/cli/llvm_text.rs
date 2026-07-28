@@ -92,6 +92,30 @@ fn prepare_llvm_text_tir_multi(
     let entry_dir = Path::new(path).parent().unwrap_or_else(|| Path::new("."));
     let sibling_modules = loader::load_sibling_modules_transitive(prog, entry_dir);
 
+    // Fail loudly, before lowering/emission, if entry+siblings declare a
+    // free function with the same name. Emission streams entry+siblings
+    // into one shared module with no per-module namespacing, so a
+    // collision here previously meant `emit_fn_tir`'s `emitted_fn_names`
+    // guard would silently keep the first definition and drop the
+    // second's body — no error, just quietly wrong behavior (#2036).
+    let dup_labeled_siblings: Vec<(&str, &Program)> = sibling_modules
+        .iter()
+        .map(|(_, sib_path, p)| (sib_path.as_str(), p))
+        .collect();
+    let dups = loader::find_duplicate_free_fn_names((path, prog), &dup_labeled_siblings);
+    if !dups.is_empty() {
+        for (name, (first_file, first_span), (second_file, second_span)) in &dups {
+            eprintln!(
+                "error: duplicate function `{name}`\n  first declared at {first_file}:{}:{}\n  again declared at {second_file}:{}:{}",
+                first_span.line, first_span.col, second_span.line, second_span.col
+            );
+        }
+        eprintln!(
+            "Same-directory modules compiled to --backend=llvm share one flat symbol space; rename one of the above."
+        );
+        process::exit(1);
+    }
+
     // Transitively load pkg.* packages the entry or its siblings import (#1905).
     // Mirrors the frontier walk in `src/cli/build.rs` so pkg-imported enum
     // variants (e.g. `Key::Char` from pkg.tui) resolve during checking and
