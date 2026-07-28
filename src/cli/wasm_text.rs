@@ -102,6 +102,30 @@ fn compile_wat_multi(
 ) -> String {
     let entry_dir = Path::new(path).parent().unwrap_or_else(|| Path::new("."));
     let sibling_modules = loader::load_sibling_modules_transitive(prog, entry_dir);
+
+    // Fail loudly, before lowering/emission, if entry+siblings declare a
+    // free function with the same name — `emit_program` derives everything
+    // from one flat `TirProgram`, so a collision here would otherwise only
+    // surface as an opaque `wasm-tools parse` "duplicate func identifier"
+    // error at assembly time (#2036).
+    let dup_labeled_siblings: Vec<(&str, &Program)> = sibling_modules
+        .iter()
+        .map(|(_, sib_path, p)| (sib_path.as_str(), p))
+        .collect();
+    let dups = loader::find_duplicate_free_fn_names((path, prog), &dup_labeled_siblings);
+    if !dups.is_empty() {
+        for (name, (first_file, first_span), (second_file, second_span)) in &dups {
+            eprintln!(
+                "error: duplicate function `{name}`\n  first declared at {first_file}:{}:{}\n  again declared at {second_file}:{}:{}",
+                first_span.line, first_span.col, second_span.line, second_span.col
+            );
+        }
+        eprintln!(
+            "Same-directory modules compiled to --backend=wasm share one flat symbol space; rename one of the above."
+        );
+        process::exit(1);
+    }
+
     if sibling_modules.is_empty() {
         return compile_wat(prog, module_name, assert_mode);
     }

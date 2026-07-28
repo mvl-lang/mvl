@@ -254,6 +254,46 @@ pub fn load_sibling_modules_transitive(
     result
 }
 
+/// A declaration site for a duplicate-name diagnostic: `(display label —
+/// typically a file path, declaration span)`.
+pub type FnNameSite<'a> = (&'a str, Span);
+
+/// Find duplicate free (non-method) top-level function names across `entry`
+/// and its `siblings` — each program labeled for error reporting (e.g. its
+/// file path). Returns `(name, first_site, second_site)` per collision.
+///
+/// The WASM and LLVM backends both merge same-directory declarations into
+/// one flat symbol space with no per-module namespacing when compiling a
+/// multi-file program (#2027, #2036) — a name shared by two `fn`/`test fn`
+/// declarations (even within the same file) breaks codegen: WASM's emitted
+/// module fails `wasm-tools parse` ("duplicate func identifier"); LLVM
+/// silently keeps only the first definition and drops the second. Extension
+/// methods (`fn TypeName::method(self, ...)`) are excluded — they key by
+/// `(receiver_type, name)`, not name alone, so `String::len` and `List::len`
+/// coexisting is not a collision.
+pub fn find_duplicate_free_fn_names<'a>(
+    entry: (&'a str, &'a Program),
+    siblings: &[(&'a str, &'a Program)],
+) -> Vec<(String, FnNameSite<'a>, FnNameSite<'a>)> {
+    let mut seen: HashMap<&str, FnNameSite<'a>> = HashMap::new();
+    let mut dups = Vec::new();
+    for (label, prog) in std::iter::once(entry).chain(siblings.iter().copied()) {
+        for decl in &prog.declarations {
+            let Decl::Fn(fd) = decl else { continue };
+            if fd.receiver_type.is_some() {
+                continue;
+            }
+            match seen.get(fd.name.as_str()) {
+                Some(&first_site) => dups.push((fd.name.clone(), first_site, (label, fd.span))),
+                None => {
+                    seen.insert(fd.name.as_str(), (label, fd.span));
+                }
+            }
+        }
+    }
+    dups
+}
+
 /// Infer the module root (`base_dir`) for a single-file entry point by walking
 /// ancestors until one of its qualified imports resolves.
 ///
@@ -1706,6 +1746,51 @@ mod tests {
         );
         assert!(lines[0].contains("version"));
         assert!(lines[0].contains("features"));
+    }
+
+    fn parse(src: &str) -> Program {
+        let (mut p, _) = Parser::new(src);
+        p.parse_program()
+    }
+
+    // find_duplicate_free_fn_names: identical free-fn names across entry and
+    // a sibling are reported with both file:line sites (#2036).
+    #[test]
+    fn find_duplicate_free_fn_names_detects_cross_file_collision() {
+        let entry = parse("fn foo() -> Int { 0 }\n");
+        let sibling = parse("\n\nfn foo() -> Int { 1 }\n");
+        let dups =
+            find_duplicate_free_fn_names(("entry.mvl", &entry), &[("sibling.mvl", &sibling)]);
+        assert_eq!(dups.len(), 1, "{dups:?}");
+        let (name, (first_file, first_span), (second_file, second_span)) = &dups[0];
+        assert_eq!(name, "foo");
+        assert_eq!(*first_file, "entry.mvl");
+        assert_eq!(first_span.line, 1);
+        assert_eq!(*second_file, "sibling.mvl");
+        assert_eq!(second_span.line, 3);
+    }
+
+    // find_duplicate_free_fn_names: two `fn foo` in the *same* file (no
+    // siblings involved) is also a collision — both backends' flat symbol
+    // space doesn't care whether the duplicate came from one file or two.
+    #[test]
+    fn find_duplicate_free_fn_names_detects_same_file_collision() {
+        let entry = parse("fn foo() -> Int { 0 }\nfn foo() -> Int { 1 }\n");
+        let dups = find_duplicate_free_fn_names(("entry.mvl", &entry), &[]);
+        assert_eq!(dups.len(), 1, "{dups:?}");
+        assert_eq!(dups[0].0, "foo");
+    }
+
+    // find_duplicate_free_fn_names: extension methods key by (receiver
+    // type, name), not name alone — `String::describe` and `Box::describe`
+    // sharing a method name is not a collision.
+    #[test]
+    fn find_duplicate_free_fn_names_ignores_receiver_typed_methods() {
+        let entry = parse("pub fn String::describe(self) -> Int { 0 }\n");
+        let sibling = parse("pub fn Box::describe(self) -> Int { 0 }\n");
+        let dups =
+            find_duplicate_free_fn_names(("entry.mvl", &entry), &[("sibling.mvl", &sibling)]);
+        assert!(dups.is_empty(), "{dups:?}");
     }
 }
 
