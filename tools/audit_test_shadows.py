@@ -44,6 +44,19 @@ from pathlib import Path
 ROOT = Path(__file__).parent.parent
 SCAN_ROOT = ROOT / "examples"
 
+# Directory names that hold vendored/generated code we do not own. `.mvl/pkg/`
+# is the downloaded-package cache an example populates on first build; its
+# `*_test.mvl` files belong to the dependency, not this repo. Scanning them made
+# the audit report dozens of false shadows in any worktree where an example had
+# been built, while a clean checkout reported zero — a quality gate whose result
+# depended on local build state.
+SKIP_DIRS = {".mvl", "target", "node_modules", ".git"}
+
+
+def is_vendored(path: Path) -> bool:
+    """True if `path` lies under a dependency cache or build output directory."""
+    return any(part in SKIP_DIRS for part in path.parts)
+
 # Match a top-level `type` declaration; capture (is_pub, name).
 TYPE_DECL_RE = re.compile(r"^\s*(pub\s+)?type\s+([A-Z][A-Za-z0-9_]*)\b")
 
@@ -93,6 +106,8 @@ def collect_hits() -> list[tuple[Path, int, str, str]]:
     """Return (path, line, kind, snippet) for every shadow declaration."""
     hits: list[tuple[Path, int, str, str]] = []
     for path in sorted(SCAN_ROOT.rglob("*_test.mvl")):
+        if is_vendored(path.relative_to(ROOT)):
+            continue
         pub_names = collect_sibling_pub_fn_names(path)
         for i, line in enumerate(read_lines(path), 1):
             if COMMENT_RE.match(line):
