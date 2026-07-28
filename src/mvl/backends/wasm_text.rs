@@ -2753,29 +2753,61 @@ fn emit_match_impl(
                 // narrows further than the outer tag — AND in a comparison
                 // against the payload slot's inline i32 discriminant so arms
                 // sharing an outer discriminant are actually disambiguated
-                // (#2029). Unrecognized qualified names (e.g. a nested
-                // payload-carrying enum's variant) fall through as
-                // unsupported rather than silently matching every arm.
+                // (#2029). Any field-pattern shape this loop can't safely
+                // discriminate (an unresolved/mistyped qualifier, a literal,
+                // a doubly-nested payload-carrying variant, …) falls through
+                // to the `;; unsupported nested pattern` marker instead of
+                // silently matching every arm — the whole-body `unreachable`
+                // stub (see the `;; unsupported` scan at fn-emission time)
+                // turns that into a loud trap rather than a wrong answer.
+                // Note: this AND unconditionally dereferences the payload
+                // pointer even when the outer tag check above is false —
+                // safe only because unit variants store `payload_ptr = 0`
+                // (see `emit_enum_variant_construct`), so the speculative
+                // load stays in bounds and its result is simply discarded.
                 for (slot, pat) in pats.iter().enumerate() {
-                    if let Pattern::Ident(name, _) = pat {
-                        if name != "_" && name.contains("::") {
-                            match ctx.enum_variants.get(name) {
-                                Some(&inner_disc) => {
-                                    let field_ty = pv.fields.get(slot).cloned().unwrap_or(Ty::Int);
+                    match pat {
+                        Pattern::Wildcard(_) => {}
+                        Pattern::Ident(name, _) if name == "_" => {}
+                        Pattern::Ident(name, _) if name.contains("::") => {
+                            let field_ty = pv.fields.get(slot).cloned().unwrap_or(Ty::Int);
+                            let qualifier_enum = name.split_once("::").map(|(t, _)| t);
+                            let type_matches = qualifier_enum
+                                .zip(underlying_named_ty(&field_ty, ctx))
+                                .is_some_and(|(q, actual)| q == actual.as_str());
+                            match (ctx.enum_variants.get(name), type_matches) {
+                                (Some(&inner_disc), true) => {
                                     let byte_off = (slot as u32) * 8;
                                     out.push_str(&format!("    local.get ${temp}\n"));
                                     out.push_str("    i32.load offset=4\n");
-                                    emit_payload_load(out, &field_ty, byte_off, ctx);
+                                    // `type_matches` confirms the field's declared
+                                    // type resolves to this qualifier's own
+                                    // (all-unit, and therefore i32-represented)
+                                    // enum — pass a clean `Ty::Named` for it rather
+                                    // than the raw (possibly-aliased) `field_ty` so
+                                    // `emit_payload_load` always takes the i32 path.
+                                    emit_payload_load(
+                                        out,
+                                        &Ty::Named(qualifier_enum.unwrap().to_string(), vec![]),
+                                        byte_off,
+                                        ctx,
+                                    );
                                     out.push_str(&format!("    i32.const {inner_disc}\n"));
                                     out.push_str("    i32.eq\n");
                                     out.push_str("    i32.and\n");
                                 }
-                                None => {
+                                _ => {
                                     out.push_str(&format!(
                                         "    ;; unsupported nested pattern: {name}\n"
                                     ));
                                 }
                             }
+                        }
+                        Pattern::Ident(_, _) => {}
+                        other => {
+                            out.push_str(&format!(
+                                "    ;; unsupported nested pattern: {other:?}\n"
+                            ));
                         }
                     }
                 }
@@ -3757,10 +3789,38 @@ fn is_i32(ty: &Ty, ctx: &Ctx) -> bool {
         {
             true
         }
+        // Type alias (e.g. `type Alias = Inner`) — peel to the underlying
+        // type, mirroring `wasm_ty`/`is_float_ctx`. Without this, a payload
+        // field declared via an alias to a unit-variant enum falls through
+        // to the `_ => false` default below, and `emit_payload_store` skips
+        // the `i64.extend_i32_u` widen it needs for the 8-byte slot.
+        Ty::Named(name, _) if ctx.type_aliases.contains_key(name.as_str()) => {
+            is_i32(&ctx.type_aliases[name.as_str()].clone(), ctx)
+        }
         Ty::List(_) | Ty::Array(_, _) | Ty::Set(_) | Ty::Map(_, _) => true,
         Ty::Option(_) | Ty::Result(_, _) => true,
         Ty::Ref(_, inner) | Ty::Labeled(_, inner) | Ty::Refined(inner, _) => is_i32(inner, ctx),
         _ => false,
+    }
+}
+
+/// Peels `Ref`/`Labeled`/`Refined` wrappers and registered type aliases down
+/// to the underlying `Ty::Named` name, if any. Used to verify a qualified
+/// nested-variant pattern's enum (e.g. `Inner` in `Inner::A`) actually
+/// matches a payload field's declared type — including when that field is
+/// declared via a type alias — before treating it as a valid discriminant
+/// guard (#2029 follow-up: an unrelated enum with a colliding ordinal must
+/// not be able to satisfy the guard).
+fn underlying_named_ty(ty: &Ty, ctx: &Ctx) -> Option<String> {
+    match ty {
+        Ty::Named(name, _) => match ctx.type_aliases.get(name.as_str()) {
+            Some(aliased) => underlying_named_ty(aliased, ctx),
+            None => Some(name.clone()),
+        },
+        Ty::Ref(_, inner) | Ty::Labeled(_, inner) | Ty::Refined(inner, _) => {
+            underlying_named_ty(inner, ctx)
+        }
+        _ => None,
     }
 }
 
@@ -5427,16 +5487,159 @@ mod tests {
         assert!(!wat.contains(";; unsupported"), "{wat}");
         // Four distinct `Wrapped(Inner::X)` arms must each AND in their own
         // inner-discriminant comparison, not share one outer-only guard.
-        assert_eq!(
-            wat.matches("i32.and").count(),
-            4,
-            "expected one inner-discriminant AND per Wrapped(Inner::X) arm\n{wat}"
-        );
+        // A bare count would pass even if two arms' discriminant constants
+        // were swapped, so assert the exact guard sequence (including the
+        // expected `inner_disc` value) for each arm instead.
+        for inner_disc in 0..4 {
+            let guard = format!(
+                "i32.load offset=4\n    i64.load offset=0\n    i32.wrap_i64\n    i32.const {inner_disc}\n    i32.eq\n    i32.and\n"
+            );
+            assert!(
+                wat.contains(&guard),
+                "missing inner-discriminant guard for disc {inner_disc}\n{wat}"
+            );
+        }
         // Qualified variant names are guards, not bindings — no local should
         // ever be declared for them.
         assert!(!wat.contains("(local $Inner::A"), "{wat}");
         assert!(!wat.contains("(local $Inner::B"), "{wat}");
         assert!(!wat.contains("(local $Inner::C"), "{wat}");
         assert!(!wat.contains("(local $Inner::D"), "{wat}");
+    }
+
+    /// A qualified reference to an unrelated enum whose variant happens to
+    /// share an ordinal with the field's actual enum (e.g. `ColorB::Y` == 1,
+    /// `ColorA::Green` == 1) must not satisfy the guard — the type mismatch
+    /// has to route to the safe `;; unsupported`/`unreachable` stub instead
+    /// of silently matching the wrong arm.
+    #[test]
+    fn cross_enum_ordinal_collision_is_unsupported_not_silently_matched() {
+        let wat = compile(
+            "type ColorA = enum { Red, Green, Blue }\n\
+             type ColorB = enum { X, Y, Blue2 }\n\
+             type Outer = enum { Plain, Wrapped(ColorA) }\n\
+             fn describe(o: Outer) -> Int {\n\
+                 match o {\n\
+                     Outer::Plain              => 0,\n\
+                     Outer::Wrapped(ColorB::Y) => 111,\n\
+                     Outer::Wrapped(_)         => 999,\n\
+                 }\n\
+             }\n",
+        );
+        // The `;; unsupported nested pattern` marker itself lives in the
+        // scratch body buffer that gets discarded once a whole-body stub is
+        // triggered — so the *emitted* module only shows the stub, not the
+        // marker text. Asserting the stub confirms the safe-trap path fired.
+        assert!(wat.contains("body stubbed"), "{wat}");
+        assert!(wat.contains("unreachable"), "{wat}");
+    }
+
+    /// A nested variant reference whose own variant carries a payload (e.g.
+    /// `Inner::B(n)` where `Inner::B` is `B(Int)`) parses as a `TupleStruct`
+    /// field pattern, not `Ident` — the guard loop must recognize this shape
+    /// as unsupported rather than silently emitting only the outer-tag
+    /// guard (the same bug class as #2029, one level deeper).
+    #[test]
+    fn doubly_nested_payload_carrying_variant_is_unsupported_not_silently_matched() {
+        let wat = compile(
+            "type Inner = enum { B(Int), C(Int) }\n\
+             type Outer = enum { Plain, Wrapped(Inner) }\n\
+             fn describe(o: Outer) -> String {\n\
+                 match o {\n\
+                     Outer::Plain                => \"PLAIN\",\n\
+                     Outer::Wrapped(Inner::B(n)) => \"WRAPPED B\",\n\
+                     Outer::Wrapped(Inner::C(n)) => \"WRAPPED C\",\n\
+                 }\n\
+             }\n",
+        );
+        assert!(wat.contains("body stubbed"), "{wat}");
+        assert!(wat.contains("unreachable"), "{wat}");
+    }
+
+    /// A literal field pattern (`Code(0)` vs `Code(n)`) gets no discriminant
+    /// check from either the guard loop or the binding loop today — it must
+    /// route to the safe stub rather than silently sharing the outer-only
+    /// guard with the catch-all `Code(n)` arm.
+    #[test]
+    fn literal_field_pattern_is_unsupported_not_silently_matched() {
+        let wat = compile(
+            "type Msg2 = enum { Quit, Code(Int) }\n\
+             fn classify(m: Msg2) -> Int {\n\
+                 match m {\n\
+                     Msg2::Quit    => -1,\n\
+                     Msg2::Code(0) => 100,\n\
+                     Msg2::Code(n) => n,\n\
+                 }\n\
+             }\n",
+        );
+        assert!(wat.contains("body stubbed"), "{wat}");
+        assert!(wat.contains("unreachable"), "{wat}");
+    }
+
+    /// A nested-variant guard whose payload field is declared via a type
+    /// alias (`type Alias = Inner`) must still resolve and emit a real
+    /// guard — not stub to unreachable — since the alias peels down to the
+    /// same all-unit enum the qualifier names.
+    #[test]
+    fn aliased_enum_field_type_still_gets_a_real_guard() {
+        let wat = compile(
+            "type Inner = enum { A, B }\n\
+             type Alias = Inner\n\
+             type Outer = enum { Plain, Wrapped(Alias) }\n\
+             fn describe(o: Outer) -> Int {\n\
+                 match o {\n\
+                     Outer::Plain             => 0,\n\
+                     Outer::Wrapped(Inner::A) => 1,\n\
+                     Outer::Wrapped(Inner::B) => 2,\n\
+                 }\n\
+             }\n",
+        );
+        assert!(!wat.contains(";; unsupported"), "{wat}");
+        assert!(!wat.contains("body stubbed"), "{wat}");
+        for inner_disc in 0..2 {
+            let guard = format!(
+                "i32.load offset=4\n    i64.load offset=0\n    i32.wrap_i64\n    i32.const {inner_disc}\n    i32.eq\n    i32.and\n"
+            );
+            assert!(
+                wat.contains(&guard),
+                "missing inner-discriminant guard for disc {inner_disc}\n{wat}"
+            );
+        }
+    }
+
+    /// Two simultaneous nested-enum guard slots in one payload variant, one
+    /// of them wildcarded — each live guard slot must AND in its own check
+    /// independently (#2029 follow-up). This is a WASM-backend-only test:
+    /// the equivalent corpus case tripped a pre-existing, unrelated LLVM
+    /// backend bug ("duplicate case value in switch" in its match-arm
+    /// lowering) that isn't part of this fix's scope.
+    #[test]
+    fn multiple_simultaneous_nested_guards_in_one_variant() {
+        let wat = compile(
+            "type Weekday = enum { Mon, Tue, Wed }\n\
+             type Season = enum { Spring, Summer, Fall, Winter }\n\
+             type Combo = enum { Solo(Weekday), Duo(Weekday, Season) }\n\
+             fn describe(c: Combo) -> String {\n\
+                 match c {\n\
+                     Combo::Solo(Weekday::Mon)               => \"SOLO MON\",\n\
+                     Combo::Solo(Weekday::Tue)               => \"SOLO TUE\",\n\
+                     Combo::Solo(Weekday::Wed)               => \"SOLO WED\",\n\
+                     Combo::Duo(Weekday::Mon, Season::Spring) => \"MON SPRING\",\n\
+                     Combo::Duo(_, Season::Fall)              => \"ANY FALL\",\n\
+                     Combo::Duo(_, _)                         => \"OTHER DUO\",\n\
+                 }\n\
+             }\n",
+        );
+        assert!(!wat.contains(";; unsupported"), "{wat}");
+        assert!(!wat.contains("body stubbed"), "{wat}");
+        // The three `Solo(Weekday::X)` arms get one guard each; the
+        // `Duo(Weekday::Mon, Season::Spring)` arm gets two ANDed together
+        // (both slots live); `Duo(_, Season::Fall)` gets one (first slot is
+        // wildcarded); `Duo(_, _)` gets none. Total: 3 + 2 + 1 = 6.
+        assert_eq!(
+            wat.matches("i32.and").count(),
+            6,
+            "expected 6 total inner-discriminant guards across all arms\n{wat}"
+        );
     }
 }
