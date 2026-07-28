@@ -9,7 +9,7 @@
 //! TIR vs AST boundary.
 
 use crate::mvl::checker::types::Ty;
-use crate::mvl::ir::{BinaryOp, Literal, TypeExpr};
+use crate::mvl::ir::{BinaryOp, Literal, Pattern, TypeExpr};
 use crate::mvl::parser::lexer::Span;
 
 use super::{HeapKind, TextEmitter, RESULT_LLVM_TY};
@@ -973,6 +973,63 @@ impl TextEmitter {
             }
         }
         None
+    }
+
+    /// If `pattern` names a qualified enum variant (e.g. `Weekday::Mon`,
+    /// whether written bare or as an empty `TupleStruct`), return that name.
+    /// `None` for wildcards, plain bindings, and payload sub-patterns.
+    pub(super) fn qualified_variant_name(pattern: &Pattern) -> Option<&str> {
+        match pattern {
+            Pattern::TupleStruct { name, .. } => Some(name.as_str()),
+            Pattern::Ident(name, _) if name.contains("::") => Some(name.as_str()),
+            _ => None,
+        }
+    }
+
+    /// Load the discriminant (as `i8`) of tuple-payload slot `slot` out of
+    /// `payload_ptr`, which points at a `[n_slots x i64]` array. Handles both
+    /// nested payload-enum fields (`RESULT_LLVM_TY`, extractvalue tag 0) and
+    /// unit-enum/scalar fields (raw `i64`, truncated to `i8`).
+    ///
+    /// Generalizes what used to be inlined for slot 0 only (#2032): a match
+    /// arm with 2+ simultaneous nested-enum guard fields needs the
+    /// discriminant of *each* guarded slot, not just the first.
+    pub(super) fn emit_tuple_slot_discriminant_tir(
+        &mut self,
+        payload_ptr: &str,
+        n_slots: usize,
+        slot: usize,
+        field_llvm: &str,
+    ) -> String {
+        let slot_ptr = self.next_reg();
+        self.push_instr(&format!(
+            "{slot_ptr} = getelementptr [{n_slots} x i64], ptr {payload_ptr}, i32 0, i32 {slot}"
+        ));
+
+        let inner_disc = self.next_reg();
+        if field_llvm == RESULT_LLVM_TY {
+            let inner_val = self.next_reg();
+            self.push_instr(&format!(
+                "{inner_val} = load {RESULT_LLVM_TY}, ptr {slot_ptr}"
+            ));
+            self.fn_ctx
+                .reg_types
+                .insert(inner_val.clone(), RESULT_LLVM_TY.to_string());
+            self.push_instr(&format!(
+                "{inner_disc} = extractvalue {RESULT_LLVM_TY} {inner_val}, 0"
+            ));
+        } else {
+            let inner_val_i64 = self.next_reg();
+            self.push_instr(&format!("{inner_val_i64} = load i64, ptr {slot_ptr}"));
+            self.fn_ctx
+                .reg_types
+                .insert(inner_val_i64.clone(), "i64".to_string());
+            self.push_instr(&format!("{inner_disc} = trunc i64 {inner_val_i64} to i8"));
+        }
+        self.fn_ctx
+            .reg_types
+            .insert(inner_disc.clone(), "i8".to_string());
+        inner_disc
     }
 
     // ── Literal emission ───────────────────────────────────────────────────

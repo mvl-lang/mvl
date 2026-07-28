@@ -948,6 +948,59 @@ test fn test_won() -> Unit {\n\
         }
     }
 
+    // Regression: a payload variant with two or more simultaneous
+    // nested-enum guard fields (e.g. `Duo(Weekday::Mon, Season::Spring)` vs
+    // `Duo(Weekday::Mon, Season::Summer)`) must not collide into the same
+    // switch case just because their *first* guard field shares an
+    // ordinal. #2032 fixed the emitter; this test guards it.
+    #[test]
+    fn payload_enum_multi_guard_no_duplicate_switch() {
+        let src = "\
+type Weekday = enum { Mon, Tue, Wed }\n\
+type Season = enum { Spring, Summer, Fall, Winter }\n\
+type Combo = enum { Solo(Weekday), Duo(Weekday, Season) }\n\
+fn describe_combo(c: Combo) -> String {\n\
+    match c {\n\
+        Combo::Solo(Weekday::Mon)               => \"SOLO MON\",\n\
+        Combo::Solo(Weekday::Tue)               => \"SOLO TUE\",\n\
+        Combo::Solo(Weekday::Wed)               => \"SOLO WED\",\n\
+        Combo::Duo(Weekday::Mon, Season::Spring) => \"MON SPRING\",\n\
+        Combo::Duo(Weekday::Mon, Season::Summer) => \"MON SUMMER\",\n\
+        Combo::Duo(_, Season::Fall)              => \"ANY FALL\",\n\
+        Combo::Duo(_, _)                         => \"OTHER DUO\",\n\
+    }\n\
+}\n\
+test fn test_combo() -> Unit {\n\
+    assert_eq(describe_combo(Combo::Duo(Weekday::Tue, Season::Fall)), \"ANY FALL\");\n\
+}\n\
+";
+        let dir = TempDir::new().unwrap();
+        let path = write_file(&dir, "combo_test.mvl", src);
+        let (prog, _) = super::super::parse_or_exit(&path);
+        let (prelude_tirs, entry_tir, compiler) = prepare_llvm_text_tir(&prog);
+        let (ir, _) = compiler
+            .compile_to_ir_test_crate(&prelude_tirs, &entry_tir, "combo_test")
+            .expect("IR generation failed");
+
+        // A duplicate `i8 N, label` inside a SINGLE switch block would fail
+        // lli verification — check every switch block, for every case value
+        // (unlike #1887's test, which only needed to check `i8 1`).
+        for block in ir.split("switch ").skip(1) {
+            let block_body = block.split("]").next().unwrap_or("");
+            let mut seen = std::collections::HashSet::new();
+            for line in block_body.lines() {
+                if let Some(rest) = line.trim().strip_prefix("i8 ") {
+                    if let Some((val, _)) = rest.split_once(',') {
+                        assert!(
+                            seen.insert(val.trim().to_string()),
+                            "duplicate 'i8 {val}' in a single switch (would fail lli):\n{block_body}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
     // Regression: multi-file test crate must include sibling module IR (#1880).
     #[test]
     fn test_crate_includes_sibling_fns() {

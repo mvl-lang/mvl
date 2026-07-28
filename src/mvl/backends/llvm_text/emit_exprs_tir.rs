@@ -1745,78 +1745,106 @@ impl TextEmitter {
                 .reg_types
                 .insert(payload_ptr.clone(), "ptr".into());
 
-            // Load the inner enum value from field 0 of the outer payload.
-            // Determine the field type from the first arm in the group.
+            // Determine the payload field types from the first arm in the group
+            // (every arm here shares the same outer variant, hence the same
+            // field types).
             let first_idx = arm_indices[0];
-            let (n_slots, field_llvm) = match &arms[first_idx].pattern {
-                Pattern::TupleStruct { name, .. } => {
-                    let tys = self
-                        .variant_payload_types(name)
-                        .map(|s| s.to_vec())
-                        .unwrap_or_default();
-                    let n = tys.len();
-                    let llvm = tys
-                        .first()
-                        .map(|ty| self.llvm_ty_ctx(ty))
-                        .unwrap_or_else(|| "i64".to_string());
-                    (n, llvm)
-                }
-                _ => (1_usize, "i64".to_string()),
+            let field_tys: Vec<TypeExpr> = match &arms[first_idx].pattern {
+                Pattern::TupleStruct { name, .. } => self
+                    .variant_payload_types(name)
+                    .map(|s| s.to_vec())
+                    .unwrap_or_default(),
+                _ => Vec::new(),
             };
+            let n_slots = field_tys.len();
 
-            let inner_slot = self.next_reg();
-            self.push_instr(&format!(
-                "{inner_slot} = getelementptr [{n_slots} x i64], ptr {payload_ptr}, i32 0, i32 0"
-            ));
-
-            // Extract the inner discriminant.
-            let inner_disc = self.next_reg();
-            if field_llvm == RESULT_LLVM_TY {
-                // Payload inner enum: load as RESULT_LLVM_TY, extractvalue 0.
-                let inner_val = self.next_reg();
-                self.push_instr(&format!(
-                    "{inner_val} = load {RESULT_LLVM_TY}, ptr {inner_slot}"
-                ));
-                self.fn_ctx
-                    .reg_types
-                    .insert(inner_val.clone(), RESULT_LLVM_TY.to_string());
-                self.push_instr(&format!(
-                    "{inner_disc} = extractvalue {RESULT_LLVM_TY} {inner_val}, 0"
-                ));
-            } else {
-                // Unit inner enum or i64: load i64, trunc to i8.
-                let inner_val_i64 = self.next_reg();
-                self.push_instr(&format!("{inner_val_i64} = load i64, ptr {inner_slot}"));
-                self.fn_ctx
-                    .reg_types
-                    .insert(inner_val_i64.clone(), "i64".to_string());
-                self.push_instr(&format!("{inner_disc} = trunc i64 {inner_val_i64} to i8"));
-            }
-            self.fn_ctx
-                .reg_types
-                .insert(inner_disc.clone(), "i8".to_string());
-
-            // Build inner switch on the inner discriminant.
-            let mut inner_switch = format!("switch i8 {inner_disc}, label %{default_bb} [\n");
+            // A flat switch on slot 0's raw ordinal alone can't distinguish
+            // arms that only differ on a later slot (#2032: e.g.
+            // `Duo(Weekday::Mon, Season::Spring)` vs
+            // `Duo(Weekday::Mon, Season::Summer)`). Instead, find every slot
+            // used as a nested-enum guard by any arm in this group, load
+            // each such slot's discriminant once, then walk the arms in
+            // order testing an AND of that arm's live guard slots — first
+            // match wins, exactly like the source `match`'s own semantics.
+            let mut guard_slots: Vec<usize> = Vec::new();
             for &arm_idx in arm_indices {
                 if let Pattern::TupleStruct { fields, .. } = &arms[arm_idx].pattern {
-                    if let Some(inner_pat) = fields.first() {
-                        let inner_disc_val = match inner_pat {
-                            Pattern::TupleStruct { name, .. } => self.pattern_discriminant(name),
-                            Pattern::Ident(name, _) if name.contains("::") => {
-                                self.pattern_discriminant(name)
-                            }
-                            _ => None,
-                        };
-                        if let Some(d) = inner_disc_val {
-                            inner_switch
-                                .push_str(&format!("    i8 {d}, label %{}\n", arm_bbs[arm_idx]));
+                    for (i, field_pat) in fields.iter().enumerate() {
+                        if Self::qualified_variant_name(field_pat).is_some()
+                            && !guard_slots.contains(&i)
+                        {
+                            guard_slots.push(i);
                         }
                     }
                 }
             }
-            inner_switch.push_str("  ]");
-            self.push_instr(&inner_switch);
+            guard_slots.sort_unstable();
+
+            let mut slot_disc: std::collections::HashMap<usize, String> =
+                std::collections::HashMap::new();
+            for &slot in &guard_slots {
+                let field_llvm = field_tys
+                    .get(slot)
+                    .map(|ty| self.llvm_ty_ctx(ty))
+                    .unwrap_or_else(|| "i64".to_string());
+                let reg =
+                    self.emit_tuple_slot_discriminant_tir(&payload_ptr, n_slots, slot, &field_llvm);
+                slot_disc.insert(slot, reg);
+            }
+
+            for (pos, &arm_idx) in arm_indices.iter().enumerate() {
+                let is_last = pos == arm_indices.len() - 1;
+                let mut conds: Vec<(usize, i64)> = Vec::new();
+                if let Pattern::TupleStruct { fields, .. } = &arms[arm_idx].pattern {
+                    for (i, field_pat) in fields.iter().enumerate() {
+                        if let Some(name) = Self::qualified_variant_name(field_pat) {
+                            if let Some(d) = self.pattern_discriminant(name) {
+                                conds.push((i, d));
+                            }
+                        }
+                    }
+                }
+
+                if conds.is_empty() {
+                    // No live guards (all wildcards/bindings) — unconditional
+                    // match. Any further arms in this group are unreachable.
+                    self.push_instr(&format!("br label %{}", arm_bbs[arm_idx]));
+                    break;
+                }
+
+                let mut cond_reg: Option<String> = None;
+                for (slot, target) in &conds {
+                    let eq_reg = self.next_reg();
+                    self.push_instr(&format!(
+                        "{eq_reg} = icmp eq i8 {}, {target}",
+                        slot_disc[slot]
+                    ));
+                    self.fn_ctx.reg_types.insert(eq_reg.clone(), "i1".into());
+                    cond_reg = Some(match cond_reg {
+                        None => eq_reg,
+                        Some(prev) => {
+                            let and_reg = self.next_reg();
+                            self.push_instr(&format!("{and_reg} = and i1 {prev}, {eq_reg}"));
+                            self.fn_ctx.reg_types.insert(and_reg.clone(), "i1".into());
+                            and_reg
+                        }
+                    });
+                }
+                let cond_reg = cond_reg.expect("conds is non-empty");
+
+                let next_bb = if is_last {
+                    default_bb.clone()
+                } else {
+                    self.next_bb("match_guard")
+                };
+                self.push_instr(&format!(
+                    "br i1 {cond_reg}, label %{}, label %{next_bb}",
+                    arm_bbs[arm_idx]
+                ));
+                if !is_last {
+                    self.start_bb(&next_bb);
+                }
+            }
         }
 
         // Emit individual arm blocks.
