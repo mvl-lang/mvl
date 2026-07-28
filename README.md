@@ -94,6 +94,14 @@ mvl --version    # → mvl 1.0.0
 curl -fsSL https://mvl-lang.org/install.sh | sh
 ```
 
+**Container image:**
+
+```bash
+docker run --rm -v "$PWD:/work" ghcr.io/mvl-lang/mvl:latest check /work
+```
+
+Multi-arch (`linux/amd64`, `linux/arm64`) image published on every tagged release, tagged `:<version>` and `:latest`. It includes `mvl`, the `std/` toolchain files, and Z3 (so `mvl check`/`prove` fully work). `mvl build`/`mvl run` additionally need a live `cargo`/`rustc` on `PATH` and network access to fetch the runtime tarball on first use — this image alone doesn't provide those; use it as a multi-stage `COPY --from=` source into a Rust-based image if you need `build`/`run`.
+
 ### Build from source (for compiler development)
 
 Use this path if you're working *on* the compiler, not just *with* it.
