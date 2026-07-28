@@ -8,6 +8,18 @@
 - **WASM backend: directory input.** `mvl build <dir> --backend=wasm` errored with `Cannot read <dir>: Is a directory`; it now resolves to `main.mvl`/`lib.mvl` within the directory, matching the Rust backend.
 - **`checker_parity_baseline_stable` test drift.** #2026 added `tests/corpus/07_ownership/heap_param_reuse_test.mvl` without regenerating the checker-parity snapshot, leaving `cargo test` failing on `main`. Baseline regenerated.
 
+### Fixed — #2029 #2031
+
+- **WASM backend: nested unit-variant enums inside a payload-carrying variant were never discriminated.** A pattern like `Outer::Wrapped(Inner::A)` compiled every `Wrapped(Inner::X)` arm to the same outer-only guard (`i32.load offset=0; i32.const N; i32.eq`), so the first such arm always matched regardless of the actual inner variant — and `collect_match_arm_locals` declared a mismatched-type `i64` local for the qualified variant name, producing a WASM validation error before the mismatch was even reached. Nested-variant guards are now ANDed into the outer-tag check, gated on the field's actual declared type matching the guard's enum (closing a cross-enum ordinal-collision gap found in review), and any field-pattern shape the emitter can't safely discriminate (a literal, or a doubly-nested payload-carrying variant) now safely stubs the whole function to `unreachable` instead of silently matching every arm.
+
+### Fixed — #2033
+
+- **`mvlr`'s synthesized WASM test driver lost sibling-module resolution.** `mvlr --backend=wasm` synthesizes a driver `fn main` for `*_test.mvl` files, but wrote it into an unrelated scratch directory; `mvl build --backend=wasm` resolves `use` imports relative to the entry file's own directory, so a test file with cross-file production dependencies (e.g. `examples/flight_fuel_planning`) silently lost access to them, surfacing as a confusing `wasm-tools parse` failure (`unknown func: failed to find name $dispatch`). The driver is now written as a hidden sibling of the source file instead, so sibling resolution still finds the real directory.
+
+### Fixed — #2032
+
+- **LLVM backend: two or more simultaneous nested-enum guards in one payload variant collided on the same switch case.** Match arms differing only on a *second* nested-enum guard field (e.g. `Duo(Weekday::Mon, Season::Spring)` vs `Duo(Weekday::Mon, Season::Summer)`) dispatched via a single inner `switch` keyed on tuple field slot 0's raw ordinal only, so both arms produced the same `i8` case value — `lli` rejected the module with "duplicate case value in switch". Replaced the flat slot-0 switch with a sequential per-arm guard-test chain (`icmp eq` + `and i1` + `br`) that checks every guarded slot for every arm in source order, generalizing the existing single-guard case (#1887) rather than special-casing it.
+
 ## [1.7.1] - 2026-07-27
 
 ### Added — #2012
