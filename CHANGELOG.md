@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.7.2] - 2026-07-28
+
+### Fixed — #2027
+
+- **WASM backend: sibling `use` imports were never resolved.** `mvl build --backend=wasm` compiled only the entry file, so cross-file `use module.{...}` imports (e.g. `examples/flight_fuel_planning`) left the emitted WAT calling functions/types that were never emitted — `wasm-tools` failed to assemble with e.g. `unknown func: failed to find name $dispatch`. Since `WasmTextCompiler::emit_program` derives everything from a single `TirProgram`'s flat `Vec` fields, the fix loads siblings via `loader::load_sibling_modules_transitive`, cross-checks each against the entry, lowers each to its own `TirProgram`, and merges them into one flat program before emission.
+- **WASM backend: directory input.** `mvl build <dir> --backend=wasm` errored with `Cannot read <dir>: Is a directory`; it now resolves to `main.mvl`/`lib.mvl` within the directory, matching the Rust backend.
+- **`checker_parity_baseline_stable` test drift.** #2026 added `tests/corpus/07_ownership/heap_param_reuse_test.mvl` without regenerating the checker-parity snapshot, leaving `cargo test` failing on `main`. Baseline regenerated.
+
 ## [1.7.1] - 2026-07-27
 
 ### Added — #2012
