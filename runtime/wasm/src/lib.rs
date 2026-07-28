@@ -214,6 +214,16 @@ pub unsafe extern "C" fn _mvl_string_new(ptr: i32, len: i32) -> i32 {
     alloc_mvl_string(src)
 }
 
+/// `Float.to_string()` (#2039) — shortest round-trip decimal via `f64`'s
+/// `Display` impl (`25.0` → `"25"`, `25.5` → `"25.5"`), matching
+/// `runtime/llvm/src/stdlib/random.rs::_mvl_float_to_string`. Returns a
+/// `*MvlString`; the emitter unpacks `.ptr`/`.len` immediately after the
+/// call, same as `_mvl_string_new`.
+#[unsafe(no_mangle)]
+pub extern "C" fn _mvl_float_to_string(v: f64) -> i32 {
+    alloc_mvl_string(format!("{v}").as_bytes())
+}
+
 /// Increment the refcount and return the same pointer. Passing an
 /// `MvlString` around by clone gives every holder a valid reference; the
 /// last drop frees. Null-safe.
@@ -1428,6 +1438,47 @@ pub extern "C" fn _mvl_struct_alloc(size: i32) -> i32 {
     let ptr = v.as_mut_ptr() as i32;
     std::mem::forget(v);
     ptr
+}
+
+// ── format() builtin (#2039) ──────────────────────────────────────────────
+
+/// `format(template, values)` — positional `{}` interpolation, mirroring
+/// `runtime/rust/src/prelude.rs::mvl_format`. `template` is a raw
+/// `(ptr, len)` byte range; `values` is a `List[String]` — a `*MvlArray`
+/// whose elements are `*MvlString` pointers (`elem_size == 4`). Returns a
+/// `*MvlString`; the emitter unpacks `.ptr`/`.len` immediately after the
+/// call, same as `_mvl_string_new`.
+///
+/// # Safety
+/// `values` must be `0` or a valid `*MvlArray` of `*MvlString` elements.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn _mvl_format(tmpl_ptr: i32, tmpl_len: i32, values: i32) -> i32 {
+    let template = unsafe { slice_or_empty(tmpl_ptr, tmpl_len) };
+    let elems: &[i32] = if values == 0 {
+        &[]
+    } else {
+        let arr = unsafe { &*(values as usize as *const MvlArray) };
+        unsafe { core::slice::from_raw_parts(arr.ptr as usize as *const i32, arr.len as usize) }
+    };
+    let mut result = Vec::<u8>::with_capacity(template.len());
+    let mut val_idx = 0usize;
+    let mut i = 0usize;
+    while i < template.len() {
+        if template[i] == b'{' && template.get(i + 1) == Some(&b'}') {
+            if let Some(&ms_ptr) = elems.get(val_idx) {
+                if ms_ptr != 0 {
+                    let ms = unsafe { &*(ms_ptr as usize as *const MvlString) };
+                    result.extend_from_slice(unsafe { slice_or_empty(ms.ptr, ms.len) });
+                }
+            }
+            val_idx += 1;
+            i += 2;
+        } else {
+            result.push(template[i]);
+            i += 1;
+        }
+    }
+    alloc_mvl_string(&result)
 }
 
 // ── Tests ────────────────────────────────────────────────────────────────

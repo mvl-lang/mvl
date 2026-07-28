@@ -356,6 +356,11 @@ const RUNTIME_IMPORTS: &[(&str, &str)] = &[
         "_mvl_audit_emit_relabel",
         "(param i32 i32 i32 i32 i32 i32 i32 i32 i32 i32)",
     ),
+    // Group J — Float.to_string() and the format() builtin (#2039). Both
+    // return `*MvlString`; the emitter unpacks `.ptr`/`.len` immediately
+    // after the call, same as `_mvl_string_new` (Group B).
+    ("_mvl_float_to_string", "(param f64) (result i32)"),
+    ("_mvl_format", "(param i32 i32 i32) (result i32)"),
 ];
 
 /// Layout offsets on `MvlString` — mirrors `runtime/wasm/src/lib.rs` /
@@ -1466,9 +1471,14 @@ fn collect_locals_expr(expr: &TirExpr, locals: &mut Vec<(String, Ty)>) {
             collect_locals_expr(right, locals);
         }
         TirExprKind::Unary { expr, .. } => collect_locals_expr(expr, locals),
-        TirExprKind::FnCall { args, .. } => {
+        TirExprKind::FnCall { name, args, .. } => {
             for a in args {
                 collect_locals_expr(a, locals);
+            }
+            // `format(...)` returns `*MvlString` (via `_mvl_format`), unpacked
+            // through the same temp-local convention as the String methods below.
+            if name == "format" && args.len() == 2 {
+                locals.push((mvl_string_temp_name(expr), Ty::Bool));
             }
         }
         TirExprKind::MethodCall {
@@ -1491,6 +1501,11 @@ fn collect_locals_expr(expr: &TirExpr, locals: &mut Vec<(String, Ty)>) {
             {
                 // Ty::Bool → i32 in `wasm_ty` — reuse for the pointer
                 // temp so we don't need a dedicated "raw i32" ty.
+                locals.push((mvl_string_temp_name(expr), Ty::Bool));
+            }
+            // `Float.to_string()` also returns `*MvlString` (via
+            // `_mvl_float_to_string`, #2039) and gets the same unpack treatment.
+            if matches!(receiver.ty, Ty::Float) && method == "to_string" {
                 locals.push((mvl_string_temp_name(expr), Ty::Bool));
             }
             // `.unwrap_or(default)` on Option stashes the option pointer
@@ -1828,6 +1843,20 @@ fn emit_expr(out: &mut String, expr: &TirExpr, ctx: &Ctx) {
                 emit_assert_eq(out, &args[0], &args[1], name == "assert_ne", ctx);
                 return;
             }
+            // `format(template, values)` — positional `{}` interpolation
+            // (std/core.mvl builtin, #2039). `template` leaves (ptr, len)
+            // on the stack like any String expr; `values` (a
+            // `List[String]`) leaves its `*MvlArray` pointer. `_mvl_format`
+            // returns `*MvlString`, unpacked back to (ptr, len) like the
+            // other Group B allocation-returning calls.
+            if name == "format" && args.len() == 2 {
+                ctx.needs_runtime.set(true);
+                emit_expr(out, &args[0], ctx);
+                emit_expr(out, &args[1], ctx);
+                out.push_str("    call $_mvl_format\n");
+                emit_unpack_mvl_string(out, expr);
+                return;
+            }
             // `Some(x)` constructor — the TIR lowerer represents it as a
             // FnCall on the bare name "Some". Dispatch to the runtime's
             // typed constructor based on the payload's WASM lowering.
@@ -1835,6 +1864,12 @@ fn emit_expr(out: &mut String, expr: &TirExpr, ctx: &Ctx) {
                 ctx.needs_runtime.set(true);
                 emit_expr(out, &args[0], ctx);
                 let inner = option_inner_ty(&expr.ty).cloned().unwrap_or(Ty::Int);
+                // The runtime `Some` ctor is i64-typed; Float payloads are
+                // stored bit-for-bit via reinterpret rather than a
+                // dedicated f64 ctor (#2038).
+                if is_float_ctx(&inner, ctx) {
+                    out.push_str("    i64.reinterpret_f64\n");
+                }
                 let (some_ctor, _) = option_ops_for(&inner, ctx);
                 out.push_str(&format!("    call ${some_ctor}\n"));
                 return;
@@ -1860,6 +1895,12 @@ fn emit_expr(out: &mut String, expr: &TirExpr, ctx: &Ctx) {
                 ctx.needs_runtime.set(true);
                 emit_expr(out, &args[0], ctx);
                 let ok_ty = result_ok_ty(&expr.ty).cloned().unwrap_or(Ty::Int);
+                // The runtime `Ok` ctor is i64-typed; Float payloads are
+                // stored bit-for-bit via reinterpret rather than a
+                // dedicated f64 ctor (#2038).
+                if is_float_ctx(&ok_ty, ctx) {
+                    out.push_str("    i64.reinterpret_f64\n");
+                }
                 let (ok_ctor, _) = result_ops_for_ok(&ok_ty, ctx);
                 out.push_str(&format!("    call ${ok_ctor}\n"));
                 return;
@@ -1935,6 +1976,11 @@ fn emit_expr(out: &mut String, expr: &TirExpr, ctx: &Ctx) {
             emit_expr(out, receiver, ctx);
             match &receiver.ty {
                 Ty::Int => out.push_str("    call $mvl_int_to_string\n"),
+                Ty::Float => {
+                    ctx.needs_runtime.set(true);
+                    out.push_str("    call $_mvl_float_to_string\n");
+                    emit_unpack_mvl_string(out, expr);
+                }
                 Ty::Bool => {
                     let (tp, tl) = ctx.literals.get("true").copied().unwrap_or((0, 0));
                     let (fp, fl) = ctx.literals.get("false").copied().unwrap_or((0, 0));
@@ -2027,6 +2073,9 @@ fn emit_expr(out: &mut String, expr: &TirExpr, ctx: &Ctx) {
             out.push_str(&format!("    if (result {result_wasm_ty})\n"));
             out.push_str(&format!("    local.get ${temp}\n"));
             out.push_str(&format!("    call ${getter}\n"));
+            if is_float_ctx(&ok_ty, ctx) {
+                out.push_str("    f64.reinterpret_i64\n");
+            }
             out.push_str("    else\n");
             emit_expr(out, &args[0], ctx);
             out.push_str("    end\n");
@@ -2183,6 +2232,9 @@ fn emit_expr(out: &mut String, expr: &TirExpr, ctx: &Ctx) {
             out.push_str(&format!("    if (result {result_ty})\n"));
             out.push_str(&format!("    local.get ${temp}\n"));
             out.push_str(&format!("    call ${getter}\n"));
+            if is_float_ctx(&inner, ctx) {
+                out.push_str("    f64.reinterpret_i64\n");
+            }
             out.push_str("    else\n");
             emit_expr(out, &args[0], ctx);
             out.push_str("    end\n");
@@ -2658,6 +2710,9 @@ fn emit_match_impl(
                     if name != "_" {
                         out.push_str(&format!("    local.get ${temp}\n"));
                         out.push_str(&format!("    call ${getter}\n"));
+                        if is_float_ctx(&inner_ty, ctx) {
+                            out.push_str("    f64.reinterpret_i64\n");
+                        }
                         out.push_str(&format!("    local.set ${name}\n"));
                     }
                 }
@@ -2689,6 +2744,9 @@ fn emit_match_impl(
                     if name != "_" {
                         out.push_str(&format!("    local.get ${temp}\n"));
                         out.push_str(&format!("    call ${getter}\n"));
+                        if is_float_ctx(&ok_ty, ctx) {
+                            out.push_str("    f64.reinterpret_i64\n");
+                        }
                         out.push_str(&format!("    local.set ${name}\n"));
                     }
                 }
@@ -3218,7 +3276,7 @@ fn emit_propagate(out: &mut String, inner: &TirExpr, expr: &TirExpr, ctx: &Ctx) 
 /// (TirExprKind::Match) can share the same logic.
 fn collect_match_arm_locals(
     arm: &TirMatchArm,
-    _scrutinee_ty: &Ty,
+    scrutinee_ty: &Ty,
     option_inner: Option<&Ty>,
     span_offset: u32,
     locals: &mut Vec<(String, Ty)>,
@@ -3235,7 +3293,12 @@ fn collect_match_arm_locals(
         Pattern::Ok { inner, .. } => {
             if let Pattern::Ident(name, _) = inner.as_ref() {
                 if name != "_" {
-                    locals.push((name.clone(), Ty::Int));
+                    // Bind at the Result's actual Ok-payload type (#2038) — a
+                    // hardcoded `Ty::Int` here declares e.g. a Float
+                    // payload's local as `i64`, then `local.set` on the
+                    // `f64.reinterpret_i64`'d value fails validation.
+                    let ty = result_ok_ty(scrutinee_ty).cloned().unwrap_or(Ty::Int);
+                    locals.push((name.clone(), ty));
                 }
             }
         }
@@ -3495,7 +3558,10 @@ fn option_inner_ty(ty: &Ty) -> Option<&Ty> {
 ///
 /// The choice comes from [`wasm_ty`]: i32-typed payloads (Bool, Byte,
 /// enum, collection ptr) use the i32 variants; everything else falls
-/// back to i64 (Int, UInt, Float via bit-cast if needed later).
+/// back to i64 (Int, UInt). Float payloads also use the i64 variants —
+/// callers must bit-cast with `i64.reinterpret_f64` / `f64.reinterpret_i64`
+/// around the ctor/getter call, since there is no dedicated f64 runtime
+/// helper (#2038).
 fn option_ops_for(inner_ty: &Ty, ctx: &Ctx) -> (&'static str, &'static str) {
     if is_i32(inner_ty, ctx) {
         ("_mvl_option_some_i32", "_mvl_option_value_i32")
@@ -3535,7 +3601,9 @@ fn result_err_ty(ty: &Ty) -> Option<&Ty> {
 
 /// Constructor and value-getter names for a `Result[T, E]` Ok payload of
 /// `ok_ty`. Returns `(ok_ctor, value_getter)` — unprefixed runtime symbol
-/// names (no `$`).
+/// names (no `$`). Float payloads reuse the i64 variants; callers must
+/// bit-cast with `i64.reinterpret_f64` / `f64.reinterpret_i64` around the
+/// ctor/getter call (#2038).
 fn result_ops_for_ok(ok_ty: &Ty, ctx: &Ctx) -> (&'static str, &'static str) {
     if is_i32(ok_ty, ctx) {
         ("_mvl_result_ok_i32", "_mvl_result_value_i32")
