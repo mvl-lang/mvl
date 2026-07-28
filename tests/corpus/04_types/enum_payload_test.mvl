@@ -40,6 +40,37 @@ fn code_or_default(m: Msg) -> Int {
     }
 }
 
+// A unit-variant enum nested inside a payload-carrying variant (#2029) —
+// the inner variant must be independently discriminated, not just the
+// outer `Wrapped` tag.
+type Inner = enum { A, B, C, D }
+type Outer = enum { Plain, Wrapped(Inner) }
+
+fn describe_outer(o: Outer) -> String {
+    match o {
+        Outer::Plain             => "PLAIN",
+        Outer::Wrapped(Inner::A) => "WRAPPED A",
+        Outer::Wrapped(Inner::B) => "WRAPPED B",
+        Outer::Wrapped(Inner::C) => "WRAPPED C",
+        Outer::Wrapped(Inner::D) => "WRAPPED D",
+    }
+}
+
+// A payload field declared through a type alias must still resolve to the
+// same all-unit enum the guard names (#2029 follow-up).
+type AliasedInner = Inner
+type Boxed = enum { Empty, Full(AliasedInner) }
+
+fn describe_boxed(b: Boxed) -> String {
+    match b {
+        Boxed::Empty          => "EMPTY",
+        Boxed::Full(Inner::A) => "FULL A",
+        Boxed::Full(Inner::B) => "FULL B",
+        Boxed::Full(Inner::C) => "FULL C",
+        Boxed::Full(Inner::D) => "FULL D",
+    }
+}
+
 test fn enum_positional_single_payload() -> Unit {
     let c: Shape = Shape::Circle(5);
     assert_eq(area(c), 75);
@@ -64,4 +95,20 @@ test fn enum_payload_with_wildcard_fallthrough() -> Unit {
     assert_eq(code_or_default(Msg::Code(42)), 42);
     assert_eq(code_or_default(Msg::Quit), -1);
     assert_eq(code_or_default(Msg::Write("x")), -1);
+}
+
+test fn enum_nested_unit_variant_in_payload() -> Unit {
+    assert_eq(describe_outer(Outer::Plain), "PLAIN");
+    assert_eq(describe_outer(Outer::Wrapped(Inner::A)), "WRAPPED A");
+    assert_eq(describe_outer(Outer::Wrapped(Inner::B)), "WRAPPED B");
+    assert_eq(describe_outer(Outer::Wrapped(Inner::C)), "WRAPPED C");
+    assert_eq(describe_outer(Outer::Wrapped(Inner::D)), "WRAPPED D");
+}
+
+test fn enum_nested_guard_through_type_alias() -> Unit {
+    assert_eq(describe_boxed(Boxed::Empty), "EMPTY");
+    assert_eq(describe_boxed(Boxed::Full(Inner::A)), "FULL A");
+    assert_eq(describe_boxed(Boxed::Full(Inner::B)), "FULL B");
+    assert_eq(describe_boxed(Boxed::Full(Inner::C)), "FULL C");
+    assert_eq(describe_boxed(Boxed::Full(Inner::D)), "FULL D");
 }
