@@ -328,11 +328,11 @@ let b = a.checked_add(1);           // Option<Int32> — explicit handling
 
 **Secret and tainted data tracked through types — no leaks, no injection.**
 
-Every value carries a security label: `Public`, `Clean`, `Tainted`, `Secret`. Data flows up the lattice freely; flowing down requires explicit `declassify()` or `sanitize()` — auditable, greppable operations. External data is automatically `Tainted`.
+Values are either **bare** (unlabeled, implicitly public) or carry an explicit security label — pre-seeded `Tainted[T]` and `Secret[T]`, plus user-defined labels via `label`. There is **no lattice and no hierarchy** (#894): labels are opaque categories, and `Tainted[String]`, `Secret[String]` and bare `String` are three distinct, mutually incompatible types. No implicit conversion exists in either direction. Every crossing requires a named `relabel` transition, which makes every trust boundary auditable by grep. External data arrives `Tainted`.
 
 **If dropped:** Secret data flows to public outputs. SQL injection, log leakage, XSS, SSRF.
 
-**Origin:** Denning's lattice model (1976). Perl taint mode (1989, runtime). Jif (Myers, 1999, compile-time). LIO. The MVL makes it compile-time and LLM-annotated.
+**Origin:** Denning's lattice model (1976) — inspiration, not adopted. Perl taint mode (1989, runtime). Jif (Myers, 1999, compile-time). LIO. MVL makes it compile-time and LLM-annotated, and departs from the lattice: labels are user-defined categories with no implicit ordering (#894).
 
 **Why LLMs unblock it:** Security lattice annotations on every variable are prohibitive for humans. LLMs propagate taint labels through the codebase automatically.
 
@@ -340,13 +340,17 @@ Every value carries a security label: `Public`, `Clean`, `Tainted`, `Secret`. Da
 let user_input: Tainted[String] = read_line();
 let api_key: Secret[String] = load_key();
 
-fn log_msg(msg: Public[String]) -> () ! Log { ... }
+// Bare `String` — unlabeled is implicitly public. There is no `Public[T]`.
+fn log_msg(msg: String) -> Unit ! Log { ... }
 
-log_msg(api_key);                   // COMPILE ERROR: Secret → Public
-log_msg(user_input);                // COMPILE ERROR: Tainted → Public
+log_msg(api_key);                   // COMPILE ERROR: Secret[String] ≠ String
+log_msg(user_input);                // COMPILE ERROR: Tainted[String] ≠ String
 
-let clean = sanitize(validate(user_input));  // Tainted → Clean (explicit)
-log_msg(declassify(clean));                  // Clean → Public (auditable)
+// Named transitions, each carrying an audit tag.
+let trusted = relabel trust(validate(user_input), "INPUT-VALIDATED");
+log_msg(trusted);                   // OK — bare String
+
+log_msg(relabel release(api_key, "KEY-FINGERPRINT-ONLY"));  // auditable by grep
 ```
 
 **Capability security absorbed:** IFC labels double as capability tokens (#931). `ConfigPath[String]`, `DbUrl[String]`, `ApiEndpoint[String]` prove resource identifiers came from audited configuration — the compiler rejects raw or tainted strings at builtin boundaries. Effects (`! FileRead`) tell you the class of action; capability labels tell you which resource.
