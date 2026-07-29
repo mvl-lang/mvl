@@ -52,3 +52,28 @@ test fn map_contains_key() -> Unit {
     assert_eq(m.contains_key("x"), true);
     assert_eq(m.contains_key("z"), false);
 }
+
+// String values are boxed `*MvlString` handles under the WASM backend
+// (#2047) — `.get()` must clone before returning so the caller's
+// `unwrap_or` cleanup doesn't free memory the map's own entry still
+// references. `contains_key`/`len`/`main` here also just exercise that the
+// map itself survives being fully consumed afterward.
+test fn map_string_value_get_hit_returns_some() -> Unit {
+    let m: Map[String, String] = {"status": "ready"};
+    let v: String = m.get("status").unwrap_or("none");
+    assert_eq(v, "ready");
+}
+
+test fn map_string_value_get_miss_returns_none() -> Unit {
+    let m: Map[String, String] = {"status": "ready"};
+    let v: String = m.get("missing").unwrap_or("none");
+    assert_eq(v, "none");
+}
+
+test fn map_string_value_get_twice_is_safe() -> Unit {
+    let m: Map[String, String] = {"status": "ready"};
+    let first: String = m.get("status").unwrap_or("none");
+    let second: String = m.get("status").unwrap_or("none");
+    assert_eq(first, "ready");
+    assert_eq(second, "ready");
+}
