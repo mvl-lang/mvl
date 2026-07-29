@@ -59,6 +59,42 @@ fn map_get_emits_null_guard_before_load() {
     assert!(ir.contains("phi { i8, ptr }"), "{ir}");
 }
 
+// `Map[String, Int]`'s value slot holds the i64 by value, not a shared
+// reference — nothing to clone. Confirms the scalar path is unchanged by
+// the String-specific fix below.
+#[test]
+fn map_get_scalar_value_does_not_clone() {
+    let ir = compile(
+        "fn f(m: Map[String, Int]) -> Int {\n\
+         m.get(\"key\")\n\
+         }",
+    );
+    assert!(!ir.contains("@_mvl_string_clone"), "{ir}");
+}
+
+// `Map[String, String]`'s value slot stores the string's pointer by value
+// (aliasing the same heap object the map owns — see the "Transfer
+// ownership" comment in `emit_map_literal_tir`). `.get()` must clone the
+// loaded pointer into a fresh Option payload slot rather than handing back
+// a pointer into the map's own storage — otherwise the caller's eventual
+// drop (e.g. `unwrap_or`'s cleanup) frees memory the map still references,
+// and the map's own later drop double-frees it (#2047, mirrors the
+// equivalent WASM backend fix).
+#[test]
+fn map_get_string_value_clones_before_wrapping_in_option() {
+    let ir = compile(
+        "fn f(m: Map[String, String]) -> String {\n\
+         m.get(\"key\").unwrap_or(\"default\")\n\
+         }",
+    );
+    assert!(ir.contains("call ptr @_mvl_map_get(ptr"), "{ir}");
+    assert!(ir.contains("declare ptr @_mvl_string_clone(ptr)"), "{ir}");
+    assert!(ir.contains("call ptr @_mvl_string_clone(ptr"), "{ir}");
+    // The cloned pointer must land in a fresh slot, not the map's own —
+    // i.e. a second `alloca ptr` distinct from the map-get call's result.
+    assert!(ir.contains("insertvalue { i8, ptr }"), "{ir}");
+}
+
 #[test]
 fn string_chars_emits_runtime_call() {
     let ir = compile(

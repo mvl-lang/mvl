@@ -3432,6 +3432,24 @@ impl TextEmitter {
                 Ok(Some(result))
             }
             ("get", "ptr") if matches!(unwrap_labels(&receiver.ty), Ty::Map(_, _)) => {
+                // Map[String, String]'s value slot stores the string's
+                // pointer by value (aliasing the same heap object — see the
+                // "Transfer ownership" comment in `emit_map_literal_tir`),
+                // not a deep clone. `_mvl_map_get` returns a pointer *into
+                // that slot*, so wrapping it directly as the Option's
+                // payload hands the caller a reference the map still owns.
+                // Every consumer of an Option (`unwrap_or`, `match`, …)
+                // treats its payload as freshly owned and drops it, which —
+                // for a value the map's own drop will also walk — is a
+                // double free the moment both run. Clone the string here so
+                // the Option holds an independently-owned reference; scalar
+                // values (Int, Bool, enum discriminants, …) have no
+                // ownership to share and are returned as before (#2047,
+                // mirrors the equivalent WASM backend fix).
+                let value_is_string = matches!(
+                    unwrap_labels(&receiver.ty),
+                    Ty::Map(_, v) if matches!(unwrap_labels(v), Ty::String)
+                );
                 let key_expr = match args.first() {
                     Some(a) => a,
                     None => return Ok(None),
@@ -3470,9 +3488,25 @@ impl TextEmitter {
                 ));
                 self.start_bb(&some_bb);
                 let opt_some = self.next_reg();
-                self.push_instr(&format!(
-                    "{opt_some} = insertvalue {RESULT_LLVM_TY} {{ i8 0, ptr null }}, ptr {raw}, 1"
-                ));
+                if value_is_string {
+                    self.ensure_extern("declare ptr @_mvl_string_clone(ptr)");
+                    let loaded = self.next_reg();
+                    self.push_instr(&format!("{loaded} = load ptr, ptr {raw}"));
+                    let cloned = self.next_reg();
+                    self.push_instr(&format!(
+                        "{cloned} = call ptr @_mvl_string_clone(ptr {loaded})"
+                    ));
+                    let fresh_slot = self.next_reg();
+                    self.push_instr(&format!("{fresh_slot} = alloca ptr"));
+                    self.push_instr(&format!("store ptr {cloned}, ptr {fresh_slot}"));
+                    self.push_instr(&format!(
+                        "{opt_some} = insertvalue {RESULT_LLVM_TY} {{ i8 0, ptr null }}, ptr {fresh_slot}, 1"
+                    ));
+                } else {
+                    self.push_instr(&format!(
+                        "{opt_some} = insertvalue {RESULT_LLVM_TY} {{ i8 0, ptr null }}, ptr {raw}, 1"
+                    ));
+                }
                 self.push_instr(&format!("br label %{merge_bb}"));
                 let some_end = self.fn_ctx.current_bb.clone();
                 self.start_bb(&none_bb);
