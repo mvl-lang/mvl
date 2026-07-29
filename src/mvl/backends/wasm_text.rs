@@ -440,8 +440,13 @@ impl Backend for WasmTextCompiler {
             .map(|rd| (rd.name.clone(), (rd.from.clone(), rd.to.clone())))
             .collect();
 
+        // Extension-method bodies are emitted separately from `fns` (see
+        // `ext_methods` above) but still need their string literals interned
+        // here — otherwise a literal inside one emits as `;; missing literal`
+        // with nothing pushed to the stack (#2058 follow-up).
+        let literal_scan_fns: Vec<&TirFn> = fns.iter().chain(ext_methods.iter()).copied().collect();
         let (literals, heap_start) =
-            collect_literals(&fns, &tir.actors, needs_wasi, &audit_relabels);
+            collect_literals(&literal_scan_fns, &tir.actors, needs_wasi, &audit_relabels);
         let (enum_types, enum_variants) = collect_enums(&tir.types);
         let mut struct_layouts = collect_structs(&tir.types);
         // Actor state layouts land in `struct_layouts` so the handle behaves
@@ -2045,9 +2050,12 @@ fn emit_expr(out: &mut String, expr: &TirExpr, ctx: &Ctx) {
                 ));
             }
         }
+        // Guarded off a user-defined extension method of the same name
+        // (#2058 follow-up) — a struct's own `to_string` must win over this
+        // generic by-name fallback, which never checked the receiver's type.
         TirExprKind::MethodCall {
             receiver, method, ..
-        } if method == "to_string" => {
+        } if method == "to_string" && !is_struct_method_call(receiver, method, ctx) => {
             emit_expr(out, receiver, ctx);
             match &receiver.ty {
                 Ty::Int => out.push_str("    call $mvl_int_to_string\n"),
@@ -2562,9 +2570,7 @@ fn emit_expr(out: &mut String, expr: &TirExpr, ctx: &Ctx) {
             receiver,
             method,
             args,
-        } if named_type_name(&receiver.ty)
-            .is_some_and(|t| ctx.struct_methods.contains(&(t, method.clone()))) =>
-        {
+        } if is_struct_method_call(receiver, method, ctx) => {
             let receiver_type = named_type_name(&receiver.ty).expect("guarded above");
             emit_expr(out, receiver, ctx);
             for a in args {
@@ -4836,6 +4842,17 @@ fn named_type_name(ty: &Ty) -> Option<String> {
             _ => return None,
         }
     }
+}
+
+/// True if `method` is a user-defined extension method registered on
+/// `receiver`'s named type (#2054, #2058 follow-up). Consulted by any
+/// dispatch arm that would otherwise match purely on method name (e.g.
+/// `to_string`, checked below) so a struct's own `to_string`/etc. extension
+/// method isn't shadowed by a builtin-type special case that never
+/// considered the receiver's type.
+fn is_struct_method_call(receiver: &TirExpr, method: &str, ctx: &Ctx) -> bool {
+    named_type_name(&receiver.ty)
+        .is_some_and(|t| ctx.struct_methods.contains(&(t, method.to_string())))
 }
 
 /// Emit `$<snake>_dispatch(state, disc, args)` — a discriminant switch that
