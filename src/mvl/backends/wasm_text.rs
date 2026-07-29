@@ -333,6 +333,9 @@ const RUNTIME_IMPORTS: &[(&str, &str)] = &[
     ("_mvl_map_len", "(param i32) (result i64)"),
     ("_mvl_map_insert_si64", "(param i32 i32 i32 i64)"),
     ("_mvl_map_get_si64", "(param i32 i32 i32) (result i32)"),
+    // Map[String, String] get — clones the returned `*MvlString` handle so
+    // the caller can drop it independently of the map's own copy (#2047).
+    ("_mvl_map_get_str", "(param i32 i32 i32) (result i32)"),
     (
         "_mvl_map_contains_key_si64",
         "(param i32 i32 i32) (result i32)",
@@ -2156,9 +2159,21 @@ fn emit_expr(out: &mut String, expr: &TirExpr, ctx: &Ctx) {
             args,
         } if map_key_val_ty(&receiver.ty).is_some() && method == "get" && args.len() == 1 => {
             ctx.needs_runtime.set(true);
+            // String values are `*MvlString` handles still owned by the
+            // map's own entry — `_mvl_map_get_str` clones before wrapping
+            // in the Option so the caller's eventual drop (e.g.
+            // `unwrap_or`'s cleanup) doesn't free memory the map still
+            // references (#2047). Non-string values are plain scalars with
+            // no ownership to share, so the untyped getter is fine as-is.
+            let val_ty = map_key_val_ty(&receiver.ty).map(|(_, v)| v.clone());
+            let getter = if val_ty.as_ref().is_some_and(|v| is_string_ty(v, ctx)) {
+                "_mvl_map_get_str"
+            } else {
+                "_mvl_map_get_si64"
+            };
             emit_expr(out, receiver, ctx); // map ptr
             emit_expr(out, &args[0], ctx); // key → (ptr, len)
-            out.push_str("    call $_mvl_map_get_si64\n");
+            out.push_str(&format!("    call ${getter}\n"));
         }
         TirExprKind::MethodCall {
             receiver,

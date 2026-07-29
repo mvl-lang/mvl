@@ -378,59 +378,37 @@ test-runtime-rust: ## Unit-test runtime/rust/ crate natively (peer of test-runti
 test-runtime-llvm: ## Unit-test runtime/llvm/ crate natively (peer of test-runtime-wasm)
 	cargo test -p mvl_runtime_llvm
 
-# WASM cases the backend actually handles — scoped to what runs end-to-end
-# without a `runtime/wasm/` crate (Phase 2 of epic #1817). Everything else
-# in `tests/corpus/` needs collections, MvlString ops, tagged-union enum
-# payloads, closures, or generics-mono — all of which land in later phases.
-# Grow this list as the emitter's coverage grows.
+# WASM cases the backend actually handles — everything under tests/corpus/
+# *except* the closure/HOF- and split-heavy cases below (Phase 2 of epic
+# #1817). Coverage is now the norm rather than the exception, so this is an
+# exclude list: new corpus files are included automatically, and only need
+# adding here if the WASM backend can't handle them yet.
 #
 # 12_actors runs on the single-threaded run-to-completion scheduler emitted
 # into the module itself (#2012, ADR-0059) — semantics only, no parallelism.
-WASM_CORPUS := \
+WASM_CORPUS_EXCLUDE := \
+	tests/corpus/03_functions/higher_order_test.mvl \
+	tests/corpus/07_ownership/lambda_capture_test.mvl \
+	tests/corpus/13_stdlib/list_hof_test.mvl \
+	tests/corpus/13_stdlib/list_method_fallback_test.mvl \
+	tests/corpus/13_stdlib/list_sort_by_test.mvl \
+	tests/corpus/13_stdlib/parse_test.mvl
+
+# Directories with nothing excluded pass through whole — mvlr prints a
+# per-test checkmark + pass/fail count for a directory arg, but runs a bare
+# file arg silently (stdout only) on success. Everything else is listed as
+# individual files so newly-excluded tests can be dropped without losing a
+# whole directory's summary output.
+WASM_CORPUS_WHOLE_DIRS := \
 	tests/corpus/00_smoke \
 	tests/corpus/01_expressions \
 	tests/corpus/02_control_flow \
-	tests/corpus/03_functions/basic_test.mvl \
-	tests/corpus/03_functions/generic_test.mvl \
-	tests/corpus/03_functions/total_partial_test.mvl \
-	tests/corpus/04_types/enum_test.mvl \
-	tests/corpus/04_types/struct_test.mvl \
-	tests/corpus/04_types/enum_payload_test.mvl \
-	tests/corpus/04_types/option_result_test.mvl \
-	tests/corpus/05_collections/list_basics_test.mvl \
-	tests/corpus/05_collections/list_iter_test.mvl \
-	tests/corpus/05_collections/list_get_test.mvl \
-	tests/corpus/05_collections/list_test.mvl \
-	tests/corpus/05_collections/set_test.mvl \
-	tests/corpus/05_collections/map_test.mvl \
-	tests/corpus/05_collections/nested_collections_drop_test.mvl \
-	tests/corpus/06_effects/pure_test.mvl \
-	tests/corpus/06_effects/composite_test.mvl \
-	tests/corpus/06_effects/console_test.mvl \
-	tests/corpus/06_effects/user_defined_test.mvl \
-	tests/corpus/07_ownership/ref_test.mvl \
-	tests/corpus/07_ownership/value_test.mvl \
-	tests/corpus/07_ownership/consume_test.mvl \
-	tests/corpus/07_ownership/heap_param_reuse_test.mvl \
-	tests/corpus/08_ifc/secret_test.mvl \
-	tests/corpus/08_ifc/tainted_test.mvl \
-	tests/corpus/08_ifc/audit_relabel_test.mvl \
-	tests/corpus/09_refinements/type_alias_test.mvl \
-	tests/corpus/09_refinements/array_index_refinement_test.mvl \
-	tests/corpus/09_refinements/bitwise_refinement_test.mvl \
-	tests/corpus/09_refinements/float_refinement_test.mvl \
-	tests/corpus/09_refinements/field_refinement_test.mvl \
-	tests/corpus/09_refinements/list_get_refined_test.mvl \
-	tests/corpus/09_refinements/method_call_refinement_test.mvl \
-	tests/corpus/09_refinements/struct_invariant_test.mvl \
-	tests/corpus/10_termination/total_fn_test.mvl \
-	tests/corpus/10_termination/decreases_test.mvl \
-	tests/corpus/10_termination/partial_fn_test.mvl \
-	tests/corpus/11_contracts/requires_test.mvl \
-	tests/corpus/11_contracts/ensures_test.mvl \
-	tests/corpus/11_contracts/invariant_test.mvl \
-	tests/corpus/12_actors \
-	tests/corpus/13_stdlib/string_test.mvl
+	tests/corpus/12_actors
+
+WASM_CORPUS := $(WASM_CORPUS_WHOLE_DIRS) \
+	$(filter-out \
+		$(WASM_CORPUS_EXCLUDE) $(foreach d,$(WASM_CORPUS_WHOLE_DIRS),$(wildcard $(d)/*_test.mvl)), \
+		$(sort $(wildcard tests/corpus/*/*_test.mvl)))
 
 test-rust-wasm: build build-runtime-wasm ## rust/wasm — WASM-supported corpus subset (via runtime/wasm/ preload)
 	@command -v wasm-tools > /dev/null 2>&1 || { \

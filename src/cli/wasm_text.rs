@@ -12,14 +12,163 @@ use mvl::mvl::backends::llvm_text::lli;
 use mvl::mvl::backends::wasm_text::WasmTextCompiler;
 use mvl::mvl::backends::{AssertMode, Backend};
 use mvl::mvl::checker;
-use mvl::mvl::ir::TirProgram;
+use mvl::mvl::checker::types::Ty;
+use mvl::mvl::ir::visit::{walk_tir_expr, Visit};
+use mvl::mvl::ir::{TirExpr, TirExprKind, TirFn, TirProgram};
 use mvl::mvl::loader;
-use mvl::mvl::parser::ast::Program;
+use mvl::mvl::parser::ast::{Decl, FnDecl, Program, TypeDecl};
+use mvl::mvl::parser::lexer::Span;
 use mvl::mvl::parser::Parser;
 use mvl::mvl::pipeline::{load_full_prelude, PreludeMode};
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process;
+
+/// Collects every free-function name referenced via `TirExprKind::FnCall`,
+/// and every qualified enum-variant reference (`TirExprKind::Var("Type::Variant")`)
+/// in a function body — used to find prelude functions/types a program
+/// references but that never got lowered into the emitted module (#2045,
+/// #2046).
+#[derive(Default)]
+struct RefCollector {
+    fn_calls: HashSet<String>,
+    variant_refs: HashSet<String>,
+}
+
+impl<'a> Visit<'a> for RefCollector {
+    fn visit_tir_expr(&mut self, e: &'a TirExpr) {
+        match &e.kind {
+            TirExprKind::FnCall { name, .. } => {
+                self.fn_calls.insert(name.clone());
+            }
+            TirExprKind::Var(name) if name.contains("::") => {
+                self.variant_refs.insert(name.clone());
+            }
+            _ => {}
+        }
+        walk_tir_expr(self, e);
+    }
+}
+
+/// Collect all top-level type declarations from a list of programs, keyed
+/// by name — the `Decl::Type` counterpart to `mono::collect_fns`.
+fn collect_type_decls<'a>(
+    programs: impl IntoIterator<Item = &'a Program>,
+) -> HashMap<String, TypeDecl> {
+    let mut map = HashMap::new();
+    for prog in programs {
+        for decl in &prog.declarations {
+            if let Decl::Type(td) = decl {
+                map.insert(td.name.clone(), td.clone());
+            }
+        }
+    }
+    map
+}
+
+/// Pull in prelude functions and types that `merged` references by name but
+/// that were never lowered (#2045, #2046).
+///
+/// `entry_tir`/`sibling_tirs` only lower `prog` (and its siblings) — a call
+/// like `int_max(a, b)` reached via `use std.math.{int_max}` is resolved by
+/// the checker but never gets a `(func $int_max ...)` body in the emitted
+/// module, leaving a dangling `call $int_max` that fails `wasm-tools parse`.
+/// Likewise, a bare enum-variant value like `ArgType::Int` (`use
+/// std.args.{ArgType}`) lowers to `TirExprKind::Var("ArgType::Int")`, and the
+/// WASM emitter only recognizes such names when the owning enum's `TirTypeDecl`
+/// is present in `merged.types` — otherwise it falls through to treating the
+/// name as a plain local (`local.get $ArgType::Int`, "unknown local").
+///
+/// The LLVM backend avoids both gaps by lowering *every* prelude module and
+/// merging all of it in — too broad here: prelude functions the WASM backend
+/// doesn't support yet (e.g. `stdout()`, `exit()`) would break every program
+/// that transitively pulls them in, even ones that never call them. Instead,
+/// walk outward from `merged` and lower only the specific missing
+/// functions/types, transitively.
+///
+/// Extern declarations (`extern "rust" { ... }`) are deliberately left
+/// unresolved — `all_fn_decls` only contains `Decl::Fn`, never
+/// `Decl::Extern`, so a call to an extern function stays dangling here, same
+/// as before (#2049 — not supported by `--backend=wasm`).
+fn pull_in_missing_prelude_items(
+    merged: &mut TirProgram,
+    all_fn_decls: &HashMap<String, FnDecl>,
+    all_type_decls: &HashMap<String, TypeDecl>,
+    expr_types: &HashMap<Span, Ty>,
+) {
+    let mut known_fns: HashSet<String> = merged.fns.iter().map(|f| f.name.clone()).collect();
+    let mut known_types: HashSet<String> = merged.types.iter().map(|t| t.name.clone()).collect();
+    let mut frontier: Vec<TirFn> = merged.fns.clone();
+
+    while !frontier.is_empty() {
+        let mut collector = RefCollector::default();
+        for f in &frontier {
+            collector.visit_tir_block(&f.body);
+        }
+
+        for name in collector.variant_refs {
+            let Some((type_name, _)) = name.split_once("::") else {
+                continue;
+            };
+            if known_types.contains(type_name) {
+                continue;
+            }
+            known_types.insert(type_name.to_string());
+
+            let Some(td) = all_type_decls.get(type_name) else {
+                continue;
+            };
+            let synthetic = Program {
+                declarations: vec![Decl::Type(td.clone())],
+                span: td.span,
+            };
+            let syn_mono =
+                mvl::mvl::passes::mono::monomorphize(&synthetic, &HashMap::new(), expr_types);
+            let syn_tir = mvl::mvl::ir::lower::lower(&synthetic, &syn_mono, expr_types);
+            merged.types.extend(syn_tir.types);
+        }
+
+        let mut newly_added: Vec<TirFn> = Vec::new();
+        for name in collector.fn_calls {
+            if known_fns.contains(&name) {
+                continue;
+            }
+            known_fns.insert(name.clone());
+
+            // `emit_expr`'s `TirExprKind::FnCall` match hardcodes these two
+            // names to WASI runtime shims (`$mvl_println`/`$mvl_eprintln`)
+            // rather than ever calling a real `$println`/`$eprintln`
+            // function — pulling in their `std/core.mvl` bodies would drag
+            // in `write`/`stdout`/`stderr`, which the WASM backend doesn't
+            // support standalone, breaking every program that prints.
+            if name == "println" || name == "eprintln" {
+                continue;
+            }
+
+            let Some(fd) = all_fn_decls.get(&name) else {
+                continue; // Not a plain fn decl — extern, or unresolved (checker already flagged it).
+            };
+            // Generics/methods/builtins are handled by their own dispatch
+            // paths — `emit_program`'s `fns` filter drops them regardless.
+            if !fd.type_params.is_empty() || fd.receiver_type.is_some() || fd.is_builtin {
+                continue;
+            }
+
+            let synthetic = Program {
+                declarations: vec![Decl::Fn(fd.clone())],
+                span: fd.span,
+            };
+            let syn_fns = mvl::mvl::passes::mono::collect_fns([&synthetic]);
+            let syn_mono = mvl::mvl::passes::mono::monomorphize(&synthetic, &syn_fns, expr_types);
+            let syn_tir = mvl::mvl::ir::lower::lower(&synthetic, &syn_mono, expr_types);
+            newly_added.extend(syn_tir.fns);
+        }
+
+        merged.fns.extend(newly_added.iter().cloned());
+        frontier = newly_added;
+    }
+}
 
 /// Lower `prog` (with prelude) to TIR and emit a WAT string.
 fn compile_wat(prog: &Program, module_name: &str, assert_mode: AssertMode) -> String {
@@ -54,8 +203,10 @@ fn compile_wat(prog: &Program, module_name: &str, assert_mode: AssertMode) -> St
     expr_types.extend(check_result.expr_types);
 
     let all_fns = mvl::mvl::passes::mono::collect_fns(std::iter::once(prog).chain(prelude.iter()));
+    let all_types = collect_type_decls(std::iter::once(prog).chain(prelude.iter()));
     let mono = mvl::mvl::passes::mono::monomorphize(prog, &all_fns, &expr_types);
-    let entry_tir = mvl::mvl::ir::lower::lower(prog, &mono, &expr_types);
+    let mut entry_tir = mvl::mvl::ir::lower::lower(prog, &mono, &expr_types);
+    pull_in_missing_prelude_items(&mut entry_tir, &all_fns, &all_types, &expr_types);
 
     let mut compiler = WasmTextCompiler::new();
     compiler.assert_mode = assert_mode;
@@ -163,6 +314,11 @@ fn compile_wat_multi(
             .chain(sibling_progs.iter().copied())
             .chain(prelude.iter()),
     );
+    let all_types = collect_type_decls(
+        std::iter::once(prog)
+            .chain(sibling_progs.iter().copied())
+            .chain(prelude.iter()),
+    );
     let mono = mvl::mvl::passes::mono::monomorphize(prog, &all_fns, &expr_types);
     let entry_tir = mvl::mvl::ir::lower::lower(prog, &mono, &expr_types);
 
@@ -189,11 +345,14 @@ fn compile_wat_multi(
         })
         .collect();
 
-    let merged = merge_tir_programs(
+    let mut merged = merge_tir_programs(
         &std::iter::once(entry_tir)
             .chain(sibling_tirs)
             .collect::<Vec<_>>(),
     );
+    // Pull in prelude functions/types referenced by name but never lowered —
+    // see `pull_in_missing_prelude_items` (#2045, #2046).
+    pull_in_missing_prelude_items(&mut merged, &all_fns, &all_types, &expr_types);
 
     let mut compiler = WasmTextCompiler::new();
     compiler.assert_mode = assert_mode;

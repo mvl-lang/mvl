@@ -21,7 +21,7 @@ guard-mvl: ## Validate MVL binary is present and working (does NOT recompile)
 
 check: guard-mvl ## Type-check all source files
 	$(MVL) check $(DIR)ifc.mvl
-	$(MVL) check $(DIR)payment.mvl
+	$(MVL) check $(DIR)main.mvl
 
 prove: guard-mvl ## Prove per-call-site refinement proof layer breakdown
 	$(MVL) prove $(DIR)
@@ -35,7 +35,7 @@ format: guard-mvl ## Format all .mvl source files
 test-solver: guard-mvl ## Show per-file solver statistics for all source files
 	@pass=0; fail=0; \
 	OK="\033[32m✓\033[0m"; FAIL="\033[31m✗\033[0m"; \
-	for f in $(DIR)ifc.mvl $(DIR)payment.mvl; do \
+	for f in $(DIR)ifc.mvl $(DIR)main.mvl; do \
 		name=$$(basename "$$f"); \
 		out=$$($(MVL) check "$$f" 2>&1); rc=$$?; \
 		if [ $$rc -eq 0 ]; then \
@@ -69,7 +69,7 @@ all: check test assurance mcdc ## Run full quality pipeline: check + test + assu
 
 smoke: guard-mvl ## Smoke-test: type-check all files
 	$(MVL) check $(DIR)ifc.mvl
-	$(MVL) check $(DIR)payment.mvl
+	$(MVL) check $(DIR)main.mvl
 
 clean: ## Remove build artifacts
 	rm -rf $(TMPDIR)mvl_build_pci_payment

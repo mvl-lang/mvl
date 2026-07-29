@@ -1375,6 +1375,15 @@ pub unsafe extern "C" fn _mvl_map_insert_si64(m: i32, k_ptr: i32, k_len: i32, va
 /// `_mvl_map_get_si64(m, k_ptr, k_len) -> *MvlOption` — look up a key and
 /// return `Some(val)` or `None` as a heap-allocated `MvlOption` (same ABI
 /// as `_mvl_array_get_option_i64`). Caller must drop the returned pointer.
+///
+/// Only for `Map[String, V]` where `V` is a plain scalar (Int, Bool, enum
+/// discriminant, …) — `val` is handed back verbatim, not cloned. For
+/// `Map[String, String]`, use [`_mvl_map_get_str`] instead: `val` there is a
+/// `*MvlString` handle still owned by this map's entry, and the emitter's
+/// `unwrap_or`/match unpacking unconditionally drops whatever it extracts
+/// from the Option — returning the raw (un-cloned) handle from a String map
+/// is a use-after-free the moment the caller drops the "unwrapped" string
+/// and then this map (#2047).
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn _mvl_map_get_si64(m: i32, k_ptr: i32, k_len: i32) -> i32 {
     if m == 0 {
@@ -1384,6 +1393,27 @@ pub unsafe extern "C" fn _mvl_map_get_si64(m: i32, k_ptr: i32, k_len: i32) -> i3
     for entry in &map.entries {
         if ms_handle_eq_bytes(entry.key, k_ptr, k_len) {
             return _mvl_option_some_i64(entry.val);
+        }
+    }
+    _mvl_option_none()
+}
+
+/// `_mvl_map_get_str(m, k_ptr, k_len) -> *MvlOption` — look up a key in a
+/// `Map[String, String]` and return `Some(val)` or `None`. Unlike
+/// [`_mvl_map_get_si64`], `val` (a `*MvlString` handle) is refcount-cloned
+/// before being wrapped, so it is a fresh, independently-owned reference —
+/// safe for the caller to drop without affecting this map's own copy
+/// (#2047).
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn _mvl_map_get_str(m: i32, k_ptr: i32, k_len: i32) -> i32 {
+    if m == 0 {
+        return _mvl_option_none();
+    }
+    let map = &*(m as usize as *const MvlMap);
+    for entry in &map.entries {
+        if ms_handle_eq_bytes(entry.key, k_ptr, k_len) {
+            let cloned = _mvl_string_clone(entry.val as i32);
+            return _mvl_option_some_i32(cloned);
         }
     }
     _mvl_option_none()
@@ -2263,5 +2293,92 @@ mod tests {
         assert_eq!(unsafe { _mvl_option_value_i32(opt) }, 1);
         unsafe { _mvl_option_drop(opt) };
         unsafe { _mvl_array_drop(a) };
+    }
+
+    // ── MvlMap ────
+
+    #[test]
+    fn map_get_si64_missing_key_is_none() {
+        let m = _mvl_map_new_si64();
+        let k = b"missing";
+        let opt = unsafe { _mvl_map_get_si64(m, addr(k), k.len() as i32) };
+        assert_eq!(unsafe { _mvl_option_tag(opt) }, 1);
+        unsafe { _mvl_option_drop(opt) };
+        unsafe { _mvl_map_drop_si64(m) };
+    }
+
+    #[test]
+    fn map_get_si64_roundtrips_int_value() {
+        let m = _mvl_map_new_si64();
+        let k = b"count";
+        unsafe { _mvl_map_insert_si64(m, addr(k), k.len() as i32, 7) };
+        let opt = unsafe { _mvl_map_get_si64(m, addr(k), k.len() as i32) };
+        assert_eq!(unsafe { _mvl_option_tag(opt) }, 0);
+        assert_eq!(unsafe { _mvl_option_value_i64(opt) }, 7);
+        unsafe { _mvl_option_drop(opt) };
+        unsafe { _mvl_map_drop_si64(m) };
+    }
+
+    // `_mvl_map_get_str` must bump the stored `*MvlString` handle's refcount
+    // before handing it back (#2047) — otherwise dropping the "unwrapped"
+    // string (as `unwrap_or`'s codegen always does) frees memory the map's
+    // entry still points at, and the map's own later drop double-frees it.
+    // Reproduce the exact sequence the WASM emitter generates: get -> drop
+    // the unwrapped string -> drop the map (which drops its own reference).
+    // `MvlString.rc` starts at 1 from `_mvl_string_new`; a bare (unfixed)
+    // `_mvl_map_get_si64`-style getter would hand back that same rc=1
+    // handle, and the first drop below would free it out from under the map.
+    #[test]
+    fn map_get_str_clones_so_caller_can_drop_independently() {
+        let m = _mvl_map_new_si64();
+        let k = b"status";
+        let v = b"ready";
+        let boxed = unsafe { _mvl_string_new(addr(v), v.len() as i32) };
+        unsafe { _mvl_map_insert_si64(m, addr(k), k.len() as i32, boxed as i64) };
+
+        let opt = unsafe { _mvl_map_get_str(m, addr(k), k.len() as i32) };
+        assert_eq!(unsafe { _mvl_option_tag(opt) }, 0);
+        let handle = unsafe { _mvl_option_value_i32(opt) };
+        assert_eq!(
+            handle, boxed,
+            "same MvlString handle — cloning bumps rc, not the pointer"
+        );
+        unsafe { _mvl_option_drop(opt) };
+
+        // Mirrors `unwrap_or`'s cleanup: drop the value extracted from the option.
+        // If `_mvl_map_get_str` hadn't bumped rc, this would free `boxed`
+        // while the map's entry still references it.
+        unsafe { _mvl_string_drop(handle) };
+
+        // The map's own entry must still be valid — dropping the whole map
+        // must not double-free.
+        unsafe { _mvl_map_drop_si64(m) };
+    }
+
+    #[test]
+    fn map_get_str_missing_key_is_none() {
+        let m = _mvl_map_new_si64();
+        let k = b"missing";
+        let opt = unsafe { _mvl_map_get_str(m, addr(k), k.len() as i32) };
+        assert_eq!(unsafe { _mvl_option_tag(opt) }, 1);
+        unsafe { _mvl_option_drop(opt) };
+        unsafe { _mvl_map_drop_si64(m) };
+    }
+
+    #[test]
+    fn map_contains_key_and_len() {
+        let m = _mvl_map_new_si64();
+        let k = b"a";
+        assert_eq!(
+            unsafe { _mvl_map_contains_key_si64(m, addr(k), k.len() as i32) },
+            0
+        );
+        unsafe { _mvl_map_insert_si64(m, addr(k), k.len() as i32, 1) };
+        assert_eq!(
+            unsafe { _mvl_map_contains_key_si64(m, addr(k), k.len() as i32) },
+            1
+        );
+        assert_eq!(unsafe { _mvl_map_len(m) }, 1);
+        unsafe { _mvl_map_drop_si64(m) };
     }
 }

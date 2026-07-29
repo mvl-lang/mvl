@@ -62,7 +62,7 @@ PCI-DSS compliant payment card processing — demonstrates **user-defined IFC la
 | File | Purpose |
 |------|---------|
 | `ifc.mvl` | PCI label and relabel transition declarations |
-| `payment.mvl` | Card ingestion, validation, tokenization, payment processing |
+| `main.mvl` | Card ingestion, validation, tokenization, payment processing |
 
 ---
 
