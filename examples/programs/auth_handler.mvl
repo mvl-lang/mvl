@@ -12,12 +12,31 @@
 // Req 9:  iso store — isolated, no concurrent access
 // Req 10: UserId refinement (> 0)
 // Req 11: Tainted input, Secret password, Public output
+//
+// Expected stdout:
+//   user 1: OK session, expires_at=0   (now_plus() is a stub returning 0)
+//   user 2: Err(NotFound)
 
 // Supporting types and stub functions (would be provided by a library in practice).
-// UserStore and sanitize are declared here as stubs; real implementations are injected at runtime.
 type UserId = Int where self > 0
 type User = struct { id: UserId, password_hash: Secret[String] }
-type UserStore = struct {}
+type UserStore = struct { users: List[User] }
+
+fn find_user(store: UserStore, id: UserId) -> Option[User] {
+    let i: ref Int = 0;
+    while i < store.users.len() decreases store.users.len() - i {
+        match store.users.get(i) {
+            Some(candidate) => {
+                if candidate.id == id {
+                    return Some(candidate);
+                }
+            },
+            None => {},
+        }
+        i = i + 1;
+    }
+    None
+}
 
 fn verify_hash(pwd: String, stored: Secret[String]) -> Bool { true }
 fn generate_token(id: UserId) -> Secret[String] { relabel classify("token", "GEN-TOKEN") }
@@ -41,7 +60,7 @@ pub total fn authenticate(
     user_id: UserId,
 ) -> Result[Session, AuthError] ! Console {
 
-    let user: Option[User] = store.find_user(user_id)?;
+    let user: Option[User] = find_user(store, user_id);
 
     match user {
         None => Err(AuthError::NotFound),
@@ -65,5 +84,25 @@ pub total fn authenticate(
                 Err(AuthError::InvalidPassword)
             }
         }
+    }
+}
+
+fn main() -> Unit ! Console {
+    let alice_id: UserId = 1;
+    let alice: User = User { id: alice_id, password_hash: relabel classify("hashed-pw", "SEED-HASH") };
+    let store: UserStore = UserStore { users: [alice] };
+
+    match authenticate(store, relabel taint("s3cr3t!", "LOGIN-FORM"), 1) {
+        Ok(session) => println(format("user 1: OK session, expires_at={}", [session.expires_at.to_string()])),
+        Err(AuthError::NotFound) => println("user 1: Err(NotFound)"),
+        Err(AuthError::InvalidPassword) => println("user 1: Err(InvalidPassword)"),
+        Err(AuthError::AccountLocked { attempts: attempts }) => println(format("user 1: Err(AccountLocked, attempts={})", [attempts.to_string()])),
+    }
+
+    match authenticate(store, relabel taint("s3cr3t!", "LOGIN-FORM"), 2) {
+        Ok(session) => println(format("user 2: OK session, expires_at={}", [session.expires_at.to_string()])),
+        Err(AuthError::NotFound) => println("user 2: Err(NotFound)"),
+        Err(AuthError::InvalidPassword) => println("user 2: Err(InvalidPassword)"),
+        Err(AuthError::AccountLocked { attempts: attempts }) => println(format("user 2: Err(AccountLocked, attempts={})", [attempts.to_string()])),
     }
 }
