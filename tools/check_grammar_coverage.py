@@ -34,6 +34,20 @@ GRAMMAR_JS_PATH = ROOT / "vendor" / "tree-sitter-mvl" / "grammar.js"
 # Rules that are in the EBNF but deliberately absent/renamed/inlined in
 # grammar.js.  Each entry maps the EBNF name to a short reason string.
 EBNF_KNOWN_ABSENT = {
+    # ── Qualified constructor paths, added to the EBNF in mvl-spec 0.1.3 ──────
+    # The EBNF factors this as one rule with an optional `::` segment:
+    #   ctor_path = IDENT [ "::" IDENT ]
+    # tree-sitter splits the two cases instead — `path_pattern` is the
+    # required-`::` form (grammar.js:794), and the bare form is a plain
+    # identifier. `struct_pattern` inlines the same shape as
+    # `optional(seq("::", $.identifier))`. Same coverage, different factoring.
+    "ctor_path": "split in tree-sitter: path_pattern (qualified) + bare identifier",
+    # IDENT ":" expr — tree-sitter inlines the field pairs directly into
+    # construct_expr (grammar.js:688) rather than naming a rule.
+    "field_init": "inlined into construct_expr field pairs",
+    # IDENT ":" base_pattern — likewise inlined into struct_pattern
+    # (grammar.js:812).
+    "field_pattern": "inlined into struct_pattern field pairs",
     # Inlined into `declaration` — tree-sitter doesn't need the intermediate node
     "decl_body": "inlined into declaration",
     # Inlined as type_body → type_expr branch (alias_type adds no AST node)
@@ -147,9 +161,12 @@ TS_KNOWN_EXTENSIONS = {
     "module_decl",
     "extern_decl",
     "extern_fn_decl",
-    # Qualified constructor patterns (`Enum::Variant(x)`), added in
-    # tree-sitter-mvl feat/qualified-ctor-patterns. Needs a matching EBNF
-    # production in mvl-lang/mvl-spec before this entry can be dropped.
+    # Qualified constructor patterns (`Enum::Variant(x)`). The EBNF *does* have
+    # this now — mvl-spec 0.1.3 added `ctor_path = IDENT [ "::" IDENT ]` — but
+    # under a different name and with the `::` optional, so the names do not
+    # line up in either direction. See the `ctor_path` note in
+    # EBNF_KNOWN_ABSENT above; the two entries are one divergence, recorded from
+    # both sides.
     "path_pattern",
     # Session type support (#37, #134): BMC for protocol deadlocks
     "session_branch",
