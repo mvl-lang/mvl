@@ -1,3 +1,6 @@
 [submodule "vendor/mvl-spec"]
 	path = vendor/mvl-spec
 	url = https://github.com/mvl-lang/mvl-spec
+[submodule "vendor/tree-sitter-mvl"]
+	path = vendor/tree-sitter-mvl
+	url = https://github.com/mvl-lang/tree-sitter-mvl

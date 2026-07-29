@@ -1,8 +1,13 @@
 #!/usr/bin/env python3
 """
 check_grammar_coverage.py — Cross-validate the EBNF grammar against the
-tree-sitter grammar, both pulled in via the mvl-spec submodule at
-vendor/mvl-spec/.
+tree-sitter grammar. Each comes from its own git submodule: the EBNF from
+vendor/mvl-spec/, the tree-sitter grammar from vendor/tree-sitter-mvl/.
+
+The tree-sitter grammar used to live at vendor/mvl-spec/tools/tree-sitter/.
+It was extracted to the standalone mvl-lang/tree-sitter-mvl repo and deleted
+from mvl-spec after 0.1.2, which silently broke this check for anyone who
+bumped the mvl-spec submodule.
 
 Extracts all lowercase production rule names from the EBNF and all
 rule names from the tree-sitter grammar, then reports:
@@ -23,7 +28,7 @@ from pathlib import Path
 ROOT = Path(__file__).parent.parent
 
 EBNF_PATH = ROOT / "vendor" / "mvl-spec" / "grammar" / "grammar.ebnf"
-GRAMMAR_JS_PATH = ROOT / "vendor" / "mvl-spec" / "tools" / "tree-sitter" / "grammar.js"
+GRAMMAR_JS_PATH = ROOT / "vendor" / "tree-sitter-mvl" / "grammar.js"
 
 # ── Known intentional divergences ────────────────────────────────────────────
 # Rules that are in the EBNF but deliberately absent/renamed/inlined in
@@ -116,6 +121,16 @@ TS_KNOWN_EXTENSIONS = {
     "err_pattern",
     # Renamed from security
     "security_modifier",
+    # Legitimately tree-sitter-only. The EBNF writes labeled_type as
+    # `IDENT "[" type_expr "]"` with the semantic side condition
+    # `IDENT ∈ declared-label set` (grammar.ebnf:141), which a context-free
+    # grammar cannot express. tree-sitter approximates it with a closed set
+    # mirroring keywords.yaml `stdlib_labels`, so the known labels can be
+    # highlighted; user-declared labels fall through to base_type.
+    # Contents corrected in mvl-lang/tree-sitter-mvl#1 — it previously listed
+    # Public and Clean, which are not labels, and omitted the four #931
+    # capability labels.
+    "security_label",
     # Literal sub-rules (EBNF uses uppercase terminals)
     "integer_literal",
     "float_literal",
@@ -132,6 +147,10 @@ TS_KNOWN_EXTENSIONS = {
     "module_decl",
     "extern_decl",
     "extern_fn_decl",
+    # Qualified constructor patterns (`Enum::Variant(x)`), added in
+    # tree-sitter-mvl feat/qualified-ctor-patterns. Needs a matching EBNF
+    # production in mvl-lang/mvl-spec before this entry can be dropped.
+    "path_pattern",
     # Session type support (#37, #134): BMC for protocol deadlocks
     "session_branch",
     "session_branches",
