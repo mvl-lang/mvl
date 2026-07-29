@@ -63,10 +63,10 @@ Open follow-ups tracked separately (do not block phase completion):
 
 | Component | Issues | Status |
 |-----------|--------|--------|
-| Iterator trait + lazy ops | [#219](https://github.com/LAB271/mvl_language/issues/219) | Open |
-| Generics constraint enforcement | [#225](https://github.com/LAB271/mvl_language/issues/225) | Open |
+| Iterator trait + lazy ops | [#219](https://github.com/mvl-lang/mvl/issues/219) | Done (2026-04-17) |
+| Generics constraint enforcement | [#225](https://github.com/mvl-lang/mvl/issues/225) | Done (2026-04-17) |
 | MC/DC coverage in CI | — | Open |
-| Mutation testing score ≥ 0.85 | [#210](https://github.com/LAB271/mvl_language/issues/210) | Open |
+| Mutation testing score ≥ 0.85 | [#210](https://github.com/mvl-lang/mvl/issues/210) | Done (2026-04-18) |
 | Borrow lifetimes (full Req 2) | [#234](https://github.com/mvl-lang/mvl/issues/234) | Done (2026-05-01) |
 
 See [stdlib](stdlib.md) for full module implementation status.
@@ -75,11 +75,11 @@ See [stdlib](stdlib.md) for full module implementation status.
 
 **Goal:** The MVL compiler compiles itself. Validates the toolchain end-to-end and proves the language is expressive enough for a real, non-trivial program (the compiler).
 
-The MVL-in-MVL compiler lives under `compiler/` (35 modules) and passes `mvl check`. Lexer, parser, TIR, and both LLVM and Rust emitters are ported. Resolver, monomorphizer, and type-checker passes are in progress.
+The MVL-in-MVL compiler lives under `compiler/` (56 files, ~26,300 lines of MVL) and passes `mvl check` and `mvl lint`. Lexer, parser, TIR, and both LLVM and Rust emitters are ported. Resolver, monomorphizer, and type-checker passes are in progress.
 
 **Completion criterion:** Three-stage bootstrap verify — Rust `mvl₀` compiles `compiler/*.mvl` to produce `mvl₁`; `mvl₁` recompiles the same source to produce `mvl₂`; `mvl₁` and `mvl₂` are byte-identical.
 
-Tracked: [#187](https://github.com/LAB271/mvl_language/issues/187) (milestone: MVL frontend in MVL), #1117, #1118.
+[#187](https://github.com/mvl-lang/mvl/issues/187) (MVL frontend in MVL) and [#1117](https://github.com/mvl-lang/mvl/issues/1117) (self-hosted checker) are closed. Remaining: [#1118](https://github.com/mvl-lang/mvl/issues/1118) — self-hosted Rust and LLVM emitters.
 
 ### Phase 8 — Proves 🔄
 
@@ -87,13 +87,40 @@ Tracked: [#187](https://github.com/LAB271/mvl_language/issues/187) (milestone: M
 
 Foundations exist: `std.actors` with Tokio runtime (spec 015), data-race freedom checker foundation (`src/mvl/checker/data_race.rs`), session types spec drafted (spec 016). Model-checking and full protocol verification tracked as ongoing work.
 
-Tracked: [#134](https://github.com/LAB271/mvl_language/issues/134), [#63](https://github.com/LAB271/mvl_language/issues/63), [#37](https://github.com/LAB271/mvl_language/issues/37), #260, #262, #295, #306, #362.
+The original Phase 8 scope is **closed**. Epic
+[#134](https://github.com/mvl-lang/mvl/issues/134) ("Actors, Concurrency, Model
+Checker — 11/11") completed on 2026-05-16, along with actor syntax
+([#63](https://github.com/mvl-lang/mvl/issues/63)), the model checker
+([#37](https://github.com/mvl-lang/mvl/issues/37)), session types
+([#260](https://github.com/mvl-lang/mvl/issues/260)), spatial composition
+([#295](https://github.com/mvl-lang/mvl/issues/295)) and mutable borrows with
+alias checking ([#306](https://github.com/mvl-lang/mvl/issues/306),
+[#362](https://github.com/mvl-lang/mvl/issues/362)). Temporal effect properties
+([#262](https://github.com/mvl-lang/mvl/issues/262)) were closed as not planned.
+
+Implementation landed: `src/mvl/checker/data_race.rs` (845 lines),
+`runtime/llvm/src/actors.rs` (969 lines), spec 015 (actors) and spec 016 (session
+types) both on disk.
+
+**A second wave is open**, which is why this phase is not yet marked done:
+[#1621](https://github.com/mvl-lang/mvl/issues/1621) (epic: Actors v2 — freeze
+actor semantics and runtime for Phase 9 formalization),
+[#1740](https://github.com/mvl-lang/mvl/issues/1740) (`select {}` arms are not
+yet lowered to real codegen on all backends),
+[#1495](https://github.com/mvl-lang/mvl/issues/1495) (bounded mailbox),
+[#1552](https://github.com/mvl-lang/mvl/issues/1552) (per-sender causal FIFO),
+[#1741](https://github.com/mvl-lang/mvl/issues/1741) (dead-letter routing),
+[#2008](https://github.com/mvl-lang/mvl/issues/2008) (behavioural
+substitutability) and [#1613](https://github.com/mvl-lang/mvl/issues/1613)
+(message throughput 25-30x slower than Go channels).
 
 ### Phase 9 — Proven
 
 Two pillars: package supply chain trust (registry, signing, publish workflow) and formal metatheory (Lean 4 / Coq soundness theorem). Post-1.0.
 
-Tracked: [#56](https://github.com/LAB271/mvl_language/issues/56), [#151](https://github.com/LAB271/mvl_language/issues/151), [#252](https://github.com/LAB271/mvl_language/issues/252), #185, #246, #251.
+Supply-chain groundwork is already done: [#56](https://github.com/mvl-lang/mvl/issues/56) (package manager, SBOM, licensing), [#151](https://github.com/mvl-lang/mvl/issues/151) (CVE-aware dependency auditing) and [#185](https://github.com/mvl-lang/mvl/issues/185) (unified `mvl check` / `audit` / `sbom` trust pipeline) all closed between May and June 2026.
+
+Still open: [#246](https://github.com/mvl-lang/mvl/issues/246) (Lean/Coq metatheory epic), [#252](https://github.com/mvl-lang/mvl/issues/252) (package signing — Sigstore + SLSA), [#251](https://github.com/mvl-lang/mvl/issues/251) (organisational package proxy).
 
 ---
 
