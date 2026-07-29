@@ -400,8 +400,10 @@ WASM_CORPUS := \
 	tests/corpus/05_collections/list_basics_test.mvl \
 	tests/corpus/05_collections/list_iter_test.mvl \
 	tests/corpus/05_collections/list_get_test.mvl \
+	tests/corpus/05_collections/list_test.mvl \
 	tests/corpus/05_collections/set_test.mvl \
 	tests/corpus/05_collections/map_test.mvl \
+	tests/corpus/05_collections/nested_collections_drop_test.mvl \
 	tests/corpus/06_effects/pure_test.mvl \
 	tests/corpus/06_effects/composite_test.mvl \
 	tests/corpus/06_effects/console_test.mvl \

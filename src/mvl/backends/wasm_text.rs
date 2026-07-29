@@ -822,9 +822,20 @@ fn emit_contract_check(
 fn local_drop_fn(name: &str, ty: &Ty) -> Option<&'static str> {
     if name.starts_with("__ms_") {
         Some("_mvl_string_drop")
-    } else if name.starts_with("__mo_") {
-        Some("_mvl_option_drop")
-    } else if name.starts_with("__mr_") || name.starts_with("__pr_") {
+    } else if name.starts_with("__mo_") || name.starts_with("__mr_") {
+        // `.unwrap_or(default)`'s own temp (Option or Result) is already
+        // dropped inline, immediately after the if/else that extracts its
+        // payload — see the `unwrap_or` emitters above. Matching it here
+        // too double-drops the box: harmless-looking UB for `Option`
+        // (`_mvl_option_drop`'s second `Box::from_raw` doesn't trip any
+        // check), but for `Result` the second drop reads freed memory that
+        // can look like a stale `Err` and fires a spurious
+        // `_mvl_string_drop` on a garbage pointer — a real crash (#2024).
+        None
+    } else if name.starts_with("__pr_") {
+        // `expr?`'s temp has no inline drop on the Ok path (the Err path
+        // returns the box to the caller instead) — this catch-all is its
+        // only cleanup.
         Some("_mvl_result_drop")
     } else if name.starts_with("__match_") && option_inner_ty(ty).is_some() {
         Some("_mvl_option_drop")
@@ -845,7 +856,7 @@ fn local_drop_fn(name: &str, ty: &Ty) -> Option<&'static str> {
             .unwrap_or(true)
     {
         Some("_mvl_array_drop")
-    } else if !name.starts_with("__") && matches!(map_key_val_ty(ty), Some((Ty::String, Ty::Int))) {
+    } else if !name.starts_with("__") && matches!(map_key_val_ty(ty), Some((Ty::String, _))) {
         Some("_mvl_map_drop_si64")
     } else {
         None
@@ -1511,12 +1522,25 @@ fn collect_locals_expr(expr: &TirExpr, locals: &mut Vec<(String, Ty)>) {
             // `.unwrap_or(default)` on Option stashes the option pointer
             // in a temp so it can be dropped after the if-else selects
             // a value.
-            if option_inner_ty(&receiver.ty).is_some() && method == "unwrap_or" {
-                locals.push((mvl_option_temp_name(expr), Ty::Bool));
+            if let Some(inner) = option_inner_ty(&receiver.ty) {
+                if method == "unwrap_or" {
+                    locals.push((mvl_option_temp_name(expr), Ty::Bool));
+                    // `Option[String]` unwraps to a `*MvlString` that the
+                    // then-branch unpacks into (ptr, len) via the same
+                    // temp scheme as the Group B string methods (#2024).
+                    if peels_to_string(inner) {
+                        locals.push((mvl_string_temp_name(expr), Ty::Bool));
+                    }
+                }
             }
             // Same for Result.unwrap_or — stashes the Result pointer in __mr_*.
-            if result_ok_ty(&receiver.ty).is_some() && method == "unwrap_or" {
-                locals.push((mvl_result_temp_name(expr), Ty::Bool));
+            if let Some(ok_ty) = result_ok_ty(&receiver.ty) {
+                if method == "unwrap_or" {
+                    locals.push((mvl_result_temp_name(expr), Ty::Bool));
+                    if peels_to_string(ok_ty) {
+                        locals.push((mvl_string_temp_name(expr), Ty::Bool));
+                    }
+                }
             }
         }
         // List / Set literals stash their `*MvlArray` pointer in a temp
@@ -1862,16 +1886,25 @@ fn emit_expr(out: &mut String, expr: &TirExpr, ctx: &Ctx) {
             // typed constructor based on the payload's WASM lowering.
             if name == "Some" && args.len() == 1 && matches!(&expr.ty, Ty::Option(_)) {
                 ctx.needs_runtime.set(true);
-                emit_expr(out, &args[0], ctx);
                 let inner = option_inner_ty(&expr.ty).cloned().unwrap_or(Ty::Int);
-                // The runtime `Some` ctor is i64-typed; Float payloads are
-                // stored bit-for-bit via reinterpret rather than a
-                // dedicated f64 ctor (#2038).
-                if is_float_ctx(&inner, ctx) {
-                    out.push_str("    i64.reinterpret_f64\n");
+                emit_expr(out, &args[0], ctx);
+                if is_string_ty(&inner, ctx) {
+                    // String payload arrives as (ptr, len); box it into a
+                    // `*MvlString` before handing it to the i32-payload
+                    // Option constructor — same blind spot as unwrap_or
+                    // (#2024), just on the construction side.
+                    out.push_str("    call $_mvl_string_new\n");
+                    out.push_str("    call $_mvl_option_some_i32\n");
+                } else {
+                    // The runtime `Some` ctor is i64-typed; Float payloads are
+                    // stored bit-for-bit via reinterpret rather than a
+                    // dedicated f64 ctor (#2038).
+                    if is_float_ctx(&inner, ctx) {
+                        out.push_str("    i64.reinterpret_f64\n");
+                    }
+                    let (some_ctor, _) = option_ops_for(&inner, ctx);
+                    out.push_str(&format!("    call ${some_ctor}\n"));
                 }
-                let (some_ctor, _) = option_ops_for(&inner, ctx);
-                out.push_str(&format!("    call ${some_ctor}\n"));
                 return;
             }
             // `Shape::Circle(5)` — positional enum-variant constructor written
@@ -1893,16 +1926,22 @@ fn emit_expr(out: &mut String, expr: &TirExpr, ctx: &Ctx) {
             // `Ok(x)` constructor — dispatch to the typed result constructor.
             if name == "Ok" && args.len() == 1 && matches!(&expr.ty, Ty::Result(_, _)) {
                 ctx.needs_runtime.set(true);
-                emit_expr(out, &args[0], ctx);
                 let ok_ty = result_ok_ty(&expr.ty).cloned().unwrap_or(Ty::Int);
-                // The runtime `Ok` ctor is i64-typed; Float payloads are
-                // stored bit-for-bit via reinterpret rather than a
-                // dedicated f64 ctor (#2038).
-                if is_float_ctx(&ok_ty, ctx) {
-                    out.push_str("    i64.reinterpret_f64\n");
+                emit_expr(out, &args[0], ctx);
+                if is_string_ty(&ok_ty, ctx) {
+                    // Same String blind spot as `Some(x)` above (#2024).
+                    out.push_str("    call $_mvl_string_new\n");
+                    out.push_str("    call $_mvl_result_ok_i32\n");
+                } else {
+                    // The runtime `Ok` ctor is i64-typed; Float payloads are
+                    // stored bit-for-bit via reinterpret rather than a
+                    // dedicated f64 ctor (#2038).
+                    if is_float_ctx(&ok_ty, ctx) {
+                        out.push_str("    i64.reinterpret_f64\n");
+                    }
+                    let (ok_ctor, _) = result_ops_for_ok(&ok_ty, ctx);
+                    out.push_str(&format!("    call ${ok_ctor}\n"));
                 }
-                let (ok_ctor, _) = result_ops_for_ok(&ok_ty, ctx);
-                out.push_str(&format!("    call ${ok_ctor}\n"));
                 return;
             }
             // `Err(x)` constructor — `Err(s: String)` routes to
@@ -2062,19 +2101,31 @@ fn emit_expr(out: &mut String, expr: &TirExpr, ctx: &Ctx) {
         } if result_ok_ty(&receiver.ty).is_some() && method == "unwrap_or" && args.len() == 1 => {
             ctx.needs_runtime.set(true);
             let ok_ty = result_ok_ty(&receiver.ty).cloned().unwrap_or(Ty::Int);
-            let (_, getter) = result_ops_for_ok(&ok_ty, ctx);
-            let result_wasm_ty = wasm_ty(&ok_ty, ctx);
             let temp = mvl_result_temp_name(expr);
             emit_expr(out, receiver, ctx);
             out.push_str(&format!("    local.tee ${temp}\n"));
             out.push_str("    call $_mvl_result_tag\n");
             // tag == 0 → Ok. i32.eqz maps 0→1, non-zero→0.
             out.push_str("    i32.eqz\n");
-            out.push_str(&format!("    if (result {result_wasm_ty})\n"));
-            out.push_str(&format!("    local.get ${temp}\n"));
-            out.push_str(&format!("    call ${getter}\n"));
-            if is_float_ctx(&ok_ty, ctx) {
-                out.push_str("    f64.reinterpret_i64\n");
+            if is_string_ty(&ok_ty, ctx) {
+                // Same String blind spot as Option.unwrap_or above (#2024) —
+                // the Ok payload is a `*MvlString` i32 pointer, unpacked to
+                // (ptr, len) to match the `else` branch's shape.
+                out.push_str("    if (result i32 i32)\n");
+                out.push_str(&format!("    local.get ${temp}\n"));
+                out.push_str("    call $_mvl_result_value_i32\n");
+                emit_unpack_mvl_string(out, expr);
+            } else {
+                let (_, getter) = result_ops_for_ok(&ok_ty, ctx);
+                let result_wasm_ty = wasm_ty(&ok_ty, ctx);
+                out.push_str(&format!("    if (result {result_wasm_ty})\n"));
+                out.push_str(&format!("    local.get ${temp}\n"));
+                out.push_str(&format!("    call ${getter}\n"));
+                // The runtime getter returns i64; Float payloads are
+                // bit-cast back via reinterpret (#2038).
+                if is_float_ctx(&ok_ty, ctx) {
+                    out.push_str("    f64.reinterpret_i64\n");
+                }
             }
             out.push_str("    else\n");
             emit_expr(out, &args[0], ctx);
@@ -2115,9 +2166,12 @@ fn emit_expr(out: &mut String, expr: &TirExpr, ctx: &Ctx) {
             args,
         } if map_key_val_ty(&receiver.ty).is_some() && method == "insert" && args.len() == 2 => {
             ctx.needs_runtime.set(true);
+            let val_ty = map_key_val_ty(&receiver.ty)
+                .map(|(_, v)| v.clone())
+                .unwrap_or(Ty::Int);
             emit_expr(out, receiver, ctx); // map ptr
             emit_expr(out, &args[0], ctx); // key → (ptr, len)
-            emit_expr(out, &args[1], ctx); // value → i64
+            emit_map_value_push(out, &args[1], &val_ty, ctx);
             out.push_str("    call $_mvl_map_insert_si64\n");
         }
         TirExprKind::MethodCall {
@@ -2221,19 +2275,34 @@ fn emit_expr(out: &mut String, expr: &TirExpr, ctx: &Ctx) {
         {
             ctx.needs_runtime.set(true);
             let inner = option_inner_ty(&receiver.ty).cloned().unwrap_or(Ty::Int);
-            let (_, getter) = option_ops_for(&inner, ctx);
-            let result_ty = wasm_ty(&inner, ctx);
             let temp = mvl_option_temp_name(expr);
             emit_expr(out, receiver, ctx);
             out.push_str(&format!("    local.tee ${temp}\n"));
             out.push_str("    call $_mvl_option_tag\n");
             // tag == 0 → Some. `i32.eqz` maps 0→1, non-zero→0.
             out.push_str("    i32.eqz\n");
-            out.push_str(&format!("    if (result {result_ty})\n"));
-            out.push_str(&format!("    local.get ${temp}\n"));
-            out.push_str(&format!("    call ${getter}\n"));
-            if is_float_ctx(&inner, ctx) {
-                out.push_str("    f64.reinterpret_i64\n");
+            if is_string_ty(&inner, ctx) {
+                // `Option[String]`'s payload slot stores the `*MvlString`
+                // pointer as i32 (same convention `.get()` uses via
+                // `_mvl_array_get_option_i32`, wasm_text.rs:2152) — not the
+                // generic i32-or-i64 shape `option_ops_for` picks between.
+                // The `then` branch must yield the ordinary (ptr, len)
+                // String shape to match the `else` branch (#2024).
+                out.push_str("    if (result i32 i32)\n");
+                out.push_str(&format!("    local.get ${temp}\n"));
+                out.push_str("    call $_mvl_option_value_i32\n");
+                emit_unpack_mvl_string(out, expr);
+            } else {
+                let (_, getter) = option_ops_for(&inner, ctx);
+                let result_ty = wasm_ty(&inner, ctx);
+                out.push_str(&format!("    if (result {result_ty})\n"));
+                out.push_str(&format!("    local.get ${temp}\n"));
+                out.push_str(&format!("    call ${getter}\n"));
+                // The runtime getter returns i64; Float payloads are
+                // bit-cast back via reinterpret (#2038).
+                if is_float_ctx(&inner, ctx) {
+                    out.push_str("    f64.reinterpret_i64\n");
+                }
             }
             out.push_str("    else\n");
             emit_expr(out, &args[0], ctx);
@@ -2318,27 +2387,30 @@ fn emit_expr(out: &mut String, expr: &TirExpr, ctx: &Ctx) {
             }
             out.push_str(&format!("    local.get ${temp}\n"));
         }
-        // Map literal — `{"k1": v1, "k2": v2, ...}`. Only `Map[String, Int]`
-        // is supported for now (corpus scope). Emits `_mvl_map_new_si64()`,
+        // Map literal — `{"k1": v1, "k2": v2, ...}`. String keys only;
+        // any value type that fits the i64 map-value slot is supported
+        // (#2024) — see `emit_map_value_push`. Emits `_mvl_map_new_si64()`,
         // stashes the pointer, then inserts each pair via `_mvl_map_insert_si64`.
         TirExprKind::Map { pairs } => {
             ctx.needs_runtime.set(true);
-            // Check key/value types; only String→Int is wired (#1820).
             let kv = map_key_val_ty(&expr.ty);
-            let supported = matches!(kv, Some((Ty::String, Ty::Int)));
+            let val_ty = kv.map(|(_, v)| v.clone());
+            let supported = matches!(kv, Some((Ty::String, _)))
+                && val_ty.as_ref().is_some_and(|v| map_value_supported(v, ctx));
             if !supported {
                 out.push_str(
-                    "    ;; unsupported: Map literal (only Map[String, Int] in Phase 3)\n",
+                    "    ;; unsupported: Map literal (String keys only; Float values not wired, #2024)\n",
                 );
                 return;
             }
+            let val_ty = val_ty.unwrap();
             let temp = mvl_map_temp_name(expr);
             out.push_str("    call $_mvl_map_new_si64\n");
             out.push_str(&format!("    local.set ${temp}\n"));
             for (k, v) in pairs {
                 out.push_str(&format!("    local.get ${temp}\n"));
                 emit_expr(out, k, ctx); // key → (ptr, len) two i32s
-                emit_expr(out, v, ctx); // value → i64
+                emit_map_value_push(out, v, &val_ty, ctx);
                 out.push_str("    call $_mvl_map_insert_si64\n");
             }
             out.push_str(&format!("    local.get ${temp}\n"));
@@ -3490,6 +3562,35 @@ fn map_key_val_ty(ty: &Ty) -> Option<(&Ty, &Ty)> {
             Ty::Map(k, v) => return Some((k, v)),
             _ => return None,
         }
+    }
+}
+
+/// True if `val_ty` can be stored in a `Map[String, V]`'s i64 value slot —
+/// everything [`emit_map_value_push`] knows how to encode. `Float` is the
+/// one gap: reading it back out would need `f64.reinterpret_i64` wiring
+/// that hasn't landed, and no corpus fixture exercises it yet (#2024).
+fn map_value_supported(val_ty: &Ty, ctx: &Ctx) -> bool {
+    !is_float_ctx(val_ty, ctx)
+}
+
+/// Push a `Map[String, V]` value onto the stack in the i64 shape
+/// `_mvl_map_insert_si64` expects. The map's value slot is a single i64 —
+/// same "one wide slot for everything" convention `MvlOption`/`MvlResult`
+/// use (`option_ops_for` doc comment above) — so i32-shaped payloads
+/// (collection/Option/Result pointers, Bool/Byte, enum discriminants) are
+/// zero-extended, and `String` is boxed into a `*MvlString` first, then
+/// extended. `Int`/`UInt` are already i64 and pass through unchanged.
+/// Callers must reject `Float` via [`map_value_supported`] first (#2024).
+fn emit_map_value_push(out: &mut String, val_expr: &TirExpr, val_ty: &Ty, ctx: &Ctx) {
+    if is_string_ty(val_ty, ctx) {
+        emit_expr(out, val_expr, ctx); // (ptr, len)
+        out.push_str("    call $_mvl_string_new\n");
+        out.push_str("    i64.extend_i32_u\n");
+    } else if is_i32(val_ty, ctx) {
+        emit_expr(out, val_expr, ctx);
+        out.push_str("    i64.extend_i32_u\n");
+    } else {
+        emit_expr(out, val_expr, ctx);
     }
 }
 
