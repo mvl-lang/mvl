@@ -1,4 +1,4 @@
-// payment.mvl — PCI-DSS compliant payment card processing.
+// main.mvl — PCI-DSS compliant payment card processing.
 //
 // Demonstrates:
 //   1. User-defined label PCI for Payment Card Industry data
@@ -8,7 +8,7 @@
 //   5. Composing IFC labels: Tainted -> bare -> PCI -> token
 //
 // Usage:
-//   mvl check examples/pci_payment/payment.mvl
+//   mvl check examples/pci_payment/main.mvl
 //   make check   (from examples/pci_payment/)
 
 use std.ifc.{Tainted, taint, trust}
