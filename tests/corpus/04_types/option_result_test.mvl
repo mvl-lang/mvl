@@ -22,6 +22,14 @@ fn double_parsed(s: String) -> Result[Int, String] {
     Ok(n * 2)
 }
 
+fn describe(s: String) -> Result[String, String] {
+    if s == "" {
+        Err("empty")
+    } else {
+        Ok(s)
+    }
+}
+
 partial fn find(xs: List[Int], target: Int) -> Option[Int] {
     let i: ref Int = 0;
     let n: Int = xs.len();
@@ -153,4 +161,18 @@ test fn result_float_unwrap_or_uses_default_when_err() -> Unit {
     let r: Result[Float, String] = Err("bad");
     let v: Float = r.unwrap_or(8.5);
     assert_eq(v, 8.5);
+}
+
+// Regression (#2024): `Result[String, E]::unwrap_or` — the Ok payload is a
+// `*MvlString` pointer, not the generic i32-or-i64 shape the WASM backend
+// otherwise picks between; a named local (not just a chained call) exercises
+// the receiver-aliasing drop path too.
+test fn result_string_ok_unwrap_or() -> Unit {
+    let r: Result[String, String] = describe("hello");
+    assert_eq(r.unwrap_or("default"), "hello");
+}
+
+test fn result_string_err_unwrap_or() -> Unit {
+    let r: Result[String, String] = describe("");
+    assert_eq(r.unwrap_or("default"), "default");
 }
