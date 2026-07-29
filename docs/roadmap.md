@@ -1,6 +1,6 @@
 # MVL Roadmap
 
-**Status (July 2026):** Foundation complete (phases 1–4). Phase 5 shipped (LLVM backend, v0.60–v0.68). Phase 6 shipped (stdlib complete, packaging live). Phase 7 (self-hosting) and Phase 8 (proves) in progress.
+**Status (July 2026):** Foundation complete (phases 1–4). Phase 5 shipped (LLVM backend, v0.60–v0.68). Phase 6 shipped (stdlib complete, packaging live). Phase 8 shipped (actors, session types, model checker — epic #134 closed May 2026). In progress: Phase 7 (self-hosting — self-hosted emitters remain, #1118) and Actors v2 (semantics freeze, #1621), which Phase 9 depends on.
 
 See [spec 012](specs/012-phases.md) for the full pillar/phase model and per-phase acceptance criteria.
 
@@ -33,8 +33,10 @@ Phase 6    Works          Real programs run — stdlib complete, testing      �
                           matures
 Phase 7    Self-hosting   The compiler compiles itself — MVL is its own     🔄 In progress
                           first customer
-Phase 8    Proves         Concurrent programs verified — actors, session    🔄 In progress
+Phase 8    Proves         Concurrent programs verified — actors, session    ✅ Done (May 2026)
                           types, model checking
+Actors v2  Semantics      Freeze actor semantics + runtime so Phase 9 can  🔄 In progress
+           freeze         formalize them
 Phase 9    Proven         Language formally verified — Lean/Coq metatheory  Future
                           + package supply chain trust
 ```
@@ -81,42 +83,52 @@ The MVL-in-MVL compiler lives under `compiler/` (56 files, ~26,300 lines of MVL)
 
 [#187](https://github.com/mvl-lang/mvl/issues/187) (MVL frontend in MVL) and [#1117](https://github.com/mvl-lang/mvl/issues/1117) (self-hosted checker) are closed. Remaining: [#1118](https://github.com/mvl-lang/mvl/issues/1118) — self-hosted Rust and LLVM emitters.
 
-### Phase 8 — Proves 🔄
+### Phase 8 — Proves ✅
 
 **Goal:** Concurrent programs verified — actors, session types, model checker.
 
-Foundations exist: `std.actors` with Tokio runtime (spec 015), data-race freedom checker foundation (`src/mvl/checker/data_race.rs`), session types spec drafted (spec 016). Model-checking and full protocol verification tracked as ongoing work.
-
-The original Phase 8 scope is **closed**. Epic
-[#134](https://github.com/mvl-lang/mvl/issues/134) ("Actors, Concurrency, Model
-Checker — 11/11") completed on 2026-05-16, along with actor syntax
-([#63](https://github.com/mvl-lang/mvl/issues/63)), the model checker
+**Done (May 2026).** Epic [#134](https://github.com/mvl-lang/mvl/issues/134)
+("Actors, Concurrency, Model Checker — 11/11") closed 2026-05-16, with actor
+syntax ([#63](https://github.com/mvl-lang/mvl/issues/63)), the model checker
 ([#37](https://github.com/mvl-lang/mvl/issues/37)), session types
-([#260](https://github.com/mvl-lang/mvl/issues/260)), spatial composition
-([#295](https://github.com/mvl-lang/mvl/issues/295)) and mutable borrows with
-alias checking ([#306](https://github.com/mvl-lang/mvl/issues/306),
+([#260](https://github.com/mvl-lang/mvl/issues/260)), spatial composition with
+bounded symbolic execution ([#295](https://github.com/mvl-lang/mvl/issues/295))
+and mutable borrows with alias checking
+([#306](https://github.com/mvl-lang/mvl/issues/306),
 [#362](https://github.com/mvl-lang/mvl/issues/362)). Temporal effect properties
-([#262](https://github.com/mvl-lang/mvl/issues/262)) were closed as not planned.
+([#262](https://github.com/mvl-lang/mvl/issues/262)) were closed as not planned —
+a deliberate scope cut, not an omission.
 
-Implementation landed: `src/mvl/checker/data_race.rs` (845 lines),
-`runtime/llvm/src/actors.rs` (969 lines), spec 015 (actors) and spec 016 (session
-types) both on disk.
+Implementation: `src/mvl/checker/data_race.rs` (845 lines),
+`runtime/llvm/src/actors.rs` (969 lines), `std.actors` on the Tokio runtime,
+spec 015 (actors) and spec 016 (session types).
 
-**A second wave is open**, which is why this phase is not yet marked done:
-[#1621](https://github.com/mvl-lang/mvl/issues/1621) (epic: Actors v2 — freeze
-actor semantics and runtime for Phase 9 formalization),
-[#1740](https://github.com/mvl-lang/mvl/issues/1740) (`select {}` arms are not
-yet lowered to real codegen on all backends),
-[#1495](https://github.com/mvl-lang/mvl/issues/1495) (bounded mailbox),
-[#1552](https://github.com/mvl-lang/mvl/issues/1552) (per-sender causal FIFO),
-[#1741](https://github.com/mvl-lang/mvl/issues/1741) (dead-letter routing),
-[#2008](https://github.com/mvl-lang/mvl/issues/2008) (behavioural
-substitutability) and [#1613](https://github.com/mvl-lang/mvl/issues/1613)
-(message throughput 25-30x slower than Go channels).
+Hardening and semantics work continues in **Actors v2**, below. That is a
+follow-on wave rather than unfinished Phase 8 scope.
+
+### Actors v2 — semantics freeze 🔄
+
+**Goal:** Freeze actor semantics and runtime behaviour so they can be formalized.
+Phase 9's metatheory cannot target a moving definition, which makes this a
+prerequisite for it rather than a continuation of Phase 8.
+
+Epic: [#1621](https://github.com/mvl-lang/mvl/issues/1621).
+
+| Component | Issue | Note |
+|-----------|-------|------|
+| `select {}` codegen on all backends | [#1740](https://github.com/mvl-lang/mvl/issues/1740) | arms not yet lowered to real codegen |
+| Bounded mailbox + overflow policy | [#1495](https://github.com/mvl-lang/mvl/issues/1495) | unbounded today |
+| Per-sender causal FIFO ordering | [#1552](https://github.com/mvl-lang/mvl/issues/1552) | ordering guarantee to be specified |
+| Dead-letter routing | [#1741](https://github.com/mvl-lang/mvl/issues/1741) | undeliverable messages |
+| Behavioural substitutability | [#2008](https://github.com/mvl-lang/mvl/issues/2008) | session types, Liskov history rule |
+| Actor supervision on WASM | [#2018](https://github.com/mvl-lang/mvl/issues/2018) | link/monitor/on_exit + select |
+| Message throughput | [#1613](https://github.com/mvl-lang/mvl/issues/1613) | 25–30× slower than Go channels |
 
 ### Phase 9 — Proven
 
 Two pillars: package supply chain trust (registry, signing, publish workflow) and formal metatheory (Lean 4 / Coq soundness theorem). Post-1.0.
+
+**Prerequisite:** Actors v2 ([#1621](https://github.com/mvl-lang/mvl/issues/1621)) must land first. The soundness theorem has to state an invariant about actor semantics, and those semantics are still changing.
 
 Supply-chain groundwork is already done: [#56](https://github.com/mvl-lang/mvl/issues/56) (package manager, SBOM, licensing), [#151](https://github.com/mvl-lang/mvl/issues/151) (CVE-aware dependency auditing) and [#185](https://github.com/mvl-lang/mvl/issues/185) (unified `mvl check` / `audit` / `sbom` trust pipeline) all closed between May and June 2026.
 
@@ -136,7 +148,7 @@ Still open: [#246](https://github.com/mvl-lang/mvl/issues/246) (Lean/Coq metathe
 | 6 | Ownership (linearity) | ✅ move tracking | native (rustc) | HeapKind drop |
 | 7 | Effect tracking | ✅ enforced | doc comment | IR-generation error (planned) |
 | 8 | Termination | ✅ while rejected; structural recursion planned | doc comment | IR-generation error (planned) |
-| 9 | Data race freedom | ✅ capabilities parsed; actor-boundary Phase 8 | capability comment | planned Phase 8 |
+| 9 | Data race freedom | ✅ capabilities + actor-boundary checking (`checker/data_race.rs`) | capability comment | actor runtime present; `select` codegen in Actors v2 (#1740) |
 | 10 | Refinement types | ✅ static + debug_assert! fallback | debug_assert! | SMT (Z3) planned Phase 6 |
 | 11 | IFC | ✅ labels + `relabel` transitions enforced | newtypes + relabel | taint pass planned Phase 6 |
 

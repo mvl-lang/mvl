@@ -33,7 +33,7 @@ decision they carry into generated code:
 | 6 | Ownership / linearity | move tracking | native | `HeapKind` drop |
 | 7 | Effect tracking | enforced | **doc comment only** | **planned** |
 | 8 | Termination | `while` rejected; structural recursion planned | **doc comment only** | **planned** |
-| 9 | Data-race freedom | capabilities checked; actor-boundary Phase 8 | **capability comment** | **planned** |
+| 9 | Data-race freedom | capabilities + actor-boundary checking | **capability comment** | actor runtime present; **`select` codegen incomplete** (#1740) |
 | 10 | Refinement types | static, with runtime fallback | `debug_assert!` | **SMT planned** |
 | 11 | Information flow control | labels + `relabel` enforced | newtypes | **taint pass planned** |
 
