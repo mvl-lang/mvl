@@ -110,3 +110,47 @@ test partial fn option_from_search_miss() -> Unit {
     };
     assert_eq(idx, -1);
 }
+
+// Float payloads route through the same i32/i64-typed runtime ctors as
+// Int — the WASM backend bit-casts with reinterpret ops around the call (#2038).
+test fn option_some_float_match_extracts_value() -> Unit {
+    let x: Option[Float] = Some(3.5);
+    let v: Float = match x {
+        Some(n) => n,
+        None => 0.0,
+    };
+    assert_eq(v, 3.5);
+}
+
+test fn option_float_unwrap_or_uses_value_when_some() -> Unit {
+    let x: Option[Float] = Some(2.5);
+    let v: Float = x.unwrap_or(0.0);
+    assert_eq(v, 2.5);
+}
+
+test fn option_float_unwrap_or_uses_default_when_none() -> Unit {
+    let x: Option[Float] = None;
+    let v: Float = x.unwrap_or(9.5);
+    assert_eq(v, 9.5);
+}
+
+test fn result_ok_float_match_extracts() -> Unit {
+    let r: Result[Float, String] = Ok(1.5);
+    let v: Float = match r {
+        Ok(n) => n,
+        Err(_) => -1.0,
+    };
+    assert_eq(v, 1.5);
+}
+
+test fn result_float_unwrap_or_uses_value_when_ok() -> Unit {
+    let r: Result[Float, String] = Ok(4.5);
+    let v: Float = r.unwrap_or(0.0);
+    assert_eq(v, 4.5);
+}
+
+test fn result_float_unwrap_or_uses_default_when_err() -> Unit {
+    let r: Result[Float, String] = Err("bad");
+    let v: Float = r.unwrap_or(8.5);
+    assert_eq(v, 8.5);
+}
