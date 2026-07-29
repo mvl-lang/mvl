@@ -102,11 +102,10 @@ These are outside the guarantees by design, not by oversight:
 Beyond the organisation policy's scope:
 
 - **Compiler robustness on untrusted input.** A crash, hang, unbounded memory
-  growth, or non-terminating type-check triggered by a malicious `.mvl` file. If
-  you build a service that compiles user-submitted MVL — the
-  [playground](https://github.com/mvl-lang/mvl-playground) is exactly that — this
-  matters to you. Fuzz targets exist (`make fuzz-rust`, `fuzz-llvm`,
-  `fuzz-diff`); findings from them are welcome.
+  growth, or non-terminating type-check triggered by a malicious `.mvl` file.
+  This matters to anyone running a service that compiles user-submitted MVL —
+  the MVL playground is exactly that. Fuzz targets exist (`make fuzz-rust`,
+  `fuzz-llvm`, `fuzz-diff`); findings from them are welcome.
 - **Package manager.** `mvl add` / `install` / `update` resolve by git URL and
   tag, verified against a SHA-256 in `mvl.lock`. Anything that lets a resolved
   dependency differ from its lockfile entry, or that weakens the lockfile check,
