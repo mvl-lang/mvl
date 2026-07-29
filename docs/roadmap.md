@@ -67,7 +67,7 @@ Open follow-ups tracked separately (do not block phase completion):
 | Generics constraint enforcement | [#225](https://github.com/LAB271/mvl_language/issues/225) | Open |
 | MC/DC coverage in CI | — | Open |
 | Mutation testing score ≥ 0.85 | [#210](https://github.com/LAB271/mvl_language/issues/210) | Open |
-| Borrow lifetimes (full Req 2) | [#234](https://github.com/LAB271/mvl_language/issues/234) | In progress |
+| Borrow lifetimes (full Req 2) | [#234](https://github.com/mvl-lang/mvl/issues/234) | Done (2026-05-01) |
 
 See [stdlib](stdlib.md) for full module implementation status.
 
@@ -102,7 +102,7 @@ Tracked: [#56](https://github.com/LAB271/mvl_language/issues/56), [#151](https:/
 | # | Requirement | Checker | Rust backend | LLVM backend |
 |---|------------|---------|--------------|--------------|
 | 1 | Type safety (ADTs) | ✅ enforced | native (rustc) | native (LLVM types) |
-| 2 | Memory safety | ✅ use-after-move; borrow lifetimes in progress (#234) | native (rustc borrow checker) | noalias / nonnull metadata |
+| 2 | Memory safety | ✅ use-after-move + borrow lifetimes (#234, done 2026-05-01) | native (rustc borrow checker) | noalias / nonnull metadata |
 | 3 | Totality (exhaustive match) | ✅ enforced | native (rustc) | native |
 | 4 | Null elimination (Option) | ✅ enforced | native (rustc) | native |
 | 5 | Error visibility (Result) | ✅ enforced | native (rustc) | native |
@@ -111,7 +111,7 @@ Tracked: [#56](https://github.com/LAB271/mvl_language/issues/56), [#151](https:/
 | 8 | Termination | ✅ while rejected; structural recursion planned | doc comment | IR-generation error (planned) |
 | 9 | Data race freedom | ✅ capabilities parsed; actor-boundary Phase 8 | capability comment | planned Phase 8 |
 | 10 | Refinement types | ✅ static + debug_assert! fallback | debug_assert! | SMT (Z3) planned Phase 6 |
-| 11 | IFC | ✅ lattice, declassify/sanitize enforced | newtypes + sanitize | taint pass planned Phase 6 |
+| 11 | IFC | ✅ labels + `relabel` transitions enforced | newtypes + relabel | taint pass planned Phase 6 |
 
 ---
 
