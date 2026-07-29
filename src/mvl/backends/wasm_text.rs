@@ -222,6 +222,12 @@ struct Ctx<'a> {
     /// way `self.field = …` can find its layout, since an `LValue` carries no
     /// type (#2012).
     self_type: std::cell::RefCell<Option<String>>,
+    /// `(receiver_type, method)` pairs with a user-defined, non-generic extension
+    /// method emitted by `emit_extension_method` (#2054). Consulted by the
+    /// `MethodCall` dispatch chain after every builtin-type special case has
+    /// missed, so a call to a method on the user's own struct routes to
+    /// `${receiver_type}_${method}` instead of falling to `;; unsupported`.
+    struct_methods: &'a std::collections::HashSet<(String, String)>,
 }
 
 impl Ctx<'_> {
@@ -395,6 +401,26 @@ impl Backend for WasmTextCompiler {
             .filter(|f| !f.is_builtin && f.receiver_type.is_none())
             .collect();
 
+        // User-defined, non-generic extension methods (`fn Type::method(self, ...)`)
+        // (#2054). These carry a `receiver_type` and were previously dropped from
+        // every emission path — neither `fns`/`all_fns` above (which require
+        // `receiver_type.is_none()`) nor the generic-instantiation path (which
+        // requires `type_params` non-empty) ever saw them.
+        let ext_methods: Vec<&TirFn> = tir
+            .fns
+            .iter()
+            .filter(|f| !f.is_builtin && f.type_params.is_empty() && f.receiver_type.is_some())
+            .collect();
+        let struct_methods: std::collections::HashSet<(String, String)> = ext_methods
+            .iter()
+            .map(|f| {
+                (
+                    f.receiver_type.clone().expect("filtered above"),
+                    f.name.clone(),
+                )
+            })
+            .collect();
+
         // A Unit-returning `main` becomes the WASI `_start` entry point.
         // When present we emit the WASI runtime blob (memory, fd_write import,
         // bump allocator, int-to-string, println).
@@ -448,6 +474,7 @@ impl Backend for WasmTextCompiler {
             fn_locals: std::cell::RefCell::new(Vec::new()),
             actors: &actors,
             self_type: std::cell::RefCell::new(None),
+            struct_methods: &struct_methods,
         };
 
         // Collect unique generic-function instantiations needed by the corpus fns.
@@ -472,6 +499,12 @@ impl Backend for WasmTextCompiler {
 
         for f in &fns {
             emit_fn(&mut fns_out, f, &ctx);
+        }
+
+        // User-defined extension methods on custom structs (#2054) — emitted
+        // alongside plain fns, not exported (mirrors actor methods above).
+        for f in &ext_methods {
+            emit_extension_method(&mut fns_out, f, &ctx);
         }
 
         let mut out = String::from("(module\n");
@@ -2521,6 +2554,24 @@ fn emit_expr(out: &mut String, expr: &TirExpr, ctx: &Ctx) {
         TirExprKind::Spawn { actor_type, fields } => {
             emit_actor_spawn(out, actor_type, fields, expr, ctx);
         }
+        // User-defined extension method on a custom struct (#2054) — checked
+        // last so it never shadows a builtin-type special case above (e.g. a
+        // `List`/`String` method). Routes to `${receiver_type}_${method}`,
+        // emitted by `emit_extension_method`.
+        TirExprKind::MethodCall {
+            receiver,
+            method,
+            args,
+        } if named_type_name(&receiver.ty)
+            .is_some_and(|t| ctx.struct_methods.contains(&(t, method.clone()))) =>
+        {
+            let receiver_type = named_type_name(&receiver.ty).expect("guarded above");
+            emit_expr(out, receiver, ctx);
+            for a in args {
+                emit_expr(out, a, ctx);
+            }
+            out.push_str(&format!("    call ${receiver_type}_{method}\n"));
+        }
         other => {
             out.push_str(&format!("    ;; unsupported expr: {other:?}\n"));
         }
@@ -4313,6 +4364,7 @@ fn emit_generic_fn(
         // and `fn_locals` above, or `self.field` inside the generic body would
         // resolve against the caller's actor layout (#2012).
         self_type: std::cell::RefCell::new(None),
+        struct_methods: ctx.struct_methods,
     };
 
     // Set up string_params for params whose concrete type is String.
@@ -4629,6 +4681,77 @@ fn emit_actor_method(out: &mut String, info: &ActorInfo, m: &TirActorMethod, ctx
         out.push_str("    unreachable\n");
     } else {
         out.push_str(&body);
+    }
+    out.push_str("  )\n");
+    *ctx.self_type.borrow_mut() = None;
+}
+
+/// Emit a user-defined extension method (`fn Type::method(self, ...) { ... }`)
+/// as `${receiver_type}_${method}` (#2054).
+///
+/// Unlike actor methods, `self` is already an ordinary entry in `f.params`
+/// (the parser/checker treat it as `params[0]` with `ty = Ty::Named(receiver_type,
+/// [])`), so the param-emission loop below is the same as `emit_fn`'s — no
+/// synthesized `(param $self i32)` needed. `ctx.self_type` is still bound for
+/// the body so `self.field = …` writes can resolve their layout (see
+/// `emit_field_assign`), same as actor methods.
+///
+/// The mangled name is receiver-qualified rather than the bare `f.name`
+/// because two different structs may declare a method with the same name
+/// (the checker's `method_table` is keyed per-receiver-type) — a bare-name
+/// symbol would collide.
+fn emit_extension_method(out: &mut String, f: &TirFn, ctx: &Ctx) {
+    let receiver_type = f
+        .receiver_type
+        .as_deref()
+        .expect("emit_extension_method called on a fn without a receiver_type");
+    *ctx.self_type.borrow_mut() = Some(receiver_type.to_string());
+    *ctx.string_params.borrow_mut() = f
+        .params
+        .iter()
+        .filter(|p| peels_to_string(&p.ty))
+        .map(|p| p.name.clone())
+        .collect();
+
+    let wasm_name = format!("{receiver_type}_{}", f.name);
+    out.push_str(&format!("  (func ${wasm_name}"));
+    for p in &f.params {
+        if peels_to_string(&p.ty) {
+            out.push_str(&format!(
+                " (param ${}_ptr i32) (param ${}_len i32)",
+                p.name, p.name
+            ));
+        } else {
+            out.push_str(&format!(" (param ${} {})", p.name, wasm_ty(&p.ty, ctx)));
+        }
+    }
+    if peels_to_string(&f.ret_ty) {
+        out.push_str(" (result i32 i32)");
+    } else if !matches!(f.ret_ty, Ty::Unit) {
+        out.push_str(&format!(" (result {})", wasm_ty(&f.ret_ty, ctx)));
+    }
+    out.push('\n');
+
+    let mut body = String::new();
+    let mut locals: Vec<(String, Ty)> = Vec::new();
+    collect_locals_block(&f.body, &mut locals);
+    collect_locals_ctx(&f.body, &mut locals, ctx);
+    {
+        let mut seen = std::collections::HashSet::new();
+        locals.retain(|(name, _)| seen.insert(name.clone()));
+    }
+    for (name, ty) in &locals {
+        body.push_str(&format!("    (local ${} {})\n", name, wasm_ty(ty, ctx)));
+    }
+    *ctx.fn_locals.borrow_mut() = locals.clone();
+    emit_block(&mut body, &f.body, ctx);
+
+    if body.contains(";; unsupported") {
+        out.push_str("    ;; body stubbed — contained unsupported constructs\n");
+        out.push_str("    unreachable\n");
+    } else {
+        out.push_str(&body);
+        emit_fn_heap_drops(out, &locals, None);
     }
     out.push_str("  )\n");
     *ctx.self_type.borrow_mut() = None;
