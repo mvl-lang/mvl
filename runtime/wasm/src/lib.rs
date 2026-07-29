@@ -2339,7 +2339,10 @@ mod tests {
         let opt = unsafe { _mvl_map_get_str(m, addr(k), k.len() as i32) };
         assert_eq!(unsafe { _mvl_option_tag(opt) }, 0);
         let handle = unsafe { _mvl_option_value_i32(opt) };
-        assert_eq!(handle, boxed, "same MvlString handle — cloning bumps rc, not the pointer");
+        assert_eq!(
+            handle, boxed,
+            "same MvlString handle — cloning bumps rc, not the pointer"
+        );
         unsafe { _mvl_option_drop(opt) };
 
         // Mirrors `unwrap_or`'s cleanup: drop the value extracted from the option.
@@ -2366,9 +2369,15 @@ mod tests {
     fn map_contains_key_and_len() {
         let m = _mvl_map_new_si64();
         let k = b"a";
-        assert_eq!(unsafe { _mvl_map_contains_key_si64(m, addr(k), k.len() as i32) }, 0);
+        assert_eq!(
+            unsafe { _mvl_map_contains_key_si64(m, addr(k), k.len() as i32) },
+            0
+        );
         unsafe { _mvl_map_insert_si64(m, addr(k), k.len() as i32, 1) };
-        assert_eq!(unsafe { _mvl_map_contains_key_si64(m, addr(k), k.len() as i32) }, 1);
+        assert_eq!(
+            unsafe { _mvl_map_contains_key_si64(m, addr(k), k.len() as i32) },
+            1
+        );
         assert_eq!(unsafe { _mvl_map_len(m) }, 1);
         unsafe { _mvl_map_drop_si64(m) };
     }

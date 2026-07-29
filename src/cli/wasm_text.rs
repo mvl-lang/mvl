@@ -53,7 +53,9 @@ impl<'a> Visit<'a> for RefCollector {
 
 /// Collect all top-level type declarations from a list of programs, keyed
 /// by name — the `Decl::Type` counterpart to `mono::collect_fns`.
-fn collect_type_decls<'a>(programs: impl IntoIterator<Item = &'a Program>) -> HashMap<String, TypeDecl> {
+fn collect_type_decls<'a>(
+    programs: impl IntoIterator<Item = &'a Program>,
+) -> HashMap<String, TypeDecl> {
     let mut map = HashMap::new();
     for prog in programs {
         for decl in &prog.declarations {
@@ -121,11 +123,8 @@ fn pull_in_missing_prelude_items(
                 declarations: vec![Decl::Type(td.clone())],
                 span: td.span,
             };
-            let syn_mono = mvl::mvl::passes::mono::monomorphize(
-                &synthetic,
-                &HashMap::new(),
-                expr_types,
-            );
+            let syn_mono =
+                mvl::mvl::passes::mono::monomorphize(&synthetic, &HashMap::new(), expr_types);
             let syn_tir = mvl::mvl::ir::lower::lower(&synthetic, &syn_mono, expr_types);
             merged.types.extend(syn_tir.types);
         }
