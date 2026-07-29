@@ -1,0 +1,60 @@
+// 04_types/struct_extension_method_test.mvl — user-defined extension methods
+// on a custom (non-builtin) struct (#2054).
+//
+// Every hardcoded method dispatch in the WASM backend (.len(), .get(), etc.)
+// is special-cased by name for a handful of builtin types. There was no
+// general mechanism for "call a method the user declared on their own
+// struct" — such a call fell through to an `unreachable` trap regardless of
+// what the method body contained. Covers: a bare-literal body, a self.field
+// read, a method taking an extra argument, and one extension method calling
+// another on the same receiver.
+type Counter = struct {
+    limit: Int,
+}
+
+fn Counter::five(self: Counter) -> Int { 5 }
+
+fn Counter::value(self: Counter) -> Int { self.limit }
+
+fn Counter::add(self: Counter, n: Int) -> Int { self.limit + n }
+
+fn Counter::doubled(self: Counter) -> Int { self.add(self.value()) }
+
+type Point = struct {
+    x: Int,
+    y: Int,
+}
+
+// Two different structs may declare a method with the same name — this
+// exercises the receiver-qualified symbol mangling that keeps them distinct.
+fn Point::five(self: Point) -> Int { 5 }
+
+fn Point::manhattan(self: Point) -> Int { self.x + self.y }
+
+test fn extension_method_bare_literal() -> Unit {
+    let c: Counter = Counter { limit: 3 };
+    assert_eq(c.five(), 5)
+}
+
+test fn extension_method_field_read() -> Unit {
+    let c: Counter = Counter { limit: 7 };
+    assert_eq(c.value(), 7)
+}
+
+test fn extension_method_with_arg() -> Unit {
+    let c: Counter = Counter { limit: 10 };
+    assert_eq(c.add(5), 15)
+}
+
+test fn extension_method_calls_sibling_method() -> Unit {
+    let c: Counter = Counter { limit: 6 };
+    assert_eq(c.doubled(), 12)
+}
+
+test fn extension_method_same_name_different_struct() -> Unit {
+    let c: Counter = Counter { limit: 1 };
+    let p: Point = Point { x: 2, y: 3 };
+    assert_eq(c.five(), 5);
+    assert_eq(p.five(), 5);
+    assert_eq(p.manhattan(), 5)
+}
