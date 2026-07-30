@@ -1,10 +1,58 @@
 # Changelog
 
-## [1.7.3] - 2026-07-28
+## [1.7.3] - 2026-07-29
 
 ### Fixed — #2036
 
 - **WASM/LLVM backends: duplicate free-function names across merged sibling modules were never caught before codegen.** `mvl build --backend=wasm`/`--backend=llvm` merge an entry file with its transitively-loaded sibling modules into one flat symbol space. Two files (or two declarations in one file) sharing a free function name previously surfaced very differently, and both badly: WASM's `merge_tir_programs` concatenated every sibling's functions with no dedup, so the emitted module only failed at `wasm-tools parse` time with an opaque "duplicate func identifier" error; LLVM's `emit_fn_tir` silently kept only the first same-named definition and dropped the second's body entirely — no error, just quietly wrong behavior. Added `loader::find_duplicate_free_fn_names`, wired into both backends' multi-file compile paths: a collision now fails loudly and clearly with a `file:line` message for both declaration sites, before any lowering/emission. Not present in the Rust backend, which transpiles each sibling into its own real Rust `mod`.
+
+### Fixed — #2038, #2039
+
+- **WASM backend: `Result[Float, E]`/`Option[Float]` construction, `.unwrap_or()`, and `match` pattern binding pushed/expected `f64` where the runtime's `Option`/`Result` ctors and getters are `i64`-typed**, producing WASM that failed `wasm-tools validate` (`expected i64, found f64`). Bit-cast with `i64.reinterpret_f64`/`f64.reinterpret_i64` at all 6 call sites (construct + `.unwrap_or()` + match-bind, for both `Some`/`Ok`). Also fixed `collect_match_arm_locals`'s `Pattern::Ok` arm, which hardcoded the bound variable's WASM local type to `i64` regardless of the Result's actual `Ok`-payload type.
+- **WASM backend: `Float.to_string()` and the `format()` builtin were unimplemented**, falling through to an `;; unsupported` stub or calling a `$format` symbol never declared anywhere in the module. Added `_mvl_float_to_string` and `_mvl_format` to `runtime/wasm/`, mirroring the LLVM backend's existing semantics.
+
+### Fixed — #2042
+
+- **Two grammar cross-checks (`make validate-keywords`, `make test-grammar-coverage`) were reading a stale copy of the tree-sitter grammar** from `vendor/mvl-spec/tools/tree-sitter/`, deleted from mvl-spec after 0.1.2 once the grammar moved to the standalone `mvl-lang/tree-sitter-mvl` repo — both checks only kept passing because the submodule was still pinned three releases back. Added the `vendor/tree-sitter-mvl` submodule; both scripts now read `grammar.js` from it. Surfaced real drift once pointed at the live grammar: `security_label` was missing the four `Public`/`Tainted`/`Secret`/`Clean`-successor capability labels, `declassify_expr`/`sanitize_expr` (removed by #894) were still wired in while their replacement `relabel_expr` was defined but referenced nowhere, and `label_decl` was defined twice with the duplicate silently shadowing the first.
+- **`docs/manual/18-keywords.md` and `docs/requirements.md` Req 11 documented a keyword list and an IFC label lattice that no longer matched the language** (25 claimed keywords vs. 43 actually reserved; a `Public`/`Clean`/`declassify`/`sanitize` lattice #894 replaced with opaque labels and named `relabel` transitions). Rewritten against `keywords.yaml` and `std/audit.mvl`.
+
+### Changed — #2044
+
+- **`vendor/mvl-spec` bumped 0.1.2 → 0.1.4, `vendor/tree-sitter-mvl` re-pinned off a soon-to-be-unreachable feature branch onto its squashed `main` commit.** Caught three EBNF rules (`ctor_path`, `field_init`, `field_pattern`) with no tree-sitter counterpart, introduced by mvl-spec 0.1.3's grammar reconciliation — all confirmed as differently-factored, not real gaps, and documented in `EBNF_KNOWN_ABSENT`.
+
+### Fixed — #2024
+
+- **WASM backend: `Option[String]::unwrap_or`/`Result[String, E]::unwrap_or` emitted invalid WASM.** The generic i32-or-i64 dispatch had no String case, so the `then` branch produced a single i64 against the `else` branch's two-i32 `(ptr, len)` shape, rejected by `wasm-tools` validation. Both `unwrap_or` emitters (and the inverse `Some(x)`/`Ok(x)` constructor dispatch) now special-case String.
+- **WASM backend: every `.unwrap_or()` temp was double-dropped** — its own inline drop right after the if/else was also matched by the generic fn-exit heap-drop scan, silently freeing an `Option`'s box twice (no check trips) but freeing a `Result`'s box twice reads freed memory that can look like a stale `Err` and fires a spurious string drop on a garbage pointer — a real crash. Fixed by removing `__mo_`/`__mr_` from the fn-exit drop scan.
+- **`Map[String, V].get()`/`.insert()` only supported `V = Int`.** The runtime's map value slot is already a generic i64 "wide slot"; the emitter was hardcoded to Int. Now dispatches by value shape (String boxes into `*MvlString`, i32-shaped payloads extend directly, Int/UInt pass through).
+
+### Fixed — #2045, #2046, #2047
+
+- **WASM backend: free functions and enum types pulled in via `use std.module.{...}` resolved at check time but were never lowered into the emitted module**, leaving dangling `call $foo`-style references. Fixed by walking the call graph outward from what's already lowered and pulling in just the specific missing prelude functions/types (transitively), rather than lowering the whole prelude.
+- **WASM and LLVM backends: `Map[String, String].get()` handed back a string handle still owned by the map's own entry.** `.unwrap_or()`'s cleanup unconditionally drops whatever it extracts, so the map's own copy got freed out from under it — a trap, or a crash on the LLVM backend's drop-tracking pass, the next time the map was touched. Fixed with a dedicated cloning getter (`_mvl_map_get_str` on WASM, an equivalent clone-before-wrap on LLVM) so the caller gets an independently-owned reference.
+- **`examples/programs/auth_handler.mvl` had no `fn main` and didn't actually compile** (missing `UserStore::find_user`, and a `?` on `Option[User]` inside a `Result`-returning function that the checker allows but the Rust transpiler can't lower). Fixed and given a real `main`.
+- **`examples/pci_payment/` was the only multi-file example without a `main.mvl`** — the playground's entry-picker falls back to the alphabetically-first file when there's none, silently picking `ifc.mvl` (no `fn main`) over the actual demo. Renamed `payment.mvl` → `main.mvl` to match every other multi-file example's convention.
+
+### Added
+
+- **`SECURITY.md`**, leading with the per-backend enforcement matrix for the eleven MVL guarantees — they are not uniformly enforced across backends (e.g. IFC/Req 11 is checker-only, the taint pass on emitted LLVM is still planned; unprovable Req 10 refinements compile to `debug_assert!` on the Rust backend, compiled out in release builds).
+
+### Fixed — #2054
+
+- **WASM backend: user-defined extension methods on custom structs were entirely unsupported, not just a specific bug.** `emit_program` filtered every `TirFn` by `receiver_type.is_none()`, so a plain `fn Type::method(self, ...)` on a non-generic, non-builtin struct was dropped from every emission path — calling it compiled to an `unreachable` trap regardless of the method body. Added a `Ctx.struct_methods` dispatch table keyed by `(receiver_type, method)` and `emit_extension_method`, mangling the WASM symbol as `${receiver_type}_${method}` to avoid collisions between two structs declaring the same method name.
+- **WASM backend: the `to_string` dispatch arm matched purely on method name, with no receiver-type check, unlike every other by-name arm in the file** — so it ran ahead of the new struct-method dispatch above and always intercepted a custom struct's own `fn Type::to_string(self, ...)`, silently stubbing the caller to `unreachable` or producing a hard validation error. Also fixed `collect_literals`, which only scanned `fns` for string literals to intern, never `ext_methods` — a string literal inside an extension method body emitted `;; missing literal`.
+
+### Fixed — #2023, #2052
+
+- **WASM backend: the return-path drop sweep freed a `String` method's result before the caller ever read it — not a leak, memory corruption.** `concat`/`substring`/`to_upper`/`to_lower`/`trim`/`replace`, `Float.to_string()`, and `format(...)` materialize their result into a `*MvlString`-holding temp; when a fn's return expression *was* one of these calls directly (`fn f(a, b) -> String { a.concat(b) }` — the single most common pattern), neither the implicit- nor explicit-return drop sweep recognized that temp as the value being returned, and freed it before the `(ptr, len)` pair reached the caller. #2052 is the same root cause one level removed: a return value chained through a second helper call before `.concat()` (`pri_str(...).concat("X")`).
+
+### Fixed — #2053
+
+- **WASM backend: a `match` arm whose block body's only statement was a trailing `if`/`else if`/`else` chain caused a WASM validator stack-imbalance, not merely a wrong result.** The chain lowers to `TirStmt::If`, not a bare trailing expression, so the block-type inference used for match arms gave up and reported no result type for the *entire* match — even though every arm still left a value on the stack. Fixed by recursing into a trailing `TirStmt::If`/`TirStmt::Match` the same way nested `if`/`else if` chains already do.
+
+### Changed
+
+- **`vendor/mvl-spec` bumped 0.1.4 → 0.1.5.** Caught a second-order tooling bug from the previous bump (#2044): the new spec release documents which words are deliberately *not* reserved keywords in a prose block sitting between the `Reserved Keywords` and `Lexical` EBNF sections, and `validate_keywords.py` was scanning everything between those two fixed markers as keyword listings — every English word in the new prose became a false-positive "extra keyword". Fixed by stopping the scan at whichever `=== ... ===` section header comes next, not a hardcoded "Lexical".
 
 ## [1.7.2] - 2026-07-28
 
