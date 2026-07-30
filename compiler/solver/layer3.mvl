@@ -238,18 +238,20 @@ partial fn handle_if_stmt(
         return ()
     } else { () }
 
-    // Mid-block: fork into then-branch and else/fall-through.
-    let then_prefix: ref List[Expr] = [];
-    for c in prefix { then_prefix.push(c) }
-    then_prefix.push(cond);
-    collect_block_paths(ie.then, then_prefix, paths, depth + 1);
-
+    // Mid-block: fork into then-branch and else/fall-through. `cond` is used
+    // read-only by `negate_simple` before the final, consuming push into
+    // `then_prefix` — reversing this order moves `cond` too early.
     let else_prefix: ref List[Expr] = [];
     for c in prefix { else_prefix.push(c) }
     match negate_simple(cond) {
         Some(neg) => { else_prefix.push(neg) },
         None      => {},
     }
+
+    let then_prefix: ref List[Expr] = [];
+    for c in prefix { then_prefix.push(c) }
+    then_prefix.push(cond);
+    collect_block_paths(ie.then, then_prefix, paths, depth + 1);
 
     // Collect remaining statements into a synthetic block.
     let rest_stmts: ref List[Stmt] = [];
@@ -299,17 +301,21 @@ partial fn collect_expr_paths(
                 Some(c) => c,
                 None    => { return () },
             };
-            let then_prefix: ref List[Expr] = [];
-            for c in prefix { then_prefix.push(c) }
-            then_prefix.push(cond);
-            collect_block_paths(ie.then, then_prefix, paths, depth + 1);
-
+            // `cond` is used read-only by `negate_simple` before the final,
+            // consuming push into `then_prefix` — reversing this order
+            // moves `cond` too early.
             let else_prefix: ref List[Expr] = [];
             for c in prefix { else_prefix.push(c) }
             match negate_simple(cond) {
                 Some(neg) => { else_prefix.push(neg) },
                 None      => {},
             }
+
+            let then_prefix: ref List[Expr] = [];
+            for c in prefix { then_prefix.push(c) }
+            then_prefix.push(cond);
+            collect_block_paths(ie.then, then_prefix, paths, depth + 1);
+
             match ie.else_br.get(0) {
                 Some(e) => collect_expr_paths(e, else_prefix, paths, depth + 1),
                 None    => {},

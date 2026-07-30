@@ -218,7 +218,12 @@ partial fn infer_list_lit(
         return InferResult::ok(Ty::List(Box::new(Ty::Unknown)), c)
     } else { () }
     let curr: ref Checker = c;
-    let elem_ty: ref Ty = Ty::Unknown;
+    // A `ref` binding needs an owned initializer to reference — a bare
+    // `Ty::Unknown` literal is a temporary with nothing else keeping it
+    // alive, hence the intermediate `let` (mirrors `inst_ret`'s init from
+    // `fn_ret` elsewhere in this file).
+    let unknown_ty: Ty = Ty::Unknown;
+    let elem_ty: ref Ty = unknown_ty;
     for e in elems {
         let ir: InferResult = infer_expr(curr, errs, e);
         curr = ir.checker;

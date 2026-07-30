@@ -163,7 +163,7 @@ partial fn eff_can_reach(
                         return true
                     }
                     if !visited.any(|v: String| v == p) {
-                        visited.push(p);
+                        visited.push(p.concat(""));
                         queue.push(p);
                     }
                 }
@@ -201,7 +201,10 @@ partial fn eff_dfs_cycle(
         if let Some(s) = path.get(pi) { new_path.push(s) }
         pi = pi + 1
     }
-    new_path.push(node);
+    // `node` is pushed into two lists and read once before its final,
+    // consuming use at the bottom of this function — `.concat("")` gives
+    // each earlier site its own independent copy (no `.clone()` on String).
+    new_path.push(node.concat(""));
 
     let new_stack: ref List[String] = [];
     let si: ref Int = 0;
@@ -209,9 +212,9 @@ partial fn eff_dfs_cycle(
         if let Some(s) = on_stack.get(si) { new_stack.push(s) }
         si = si + 1
     }
-    new_stack.push(node);
+    new_stack.push(node.concat(""));
 
-    let ps: List[String] = match parents.get(node) { Some(ps) => ps, None => [] };
+    let ps: List[String] = match parents.get(node.concat("")) { Some(ps) => ps, None => [] };
     let found_cycle: ref Bool = false;
     let cycle_chain: ref List[String] = [];
     let i: ref Int = 0;

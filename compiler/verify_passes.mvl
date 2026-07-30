@@ -363,7 +363,12 @@ pub type MemorySafetyCounts = struct {
 
 /// Walk all fn bodies and count let, ref, and consume sites.
 /// Port of passes.rs::count_memory_safety_sites.
-pub total fn count_memory_safety_sites(prog: Program) -> MemorySafetyCounts {
+///
+/// `partial`, not `total`: calls `walk_block_vp`, which is itself `partial`
+/// (mutual recursion over `Block`/`Expr` — same as `walk.mvl`'s
+/// `walk_block`/`walk_expr`, never proven total). Its only caller,
+/// `run_pass`, is already `partial`, so this doesn't cascade further.
+pub partial fn count_memory_safety_sites(prog: Program) -> MemorySafetyCounts {
     let let_b: ref Int = 0;
     let ref_b: ref Int = 0;
     let con_s: ref Int = 0;
