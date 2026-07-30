@@ -3137,7 +3137,7 @@ impl TextEmitter {
                 self.fn_ctx.reg_types.insert(widened.clone(), "i64".into());
                 Ok(Some(self.emit_int_to_string(&widened)))
             }
-            ("to_string", _) => {
+            ("to_string", _) if !self.is_extension_method_call(&receiver.ty, "to_string") => {
                 self.fn_ctx.reg_types.insert(val.clone(), "ptr".into());
                 Ok(Some(val))
             }
@@ -4371,6 +4371,23 @@ impl TextEmitter {
                 Ok(Some(result))
             }
 
+            // Non-generic user-defined extension method on a custom struct
+            // (e.g. `fn Counter::increment(self) { ... }`) — checked before
+            // the generic-extension fallback below. `emit_program_tir`'s
+            // fn-emission loop already emits a non-generic extension
+            // method's body under its bare name regardless of
+            // `receiver_type`, and `register_fn_tir_sig` already registers
+            // its signature under the qualified `"Recv::method"` key; the
+            // call site just never routed to it (#2062, mirrors WASM's
+            // #2054/#2058). `is_extension_method_call` additionally checks
+            // `emitted_fn_names` so this never targets a *stripped* stdlib
+            // prelude extension method (registered for its signature only,
+            // body deliberately not emitted — see the comment on the
+            // fallback below).
+            (m, _) if self.is_extension_method_call(&receiver.ty, m) => {
+                self.emit_extension_method_call_tir(&receiver.ty, &val, m, args)
+            }
+
             // Fallback: dispatch to a generic extension method (#1612 partial).
             //
             // If `pub fn Recv[..]::method(self, ...)` is declared for the
@@ -4381,12 +4398,12 @@ impl TextEmitter {
             // methods #1763 targets (List HOFs: flatten, map, filter,
             // fold, sort_by, ...).
             //
-            // Non-generic extension methods (e.g. `String::is_empty`) are
-            // NOT handled here — the AST emitter strips them from the
-            // prelude and dispatches them via specialized arms.  Adding a
-            // second dispatch path for those without also un-stripping
-            // their bodies would emit calls to undefined symbols; the
-            // proper fix is scoped separately (see #1612 remainder).
+            // Non-generic *stdlib* extension methods (e.g. `String::is_empty`)
+            // are NOT handled here — the AST emitter strips them from the
+            // prelude and dispatches them via specialized arms above. Their
+            // signatures are still registered (for callers' type info) but
+            // their bodies are deliberately never emitted, so routing a call
+            // to them here would reference an undefined symbol.
             //
             // Generic extension methods survive the prelude strip because
             // they land in `mono.tir_generic_fns` and are emitted per
@@ -4412,6 +4429,69 @@ impl TextEmitter {
                 full_args.extend(args.iter().cloned());
                 self.emit_monomorphized_call_tir(method, &full_args)
             }
+        }
+    }
+
+    /// True if a non-generic, user-defined extension method
+    /// (`fn Recv::method(self, ...)`) exists for `ty`'s named/base type and
+    /// has an emitted body under `method`'s bare name. The `emitted_fn_names`
+    /// check is what excludes a same-named *stripped* stdlib prelude
+    /// extension method — its signature is registered the same way, but its
+    /// body is deliberately never emitted (see the comment on the generic
+    /// fallback in `emit_method_call_tir`).
+    fn is_extension_method_call(&self, ty: &Ty, method: &str) -> bool {
+        let Some(base) = receiver_base_name(ty) else {
+            return false;
+        };
+        self.module
+            .fn_param_types
+            .contains_key(&format!("{base}::{method}"))
+            && self.module.emitted_fn_names.contains(method)
+    }
+
+    /// Route a `MethodCall` to a non-generic user-defined extension method's
+    /// already-emitted body. `emit_fn_tir` emits it under its bare name
+    /// regardless of `receiver_type`; `register_fn_tir_sig` registers its
+    /// signature under the qualified `"Recv::method"` key. Mirrors the plain
+    /// free-fn-call emission in `emit_fn_call_tir`, simplified: extension
+    /// methods are always plain MVL fns, never closures or C-ABI builtins.
+    fn emit_extension_method_call_tir(
+        &mut self,
+        receiver_ty: &Ty,
+        receiver_val: &str,
+        method: &str,
+        args: &[TirExpr],
+    ) -> Result<Option<String>, String> {
+        let base = receiver_base_name(receiver_ty).expect("guarded by is_extension_method_call");
+        let qualified = format!("{base}::{method}");
+
+        let recv_llvm_ty = self.ty_to_llvm_ctx(receiver_ty);
+        let mut arg_strs = vec![format!("{recv_llvm_ty} {receiver_val}")];
+        for a in args {
+            let ty = self.ty_to_llvm_ctx(&a.ty);
+            let Some(v) = self.emit_expr_tir(a)? else {
+                continue;
+            };
+            arg_strs.push(format!("{ty} {v}"));
+        }
+        let args_str = arg_strs.join(", ");
+
+        let ret_ty = self
+            .module
+            .fn_ret_types
+            .get(&qualified)
+            .cloned()
+            .expect("fn_ret_types and fn_param_types are always inserted together");
+        let llvm_ret = self.llvm_ty_ctx(&ret_ty);
+
+        if Self::is_void(&ret_ty) {
+            self.push_instr(&format!("call void @{method}({args_str})"));
+            Ok(None)
+        } else {
+            let reg = self.next_reg();
+            self.push_instr(&format!("{reg} = call {llvm_ret} @{method}({args_str})"));
+            self.fn_ctx.reg_types.insert(reg.clone(), llvm_ret);
+            Ok(Some(reg))
         }
     }
 }

@@ -4926,7 +4926,16 @@ fn emit_extension_method(out: &mut String, f: &TirFn, ctx: &Ctx) {
         out.push_str("    unreachable\n");
     } else {
         out.push_str(&body);
-        emit_fn_heap_drops(out, &locals, None);
+        // Same implicit-return exclusion as emit_fn (#2023, #2052): a trailing
+        // bare-expression method body (e.g. `fn Type::to_string(self) -> String
+        // { "...".concat(...) }`, no `return` keyword) must not have its own
+        // *MvlString result freed by the blanket drop sweep before the caller
+        // reads it.
+        let implicit_exclude = match f.body.stmts.last() {
+            Some(TirStmt::Expr { expr, .. }) => exclude_returned_local(expr),
+            _ => None,
+        };
+        emit_fn_heap_drops(out, &locals, implicit_exclude.as_deref());
     }
     out.push_str("  )\n");
     *ctx.self_type.borrow_mut() = None;
