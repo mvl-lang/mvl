@@ -4,7 +4,7 @@ Power-grid protection relay for an 11 kV feeder. Monitors current and voltage, a
 
 **Standard.** IEC 61508 SIL 2 (industrial functional safety) + IEC 61850 (substation communication).
 **Ticket.** `mvl-lang/mvl#1909`.
-**Sibling cases at different domains.** `dose_scheduling` (medical, pharma nonlinear), `etcs_movement_authority` (rail, kinematics nonlinear). Grid is the same solver theory (QF-NIA) applied to a third distinct physics.
+**Sibling cases at different domains.** `dose_scheduling` (medical, pharma nonlinear), `etcs_move_authority` (rail, kinematics nonlinear). Grid is the same solver theory (QF-NIA) applied to a third distinct physics.
 
 ## Files
 

@@ -58,3 +58,50 @@ test fn string_trim() -> Unit {
     assert_eq("".trim(), "");
     assert_eq("   ".trim(), "");
 }
+
+// A `.concat()` result returned directly from a fn (no intermediate `let`)
+// used to be use-after-freed under the WASM backend: the fn's own
+// return-path drop sweep freed the `*MvlString` buffer it had just computed,
+// before the caller ever read the `(ptr, len)` pair (#2023).
+type Greeting = enum { Hello, Goodbye }
+
+fn combine(a: String, b: String) -> String {
+    a.concat(b)
+}
+
+fn greeting_word(g: Greeting) -> String {
+    match g {
+        Greeting::Hello => "hello",
+        Greeting::Goodbye => "goodbye",
+    }
+}
+
+// Chains a second helper's return value straight into `.concat()` — the
+// receiver is itself a call result, not a literal (#2052).
+fn greet(g: Greeting, name: String) -> String {
+    greeting_word(g).concat(name)
+}
+
+test fn string_method_result_survives_direct_return() -> Unit {
+    assert_eq(combine("hello", "world"), "helloworld");
+}
+
+test fn string_method_result_survives_chained_helper_return() -> Unit {
+    assert_eq(greet(Greeting::Hello, ", world"), "hello, world");
+    assert_eq(greet(Greeting::Goodbye, ", world"), "goodbye, world");
+}
+
+// A `.concat()` result bound to an intermediate `let` before being returned
+// used to be use-after-freed too, one level removed from #2023: `return s`
+// only ever protected the name `s`, which is never itself drop-tracked (it's
+// a split `s_ptr`/`s_len` pair) — the real heap owner is the `*MvlString`
+// temp the concat call materialized, and the fn's return-path drop sweep
+// still freed that buffer before the caller read it.
+fn combine_via_let(a: String, b: String) -> String {
+    let s: String = a.concat(b);
+    return s;
+}
+
+test fn string_method_result_survives_let_bound_return() -> Unit {
+    assert_eq(combine_via_let("hello", "world"), "helloworld");
+}

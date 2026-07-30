@@ -64,6 +64,11 @@ test: guard-mvl ## Run all tests (transpiler backend; extern bridge required)
 test-llvm: guard-mvl ## Run pure tests only via LLVM backend (no extern calls)
 	$(MVL) test $(DIR)handler_test.mvl --backend=llvm
 
+# No test-wasm target: handler_test.mvl exercises dispatch(), whose Err(e)
+# re-wrap of an auth failure calls the extern "rust" verify_request_auth —
+# blocked by #2049 (extern "rust" FFI unsupported on --backend=wasm), not
+# fixable here.
+
 assurance: guard-mvl ## Assurance report: spec coverage, MC/DC, mutation score (verbose)
 	$(MVL) assurance $(DIR) --verbose
 

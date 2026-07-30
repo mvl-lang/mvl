@@ -284,9 +284,52 @@ impl TypeChecker {
                     self.bind_match_pattern(p, &ty);
                 }
             }
-            Pattern::Struct { fields, .. } => {
-                for (_, p) in fields {
-                    self.bind_match_pattern(p, &Ty::Unknown);
+            Pattern::Struct { name, fields, .. } => {
+                // Mirror TupleStruct above: look up the enum variant's declared
+                // struct-shaped field types by name so a bound field (e.g.
+                // `AuthError::AccountLocked { attempts }`) gets its real type
+                // instead of Unknown — Unknown silently breaks any method call
+                // or use of the binding downstream (to_string(), arithmetic, ...).
+                let lookup_variant_struct_fields = |type_info: &TypeBodyInfo, vname: &str| {
+                    if let TypeBodyInfo::Enum(variants) = type_info {
+                        variants.iter().find(|v| v.name == vname).and_then(|v| {
+                            if let VariantFieldsInfo::Struct(named) = &v.fields {
+                                Some(named.clone())
+                            } else {
+                                None
+                            }
+                        })
+                    } else {
+                        None
+                    }
+                };
+                let variant_name = name.split("::").last().unwrap_or(name.as_str());
+                let field_infos: Vec<super::context::FieldInfo> =
+                    if let Some((type_name, _)) = name.split_once("::") {
+                        self.env
+                            .types
+                            .get(type_name)
+                            .and_then(|ti| lookup_variant_struct_fields(&ti.body, variant_name))
+                            .or_else(|| {
+                                self.env.types.values().find_map(|ti| {
+                                    lookup_variant_struct_fields(&ti.body, variant_name)
+                                })
+                            })
+                            .unwrap_or_default()
+                    } else {
+                        self.env
+                            .types
+                            .values()
+                            .find_map(|ti| lookup_variant_struct_fields(&ti.body, variant_name))
+                            .unwrap_or_default()
+                    };
+                for (field_name, p) in fields {
+                    let ty = field_infos
+                        .iter()
+                        .find(|fi| &fi.name == field_name)
+                        .map(|fi| fi.ty.clone())
+                        .unwrap_or(Ty::Unknown);
+                    self.bind_match_pattern(p, &ty);
                 }
             }
             Pattern::Or { patterns, .. } => {

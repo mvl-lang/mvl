@@ -1281,8 +1281,13 @@ fn run_one_expect_case(
         }
     }
 
+    // Must match the scratch-dir naming `mvl build` itself uses (#2068) —
+    // see loader::scratch_dir_disambiguator's doc comment.
+    let path_hash = loader::scratch_dir_disambiguator(&file_str);
     let binary = std::env::temp_dir()
-        .join(format!("mvl_build_{compiler_version}_{crate_name}"))
+        .join(format!(
+            "mvl_build_{compiler_version}_{crate_name}_{path_hash}"
+        ))
         .join(&crate_name)
         .join("target")
         .join("debug")

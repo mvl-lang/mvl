@@ -1,4 +1,4 @@
-# etcs_movement_authority — Rail supervision case study
+# etcs_move_authority — Rail supervision case study
 
 A refinement-typed ETCS Level 2 movement-authority supervision kernel. A Radio Block Centre (RBC) issues a Movement Authority (MA) to an on-board unit over a radio link; the on-board unit computes a brake supervision curve and decides accept / warn / service brake / emergency brake / MA-revoked.
 
@@ -45,7 +45,7 @@ grep -n "RBC-MA-001" supervision.mvl
 
 Returns exactly one line.
 
-**Contrast with `data_integrity`.** `data_integrity` traces the *output* direction of the IFC axis (`Secret[T]` → `relabel release`). `etcs_movement_authority` traces the *input* direction (`Tainted[T]` → `relabel trust`). Together the two cases close the paper's IFC-completeness claim.
+**Contrast with `data_integrity`.** `data_integrity` traces the *output* direction of the IFC axis (`Secret[T]` → `relabel release`). `etcs_move_authority` traces the *input* direction (`Tainted[T]` → `relabel trust`). Together the two cases close the paper's IFC-completeness claim.
 
 ## Compound decisions for MC/DC
 
@@ -84,7 +84,7 @@ Produces:
 
 ## Design decisions worth naming
 
-**Nonlinear obligations come from physics, not from domain magic.** `v² = u² − 2as` forces QF-NIA at every stopping-distance calculation. This is the paper's key claim: L5's role is domain-agnostic — pharma dosing (`dose_scheduling`) and rail kinematics (`etcs_movement_authority`) both discharge the same shape of nonlinear obligation.
+**Nonlinear obligations come from physics, not from domain magic.** `v² = u² − 2as` forces QF-NIA at every stopping-distance calculation. This is the paper's key claim: L5's role is domain-agnostic — pharma dosing (`dose_scheduling`) and rail kinematics (`etcs_move_authority`) both discharge the same shape of nonlinear obligation.
 
 **Movement authority arrives over an untrusted channel.** The radio link between RBC and on-board unit is subject to interference, spoofing, and stale-message attacks. Enforcing `Tainted[MovementAuthority]` at the ingress makes the trust boundary a single grep-able anchor rather than an implicit assumption scattered through the code.
 

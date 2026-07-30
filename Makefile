@@ -2,7 +2,7 @@
 .ONESHELL:
 SHELL := /bin/bash
 
-.PHONY: help version build build-runtime-wasm test test-full test-unit test-rust-integration test-requirements test-error-messages test-fmt-roundtrip test-rust-rust test-rust-llvm test-mvl-llvm test-rust-wasm test-mvl-wasm test-rust-tokio test-runtime-rust test-runtime-llvm test-runtime-wasm test-checker-parity test-checker-parity-update test-solver test-stdlib check-compiler assure-compiler test-mvl test-bootstrap-e2e test-bdd test-grammar-coverage test-examples test-examples-rust test-examples-llvm coverage traceability verification evidence validate-keywords lint mvl-lint format format-check format-mvl format-mvl-check assurance assurance-gate audit-backend-ast audit-cli-prelude check-adr docs docs-serve install install-runtime setup doctor clean fuzz-rust fuzz-llvm fuzz-diff fuzz-mvl test-fuzz-list mutants mutants-actors
+.PHONY: help version build build-runtime-wasm test test-full test-unit test-rust-integration test-requirements test-error-messages test-fmt-roundtrip test-rust-rust test-rust-llvm test-mvl-llvm test-rust-wasm test-mvl-wasm test-rust-tokio test-runtime-rust test-runtime-llvm test-runtime-wasm test-checker-parity test-checker-parity-update test-solver test-stdlib check-compiler assure-compiler test-mvl test-bootstrap-e2e test-bdd test-grammar-coverage bump-vendor-pins test-examples test-examples-rust test-examples-llvm test-examples-wasm coverage traceability verification evidence validate-keywords lint mvl-lint format format-check format-mvl format-mvl-check assurance assurance-gate audit-backend-ast audit-cli-prelude check-adr docs docs-serve install install-runtime setup doctor clean fuzz-rust fuzz-llvm fuzz-diff fuzz-mvl test-fuzz-list mutants mutants-actors
 
 .DEFAULT_GOAL := help
 
@@ -191,6 +191,7 @@ TEST_FULL_EXTRA_SUITES := \
 	"Backend rust/wasm |test-rust-wasm" \
 	"Examples (Rust)   |test-examples-rust" \
 	"Examples (LLVM)   |test-examples-llvm" \
+	"Examples (WASM)   |test-examples-wasm" \
 	"MVL compiler      |test-mvl" \
 	"Backend mvl/llvm  |test-mvl-llvm" 
 
@@ -445,6 +446,13 @@ test-examples-rust: build ## Run Rust transpiler smoke build for every example s
 test-examples-llvm: build ## Run LLVM backend tests for every example subdirectory
 	@examples/test-all.sh --llvm
 
+test-examples-wasm: build build-runtime-wasm ## Run WASM backend tests for every example subdirectory (only examples with a test-wasm target)
+	@command -v wasm-tools > /dev/null 2>&1 || { \
+	  printf "  \033[31m✗  wasm-tools not installed — 'cargo install wasm-tools'\033[0m\n"; exit 1; }
+	@command -v wasmtime > /dev/null 2>&1 || { \
+	  printf "  \033[31m✗  wasmtime not installed — see https://wasmtime.dev/\033[0m\n"; exit 1; }
+	@examples/test-all.sh --wasm
+
 # === Quality ===
 
 validate-keywords: ## Cross-check keyword lists across mvl-spec EBNF, tree-sitter, compiler/lexer.mvl, and Rust lexer (#706)
@@ -452,6 +460,31 @@ validate-keywords: ## Cross-check keyword lists across mvl-spec EBNF, tree-sitte
 
 test-grammar-coverage: validate-keywords ## Cross-validate mvl-spec EBNF against the tree-sitter grammar.js
 	@python3 tools/check_grammar_coverage.py
+
+# Reports what's available upstream; never mutates the submodule checkout or
+# commits anything. Bumping the pin is a deliberate, reviewed change (see
+# #2044, #2062) — a test/report target silently rewriting it on every run
+# would make `make test` non-reproducible and leave an unreviewed dependency
+# bump sitting in your working tree.
+bump-vendor-pins: ## Report available mvl-spec/tree-sitter-mvl updates (does not change the pin)
+	@echo "── vendor/mvl-spec ──"; \
+	git -C vendor/mvl-spec fetch --tags --quiet; \
+	echo "  pinned:      $$(git -C vendor/mvl-spec describe --tags 2>/dev/null || git -C vendor/mvl-spec rev-parse --short HEAD)"; \
+	echo "  latest tag:  $$(git -C vendor/mvl-spec tag -l 'spec-v*' | sort -V | tail -1)"; \
+	behind=$$(git -C vendor/mvl-spec rev-list --count HEAD..origin/main 2>/dev/null || echo '?'); \
+	echo "  commits behind origin/main: $$behind"; \
+	echo; \
+	echo "── vendor/tree-sitter-mvl ──"; \
+	git -C vendor/tree-sitter-mvl fetch --tags --quiet; \
+	echo "  pinned:      $$(git -C vendor/tree-sitter-mvl describe --tags 2>/dev/null || git -C vendor/tree-sitter-mvl rev-parse --short HEAD)"; \
+	echo "  latest tag:  $$(git -C vendor/tree-sitter-mvl tag -l 'v*' | sort -V | tail -1)"; \
+	behind=$$(git -C vendor/tree-sitter-mvl rev-list --count HEAD..origin/main 2>/dev/null || echo '?'); \
+	echo "  commits behind origin/main: $$behind"; \
+	echo; \
+	echo "To bump a pin, review its changelog first, then:"; \
+	echo "  git -C vendor/<name> checkout <tag-or-commit>"; \
+	echo "  make validate-keywords test-grammar-coverage"; \
+	echo "  git add vendor/<name> && git commit -m 'chore(vendor): bump <name> to <version>'"
 
 lint: ## Lint Rust source with clippy
 	cargo clippy -- -D warnings

@@ -4,12 +4,14 @@
 # Scalar predicates (price > 0, quantity > 0) are proved statically by the
 # MVL layered solver.  Cross-field invariants (no-worse-than-limit, quantity
 # conservation) are proved for ALL inputs by the Z3 harness in verify.py.
-.PHONY: help guard-mvl guard-z3 lint check prove test test-solver test-llvm assurance verify smoke run clean
+.PHONY: help guard-mvl guard-z3 lint check prove test test-solver test-llvm test-wasm assurance verify smoke run clean
 
 .DEFAULT_GOAL := help
 
 MVL  := ../../target/debug/mvl
 DIR  := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
+MVLR := ../../tools/mvlr
+WASM_RUNTIME := ../../target/wasm32-wasip1/debug/mvl_runtime_wasm.wasm
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z0-9_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-12s\033[0m %s\n", $$1, $$2}'
@@ -49,6 +51,9 @@ test-solver: check ## Show per-file solver statistics (alias for check)
 
 test-llvm: guard-mvl ## Run tests via LLVM backend
 	$(MVL) test $(DIR) --backend=llvm
+
+test-wasm: guard-mvl ## Run tests via WASM backend
+	MVL_RUNTIME_WASM=$(WASM_RUNTIME) $(MVLR) --mvl=$(MVL) --compiler=rust --backend=wasm $(DIR)
 
 assurance: guard-mvl ## Assurance report for main.mvl
 	$(MVL) assurance $(DIR)main.mvl

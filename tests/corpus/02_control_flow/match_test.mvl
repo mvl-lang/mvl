@@ -40,3 +40,42 @@ test fn match_bool_false_arm() -> Unit {
     };
     assert_eq(n, 0);
 }
+
+// A match arm whose block body's only statement is a trailing if/else-if/else
+// chain (each branch constructing an enum variant) used to compute the wrong
+// WASM block-type for the whole match under the WASM backend, since the
+// arm's own trailing shape wasn't recognised as leaving a value on the
+// stack. That produced a validator-rejected module (stack imbalance), not
+// merely a wrong result (#2053).
+type Breaker = enum { Open, Closed }
+type Decision = enum { Hold, Trip, Blocked }
+
+fn compute(fault: Bool, crit: Bool, b: Breaker) -> Decision {
+    match b {
+        Breaker::Open => Decision::Hold,
+        Breaker::Closed => {
+            if fault && crit {
+                Decision::Trip
+            } else if fault {
+                Decision::Blocked
+            } else {
+                Decision::Hold
+            }
+        }
+    }
+}
+
+fn decision_word(d: Decision) -> Int {
+    match d {
+        Decision::Hold => 0,
+        Decision::Trip => 1,
+        Decision::Blocked => 2,
+    }
+}
+
+test fn match_arm_with_nested_if_else_chain() -> Unit {
+    assert_eq(decision_word(compute(true, true, Breaker::Closed)), 1);
+    assert_eq(decision_word(compute(true, false, Breaker::Closed)), 2);
+    assert_eq(decision_word(compute(false, false, Breaker::Closed)), 0);
+    assert_eq(decision_word(compute(true, true, Breaker::Open)), 0);
+}

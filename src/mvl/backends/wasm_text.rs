@@ -116,6 +116,10 @@ struct PayloadVariant {
     disc: i32,
     /// Payload field types in declaration order. Empty = unit variant.
     fields: Vec<Ty>,
+    /// Declared field names, in the same order as `fields`, for struct-shaped
+    /// variants (`Variant { field: Ty, .. }`) — empty for tuple/unit variants,
+    /// where a `Pattern::Struct` field-name lookup never applies.
+    field_names: Vec<String>,
     /// Byte size of the payload region (sum of field sizes, 8-byte granules).
     payload_size: u32,
 }
@@ -224,6 +228,13 @@ struct Ctx<'a> {
     /// Set by `emit_fn` before body emission; read by `emit_stmt(Return)`
     /// to emit drops on explicit-return paths and by loop back-edges.
     fn_locals: std::cell::RefCell<Vec<(String, Ty)>>,
+    /// `let NAME = INIT` bindings for the current function body, name →
+    /// initializer expression. Set by `emit_fn`/`emit_extension_method`
+    /// before body emission; read by `exclude_returned_locals` so a
+    /// `return name` can trace back to the heap-owning temp `name`'s
+    /// initializer actually materialized (#2023/#2052's one-`let`-removed
+    /// case).
+    fn_let_inits: std::cell::RefCell<HashMap<String, TirExpr>>,
     /// Actor metadata by actor type name (#2012). Empty for programs with no
     /// actors, which is what keeps the actor scheduler out of every module.
     actors: &'a HashMap<String, ActorInfo>,
@@ -361,6 +372,9 @@ const RUNTIME_IMPORTS: &[(&str, &str)] = &[
     ("_mvl_result_ok_i64", "(param i64) (result i32)"),
     ("_mvl_result_ok_i32", "(param i32) (result i32)"),
     ("_mvl_result_err_str", "(param i32 i32) (result i32)"),
+    // Non-String Err payloads (#2066) — mirrors the Ok i64/i32 pair above.
+    ("_mvl_result_err_i64", "(param i64) (result i32)"),
+    ("_mvl_result_err_i32", "(param i32) (result i32)"),
     ("_mvl_result_tag", "(param i32) (result i32)"),
     ("_mvl_result_value_i64", "(param i32) (result i64)"),
     ("_mvl_result_value_i32", "(param i32) (result i32)"),
@@ -486,6 +500,7 @@ impl Backend for WasmTextCompiler {
             string_params: std::cell::RefCell::new(std::collections::HashSet::new()),
             assert_mode: self.assert_mode,
             fn_locals: std::cell::RefCell::new(Vec::new()),
+            fn_let_inits: std::cell::RefCell::new(HashMap::new()),
             actors: &actors,
             self_type: std::cell::RefCell::new(None),
             struct_methods: &struct_methods,
@@ -574,9 +589,9 @@ impl Backend for WasmTextCompiler {
 /// `Result[Int, Unknown]` and `Err("x")` with type `Result[Unknown, String]`
 /// both lower to i32 and are recognised as compatible block types.
 fn if_stmt_result_ty(then: &TirBlock, else_: &Option<TirElseBranch>, ctx: &Ctx) -> Option<Ty> {
-    let t = block_trailing_ty(then)?;
+    let t = block_trailing_ty(then, ctx)?;
     let e = match else_ {
-        Some(TirElseBranch::Block(b)) => block_trailing_ty(b)?,
+        Some(TirElseBranch::Block(b)) => block_trailing_ty(b, ctx)?,
         Some(TirElseBranch::If(nested)) => match nested.as_ref() {
             TirStmt::If {
                 then: t2,
@@ -598,13 +613,25 @@ fn if_stmt_result_ty(then: &TirBlock, else_: &Option<TirElseBranch>, ctx: &Ctx) 
     }
 }
 
-/// Type of a block's trailing expression, if the block ends in one and
-/// that expression is non-Unit.  Used to decide if a `TirStmt::If`'s
-/// branches leave a value on the WASM stack.
-fn block_trailing_ty(block: &TirBlock) -> Option<Ty> {
+/// Type of a block's trailing statement, if it leaves a non-Unit value on
+/// the stack. Used to decide if a `TirStmt::If`'s branches (or a match
+/// arm's block body) leave a value behind that the enclosing block-type
+/// needs to declare.
+///
+/// Recurses into a trailing `TirStmt::If`/`TirStmt::Match` — not just a bare
+/// `TirStmt::Expr` — because the TIR lowerer emits those for what reads as a
+/// trailing expression (e.g. a match arm body `{ if c { A } else { B } }`).
+/// Without this, a block-bodied arm whose tail is itself an if/else chain or
+/// nested match silently reports no result type, and the *enclosing* match's
+/// `if`s all end up emitted without `(result ...)` even though every arm
+/// still leaves a value on the stack — a WASM validator stack-imbalance
+/// (#2053), not a MVL-level bug.
+fn block_trailing_ty(block: &TirBlock, ctx: &Ctx) -> Option<Ty> {
     let last = block.stmts.last()?;
     match last {
         TirStmt::Expr { expr, .. } if !matches!(expr.ty, Ty::Unit) => Some(expr.ty.clone()),
+        TirStmt::If { then, else_, .. } => if_stmt_result_ty(then, else_, ctx),
+        TirStmt::Match { arms, .. } => match_arms_result_ty(arms, ctx),
         _ => None,
     }
 }
@@ -914,12 +941,14 @@ fn local_drop_fn(name: &str, ty: &Ty) -> Option<&'static str> {
 }
 
 /// Emit `local.get $name; call $drop_fn` for every heap-owning local,
-/// optionally skipping the one named `exclude` (the value being returned).
-/// All drop functions are null-safe, so uninitialized locals (value = 0)
-/// are harmless no-ops.
-fn emit_fn_heap_drops(out: &mut String, locals: &[(String, Ty)], exclude: Option<&str>) {
+/// skipping any named in `excludes` (the value(s) being returned — plural
+/// because `return name` may chase back through one or more `let` bindings
+/// to the temp that actually owns the heap allocation, see
+/// `exclude_returned_locals`). All drop functions are null-safe, so
+/// uninitialized locals (value = 0) are harmless no-ops.
+fn emit_fn_heap_drops(out: &mut String, locals: &[(String, Ty)], excludes: &[String]) {
     for (name, ty) in locals {
-        if exclude.map(|ex| ex == name.as_str()).unwrap_or(false) {
+        if excludes.iter().any(|ex| ex == name) {
             continue;
         }
         if let Some(drop_fn) = local_drop_fn(name, ty) {
@@ -995,15 +1024,106 @@ fn peels_to_string(ty: &Ty) -> bool {
     }
 }
 
-/// Extract the binding name from a `return expr` expression so the returned
-/// value can be excluded from heap drops (it must survive for the caller).
-/// Mirrors LLVM's `exclude_returned_value_tir`.
-fn exclude_returned_local(expr: &TirExpr) -> Option<&str> {
+/// Extract the fn-local name(s) holding a `return expr` expression's value
+/// so they can be excluded from heap drops (they must survive for the
+/// caller). Mirrors LLVM's `exclude_returned_value_tir` for the
+/// `Var`/`Consume`/`Relabel` cases, but also has to cover WASM-specific
+/// temps: allocation-returning String methods, `Float.to_string()`, and
+/// `format(...)` materialize their `*MvlString` result into a span-keyed
+/// `__ms_*` local (`collect_locals_expr`, `mvl_string_temp_name`) rather
+/// than a named binding. When the return expression *is* one of these
+/// calls directly, that temp — not any named `Var` — is the value being
+/// returned, and the drop sweep must skip it instead of freeing it out
+/// from under the caller (#2023, #2052).
+///
+/// A `Var(name)` alone is not enough: `let s: String = a.concat(b); return
+/// s;` returns `Var("s")`, but `s` (split into `s_ptr`/`s_len` locals) is
+/// never itself drop-tracked — the actual heap owner is the `__ms_*` temp
+/// created when `a.concat(b)` was unpacked into `(ptr, len)` during the
+/// `let`. Excluding only `"s"` protects nothing, and the blanket drop sweep
+/// still frees that temp out from under the return value (same UAF class as
+/// #2023/#2052, one `let` removed). So `Var(name)` also looks `name` up in
+/// `ctx.fn_let_inits` — the whole function's `let`-bindings, collected once
+/// up front — and recurses into the initializer, chasing `let a = ...; let
+/// b = a; return b;` chains the same way.
+fn exclude_returned_locals(expr: &TirExpr, ctx: &Ctx) -> Vec<String> {
+    let mut out = Vec::new();
+    exclude_returned_locals_into(expr, ctx, &mut out);
+    out
+}
+
+fn exclude_returned_locals_into(expr: &TirExpr, ctx: &Ctx, out: &mut Vec<String>) {
     match &expr.kind {
-        TirExprKind::Var(name) => Some(name.as_str()),
-        TirExprKind::Consume(inner) => exclude_returned_local(inner),
-        TirExprKind::Relabel { expr: inner, .. } => exclude_returned_local(inner),
-        _ => None,
+        TirExprKind::Var(name) => {
+            out.push(name.clone());
+            if let Some(init) = ctx.fn_let_inits.borrow().get(name).cloned() {
+                exclude_returned_locals_into(&init, ctx, out);
+            }
+        }
+        TirExprKind::Consume(inner) => exclude_returned_locals_into(inner, ctx, out),
+        TirExprKind::Relabel { expr: inner, .. } => exclude_returned_locals_into(inner, ctx, out),
+        TirExprKind::MethodCall {
+            receiver, method, ..
+        } if peels_to_string(&receiver.ty)
+            && matches!(
+                method.as_str(),
+                "concat" | "substring" | "to_upper" | "to_lower" | "trim" | "replace"
+            ) =>
+        {
+            out.push(mvl_string_temp_name(expr));
+        }
+        TirExprKind::MethodCall {
+            receiver, method, ..
+        } if matches!(receiver.ty, Ty::Float) && method == "to_string" => {
+            out.push(mvl_string_temp_name(expr));
+        }
+        TirExprKind::FnCall { name, args, .. } if name == "format" && args.len() == 2 => {
+            out.push(mvl_string_temp_name(expr));
+        }
+        _ => {}
+    }
+}
+
+/// Populate `ctx.fn_let_inits` with every `let NAME = INIT` binding in
+/// `body`, recursing into nested blocks (`if`/`else`, `while`, `match` arms)
+/// so a `let` above a conditional `return` is still found. Best-effort by
+/// name, like the rest of this module's span/name-keyed lookups — a
+/// shadowed name across sibling scopes can resolve to the wrong initializer,
+/// but the failure mode is a missed exclusion (leak) or a spurious one
+/// (also just a leak), never a new UAF, since this only ever adds
+/// exclusions on top of the existing direct-expression cases above.
+fn collect_let_inits_block(block: &TirBlock, map: &mut HashMap<String, TirExpr>) {
+    for stmt in &block.stmts {
+        collect_let_inits_stmt(stmt, map);
+    }
+}
+
+fn collect_let_inits_stmt(stmt: &TirStmt, map: &mut HashMap<String, TirExpr>) {
+    match stmt {
+        TirStmt::Let {
+            pattern: Pattern::Ident(name, _),
+            init,
+            ..
+        } => {
+            map.insert(name.clone(), init.clone());
+        }
+        TirStmt::If { then, else_, .. } => {
+            collect_let_inits_block(then, map);
+            match else_ {
+                Some(TirElseBranch::Block(b)) => collect_let_inits_block(b, map),
+                Some(TirElseBranch::If(nested)) => collect_let_inits_stmt(nested, map),
+                None => {}
+            }
+        }
+        TirStmt::While { body, .. } => collect_let_inits_block(body, map),
+        TirStmt::Match { arms, .. } => {
+            for arm in arms {
+                if let TirMatchBody::Block(b) = &arm.body {
+                    collect_let_inits_block(b, map);
+                }
+            }
+        }
+        _ => {}
     }
 }
 
@@ -1082,10 +1202,7 @@ fn emit_fn(out: &mut String, f: &TirFn, ctx: &Ctx) {
 
     // Deduplicate (collect passes may register the same name from nested
     // expressions or speculative String locals; WAT rejects duplicates).
-    {
-        let mut seen = std::collections::HashSet::new();
-        locals.retain(|(name, _)| seen.insert(name.clone()));
-    }
+    dedup_locals_keep_last(&mut locals);
     for (name, ty) in &locals {
         body.push_str(&format!("    (local ${} {})\n", name, wasm_ty(ty, ctx)));
     }
@@ -1100,6 +1217,12 @@ fn emit_fn(out: &mut String, f: &TirFn, ctx: &Ctx) {
     // Publish the locals list so emit_stmt(Return) can emit drops on
     // explicit-return paths without threading locals through every call.
     *ctx.fn_locals.borrow_mut() = locals.clone();
+    // Publish this function's `let` bindings so `exclude_returned_locals`
+    // can chase a returned `Var(name)` back to its initializer (#2023,
+    // #2052's one-`let`-removed case).
+    let mut let_inits = HashMap::new();
+    collect_let_inits_block(&f.body, &mut let_inits);
+    *ctx.fn_let_inits.borrow_mut() = let_inits;
 
     emit_block(&mut body, &f.body, ctx);
 
@@ -1136,16 +1259,118 @@ fn emit_fn(out: &mut String, f: &TirFn, ctx: &Ctx) {
         // Note: `__ma_*` (MvlArray literal temps) are intentionally absent
         // from `local_drop_fn` — they alias the same pointer as the
         // user-bound list local. Dropping both would double-free.
-        emit_fn_heap_drops(out, &locals, None);
+        //
+        // A trailing bare-expression statement (no `return` keyword) is the
+        // fn's implicit return value — same exclusion rule as the explicit
+        // path, needed so e.g. `fn f(a, b) -> String { a.concat(b) }` doesn't
+        // free its own `*MvlString` result before the caller reads it
+        // (#2023, #2052).
+        let implicit_excludes = match f.body.stmts.last() {
+            Some(TirStmt::Expr { expr, .. }) => exclude_returned_locals(expr, ctx),
+            _ => Vec::new(),
+        };
+        emit_fn_heap_drops(out, &locals, &implicit_excludes);
     }
     out.push_str("  )\n");
 }
 
 // ── Local collection ─────────────────────────────────────────────────────
 
+/// Deduplicate a locals list, keeping each name's LAST-pushed entry — the
+/// ctx-aware second pass (`collect_locals_ctx`) may push a corrected type
+/// for a name the ctx-unaware first pass already declared with a wrong
+/// placeholder type (`correct_payload_pattern_locals`, #2073); its pushes
+/// must win, not the earlier ones. Genuine duplicates from speculative
+/// String-local scaffolding are idempotent either way, so "keep last" never
+/// regresses those.
+fn dedup_locals_keep_last(locals: &mut Vec<(String, Ty)>) {
+    let mut seen = std::collections::HashSet::new();
+    let mut rev: Vec<(String, Ty)> = locals
+        .drain(..)
+        .rev()
+        .filter(|(name, _)| seen.insert(name.clone()))
+        .collect();
+    rev.reverse();
+    *locals = rev;
+}
+
 fn collect_locals_block(block: &TirBlock, locals: &mut Vec<(String, Ty)>) {
     for s in &block.stmts {
         collect_locals_stmt(s, locals);
+    }
+}
+
+/// Correct a match arm's payload-pattern-bound local types using
+/// `ctx.payload_enums` field metadata. The ctx-unaware first pass
+/// (`collect_match_arm_locals`) can't resolve a `TupleStruct`/`Struct`
+/// field's real type by slot — no `ctx` in scope there — so it declares
+/// every such binding as `Ty::Int` regardless of its actual shape (#2073).
+/// This runs in the ctx-aware second pass below; its pushes land after the
+/// first pass's in `locals`, so the "keep last occurrence" dedup in
+/// `emit_fn` lets them win and replace the wrong entries. String fields are
+/// skipped — those already declare correctly-shaped `_ptr`/`_len`/`__sv_*`
+/// placeholder locals from the first pass, keyed by name, not by type.
+fn correct_payload_pattern_locals(
+    pattern: &Pattern,
+    scrutinee_ty: &Ty,
+    locals: &mut Vec<(String, Ty)>,
+    ctx: &Ctx,
+) {
+    let (target, enum_ty): (&Pattern, Option<&Ty>) = match pattern {
+        Pattern::TupleStruct { .. } | Pattern::Struct { .. } => (pattern, Some(scrutinee_ty)),
+        Pattern::Err { inner, .. } => (inner.as_ref(), result_err_ty(scrutinee_ty)),
+        Pattern::Ok { inner, .. } => (inner.as_ref(), result_ok_ty(scrutinee_ty)),
+        _ => return,
+    };
+    let Some(enum_ty) = enum_ty else { return };
+    let Some(type_name) = underlying_named_ty(enum_ty, ctx) else {
+        return;
+    };
+    let Some(info) = ctx.payload_enums.get(&type_name) else {
+        return;
+    };
+
+    match target {
+        Pattern::TupleStruct { name, fields, .. } => {
+            let Some(pv) = info.variants.iter().find(|v| v.name == *name) else {
+                return;
+            };
+            for (slot, pat) in fields.iter().enumerate() {
+                if let Pattern::Ident(n, _) = pat {
+                    if n != "_" && !n.contains("::") {
+                        if let Some(field_ty) = pv.fields.get(slot) {
+                            if !peels_to_string(field_ty) {
+                                locals.push((n.clone(), field_ty.clone()));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        Pattern::Struct {
+            name,
+            fields: named_fields,
+            ..
+        } => {
+            let Some(pv) = info.variants.iter().find(|v| v.name == *name) else {
+                return;
+            };
+            for (slot, fname) in pv.field_names.iter().enumerate() {
+                let Some((_, pat)) = named_fields.iter().find(|(n, _)| n == fname) else {
+                    continue;
+                };
+                if let Pattern::Ident(bound, _) = pat {
+                    if bound != "_" && !bound.contains("::") {
+                        if let Some(field_ty) = pv.fields.get(slot) {
+                            if !peels_to_string(field_ty) {
+                                locals.push((bound.clone(), field_ty.clone()));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        _ => {}
     }
 }
 
@@ -1154,6 +1379,8 @@ fn collect_locals_block(block: &TirBlock, locals: &mut Vec<(String, Ty)>) {
 // A second pass over the function body that requires `ctx` to identify:
 //  - Payload-enum unit-variant `Var` expressions → `__ev_<off>` (i32)
 //  - String-field `FieldAccess` reads → `__sf_<off>_<len>` (i32)
+//  - Match-arm payload-pattern field locals whose real type needs a
+//    payload_enums lookup (#2073) — see `correct_payload_pattern_locals`.
 //
 // The main `collect_locals_*` functions can't see these because they don't
 // carry `ctx`. This pass is run after the main scan in `emit_fn`.
@@ -1204,6 +1431,7 @@ fn collect_locals_ctx_stmt(stmt: &TirStmt, locals: &mut Vec<(String, Ty)>, ctx: 
         } => {
             collect_locals_ctx_expr(scrutinee, locals, ctx);
             for arm in arms {
+                correct_payload_pattern_locals(&arm.pattern, &scrutinee.ty, locals, ctx);
                 match &arm.body {
                     TirMatchBody::Expr(e) => collect_locals_ctx_expr(e, locals, ctx),
                     TirMatchBody::Block(b) => collect_locals_ctx(b, locals, ctx),
@@ -1305,6 +1533,7 @@ fn collect_locals_ctx_expr(expr: &TirExpr, locals: &mut Vec<(String, Ty)>, ctx: 
         TirExprKind::Match { scrutinee, arms } => {
             collect_locals_ctx_expr(scrutinee, locals, ctx);
             for arm in arms {
+                correct_payload_pattern_locals(&arm.pattern, &scrutinee.ty, locals, ctx);
                 match &arm.body {
                     TirMatchBody::Expr(e) => collect_locals_ctx_expr(e, locals, ctx),
                     TirMatchBody::Block(b) => collect_locals_ctx(b, locals, ctx),
@@ -1635,12 +1864,12 @@ fn emit_stmt(out: &mut String, stmt: &TirStmt, ctx: &Ctx) {
             // Drop all heap locals except the one being returned.
             // The exclude keeps the return value alive for the caller;
             // all other live heap locals are freed here (not at fn exit).
-            let excluded = exclude_returned_local(e);
-            emit_fn_heap_drops(out, &ctx.fn_locals.borrow(), excluded);
+            let excluded = exclude_returned_locals(e, ctx);
+            emit_fn_heap_drops(out, &ctx.fn_locals.borrow(), &excluded);
             out.push_str("    return\n");
         }
         TirStmt::Return { value: None, .. } => {
-            emit_fn_heap_drops(out, &ctx.fn_locals.borrow(), None);
+            emit_fn_heap_drops(out, &ctx.fn_locals.borrow(), &[]);
             out.push_str("    return\n");
         }
         // `let x: T = init;`  (or `let x: ref T = init;` — same lowering)
@@ -2066,16 +2295,22 @@ fn emit_expr(out: &mut String, expr: &TirExpr, ctx: &Ctx) {
                 }
                 return;
             }
-            // `Err(x)` constructor — `Err(s: String)` routes to
-            // `_mvl_result_err_str`. Other error types not yet supported.
+            // `Err(x)` constructor — dispatches by the Result's actual
+            // Err-payload type, mirroring `Ok` above (#2066; previously
+            // any non-String Err type stubbed the whole enclosing function
+            // to `unreachable`).
             if name == "Err" && args.len() == 1 && matches!(&expr.ty, Ty::Result(_, _)) {
+                ctx.needs_runtime.set(true);
                 let err_ty = result_err_ty(&expr.ty).cloned().unwrap_or(Ty::String);
+                emit_expr(out, &args[0], ctx);
                 if peels_to_string(&err_ty) {
-                    ctx.needs_runtime.set(true);
-                    emit_expr(out, &args[0], ctx);
                     out.push_str("    call $_mvl_result_err_str\n");
                 } else {
-                    out.push_str("    ;; unsupported Err type (only String errors supported)\n");
+                    if is_float_ctx(&err_ty, ctx) {
+                        out.push_str("    i64.reinterpret_f64\n");
+                    }
+                    let (err_ctor, _) = result_ops_for_err(&err_ty, ctx);
+                    out.push_str(&format!("    call ${err_ctor}\n"));
                 }
                 return;
             }
@@ -2998,24 +3233,116 @@ fn emit_match_impl(
                 out.push_str("    else\n");
                 open_ifs += 1;
             }
-            // `Err(inner)` pattern on Result[T, E]. Check tag == 1.
+            // `Err(inner)` pattern on Result[T, E]. Check tag == 1, and —
+            // when `inner` names a specific qualified enum variant — also
+            // check that variant's own discriminant. Without this, multiple
+            // qualified Err arms in the same match (e.g. `Err(AuthError::A)`,
+            // `Err(AuthError::B)`) all lower to the same "tag == 1" condition,
+            // so only the first one listed is ever reachable.
             Pattern::Err { inner, .. } => {
                 ctx.needs_runtime.set(true);
+                let err_ty = result_err_ty(&scrutinee.ty).cloned().unwrap_or(Ty::String);
+                let qualified = wasm_qualified_variant_name(inner);
+                let variant_info =
+                    qualified.and_then(|qname| payload_variant_for(qname, ctx).cloned());
+
                 out.push_str(&format!("    local.get ${temp}\n"));
                 out.push_str("    call $_mvl_result_tag\n");
-                // tag == 1 is truthy directly.
+                if let Some(pv) = &variant_info {
+                    // Nested if, not an unconditional AND — the wrapped enum
+                    // pointer is only valid to dereference when the Result is
+                    // actually Err; on Ok its slot may hold unrelated data.
+                    out.push_str("    if (result i32)\n");
+                    out.push_str(&format!("    local.get ${temp}\n"));
+                    out.push_str("    call $_mvl_result_value_i32\n");
+                    out.push_str("    i32.load offset=0\n");
+                    out.push_str(&format!("    i32.const {}\n", pv.disc));
+                    out.push_str("    i32.eq\n");
+                    out.push_str("    else\n");
+                    out.push_str("    i32.const 0\n");
+                    out.push_str("    end\n");
+                }
                 out.push_str(&if_open);
-                // Bind inner only if named and non-wildcard. For corpus the
-                // error is String — extracted as *MvlString i32; not
-                // unpacked to (ptr, len) since corpus Err arms discard it.
-                if let Pattern::Ident(name, _) = inner.as_ref() {
-                    if name != "_" {
+                // Bind inner only if named and non-wildcard. Dispatches by
+                // the Result's actual Err-payload type (#2066) — String is
+                // extracted as *MvlString i32 (not unpacked to (ptr, len);
+                // no corpus/example Err arm uses the bound string as a
+                // String yet), a genuinely i64-shaped payload (Int, Float)
+                // keeps the full i64 getter instead of the old unconditional
+                // `i32.wrap_i64`, which silently truncated it.
+                match inner.as_ref() {
+                    Pattern::Ident(name, _) if name != "_" && !name.contains("::") => {
                         out.push_str(&format!("    local.get ${temp}\n"));
-                        out.push_str("    call $_mvl_result_value_i64\n");
-                        // Narrow to i32 pointer for String payload.
-                        out.push_str("    i32.wrap_i64\n");
+                        if peels_to_string(&err_ty) {
+                            out.push_str("    call $_mvl_result_value_i32\n");
+                        } else {
+                            let (_, getter) = result_ops_for_err(&err_ty, ctx);
+                            out.push_str(&format!("    call ${getter}\n"));
+                            if is_float_ctx(&err_ty, ctx) {
+                                out.push_str("    f64.reinterpret_i64\n");
+                            }
+                        }
                         out.push_str(&format!("    local.set ${name}\n"));
                     }
+                    // Struct-shaped variant pattern with bound fields (e.g.
+                    // `Err(AuthError::AccountLocked { attempts })`) — the
+                    // discriminant check above already narrowed the variant;
+                    // here just extract and bind the named payload fields
+                    // from the wrapped enum's own `{disc,payload_ptr}` header
+                    // (same layout `emit_payload_load` uses for a bare match).
+                    Pattern::Struct {
+                        fields: named_fields,
+                        ..
+                    } => {
+                        if let Some(pv) = &variant_info {
+                            let inner_off = inner.span().offset;
+                            let err_val_local = format!("__ev_{span_offset}_{inner_off}");
+                            let payload_ptr_local = format!("__epp_{span_offset}_{inner_off}");
+                            out.push_str(&format!("    local.get ${temp}\n"));
+                            out.push_str("    call $_mvl_result_value_i32\n");
+                            out.push_str(&format!("    local.set ${err_val_local}\n"));
+                            out.push_str(&format!("    local.get ${err_val_local}\n"));
+                            out.push_str("    i32.load offset=4\n");
+                            out.push_str(&format!("    local.set ${payload_ptr_local}\n"));
+                            for (slot, fname) in pv.field_names.clone().iter().enumerate() {
+                                let Some((_, pat)) = named_fields.iter().find(|(n, _)| n == fname)
+                                else {
+                                    continue;
+                                };
+                                if let Pattern::Ident(bname, _) = pat {
+                                    if bname != "_" && !bname.contains("::") {
+                                        let field_ty =
+                                            pv.fields.get(slot).cloned().unwrap_or(Ty::Int);
+                                        let byte_off = (slot as u32) * 8;
+                                        out.push_str(&format!(
+                                            "    local.get ${payload_ptr_local}\n"
+                                        ));
+                                        if peels_to_string(&field_ty) {
+                                            out.push_str(&format!(
+                                                "    i64.load offset={byte_off}\n"
+                                            ));
+                                            out.push_str("    i32.wrap_i64\n");
+                                            let sv_tmp = format!("__svs_{inner_off}_{bname}");
+                                            out.push_str(&format!("    local.tee ${sv_tmp}\n"));
+                                            out.push_str(&format!(
+                                                "    i32.load offset={MVL_STRING_OFFSET_PTR}\n"
+                                            ));
+                                            out.push_str(&format!("    local.set ${bname}_ptr\n"));
+                                            out.push_str(&format!("    local.get ${sv_tmp}\n"));
+                                            out.push_str(&format!(
+                                                "    i32.load offset={MVL_STRING_OFFSET_LEN}\n"
+                                            ));
+                                            out.push_str(&format!("    local.set ${bname}_len\n"));
+                                        } else {
+                                            emit_payload_load(out, &field_ty, byte_off, ctx);
+                                            out.push_str(&format!("    local.set ${bname}\n"));
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    _ => {}
                 }
                 emit_match_body(out, &arm.body, ctx);
                 out.push_str("    else\n");
@@ -3135,6 +3462,89 @@ fn emit_match_impl(
                                 out.push_str(&format!("    i64.load offset={byte_off}\n"));
                                 out.push_str("    i32.wrap_i64\n");
                                 let sv_tmp = format!("__sv_{}_{}", byte_off, name.len());
+                                out.push_str(&format!("    local.tee ${sv_tmp}\n"));
+                                out.push_str(&format!(
+                                    "    i32.load offset={MVL_STRING_OFFSET_PTR}\n"
+                                ));
+                                out.push_str(&format!("    local.set ${name}_ptr\n"));
+                                out.push_str(&format!("    local.get ${sv_tmp}\n"));
+                                out.push_str(&format!(
+                                    "    i32.load offset={MVL_STRING_OFFSET_LEN}\n"
+                                ));
+                                out.push_str(&format!("    local.set ${name}_len\n"));
+                            } else {
+                                emit_payload_load(out, &field_ty, byte_off, ctx);
+                                out.push_str(&format!("    local.set ${name}\n"));
+                            }
+                        }
+                    }
+                }
+                emit_match_body(out, &arm.body, ctx);
+                out.push_str("    else\n");
+                open_ifs += 1;
+            }
+            // `Variant { field: pat, .. }` — struct-shaped payload-enum pattern.
+            // Same payload layout as TupleStruct (positional 8-byte slots) —
+            // only the pattern syntax differs — so this reorders `named_fields`
+            // to the variant's declared slot order (`pv.field_names`) and then
+            // reuses the identical discriminant-check + payload-load sequence.
+            Pattern::Struct {
+                name: variant_name,
+                fields: named_fields,
+                ..
+            } => {
+                let type_name = variant_name.split_once("::").map(|(t, _)| t).unwrap_or("");
+                let pv_opt = ctx
+                    .payload_enums
+                    .get(type_name)
+                    .and_then(|info| info.variants.iter().find(|v| v.name == *variant_name));
+                let Some(pv) = pv_opt else {
+                    out.push_str(&format!(
+                        "    ;; unsupported Struct pattern (unknown variant): {variant_name}\n"
+                    ));
+                    for _ in 0..open_ifs {
+                        out.push_str("    end\n");
+                    }
+                    return;
+                };
+                ctx.needs_runtime.set(true);
+                let disc = pv.disc;
+                let pat_off = arm.pattern.span().offset;
+                out.push_str(&format!("    local.get ${temp}\n"));
+                out.push_str("    i32.load offset=0\n");
+                out.push_str(&format!("    i32.const {disc}\n"));
+                out.push_str("    i32.eq\n");
+                out.push_str(&if_open);
+                let payload_ptr_local = format!("__pp_{span_offset}_{pat_off}");
+                out.push_str(&format!("    local.get ${temp}\n"));
+                out.push_str("    i32.load offset=4\n");
+                out.push_str(&format!("    local.set ${payload_ptr_local}\n"));
+                // Bind each named field in its declared slot order — a struct
+                // pattern need not mention every field (partial destructure,
+                // `..`), so look each declared name up in the pattern rather
+                // than iterating the pattern's own (unordered) field list.
+                for (slot, fname) in pv.field_names.clone().iter().enumerate() {
+                    let Some((_, pat)) = named_fields.iter().find(|(n, _)| n == fname) else {
+                        continue;
+                    };
+                    if let Pattern::Ident(name, _) = pat {
+                        if name != "_" && !name.contains("::") {
+                            let field_ty = pv.fields.get(slot).cloned().unwrap_or(Ty::Int);
+                            let byte_off = (slot as u32) * 8;
+                            out.push_str(&format!("    local.get ${payload_ptr_local}\n"));
+                            if peels_to_string(&field_ty) {
+                                out.push_str(&format!("    i64.load offset={byte_off}\n"));
+                                out.push_str("    i32.wrap_i64\n");
+                                // Named unlike the TupleStruct arm's `__sv_<byte_off>_*`
+                                // (keyed on positional slot, trivially known there):
+                                // `collect_match_arm_locals` can't compute a struct
+                                // pattern's declared slot order without a
+                                // payload_enums lookup it doesn't have access to
+                                // (#2073's still-open TupleStruct byte_off gap), so
+                                // this temp is keyed on the pattern's own span + field
+                                // name instead — both collect and emit sides can
+                                // derive that without any registry lookup.
+                                let sv_tmp = format!("__svs_{pat_off}_{name}");
                                 out.push_str(&format!("    local.tee ${sv_tmp}\n"));
                                 out.push_str(&format!(
                                     "    i32.load offset={MVL_STRING_OFFSET_PTR}\n"
@@ -3558,15 +3968,60 @@ fn collect_match_arm_locals(
                 }
             }
         }
-        Pattern::Err { inner, .. } => {
-            if let Pattern::Ident(name, _) = inner.as_ref() {
-                if name != "_" {
-                    // Err payload is *MvlString (i32). Use Bool as the i32
-                    // placeholder type — wasm_ty maps Bool → i32.
-                    locals.push((name.clone(), Ty::Bool));
+        Pattern::Err { inner, .. } => match inner.as_ref() {
+            Pattern::Ident(name, _) if name != "_" => {
+                // Bind at the Result's actual Err-payload type (#2066) —
+                // mirrors the Ok arm's #2038 fix above. A hardcoded
+                // Ty::Bool (i32) here declared e.g. an Int/Float
+                // payload's local as i32, then `local.set` on the
+                // i64/f64-reinterpreted extraction value failed
+                // validation. String keeps the i32 placeholder — it's
+                // extracted as a raw *MvlString pointer, not unpacked
+                // to (ptr, len).
+                let err_ty = result_err_ty(scrutinee_ty).cloned().unwrap_or(Ty::String);
+                let ty = if peels_to_string(&err_ty) {
+                    Ty::Bool
+                } else {
+                    err_ty
+                };
+                locals.push((name.clone(), ty));
+            }
+            // Struct-shaped variant pattern with bound fields (e.g.
+            // `Err(AuthError::AccountLocked { attempts })`) — names must
+            // match what the emit-side `Pattern::Err` arm computes exactly:
+            // (match span_offset, inner pattern's own span offset).
+            Pattern::Struct {
+                fields: named_fields,
+                span: inner_span,
+                ..
+            } => {
+                locals.push((
+                    format!("__ev_{}_{}", span_offset, inner_span.offset),
+                    Ty::Bool, // i32 placeholder
+                ));
+                locals.push((
+                    format!("__epp_{}_{}", span_offset, inner_span.offset),
+                    Ty::Bool, // i32 placeholder
+                ));
+                for (_, pat) in named_fields {
+                    if let Pattern::Ident(bound, _) = pat {
+                        if bound != "_" && !bound.contains("::") {
+                            // Real field type isn't resolvable here without a
+                            // payload_enums lookup this pre-pass doesn't have
+                            // access to (same #2073-class limitation as the
+                            // TupleStruct/Struct arms below) — Int/Bool-shaped
+                            // fields (the common case) still declare correctly.
+                            locals.push((bound.clone(), Ty::Int));
+                            locals.push((format!("{bound}_ptr"), Ty::Bool));
+                            locals.push((format!("{bound}_len"), Ty::Bool));
+                            locals
+                                .push((format!("__svs_{}_{}", inner_span.offset, bound), Ty::Bool));
+                        }
+                    }
                 }
             }
-        }
+            _ => {}
+        },
         Pattern::TupleStruct {
             name: vname,
             fields: pats,
@@ -3597,8 +4052,61 @@ fn collect_match_arm_locals(
                 }
             }
         }
+        Pattern::Struct {
+            name: vname,
+            fields: named_fields,
+            span,
+            ..
+        } => {
+            locals.push((
+                format!("__pp_{}_{}", span_offset, span.offset),
+                Ty::Bool, // i32 placeholder
+            ));
+            let _ = vname;
+            for (n, pat) in named_fields {
+                if let Pattern::Ident(bound, _) = pat {
+                    if bound != "_" && !bound.contains("::") {
+                        // Real field type isn't resolvable here without a
+                        // payload_enums lookup this pre-pass doesn't have
+                        // access to (same limitation as #2073's TupleStruct
+                        // gap above) — Int/Bool-shaped fields (the common
+                        // case) still declare correctly; a struct/i32-shaped
+                        // field would need the same ctx-threading fix as #2073.
+                        let _ = n;
+                        locals.push((bound.clone(), Ty::Int));
+                        locals.push((format!("{bound}_ptr"), Ty::Bool));
+                        locals.push((format!("{bound}_len"), Ty::Bool));
+                        locals.push((format!("__svs_{}_{}", span.offset, bound), Ty::Bool));
+                    }
+                }
+            }
+        }
         _ => {}
     }
+}
+
+/// If `pattern` names a qualified enum variant (e.g. `Weekday::Mon`, bare or
+/// as an empty `TupleStruct`, or a struct-shaped `Variant { field: pat }`),
+/// return that name. `None` for wildcards, plain bindings, and payload
+/// sub-patterns. Mirrors the LLVM backend's `qualified_variant_name`.
+fn wasm_qualified_variant_name(pattern: &Pattern) -> Option<&str> {
+    match pattern {
+        Pattern::TupleStruct { name, .. } => Some(name.as_str()),
+        Pattern::Struct { name, .. } => Some(name.as_str()),
+        Pattern::Ident(name, _) if name.contains("::") => Some(name.as_str()),
+        _ => None,
+    }
+}
+
+/// Resolve a qualified enum-variant name (e.g. `AuthError::AccountLocked`) to
+/// its `PayloadVariant`, if the owning type is a payload-carrying enum.
+/// `None` for pure-unit enums (their discriminant lives in `ctx.enum_variants`
+/// instead) or unresolvable names.
+fn payload_variant_for<'a>(qname: &str, ctx: &'a Ctx) -> Option<&'a PayloadVariant> {
+    let type_name = qname.split_once("::").map(|(t, _)| t).unwrap_or("");
+    ctx.payload_enums
+        .get(type_name)
+        .and_then(|info| info.variants.iter().find(|v| v.name == qname))
 }
 
 /// WASM equality opcode for a scrutinee type. Types beyond scalar defaults
@@ -3630,7 +4138,7 @@ fn match_arms_result_ty(arms: &[TirMatchArm], ctx: &Ctx) -> Option<Ty> {
     for arm in arms {
         let arm_ty = match &arm.body {
             TirMatchBody::Expr(e) if !matches!(e.ty, Ty::Unit) => e.ty.clone(),
-            TirMatchBody::Block(b) => block_trailing_ty(b)?,
+            TirMatchBody::Block(b) => block_trailing_ty(b, ctx)?,
             _ => return None,
         };
         match &ty {
@@ -3903,6 +4411,22 @@ fn result_ops_for_ok(ok_ty: &Ty, ctx: &Ctx) -> (&'static str, &'static str) {
         ("_mvl_result_ok_i32", "_mvl_result_value_i32")
     } else {
         ("_mvl_result_ok_i64", "_mvl_result_value_i64")
+    }
+}
+
+/// Constructor and value-getter names for a `Result[T, E]` Err payload of
+/// `err_ty`, for the non-String case — `peels_to_string(err_ty)` callers
+/// route through `_mvl_result_err_str` instead, same split `Ok` already has
+/// between this function and its own String special-case (#2066). The
+/// getter is deliberately the *same* `_mvl_result_value_i32`/`_i64` pair
+/// `Ok` uses: both constructors now store their payload in the shared
+/// `ok_value` slot (`err_ptr` stays reserved for `_mvl_result_drop`'s
+/// String-ownership marker).
+fn result_ops_for_err(err_ty: &Ty, ctx: &Ctx) -> (&'static str, &'static str) {
+    if is_i32(err_ty, ctx) {
+        ("_mvl_result_err_i32", "_mvl_result_value_i32")
+    } else {
+        ("_mvl_result_err_i64", "_mvl_result_value_i64")
     }
 }
 
@@ -4485,6 +5009,7 @@ fn emit_generic_fn(
         string_params: std::cell::RefCell::new(std::collections::HashSet::new()),
         assert_mode: ctx.assert_mode,
         fn_locals: std::cell::RefCell::new(Vec::new()),
+        fn_let_inits: std::cell::RefCell::new(HashMap::new()),
         actors: ctx.actors,
         // A monomorphized instantiation is a different function, not a
         // continuation of whatever triggered it — reset like `string_params`
@@ -4537,6 +5062,7 @@ fn emit_generic_fn(
     let mut locals: Vec<(String, Ty)> = Vec::new();
     collect_locals_block(&f.body, &mut locals);
     collect_locals_ctx(&f.body, &mut locals, &mono_ctx);
+    dedup_locals_keep_last(&mut locals);
     for (name, ty) in &locals {
         let concrete = resolve_ty_param(ty, type_subst);
         if peels_to_string(&concrete) {
@@ -4793,14 +5319,14 @@ fn emit_actor_method(out: &mut String, info: &ActorInfo, m: &TirActorMethod, ctx
     let mut locals: Vec<(String, Ty)> = Vec::new();
     collect_locals_block(&m.body, &mut locals);
     collect_locals_ctx(&m.body, &mut locals, ctx);
-    {
-        let mut seen = std::collections::HashSet::new();
-        locals.retain(|(name, _)| seen.insert(name.clone()));
-    }
+    dedup_locals_keep_last(&mut locals);
     for (name, ty) in &locals {
         body.push_str(&format!("    (local ${} {})\n", name, wasm_ty(ty, ctx)));
     }
     *ctx.fn_locals.borrow_mut() = locals.clone();
+    let mut let_inits = HashMap::new();
+    collect_let_inits_block(&m.body, &mut let_inits);
+    *ctx.fn_let_inits.borrow_mut() = let_inits;
     emit_block(&mut body, &m.body, ctx);
 
     if body.contains(";; unsupported") {
@@ -4863,14 +5389,14 @@ fn emit_extension_method(out: &mut String, f: &TirFn, ctx: &Ctx) {
     let mut locals: Vec<(String, Ty)> = Vec::new();
     collect_locals_block(&f.body, &mut locals);
     collect_locals_ctx(&f.body, &mut locals, ctx);
-    {
-        let mut seen = std::collections::HashSet::new();
-        locals.retain(|(name, _)| seen.insert(name.clone()));
-    }
+    dedup_locals_keep_last(&mut locals);
     for (name, ty) in &locals {
         body.push_str(&format!("    (local ${} {})\n", name, wasm_ty(ty, ctx)));
     }
     *ctx.fn_locals.borrow_mut() = locals.clone();
+    let mut let_inits = HashMap::new();
+    collect_let_inits_block(&f.body, &mut let_inits);
+    *ctx.fn_let_inits.borrow_mut() = let_inits;
     emit_block(&mut body, &f.body, ctx);
 
     if body.contains(";; unsupported") {
@@ -4878,7 +5404,16 @@ fn emit_extension_method(out: &mut String, f: &TirFn, ctx: &Ctx) {
         out.push_str("    unreachable\n");
     } else {
         out.push_str(&body);
-        emit_fn_heap_drops(out, &locals, None);
+        // Same implicit-return exclusion as emit_fn (#2023, #2052): a trailing
+        // bare-expression method body (e.g. `fn Type::to_string(self) -> String
+        // { "...".concat(...) }`, no `return` keyword) must not have its own
+        // *MvlString result freed by the blanket drop sweep before the caller
+        // reads it.
+        let implicit_excludes = match f.body.stmts.last() {
+            Some(TirStmt::Expr { expr, .. }) => exclude_returned_locals(expr, ctx),
+            _ => Vec::new(),
+        };
+        emit_fn_heap_drops(out, &locals, &implicit_excludes);
     }
     out.push_str("  )\n");
     *ctx.self_type.borrow_mut() = None;
@@ -5309,16 +5844,20 @@ fn collect_payload_enums(types: &[TirTypeDecl]) -> HashMap<String, PayloadEnumIn
             }
             let mut pvs = Vec::new();
             for (disc, v) in vs.iter().enumerate() {
-                let fields: Vec<Ty> = match &v.fields {
-                    TirVariantFields::Unit => vec![],
-                    TirVariantFields::Tuple(tys) => tys.clone(),
-                    TirVariantFields::Struct(fs) => fs.iter().map(|f| f.ty.clone()).collect(),
+                let (fields, field_names): (Vec<Ty>, Vec<String>) = match &v.fields {
+                    TirVariantFields::Unit => (vec![], vec![]),
+                    TirVariantFields::Tuple(tys) => (tys.clone(), vec![]),
+                    TirVariantFields::Struct(fs) => (
+                        fs.iter().map(|f| f.ty.clone()).collect(),
+                        fs.iter().map(|f| f.name.clone()).collect(),
+                    ),
                 };
                 let payload_size = fields.iter().map(|_| 8u32).sum::<u32>();
                 pvs.push(PayloadVariant {
                     name: format!("{}::{}", td.name, v.name),
                     disc: disc as i32,
                     fields,
+                    field_names,
                     payload_size,
                 });
             }

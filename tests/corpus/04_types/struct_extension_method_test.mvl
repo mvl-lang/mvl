@@ -20,6 +20,15 @@ fn Counter::add(self: Counter, n: Int) -> Int { self.limit + n }
 
 fn Counter::doubled(self: Counter) -> Int { self.add(self.value()) }
 
+// `to_string` is also a builtin-dispatched method name on both the WASM and
+// LLVM backends — each had its own by-name-only dispatch arm that
+// unconditionally intercepted every `to_string` call, regardless of receiver
+// type, and so always shadowed a struct's own extension method (#2058 on
+// WASM, #2062 on LLVM).
+fn Counter::to_string(self: Counter) -> String {
+    "Counter(".concat(self.limit.to_string()).concat(")")
+}
+
 type Point = struct {
     x: Int,
     y: Int,
@@ -57,4 +66,9 @@ test fn extension_method_same_name_different_struct() -> Unit {
     assert_eq(c.five(), 5);
     assert_eq(p.five(), 5);
     assert_eq(p.manhattan(), 5)
+}
+
+test fn extension_method_to_string_not_shadowed() -> Unit {
+    let c: Counter = Counter { limit: 42 };
+    assert_eq(c.to_string(), "Counter(42)")
 }

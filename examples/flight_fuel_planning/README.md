@@ -28,7 +28,7 @@ Summary: 36 proven (L1:24 L2:6 L3:0 L4:0 L5:6), 0 runtime, 0 failed
 - **L5 (6)** — Z3 QF-NIA discharges:
   - `trip_fuel_kg` bounds (distance × burn / speed — two-variable product with bounded quotient)
   - `alternate_fuel_kg` bounds (same shape, tighter envelope)
-  - `total_uplift_ceiling` bounds (three-variable product — same shape as `dose_scheduling::total_infusion_dose` and `etcs_movement_authority::safety_margin_kinematic`)
+  - `total_uplift_ceiling` bounds (three-variable product — same shape as `dose_scheduling::total_infusion_dose` and `etcs_move_authority::safety_margin_kinematic`)
 
 Zero runtime obligations — the entire fuel-arithmetic layer is compile-time certified. Bounds propagate cleanly from input envelopes to result envelopes.
 

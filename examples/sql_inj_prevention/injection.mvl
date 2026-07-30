@@ -44,7 +44,7 @@ use model.{SafeSqlParam, BoundedInput, SqlIdentifier, EscapedSqlParam, SqlQuery,
 /// AUDIT ANCHOR (`SQL-DECLASSIFY-001`): sole `relabel trust` on the
 /// user-input flow into the SQL construction path.  A future violation
 /// is detectable by grepping for the tag:
-/// `grep -rn "SQL-DECLASSIFY-001" examples/sql_injection_prevention/`
+/// `grep -rn "SQL-DECLASSIFY-001" examples/sql_inj_prevention/`
 /// returns exactly one line.
 ///
 /// The output has the plain `String` type; promoting the result to a

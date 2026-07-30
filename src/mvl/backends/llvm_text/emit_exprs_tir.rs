@@ -1422,16 +1422,18 @@ impl TextEmitter {
 
         let n = self.fn_ctx.bb;
         // Collect Err arm indices whose inner pattern is a qualified enum variant
-        // (e.g. `Err(AuthError::InvalidCredentials)`). When there are multiple such
-        // arms they must NOT all emit `i8 1` in the outer switch — LLVM rejects
-        // duplicate case values. Instead route all of them to one `err_dispatch_bb`
-        // which performs a second switch on the inner error discriminant.
+        // (e.g. `Err(AuthError::InvalidCredentials)`, bare or struct-shaped like
+        // `Err(AuthError::AccountLocked { attempts })`). When there are multiple
+        // such arms they must NOT all emit `i8 1` in the outer switch — LLVM
+        // rejects duplicate case values. Instead route all of them to one
+        // `err_dispatch_bb` which performs a second switch on the inner error
+        // discriminant.
         let qualified_err_indices: Vec<usize> = arms
             .iter()
             .enumerate()
             .filter(|(_, a)| {
                 matches!(&a.pattern, Pattern::Err { inner, .. }
-                    if matches!(inner.as_ref(), Pattern::Ident(qn, _) if qn.contains("::")))
+                    if Self::qualified_variant_name(inner).is_some())
             })
             .map(|(i, _)| i)
             .collect();
@@ -1491,15 +1493,35 @@ impl TextEmitter {
                 .reg_types
                 .insert(inner_val.clone(), err_load_ty.clone());
 
+            // A payload-carrying error enum lowers to the same `{i8,ptr}`
+            // tagged union as Result/Option (RESULT_LLVM_TY) — its own
+            // discriminant must be extracted before switching, since LLVM's
+            // `switch` requires an integer condition (a struct value crashes
+            // `lli` with "switch condition must have integer type"). A
+            // unit-only error enum has no payload and lowers straight to
+            // `i64`, where `inner_val` already IS the discriminant.
+            let (switch_ty, switch_val) = if err_load_ty == RESULT_LLVM_TY {
+                let inner_disc = self.next_reg();
+                self.push_instr(&format!(
+                    "{inner_disc} = extractvalue {RESULT_LLVM_TY} {inner_val}, 0"
+                ));
+                self.fn_ctx
+                    .reg_types
+                    .insert(inner_disc.clone(), "i8".into());
+                ("i8".to_string(), inner_disc)
+            } else {
+                (err_load_ty.clone(), inner_val.clone())
+            };
+
             let inner_default = format!("err_dispatch_default_{}", n + arms.len());
             let mut inner_sw =
-                format!("switch {err_load_ty} {inner_val}, label %{inner_default} [\n");
+                format!("switch {switch_ty} {switch_val}, label %{inner_default} [\n");
             for &idx in &qualified_err_indices {
                 if let Pattern::Err { inner, .. } = &arms[idx].pattern {
-                    if let Pattern::Ident(qname, _) = inner.as_ref() {
+                    if let Some(qname) = Self::qualified_variant_name(inner) {
                         if let Some(disc) = self.pattern_discriminant(qname) {
                             inner_sw.push_str(&format!(
-                                "    {err_load_ty} {disc}, label %{}\n",
+                                "    {switch_ty} {disc}, label %{}\n",
                                 arm_bbs[idx]
                             ));
                         }
@@ -1527,7 +1549,7 @@ impl TextEmitter {
             self.fn_ctx.current_bb = arm_bb.clone();
             self.fn_ctx.terminated = false;
 
-            let mut bound_var: Option<String> = None;
+            let mut bound_vars: Vec<String> = Vec::new();
 
             match &arm.pattern {
                 Pattern::Ok { inner, .. } if ok_load_ty != "void" => {
@@ -1543,7 +1565,7 @@ impl TextEmitter {
                     if let Pattern::Ident(var_name, _) = inner.as_ref() {
                         if var_name != "_" {
                             self.fn_ctx.locals.insert(var_name.clone(), ok_val.clone());
-                            bound_var = Some(var_name.clone());
+                            bound_vars.push(var_name.clone());
                         }
                     }
                 }
@@ -1558,15 +1580,27 @@ impl TextEmitter {
                     self.fn_ctx
                         .reg_types
                         .insert(err_val.clone(), err_load_ty.clone());
-                    if let Pattern::Ident(var_name, _) = inner.as_ref() {
+                    match inner.as_ref() {
                         // Qualified names (e.g. `AuthError::InvalidCredentials`) are
                         // discriminant checks, not variable bindings — the dispatch is
                         // already done in err_dispatch_bb. Plain names (e.g. `e`) ARE
                         // variable bindings and must be bound for arm body use.
-                        if var_name != "_" && !var_name.contains("::") {
+                        Pattern::Ident(var_name, _)
+                            if var_name != "_" && !var_name.contains("::") =>
+                        {
                             self.fn_ctx.locals.insert(var_name.clone(), err_val.clone());
-                            bound_var = Some(var_name.clone());
+                            bound_vars.push(var_name.clone());
                         }
+                        // Struct-shaped variant pattern with bound fields
+                        // (e.g. `AuthError::AccountLocked { attempts }`) — the
+                        // discriminant check is done in err_dispatch_bb; here
+                        // just extract and bind the named payload fields.
+                        Pattern::Struct { name, fields, .. } => {
+                            bound_vars.extend(
+                                self.bind_struct_variant_fields_tir(name, fields, &err_val),
+                            );
+                        }
+                        _ => {}
                     }
                 }
                 Pattern::Wildcard(_) | Pattern::Ident(_, _) => {
@@ -1574,7 +1608,7 @@ impl TextEmitter {
                         self.fn_ctx
                             .locals
                             .insert(name.clone(), scrut_val.to_string());
-                        bound_var = Some(name.clone());
+                        bound_vars.push(name.clone());
                     }
                 }
                 _ => {}
@@ -1598,8 +1632,9 @@ impl TextEmitter {
                 self.fn_ctx.heap_locals.truncate(heap_snapshot);
             }
 
-            if let Some(var_name) = bound_var {
-                self.fn_ctx.locals.remove(&var_name);
+            for var_name in &bound_vars {
+                self.fn_ctx.locals.remove(var_name);
+                self.fn_ctx.local_mvl_types.remove(var_name);
             }
         }
 
@@ -1669,6 +1704,7 @@ impl TextEmitter {
         for (idx, arm) in arms.iter().enumerate() {
             let disc_opt = match &arm.pattern {
                 Pattern::TupleStruct { name, .. } => self.pattern_discriminant(name),
+                Pattern::Struct { name, .. } => self.pattern_discriminant(name),
                 Pattern::Ident(name, _) if name.contains("::") => self.pattern_discriminant(name),
                 Pattern::Wildcard(_) | Pattern::Ident(_, _) => {
                     wildcard_arm = Some(idx);
@@ -1897,6 +1933,8 @@ impl TextEmitter {
                         }
                     }
                 }
+            } else if let Pattern::Struct { name, fields, .. } = &arm.pattern {
+                bound_vars.extend(self.bind_struct_variant_fields_tir(name, fields, scrut_val));
             }
 
             let arm_val = self.emit_match_arm_body_tir(&arm.body)?;
@@ -3137,7 +3175,7 @@ impl TextEmitter {
                 self.fn_ctx.reg_types.insert(widened.clone(), "i64".into());
                 Ok(Some(self.emit_int_to_string(&widened)))
             }
-            ("to_string", _) => {
+            ("to_string", _) if !self.is_extension_method_call(&receiver.ty, "to_string") => {
                 self.fn_ctx.reg_types.insert(val.clone(), "ptr".into());
                 Ok(Some(val))
             }
@@ -4371,6 +4409,23 @@ impl TextEmitter {
                 Ok(Some(result))
             }
 
+            // Non-generic user-defined extension method on a custom struct
+            // (e.g. `fn Counter::increment(self) { ... }`) — checked before
+            // the generic-extension fallback below. `emit_program_tir`'s
+            // fn-emission loop already emits a non-generic extension
+            // method's body under its bare name regardless of
+            // `receiver_type`, and `register_fn_tir_sig` already registers
+            // its signature under the qualified `"Recv::method"` key; the
+            // call site just never routed to it (#2062, mirrors WASM's
+            // #2054/#2058). `is_extension_method_call` additionally checks
+            // `emitted_fn_names` so this never targets a *stripped* stdlib
+            // prelude extension method (registered for its signature only,
+            // body deliberately not emitted — see the comment on the
+            // fallback below).
+            (m, _) if self.is_extension_method_call(&receiver.ty, m) => {
+                self.emit_extension_method_call_tir(&receiver.ty, &val, m, args)
+            }
+
             // Fallback: dispatch to a generic extension method (#1612 partial).
             //
             // If `pub fn Recv[..]::method(self, ...)` is declared for the
@@ -4381,12 +4436,12 @@ impl TextEmitter {
             // methods #1763 targets (List HOFs: flatten, map, filter,
             // fold, sort_by, ...).
             //
-            // Non-generic extension methods (e.g. `String::is_empty`) are
-            // NOT handled here — the AST emitter strips them from the
-            // prelude and dispatches them via specialized arms.  Adding a
-            // second dispatch path for those without also un-stripping
-            // their bodies would emit calls to undefined symbols; the
-            // proper fix is scoped separately (see #1612 remainder).
+            // Non-generic *stdlib* extension methods (e.g. `String::is_empty`)
+            // are NOT handled here — the AST emitter strips them from the
+            // prelude and dispatches them via specialized arms above. Their
+            // signatures are still registered (for callers' type info) but
+            // their bodies are deliberately never emitted, so routing a call
+            // to them here would reference an undefined symbol.
             //
             // Generic extension methods survive the prelude strip because
             // they land in `mono.tir_generic_fns` and are emitted per
@@ -4412,6 +4467,69 @@ impl TextEmitter {
                 full_args.extend(args.iter().cloned());
                 self.emit_monomorphized_call_tir(method, &full_args)
             }
+        }
+    }
+
+    /// True if a non-generic, user-defined extension method
+    /// (`fn Recv::method(self, ...)`) exists for `ty`'s named/base type and
+    /// has an emitted body under `method`'s bare name. The `emitted_fn_names`
+    /// check is what excludes a same-named *stripped* stdlib prelude
+    /// extension method — its signature is registered the same way, but its
+    /// body is deliberately never emitted (see the comment on the generic
+    /// fallback in `emit_method_call_tir`).
+    fn is_extension_method_call(&self, ty: &Ty, method: &str) -> bool {
+        let Some(base) = receiver_base_name(ty) else {
+            return false;
+        };
+        self.module
+            .fn_param_types
+            .contains_key(&format!("{base}::{method}"))
+            && self.module.emitted_fn_names.contains(method)
+    }
+
+    /// Route a `MethodCall` to a non-generic user-defined extension method's
+    /// already-emitted body. `emit_fn_tir` emits it under its bare name
+    /// regardless of `receiver_type`; `register_fn_tir_sig` registers its
+    /// signature under the qualified `"Recv::method"` key. Mirrors the plain
+    /// free-fn-call emission in `emit_fn_call_tir`, simplified: extension
+    /// methods are always plain MVL fns, never closures or C-ABI builtins.
+    fn emit_extension_method_call_tir(
+        &mut self,
+        receiver_ty: &Ty,
+        receiver_val: &str,
+        method: &str,
+        args: &[TirExpr],
+    ) -> Result<Option<String>, String> {
+        let base = receiver_base_name(receiver_ty).expect("guarded by is_extension_method_call");
+        let qualified = format!("{base}::{method}");
+
+        let recv_llvm_ty = self.ty_to_llvm_ctx(receiver_ty);
+        let mut arg_strs = vec![format!("{recv_llvm_ty} {receiver_val}")];
+        for a in args {
+            let ty = self.ty_to_llvm_ctx(&a.ty);
+            let Some(v) = self.emit_expr_tir(a)? else {
+                continue;
+            };
+            arg_strs.push(format!("{ty} {v}"));
+        }
+        let args_str = arg_strs.join(", ");
+
+        let ret_ty = self
+            .module
+            .fn_ret_types
+            .get(&qualified)
+            .cloned()
+            .expect("fn_ret_types and fn_param_types are always inserted together");
+        let llvm_ret = self.llvm_ty_ctx(&ret_ty);
+
+        if Self::is_void(&ret_ty) {
+            self.push_instr(&format!("call void @{method}({args_str})"));
+            Ok(None)
+        } else {
+            let reg = self.next_reg();
+            self.push_instr(&format!("{reg} = call {llvm_ret} @{method}({args_str})"));
+            self.fn_ctx.reg_types.insert(reg.clone(), llvm_ret);
+            Ok(Some(reg))
         }
     }
 }

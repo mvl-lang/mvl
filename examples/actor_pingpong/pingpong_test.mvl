@@ -1,0 +1,59 @@
+// actor_pingpong/pingpong_test.mvl — deterministic behavior tests.
+//
+// Imports the actors from the sibling pingpong.mvl module (main.mvl is the
+// entry point, not a module — see .openspec/patterns/006).
+//
+// Each test drives one actor's behavior directly from the test thread and
+// asserts on that SAME actor's own state via a `pub test fn` accessor —
+// both calls are FIFO-ordered within that actor's own mailbox, so the
+// result is deterministic regardless of scheduling.
+//
+// The full multi-round ping<->pong cascade (main.mvl's `ping.start()` with
+// rounds > 1) is NOT tested here: once a reply triggers a further send,
+// that message is enqueued by the OTHER actor's own thread/turn, not the
+// test thread — racing it against a second manual call from the test
+// thread is only safe when every further increment past the tested point
+// is a no-op (`rounds` set so the round limit is reached in at most one
+// hop). `pub test fn` accessors are themselves FIFO-ordered on the actor's
+// own mailbox, so reading state right after a single triggering call is
+// deterministic; driving several rounds by hand and checking intermediate
+// counts is not, and traps on the WASM backend specifically, whose
+// single-threaded scheduler resolves an entire reachable cascade before
+// the outermost call returns (ADR-0059) — so a second manual call there
+// races the real reply that already happened, double-counting the round.
+
+use pingpong.{Ping, Pong, PingMsg, PongMsg}
+
+test fn pong_tracks_every_ping_received() -> Unit ! Spawn + Send {
+    let pong: Pong = actor Pong { received: 0 };
+    let ping: Ping = actor Ping { rounds: 0, sent: 0, partner: pong };
+    pong.ping(PingMsg { seq: 0 }, ping);
+    pong.ping(PingMsg { seq: 1 }, ping);
+    assert_eq(pong.get_received(), 2);
+}
+
+test fn ping_start_sends_the_first_ping() -> Unit ! Spawn + Send {
+    let pong: Pong = actor Pong { received: 0 };
+    let ping: Ping = actor Ping { rounds: 0, sent: 0, partner: pong };
+    ping.start();
+    assert_eq(ping.get_sent(), 1);
+}
+
+test fn ping_does_not_reply_once_round_limit_is_reached() -> Unit ! Spawn + Send {
+    let pong: Pong = actor Pong { received: 0 };
+    let ping: Ping = actor Ping { rounds: 0, sent: 0, partner: pong };
+    // 0 < 0 is false — no send, so no risk of a competing reply from pong.
+    ping.pong(PongMsg { seq: 0 });
+    assert_eq(ping.get_sent(), 0);
+}
+
+test fn ping_replies_once_when_one_round_remains() -> Unit ! Spawn + Send {
+    let pong: Pong = actor Pong { received: 0 };
+    let ping: Ping = actor Ping { rounds: 1, sent: 0, partner: pong };
+    // 0 < 1 → sends once; pong's real reply to THIS send would trigger
+    // pong() again with sent already 1, where 1 < 1 is false — a no-op
+    // either way, so this assertion holds regardless of whether that
+    // reply has already landed by the time get_sent() runs.
+    ping.pong(PongMsg { seq: 0 });
+    assert_eq(ping.get_sent(), 1);
+}

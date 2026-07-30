@@ -1,11 +1,13 @@
-# etcs_movement_authority example — MC/DC coverage demonstration (EN 50128 SIL 4)
+# etcs_move_authority example — MC/DC coverage demonstration (EN 50128 SIL 4)
 # Run from this directory or from the repo root.
-.PHONY: help guard-mvl check prove lint test-solver test test-llvm coverage assurance mcdc mutate smoke run run-llvm all clean
+.PHONY: help guard-mvl check prove lint test-solver test test-llvm test-wasm coverage assurance mcdc mutate smoke run run-llvm all clean
 
 .DEFAULT_GOAL := help
 
 MVL  := ../../target/debug/mvl
 DIR  := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
+MVLR := ../../tools/mvlr
+WASM_RUNTIME := ../../target/wasm32-wasip1/debug/mvl_runtime_wasm.wasm
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z0-9_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-12s\033[0m %s\n", $$1, $$2}'
@@ -53,6 +55,9 @@ test: guard-mvl ## Run unit tests
 test-llvm: guard-mvl ## Run unit tests via LLVM backend
 	$(MVL) test $(DIR) --backend=llvm
 
+test-wasm: guard-mvl ## Run tests via WASM backend
+	MVL_RUNTIME_WASM=$(WASM_RUNTIME) $(MVLR) --mvl=$(MVL) --compiler=rust --backend=wasm $(DIR)
+
 coverage: guard-mvl ## Run unit tests with native behavioral branch coverage report
 	$(MVL) test $(DIR) --coverage
 
@@ -69,7 +74,7 @@ all: check test assurance mcdc ## Run full quality pipeline: check + test + assu
 
 test-50128: guard-mvl ## EN 50128 SIL 4 assurance envelope: static proof + tests + coverage + MC/DC (rail signalling assurance)
 	@echo "════════════════════════════════════════════════════════════════"
-	@echo "  EN 50128 SIL 4 assurance envelope — etcs_movement_authority"
+	@echo "  EN 50128 SIL 4 assurance envelope — etcs_move_authority"
 	@echo "  EN 50128 SIL 4 assurance: three independent axes"
 	@echo "════════════════════════════════════════════════════════════════"
 	@echo ""
@@ -107,4 +112,4 @@ run-llvm: guard-mvl ## Execute demo scenarios via LLVM backend
 	$(MVL) run $(DIR)main.mvl --backend=llvm
 
 clean: ## Remove build artifacts
-	rm -rf $(TMPDIR)mvl_build_etcs_movement_authority
+	rm -rf $(TMPDIR)mvl_build_etcs_move_authority
