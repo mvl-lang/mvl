@@ -90,6 +90,11 @@
 - **`make bump-vendor-pins`** added — a read-only report of available `vendor/mvl-spec`/`vendor/tree-sitter-mvl` updates (pinned version, latest tag, commits behind upstream `main`). Never mutates the submodule checkout or commits anything; bumping stays a deliberate, reviewed commit.
 - Renamed `examples/etcs_movement_authority` → `examples/etcs_move_authority` and `examples/sql_injection_prevention` → `examples/sql_inj_prevention`.
 
+### Fixed
+
+- **WASM backend: the #2023/#2052 String-return UAF survived one `let` removed** (`let s: String = a.concat(b); return s;`) — flagged as a known follow-up in #2059's own PR description and confirmed live under wasmtime during review. `exclude_returned_local` only ever excluded the *named* local a `return` referred to; for `return name`, that's a no-op — a plain `String` local is never itself drop-tracked (it's a split `name_ptr`/`name_len` pair), and the real heap owner is the span-keyed `__ms_*` temp materialized when the `let`'s right-hand side was unpacked. Nothing protected that temp when the return expression was a `Var`, only when it was the allocation-returning call directly. Fixed by tracking each function's `let` bindings and having the exclusion walk chase a returned `Var(name)` back through its initializer (recursing through `let` chains); `exclude_returned_local` → `exclude_returned_locals` (plural), `emit_fn_heap_drops` takes a slice of excludes.
+- **Rust backend: actor internals (state struct, message enum, spawn fn) were widened to full `pub` by #2059's cross-module-spawn fix, not `pub(crate)`** — leaked the raw mailbox sender and message enum outside the generated crate for no benefit, since external code only ever holds the (already-`pub`) `Handle` type. Tightened to `pub(crate)`.
+
 ## [1.7.2] - 2026-07-28
 
 ### Fixed — #2027
