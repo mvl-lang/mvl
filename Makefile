@@ -418,12 +418,43 @@ WASM_CORPUS := $(WASM_CORPUS_WHOLE_DIRS) \
 		$(WASM_CORPUS_EXCLUDE) $(foreach d,$(WASM_CORPUS_WHOLE_DIRS),$(wildcard $(d)/*_test.mvl)), \
 		$(sort $(wildcard tests/corpus/*/*_test.mvl)))
 
+# The same set as WASM_CORPUS, flattened to individual files. `mvl build` takes
+# one file at a time, and the whole-dir entries above are directories.
+WASM_CORPUS_FILES := $(filter-out $(WASM_CORPUS_EXCLUDE), \
+	$(sort $(wildcard tests/corpus/*/*_test.mvl)))
+
 test-rust-wasm: build build-runtime-wasm ## rust/wasm — WASM-supported corpus subset (via runtime/wasm/ preload)
 	@command -v wasm-tools > /dev/null 2>&1 || { \
 	  printf "  \033[31m✗  wasm-tools not installed — 'cargo install wasm-tools'\033[0m\n"; exit 1; }
 	@command -v wasmtime > /dev/null 2>&1 || { \
 	  printf "  \033[31m✗  wasmtime not installed — see https://wasmtime.dev/\033[0m\n"; exit 1; }
 	MVL_RUNTIME_WASM=$(WASM_RUNTIME_PATH) $(MVLR) --mvl=$(MVL) --compiler=rust --backend=wasm $(WASM_CORPUS)
+
+# A stubbed body is a *silent* gap: `mvl build --backend=wasm` discards it,
+# emits `unreachable`, assembles fine and exits 0. The program only fails if
+# something calls the stub. That is how `List[T]::push` came to have no dispatch
+# arm at all while every file using it still "compiled" (#2014) — so gaps
+# accumulated invisibly and landed all at once on whoever opened the next ticket.
+#
+# This pins the set: every file in WASM_CORPUS must emit zero stubs. A new gap
+# fails here, in the commit that introduces it, instead of being discovered
+# later. Excluded files are allowed to stub — that is what excluding them means.
+wasm-stub-report: build ## Fail if any WASM_CORPUS file emits `unreachable` stubs (#2014)
+	@tmp=$$(mktemp -d); bad=0; \
+	for f in $(WASM_CORPUS_FILES); do \
+	  warn=$$(cd $$tmp && MVL_NO_REEXEC=1 $(CURDIR)/$(MVL) build --backend=wasm $(CURDIR)/$$f 2>&1 >/dev/null \
+	    | grep -A99 'compiled to `unreachable`' || true); \
+	  if [ -n "$$warn" ]; then \
+	    bad=1; printf "  \033[31m✗  %s\033[0m\n" "$$f"; \
+	    echo "$$warn" | sed -n 's/^  - /       /p'; \
+	  fi; \
+	done; \
+	rm -rf $$tmp; \
+	if [ $$bad -eq 0 ]; then \
+	  printf "  \033[32m✓  no stubbed functions across %s WASM corpus files\033[0m\n" "$(words $(WASM_CORPUS_FILES))"; \
+	else \
+	  printf "  \033[31m✗  stubbed functions found — implement them, or add the file to WASM_CORPUS_EXCLUDE\033[0m\n"; exit 1; \
+	fi
 
 # runtime/wasm/ — Rust crate compiled to wasm32-wasip1 (#1819). Loaded by
 # wasmtime via --preload runtime=<path>. The emitter conditionally emits

@@ -613,7 +613,39 @@ fn compile_wat(prog: &Program, module_name: &str, assert_mode: AssertMode) -> St
 
     let mut compiler = WasmTextCompiler::new();
     compiler.assert_mode = assert_mode;
-    compiler.emit_program(&entry_tir, module_name)
+    let wat = compiler.emit_program(&entry_tir, module_name);
+    warn_about_stubs(&compiler, module_name);
+    wat
+}
+
+/// Warn about functions the emitter stubbed to `unreachable`.
+///
+/// Without this, an incomplete build is silent: the body is discarded, the
+/// module still assembles, `wasm-tools parse` is happy, and the CLI exits 0.
+/// The program then traps at runtime only if the stubbed function is actually
+/// reached — so a gap can sit unnoticed for as long as nobody exercises that
+/// path. `List[T]::push` had no dispatch arm at all and every file using it
+/// still "compiled" (#2014).
+///
+/// A warning rather than an error: stubbing sibling functions on purpose is how
+/// partial WASM support has been shipped incrementally (see the emitter's own
+/// header notes), so failing here would regress working workflows. Callers that
+/// want a hard gate can compare `stubbed_fns()` against an expected set —
+/// `make wasm-stub-report` does exactly that over the corpus.
+fn warn_about_stubs(compiler: &WasmTextCompiler, source_label: &str) {
+    let stubbed = compiler.stubbed_fns();
+    if stubbed.is_empty() {
+        return;
+    }
+    eprintln!(
+        "warning: {source_label}: {} function(s) compiled to `unreachable` \
+         because the WASM backend does not support something in their bodies. \
+         Calling any of them traps at runtime:",
+        stubbed.len()
+    );
+    for name in &stubbed {
+        eprintln!("  - {name}");
+    }
 }
 
 /// Merge sibling `TirProgram`s into one flat program.
@@ -766,7 +798,9 @@ fn compile_wat_multi(
 
     let mut compiler = WasmTextCompiler::new();
     compiler.assert_mode = assert_mode;
-    compiler.emit_program(&merged, module_name)
+    let wat = compiler.emit_program(&merged, module_name);
+    warn_about_stubs(&compiler, module_name);
+    wat
 }
 
 /// Resolve `path` to an entry `.mvl` file — `path` itself if it's a file, or

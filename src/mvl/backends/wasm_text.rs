@@ -76,13 +76,37 @@ use crate::mvl::parser::lexer::Span;
 
 pub struct WasmTextCompiler {
     pub assert_mode: AssertMode,
+    /// Functions whose bodies were replaced by `unreachable` during the last
+    /// `emit_program`, in emission order.
+    ///
+    /// Exists because stubbing is otherwise *invisible*: the body is discarded,
+    /// the module still assembles, and `mvl build --backend=wasm` exits 0. A
+    /// half-implemented method is indistinguishable from a working one at the
+    /// CLI, so gaps accumulate silently until someone runs the file — which is
+    /// how `List[T]::push` came to have no dispatch arm at all without anyone
+    /// noticing (#2014). Reported by the CLI so an incomplete build says so.
+    ///
+    /// `RefCell` because `Backend::emit_program` takes `&self`, and this is
+    /// deliberately not on that trait — the Rust and LLVM backends have no
+    /// equivalent notion.
+    stubbed: std::cell::RefCell<Vec<String>>,
 }
 
 impl WasmTextCompiler {
     pub fn new() -> Self {
         Self {
             assert_mode: AssertMode::Always,
+            stubbed: std::cell::RefCell::new(Vec::new()),
         }
+    }
+
+    /// Names of functions stubbed to `unreachable` by the last `emit_program`.
+    ///
+    /// Empty means the module is fully implemented. Non-empty means it will
+    /// trap if any listed function is called, so callers should surface this
+    /// rather than treat a successful emit as a successful compile.
+    pub fn stubbed_fns(&self) -> Vec<String> {
+        self.stubbed.borrow().clone()
     }
 }
 
@@ -274,6 +298,10 @@ struct Ctx<'a> {
     /// ordinary `call $name` (#2014). Kept separate from `fn_locals` because
     /// that list drives the drop sweep and params must never be dropped.
     fn_params: std::cell::RefCell<Vec<(String, Ty)>>,
+    /// Sink for names of functions stubbed to `unreachable`, shared with
+    /// [`WasmTextCompiler::stubbed`] so the CLI can report an incomplete build
+    /// instead of exiting 0 on one (#2014).
+    stubbed: &'a std::cell::RefCell<Vec<String>>,
     lambdas: &'a std::cell::RefCell<Vec<LambdaEntry>>,
     /// Span → table index, so re-emitting the same lambda expression reuses its
     /// slot instead of allocating a second one.
@@ -476,6 +504,10 @@ impl Backend for WasmTextCompiler {
     }
 
     fn emit_program(&self, tir: &TirProgram, _crate_name: &str) -> String {
+        // Per-emit, not cumulative: one process may emit several modules
+        // (entry + siblings), and a stale list would blame the wrong one.
+        self.stubbed.borrow_mut().clear();
+
         let fns: Vec<&TirFn> = tir
             .fns
             .iter()
@@ -606,6 +638,7 @@ impl Backend for WasmTextCompiler {
             struct_methods: &struct_methods,
             generic_methods: &generic_methods,
             fn_params: std::cell::RefCell::new(Vec::new()),
+            stubbed: &self.stubbed,
             lambdas: &lambdas,
             lambda_slots: &lambda_slots,
             indirect_sigs: &indirect_sigs,
@@ -1085,6 +1118,55 @@ fn fn_value_params(params: &[TirParam]) -> Vec<(String, Ty)> {
         .collect()
 }
 
+/// First local referenced by `body` that is not in `declared`, if any.
+///
+/// A WASM function may only touch locals it declares or receives; emitting
+/// otherwise makes `wasm-tools` reject the entire module, not just the offending
+/// function. Used to detect a capturing lambda, whose body reads a name from an
+/// enclosing scope that has no representation without a closure environment.
+///
+/// Works on the emitted text rather than the TIR because that is exactly the
+/// property that must hold — a structural capture analysis would have to
+/// re-derive which `Var`s the emitter turns into `local.get` (enum variants,
+/// qualified variants and `None` do not) and could drift from it.
+fn undeclared_local_ref<'a>(
+    body: &'a str,
+    declared: &std::collections::HashSet<&str>,
+) -> Option<&'a str> {
+    for line in body.lines() {
+        let t = line.trim_start();
+        let Some(rest) = t
+            .strip_prefix("local.get $")
+            .or_else(|| t.strip_prefix("local.set $"))
+            .or_else(|| t.strip_prefix("local.tee $"))
+        else {
+            continue;
+        };
+        let name = rest.split_whitespace().next().unwrap_or(rest);
+        // String-typed values are split into `name_ptr` / `name_len` pairs.
+        let base = name
+            .strip_suffix("_ptr")
+            .or_else(|| name.strip_suffix("_len"))
+            .unwrap_or(name);
+        if !declared.contains(name) && !declared.contains(base) {
+            return Some(name);
+        }
+    }
+    None
+}
+
+/// Record that `wasm_name`'s body was discarded in favour of `unreachable`, and
+/// emit the marker comment.
+///
+/// Every stub site goes through here so none can be added without also becoming
+/// visible to `WasmTextCompiler::stubbed_fns` — the whole point being that a
+/// silent stub is what let gaps pile up unnoticed (#2014).
+fn emit_stub_body(out: &mut String, wasm_name: &str, ctx: &Ctx) {
+    ctx.stubbed.borrow_mut().push(wasm_name.to_string());
+    out.push_str("    ;; body stubbed — contained unsupported constructs\n");
+    out.push_str("    unreachable\n");
+}
+
 /// Returns the WAT drop-function name for a heap-owning local, or `None`
 /// if the local does not hold an allocation that requires a manual drop call.
 /// Mirrors the logic in the implicit-return drop loop inside `emit_fn`.
@@ -1440,8 +1522,7 @@ fn emit_fn(out: &mut String, f: &TirFn, ctx: &Ctx) {
     }
 
     if body.contains(";; unsupported") {
-        out.push_str("    ;; body stubbed — contained unsupported constructs\n");
-        out.push_str("    unreachable\n");
+        emit_stub_body(out, wasm_name, ctx);
     } else {
         out.push_str(&body);
         // Emit heap drops for the implicit-return path. All drop functions
@@ -2297,6 +2378,26 @@ fn emit_expr(out: &mut String, expr: &TirExpr, ctx: &Ctx) {
             if is_string_ty(&expr.ty, ctx) {
                 out.push_str(&format!("    local.get ${name}_ptr\n"));
                 out.push_str(&format!("    local.get ${name}_len\n"));
+                return;
+            }
+            // A bare reference to a *named function* used as a value —
+            // `apply(double, 3)` where `double` is a top-level fn (#2014).
+            // Function values are table indices, and only lambda literals are
+            // given table slots, so there is no index to push here. Falling
+            // through emitted `local.get $double` for a local that does not
+            // exist, which makes `wasm-tools` reject the entire module rather
+            // than just this function. Stub instead, keeping the failure local.
+            //
+            // Supporting it means adding named functions to the `elem` segment;
+            // deliberately out of scope, since the file that needs it
+            // (03_functions/higher_order_test.mvl) also returns closures from a
+            // factory and would still need real capture support.
+            if matches!(resolve_ty_param(&expr.ty, ctx.type_subst), Ty::Fn(..))
+                && fn_value_ty(name, ctx).is_none()
+            {
+                out.push_str(&format!(
+                    "    ;; unsupported: `{name}` is a named function used as a value\n"
+                ));
                 return;
             }
             out.push_str(&format!("    local.get ${name}\n"));
@@ -5440,6 +5541,7 @@ fn emit_one_lambda_fn(
         // Shared, so a nested lambda registers into the one real table and gets
         // picked up by `emit_lambda_fns`'s drain loop.
         fn_params: std::cell::RefCell::new(Vec::new()),
+        stubbed: ctx.stubbed,
         lambdas: ctx.lambdas,
         lambda_slots: ctx.lambda_slots,
         indirect_sigs: ctx.indirect_sigs,
@@ -5493,9 +5595,26 @@ fn emit_one_lambda_fn(
 
     let mut body_buf = String::new();
     emit_expr(&mut body_buf, body, &lam_ctx);
-    if body_buf.contains(";; unsupported") {
-        out.push_str("    ;; body stubbed — contained unsupported constructs\n");
-        out.push_str("    unreachable\n");
+    // A capturing lambda reads a name it neither declares nor takes as a
+    // parameter. Only non-capturing lambdas are representable here (there is no
+    // environment pointer), and without this check the emitted function
+    // references an undefined local — `wasm-tools` then rejects the *whole*
+    // module with "unknown local: failed to find name `$k`", taking every
+    // unrelated function down with it. Stubbing keeps the failure contained to
+    // the one function that cannot be compiled, which is the same bargain the
+    // rest of the emitter makes (#2014).
+    let declared: std::collections::HashSet<&str> = locals
+        .iter()
+        .map(|(n, _)| n.as_str())
+        .chain(params.iter().map(|p| p.name.as_str()))
+        .collect();
+    if let Some(captured) = undeclared_local_ref(&body_buf, &declared) {
+        out.push_str(&format!(
+            "    ;; unsupported: lambda captures `{captured}` — closures need an environment\n"
+        ));
+        emit_stub_body(out, wasm_name, ctx);
+    } else if body_buf.contains(";; unsupported") {
+        emit_stub_body(out, wasm_name, ctx);
     } else {
         out.push_str(&body_buf);
     }
@@ -5977,6 +6096,7 @@ fn emit_generic_fn(
         // Shared: one funcref table per module, so a lambda inside a
         // monomorphized body claims a real slot (#2014).
         fn_params: std::cell::RefCell::new(Vec::new()),
+        stubbed: ctx.stubbed,
         lambdas: ctx.lambdas,
         lambda_slots: ctx.lambda_slots,
         indirect_sigs: ctx.indirect_sigs,
@@ -6061,8 +6181,7 @@ fn emit_generic_fn(
     emit_block(&mut body_buf, &f.body, &mono_ctx);
 
     if body_buf.contains(";; unsupported") {
-        out.push_str("    ;; body stubbed — contained unsupported constructs\n");
-        out.push_str("    unreachable\n");
+        emit_stub_body(out, mangled_name, ctx);
     } else {
         out.push_str(&body_buf);
     }
@@ -6406,8 +6525,7 @@ fn emit_actor_method(out: &mut String, info: &ActorInfo, m: &TirActorMethod, ctx
     emit_block(&mut body, &m.body, ctx);
 
     if body.contains(";; unsupported") {
-        out.push_str("    ;; body stubbed — contained unsupported constructs\n");
-        out.push_str("    unreachable\n");
+        emit_stub_body(out, &fn_name, ctx);
     } else {
         out.push_str(&body);
     }
@@ -6477,8 +6595,7 @@ fn emit_extension_method(out: &mut String, f: &TirFn, ctx: &Ctx) {
     emit_block(&mut body, &f.body, ctx);
 
     if body.contains(";; unsupported") {
-        out.push_str("    ;; body stubbed — contained unsupported constructs\n");
-        out.push_str("    unreachable\n");
+        emit_stub_body(out, &wasm_name, ctx);
     } else {
         out.push_str(&body);
         // Same implicit-return exclusion as emit_fn (#2023, #2052): a trailing
@@ -8240,6 +8357,7 @@ mod funcref_table_tests {
         // `Int` and `UInt` are both i64, so they must share a signature name;
         // `Bool` is i32 and must not.
         let names = |params: Vec<Ty>, ret: Ty| {
+            let stubbed = std::cell::RefCell::new(Vec::new());
             let lambdas = std::cell::RefCell::new(Vec::new());
             let slots = std::cell::RefCell::new(HashMap::new());
             let sigs = std::cell::RefCell::new(std::collections::BTreeMap::new());
@@ -8277,6 +8395,7 @@ mod funcref_table_tests {
                 struct_methods: &empty_methods,
                 generic_methods: &empty_gmethods,
                 fn_params: std::cell::RefCell::new(Vec::new()),
+                stubbed: &stubbed,
                 lambdas: &lambdas,
                 lambda_slots: &slots,
                 indirect_sigs: &sigs,
@@ -8293,5 +8412,170 @@ mod funcref_table_tests {
         );
         // A Unit return contributes no `(result …)`.
         assert!(!names(vec![Ty::Int], Ty::Unit).contains("_r_"));
+    }
+}
+
+// ── Stub visibility (#2014) ──────────────────────────────────────────────
+//
+// A stubbed body is discarded and replaced by `unreachable`; the module still
+// assembles and the CLI exits 0. These tests pin that such a build *reports*
+// itself, because silence is how gaps accumulated unnoticed.
+
+#[cfg(test)]
+mod stub_reporting_tests {
+    use super::*;
+    use crate::mvl::parser::Parser;
+
+    fn compile_with(src: &str) -> (String, Vec<String>) {
+        let (mut p, errs) = Parser::new(src);
+        assert!(errs.is_empty(), "lex errors: {errs:?}");
+        let prog = p.parse_program();
+        let mut expr_types = crate::mvl::checker::collect_prelude_expr_types(&[]);
+        expr_types.extend(crate::mvl::checker::check(&prog).expr_types);
+        let all_fns = crate::mvl::passes::mono::collect_fns([&prog]);
+        let mono = crate::mvl::passes::mono::monomorphize(&prog, &all_fns, &expr_types);
+        let tir = crate::mvl::ir::lower::lower(&prog, &mono, &expr_types);
+        let compiler = WasmTextCompiler::new();
+        let wat = compiler.emit_program(&tir, "test");
+        (wat, compiler.stubbed_fns())
+    }
+
+    #[test]
+    fn fully_supported_program_reports_no_stubs() {
+        let (wat, stubbed) = compile_with("test fn t() -> Unit { assert_eq(1 + 1, 2); }\n");
+        assert!(stubbed.is_empty(), "unexpected stubs {stubbed:?}\n{wat}");
+    }
+
+    #[test]
+    fn stubbed_function_is_reported_by_name() {
+        // `.clone()` on an Option is deliberately unsupported.
+        let (_, stubbed) = compile_with(
+            "test fn uses_unsupported() -> Unit {\n\
+                 let o: Option[Int] = Some(1);\n\
+                 let p: Option[Int] = o.clone();\n\
+                 assert_eq(p.unwrap_or(0), 1);\n\
+             }\n\
+             test fn fine() -> Unit { assert_eq(1 + 1, 2); }\n",
+        );
+        assert_eq!(stubbed, vec!["uses_unsupported".to_string()]);
+    }
+
+    /// Regression: a capturing lambda used to emit a function referencing an
+    /// undeclared local, which makes `wasm-tools` reject the *entire* module —
+    /// taking every unrelated function down with it. It must stub instead, so
+    /// the damage stays inside the one function that cannot be compiled.
+    #[test]
+    fn capturing_lambda_stubs_instead_of_emitting_undeclared_local() {
+        let (wat, stubbed) = compile_with(
+            "pub fn List[T]::mymap[U](self, f: fn(T) -> U) -> List[U] {\n\
+                 let r: ref List[U] = [];\n\
+                 for x in self { r.push(f(x)) };\n\
+                 r\n\
+             }\n\
+             test fn t() -> Unit {\n\
+                 let k: Int = 10;\n\
+                 let xs: List[Int] = [1];\n\
+                 let d: List[Int] = xs.mymap(|x: Int| x + k);\n\
+                 assert_eq(d.len(), 1);\n\
+             }\n",
+        );
+        assert!(
+            stubbed.iter().any(|n| n.starts_with("__lambda_")),
+            "capturing lambda not stubbed: {stubbed:?}\n{wat}"
+        );
+        assert!(wat.contains("lambda captures `k`"), "{wat}");
+        // The undefined reference must not survive into the module.
+        assert!(!wat.contains("local.get $k"), "{wat}");
+    }
+
+    /// Same failure mode from the other direction: a top-level function used as
+    /// a value has no table slot, so `local.get $double` named a local that
+    /// never existed.
+    #[test]
+    fn named_function_as_value_stubs() {
+        let (wat, stubbed) = compile_with(
+            "fn double(x: Int) -> Int { x * 2 }\n\
+             fn apply(f: fn(Int) -> Int, v: Int) -> Int { f(v) }\n\
+             test fn t() -> Unit { assert_eq(apply(double, 3), 6); }\n",
+        );
+        assert_eq!(stubbed, vec!["t".to_string()], "{wat}");
+        // The `;; unsupported` marker itself is discarded along with the body it
+        // was written into — unlike the capturing-lambda case above, which
+        // writes its note straight to the function's output. The reported name
+        // is the actionable part either way.
+        assert!(!wat.contains("local.get $double"), "{wat}");
+        // `apply` itself is fine — only the caller that names a function stubs.
+        assert!(wat.contains("call_indirect (type $sig_i64_r_i64)"), "{wat}");
+    }
+
+    /// Non-capturing lambdas must be unaffected — the whole point of #2014.
+    #[test]
+    fn non_capturing_lambda_is_not_stubbed() {
+        let (wat, stubbed) = compile_with(
+            "pub fn List[T]::mymap[U](self, f: fn(T) -> U) -> List[U] {\n\
+                 let r: ref List[U] = [];\n\
+                 for x in self { r.push(f(x)) };\n\
+                 r\n\
+             }\n\
+             test fn t() -> Unit {\n\
+                 let xs: List[Int] = [1];\n\
+                 let d: List[Int] = xs.mymap(|x: Int| x * 2);\n\
+                 assert_eq(d.len(), 1);\n\
+             }\n",
+        );
+        assert!(stubbed.is_empty(), "unexpected stubs {stubbed:?}\n{wat}");
+    }
+
+    #[test]
+    fn stub_list_is_per_emit_not_cumulative() {
+        let src = "test fn t() -> Unit {\n\
+                       let o: Option[Int] = Some(1);\n\
+                       let p: Option[Int] = o.clone();\n\
+                       assert_eq(p.unwrap_or(0), 1);\n\
+                   }\n";
+        let (mut p, _) = Parser::new(src);
+        let prog = p.parse_program();
+        let mut expr_types = crate::mvl::checker::collect_prelude_expr_types(&[]);
+        expr_types.extend(crate::mvl::checker::check(&prog).expr_types);
+        let all_fns = crate::mvl::passes::mono::collect_fns([&prog]);
+        let mono = crate::mvl::passes::mono::monomorphize(&prog, &all_fns, &expr_types);
+        let tir = crate::mvl::ir::lower::lower(&prog, &mono, &expr_types);
+        let compiler = WasmTextCompiler::new();
+        compiler.emit_program(&tir, "test");
+        let first = compiler.stubbed_fns();
+        compiler.emit_program(&tir, "test");
+        assert_eq!(compiler.stubbed_fns(), first, "stub list accumulated");
+    }
+
+    #[test]
+    fn undeclared_local_ref_finds_only_undeclared_names() {
+        let declared: std::collections::HashSet<&str> = ["x", "acc"].into_iter().collect();
+        assert_eq!(
+            undeclared_local_ref("    local.get $x\n    local.get $acc\n", &declared),
+            None
+        );
+        assert_eq!(
+            undeclared_local_ref("    local.get $x\n    local.get $k\n", &declared),
+            Some("k")
+        );
+        // `local.set` / `local.tee` count too.
+        assert_eq!(
+            undeclared_local_ref("    local.tee $nope\n", &declared),
+            Some("nope")
+        );
+        // A String local is declared as a `_ptr`/`_len` pair under its base name.
+        let s: std::collections::HashSet<&str> = ["msg"].into_iter().collect();
+        assert_eq!(
+            undeclared_local_ref("    local.get $msg_ptr\n    local.get $msg_len\n", &s),
+            None
+        );
+        // Non-local instructions are ignored rather than terminating the scan.
+        assert_eq!(
+            undeclared_local_ref(
+                "    i64.const 1\n    call $f\n    local.get $k\n",
+                &declared
+            ),
+            Some("k")
+        );
     }
 }
