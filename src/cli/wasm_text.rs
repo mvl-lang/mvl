@@ -776,6 +776,7 @@ struct CaseResult {
 }
 
 /// Run one case: parse, lower, emit WAT, assemble, run under wasmtime, compare.
+#[allow(clippy::too_many_arguments)]
 fn run_one_case(
     file: &Path,
     expected: &str,
