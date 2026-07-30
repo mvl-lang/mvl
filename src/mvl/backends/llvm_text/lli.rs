@@ -7,7 +7,7 @@
 //! No inkwell / C FFI dependency — usable from any module regardless of the
 //! `llvm` feature flag.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 const RUNTIME_VERSION: &str = env!("MVL_RUNTIME_VERSION");
 
@@ -61,6 +61,57 @@ fn which_lli() -> Option<PathBuf> {
 /// 4. Cargo cdylib output: `target/{profile}/deps/libmvl_runtime_llvm.{dylib,so}`
 pub fn find_mvl_runtime_llvm_lib() -> Option<PathBuf> {
     find_cdylib("MVL_RUNTIME_LLVM_LIB", "libmvl_runtime_llvm")
+}
+
+// ── mvl_runtime_wasm module discovery ────────────────────────────────────────
+
+/// Locate `mvl_runtime_wasm.wasm` for `wasmtime run --preload runtime=<path>` (#1819).
+///
+/// Search order:
+/// 1. `MVL_RUNTIME_WASM` env var (must end in `.wasm` and exist)
+/// 2. XDG runtime dir: `<mvl_data_home>/runtime/{RUNTIME_VERSION}/wasm/mvl_runtime_wasm.wasm`
+/// 3. Sibling of the current executable's `target/{profile}/` dir, resolved to
+///    `target/wasm32-wasip1/{debug,release}/mvl_runtime_wasm.wasm`
+pub fn find_mvl_runtime_wasm_lib() -> Option<PathBuf> {
+    if let Ok(path) = std::env::var("MVL_RUNTIME_WASM") {
+        let p = PathBuf::from(&path);
+        if p.extension().and_then(|e| e.to_str()) == Some("wasm") && p.exists() {
+            return Some(p);
+        }
+        if !path.is_empty() {
+            eprintln!("warning: MVL_RUNTIME_WASM ignored — must end in .wasm and exist: {path}");
+        }
+    }
+    let xdg_wasm = mvl_data_home()
+        .join("runtime")
+        .join(RUNTIME_VERSION)
+        .join("wasm")
+        .join("mvl_runtime_wasm.wasm");
+    if xdg_wasm.exists() {
+        return Some(xdg_wasm);
+    }
+    let exe = std::env::current_exe().ok()?;
+    find_wasm_sibling(&exe.canonicalize().unwrap_or(exe))
+}
+
+/// Given a resolved `mvl` executable path (`.../target/{profile}/mvl`), look
+/// for the wasm runtime built by the sibling `wasm32-wasip1` cargo target.
+/// Split out from `find_mvl_runtime_wasm_lib` so the search can be unit-tested
+/// against a fabricated directory tree instead of the test binary's own
+/// `current_exe()` (which lives under `target/{profile}/deps/`, not
+/// `target/{profile}/`, and would give a false negative here).
+fn find_wasm_sibling(resolved_exe: &Path) -> Option<PathBuf> {
+    let target_dir = resolved_exe.parent()?.parent()?;
+    for profile in &["debug", "release"] {
+        let lib = target_dir
+            .join("wasm32-wasip1")
+            .join(profile)
+            .join("mvl_runtime_wasm.wasm");
+        if lib.exists() {
+            return Some(lib);
+        }
+    }
+    None
 }
 
 fn mvl_data_home() -> PathBuf {
@@ -183,4 +234,30 @@ pub fn glob_match(pattern: &str, text: &str) -> bool {
         }
     }
     inner(&p, &t)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::find_wasm_sibling;
+    use std::fs;
+
+    #[test]
+    fn find_wasm_sibling_locates_debug_profile_runtime() {
+        let tmp = tempfile::tempdir().unwrap();
+        let target_dir = tmp.path().join("target");
+        let wasm_dir = target_dir.join("wasm32-wasip1").join("debug");
+        fs::create_dir_all(&wasm_dir).unwrap();
+        let runtime = wasm_dir.join("mvl_runtime_wasm.wasm");
+        fs::write(&runtime, b"").unwrap();
+
+        let exe = target_dir.join("debug").join("mvl");
+        assert_eq!(find_wasm_sibling(&exe), Some(runtime));
+    }
+
+    #[test]
+    fn find_wasm_sibling_none_when_runtime_missing() {
+        let tmp = tempfile::tempdir().unwrap();
+        let exe = tmp.path().join("target").join("debug").join("mvl");
+        assert_eq!(find_wasm_sibling(&exe), None);
+    }
 }

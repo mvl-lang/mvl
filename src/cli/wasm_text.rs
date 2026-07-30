@@ -782,6 +782,7 @@ fn run_one_case(
     is_pattern: bool,
     wasm_tools_bin: &Path,
     wasmtime_bin: &Path,
+    runtime_wasm: Option<&Path>,
     quiet: bool,
     verbose: bool,
 ) -> CaseResult {
@@ -882,10 +883,14 @@ fn run_one_case(
         }
     }
 
-    let run = process::Command::new(wasmtime_bin)
-        .arg("run")
-        .arg(wasm_tmp.path())
-        .output();
+    let mut wasmtime_cmd = process::Command::new(wasmtime_bin);
+    wasmtime_cmd.arg("run");
+    if let Some(runtime) = runtime_wasm {
+        wasmtime_cmd
+            .arg("--preload")
+            .arg(format!("runtime={}", runtime.display()));
+    }
+    let run = wasmtime_cmd.arg(wasm_tmp.path()).output();
     let output = match run {
         Ok(o) => o,
         Err(e) => {
@@ -963,6 +968,7 @@ pub(super) fn cmd_test_wasm(path: &str, quiet: bool, verbose: bool) {
         eprintln!("error: `wasmtime` not found — see https://wasmtime.dev/");
         process::exit(1);
     });
+    let runtime_wasm = lli::find_mvl_runtime_wasm_lib();
 
     let all_mvl = loader::mvl_files_all(path);
     let mut test_cases: Vec<(PathBuf, String, bool)> = Vec::new();
@@ -1005,6 +1011,7 @@ pub(super) fn cmd_test_wasm(path: &str, quiet: bool, verbose: bool) {
 
     let wasm_tools_ref: &Path = &wasm_tools_bin;
     let wasmtime_ref: &Path = &wasmtime_bin;
+    let runtime_wasm_ref: Option<&Path> = runtime_wasm.as_deref();
 
     let results: Vec<CaseResult> = std::thread::scope(|scope| {
         let handles: Vec<_> = test_cases
@@ -1014,7 +1021,16 @@ pub(super) fn cmd_test_wasm(path: &str, quiet: bool, verbose: bool) {
                     chunk
                         .iter()
                         .map(|(f, e, p)| {
-                            run_one_case(f, e, *p, wasm_tools_ref, wasmtime_ref, quiet, verbose)
+                            run_one_case(
+                                f,
+                                e,
+                                *p,
+                                wasm_tools_ref,
+                                wasmtime_ref,
+                                runtime_wasm_ref,
+                                quiet,
+                                verbose,
+                            )
                         })
                         .collect::<Vec<_>>()
                 })
