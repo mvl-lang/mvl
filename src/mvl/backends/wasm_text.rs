@@ -116,6 +116,10 @@ struct PayloadVariant {
     disc: i32,
     /// Payload field types in declaration order. Empty = unit variant.
     fields: Vec<Ty>,
+    /// Declared field names, in the same order as `fields`, for struct-shaped
+    /// variants (`Variant { field: Ty, .. }`) — empty for tuple/unit variants,
+    /// where a `Pattern::Struct` field-name lookup never applies.
+    field_names: Vec<String>,
     /// Byte size of the payload region (sum of field sizes, 8-byte granules).
     payload_size: u32,
 }
@@ -1123,10 +1127,7 @@ fn emit_fn(out: &mut String, f: &TirFn, ctx: &Ctx) {
 
     // Deduplicate (collect passes may register the same name from nested
     // expressions or speculative String locals; WAT rejects duplicates).
-    {
-        let mut seen = std::collections::HashSet::new();
-        locals.retain(|(name, _)| seen.insert(name.clone()));
-    }
+    dedup_locals_keep_last(&mut locals);
     for (name, ty) in &locals {
         body.push_str(&format!("    (local ${} {})\n", name, wasm_ty(ty, ctx)));
     }
@@ -1194,9 +1195,101 @@ fn emit_fn(out: &mut String, f: &TirFn, ctx: &Ctx) {
 
 // ── Local collection ─────────────────────────────────────────────────────
 
+/// Deduplicate a locals list, keeping each name's LAST-pushed entry — the
+/// ctx-aware second pass (`collect_locals_ctx`) may push a corrected type
+/// for a name the ctx-unaware first pass already declared with a wrong
+/// placeholder type (`correct_payload_pattern_locals`, #2073); its pushes
+/// must win, not the earlier ones. Genuine duplicates from speculative
+/// String-local scaffolding are idempotent either way, so "keep last" never
+/// regresses those.
+fn dedup_locals_keep_last(locals: &mut Vec<(String, Ty)>) {
+    let mut seen = std::collections::HashSet::new();
+    let mut rev: Vec<(String, Ty)> = locals
+        .drain(..)
+        .rev()
+        .filter(|(name, _)| seen.insert(name.clone()))
+        .collect();
+    rev.reverse();
+    *locals = rev;
+}
+
 fn collect_locals_block(block: &TirBlock, locals: &mut Vec<(String, Ty)>) {
     for s in &block.stmts {
         collect_locals_stmt(s, locals);
+    }
+}
+
+/// Correct a match arm's payload-pattern-bound local types using
+/// `ctx.payload_enums` field metadata. The ctx-unaware first pass
+/// (`collect_match_arm_locals`) can't resolve a `TupleStruct`/`Struct`
+/// field's real type by slot — no `ctx` in scope there — so it declares
+/// every such binding as `Ty::Int` regardless of its actual shape (#2073).
+/// This runs in the ctx-aware second pass below; its pushes land after the
+/// first pass's in `locals`, so the "keep last occurrence" dedup in
+/// `emit_fn` lets them win and replace the wrong entries. String fields are
+/// skipped — those already declare correctly-shaped `_ptr`/`_len`/`__sv_*`
+/// placeholder locals from the first pass, keyed by name, not by type.
+fn correct_payload_pattern_locals(
+    pattern: &Pattern,
+    scrutinee_ty: &Ty,
+    locals: &mut Vec<(String, Ty)>,
+    ctx: &Ctx,
+) {
+    let (target, enum_ty): (&Pattern, Option<&Ty>) = match pattern {
+        Pattern::TupleStruct { .. } | Pattern::Struct { .. } => (pattern, Some(scrutinee_ty)),
+        Pattern::Err { inner, .. } => (inner.as_ref(), result_err_ty(scrutinee_ty)),
+        Pattern::Ok { inner, .. } => (inner.as_ref(), result_ok_ty(scrutinee_ty)),
+        _ => return,
+    };
+    let Some(enum_ty) = enum_ty else { return };
+    let Some(type_name) = underlying_named_ty(enum_ty, ctx) else {
+        return;
+    };
+    let Some(info) = ctx.payload_enums.get(&type_name) else {
+        return;
+    };
+
+    match target {
+        Pattern::TupleStruct { name, fields, .. } => {
+            let Some(pv) = info.variants.iter().find(|v| v.name == *name) else {
+                return;
+            };
+            for (slot, pat) in fields.iter().enumerate() {
+                if let Pattern::Ident(n, _) = pat {
+                    if n != "_" && !n.contains("::") {
+                        if let Some(field_ty) = pv.fields.get(slot) {
+                            if !peels_to_string(field_ty) {
+                                locals.push((n.clone(), field_ty.clone()));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        Pattern::Struct {
+            name,
+            fields: named_fields,
+            ..
+        } => {
+            let Some(pv) = info.variants.iter().find(|v| v.name == *name) else {
+                return;
+            };
+            for (slot, fname) in pv.field_names.iter().enumerate() {
+                let Some((_, pat)) = named_fields.iter().find(|(n, _)| n == fname) else {
+                    continue;
+                };
+                if let Pattern::Ident(bound, _) = pat {
+                    if bound != "_" && !bound.contains("::") {
+                        if let Some(field_ty) = pv.fields.get(slot) {
+                            if !peels_to_string(field_ty) {
+                                locals.push((bound.clone(), field_ty.clone()));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        _ => {}
     }
 }
 
@@ -1205,6 +1298,8 @@ fn collect_locals_block(block: &TirBlock, locals: &mut Vec<(String, Ty)>) {
 // A second pass over the function body that requires `ctx` to identify:
 //  - Payload-enum unit-variant `Var` expressions → `__ev_<off>` (i32)
 //  - String-field `FieldAccess` reads → `__sf_<off>_<len>` (i32)
+//  - Match-arm payload-pattern field locals whose real type needs a
+//    payload_enums lookup (#2073) — see `correct_payload_pattern_locals`.
 //
 // The main `collect_locals_*` functions can't see these because they don't
 // carry `ctx`. This pass is run after the main scan in `emit_fn`.
@@ -1255,6 +1350,7 @@ fn collect_locals_ctx_stmt(stmt: &TirStmt, locals: &mut Vec<(String, Ty)>, ctx: 
         } => {
             collect_locals_ctx_expr(scrutinee, locals, ctx);
             for arm in arms {
+                correct_payload_pattern_locals(&arm.pattern, &scrutinee.ty, locals, ctx);
                 match &arm.body {
                     TirMatchBody::Expr(e) => collect_locals_ctx_expr(e, locals, ctx),
                     TirMatchBody::Block(b) => collect_locals_ctx(b, locals, ctx),
@@ -1356,6 +1452,7 @@ fn collect_locals_ctx_expr(expr: &TirExpr, locals: &mut Vec<(String, Ty)>, ctx: 
         TirExprKind::Match { scrutinee, arms } => {
             collect_locals_ctx_expr(scrutinee, locals, ctx);
             for arm in arms {
+                correct_payload_pattern_locals(&arm.pattern, &scrutinee.ty, locals, ctx);
                 match &arm.body {
                     TirMatchBody::Expr(e) => collect_locals_ctx_expr(e, locals, ctx),
                     TirMatchBody::Block(b) => collect_locals_ctx(b, locals, ctx),
@@ -3055,13 +3152,35 @@ fn emit_match_impl(
                 out.push_str("    else\n");
                 open_ifs += 1;
             }
-            // `Err(inner)` pattern on Result[T, E]. Check tag == 1.
+            // `Err(inner)` pattern on Result[T, E]. Check tag == 1, and —
+            // when `inner` names a specific qualified enum variant — also
+            // check that variant's own discriminant. Without this, multiple
+            // qualified Err arms in the same match (e.g. `Err(AuthError::A)`,
+            // `Err(AuthError::B)`) all lower to the same "tag == 1" condition,
+            // so only the first one listed is ever reachable.
             Pattern::Err { inner, .. } => {
                 ctx.needs_runtime.set(true);
                 let err_ty = result_err_ty(&scrutinee.ty).cloned().unwrap_or(Ty::String);
+                let qualified = wasm_qualified_variant_name(inner);
+                let variant_info =
+                    qualified.and_then(|qname| payload_variant_for(qname, ctx).cloned());
+
                 out.push_str(&format!("    local.get ${temp}\n"));
                 out.push_str("    call $_mvl_result_tag\n");
-                // tag == 1 is truthy directly.
+                if let Some(pv) = &variant_info {
+                    // Nested if, not an unconditional AND — the wrapped enum
+                    // pointer is only valid to dereference when the Result is
+                    // actually Err; on Ok its slot may hold unrelated data.
+                    out.push_str("    if (result i32)\n");
+                    out.push_str(&format!("    local.get ${temp}\n"));
+                    out.push_str("    call $_mvl_result_value_i32\n");
+                    out.push_str("    i32.load offset=0\n");
+                    out.push_str(&format!("    i32.const {}\n", pv.disc));
+                    out.push_str("    i32.eq\n");
+                    out.push_str("    else\n");
+                    out.push_str("    i32.const 0\n");
+                    out.push_str("    end\n");
+                }
                 out.push_str(&if_open);
                 // Bind inner only if named and non-wildcard. Dispatches by
                 // the Result's actual Err-payload type (#2066) — String is
@@ -3070,8 +3189,8 @@ fn emit_match_impl(
                 // String yet), a genuinely i64-shaped payload (Int, Float)
                 // keeps the full i64 getter instead of the old unconditional
                 // `i32.wrap_i64`, which silently truncated it.
-                if let Pattern::Ident(name, _) = inner.as_ref() {
-                    if name != "_" {
+                match inner.as_ref() {
+                    Pattern::Ident(name, _) if name != "_" && !name.contains("::") => {
                         out.push_str(&format!("    local.get ${temp}\n"));
                         if peels_to_string(&err_ty) {
                             out.push_str("    call $_mvl_result_value_i32\n");
@@ -3084,6 +3203,65 @@ fn emit_match_impl(
                         }
                         out.push_str(&format!("    local.set ${name}\n"));
                     }
+                    // Struct-shaped variant pattern with bound fields (e.g.
+                    // `Err(AuthError::AccountLocked { attempts })`) — the
+                    // discriminant check above already narrowed the variant;
+                    // here just extract and bind the named payload fields
+                    // from the wrapped enum's own `{disc,payload_ptr}` header
+                    // (same layout `emit_payload_load` uses for a bare match).
+                    Pattern::Struct {
+                        fields: named_fields,
+                        ..
+                    } => {
+                        if let Some(pv) = &variant_info {
+                            let inner_off = inner.span().offset;
+                            let err_val_local = format!("__ev_{span_offset}_{inner_off}");
+                            let payload_ptr_local = format!("__epp_{span_offset}_{inner_off}");
+                            out.push_str(&format!("    local.get ${temp}\n"));
+                            out.push_str("    call $_mvl_result_value_i32\n");
+                            out.push_str(&format!("    local.set ${err_val_local}\n"));
+                            out.push_str(&format!("    local.get ${err_val_local}\n"));
+                            out.push_str("    i32.load offset=4\n");
+                            out.push_str(&format!("    local.set ${payload_ptr_local}\n"));
+                            for (slot, fname) in pv.field_names.clone().iter().enumerate() {
+                                let Some((_, pat)) = named_fields.iter().find(|(n, _)| n == fname)
+                                else {
+                                    continue;
+                                };
+                                if let Pattern::Ident(bname, _) = pat {
+                                    if bname != "_" && !bname.contains("::") {
+                                        let field_ty =
+                                            pv.fields.get(slot).cloned().unwrap_or(Ty::Int);
+                                        let byte_off = (slot as u32) * 8;
+                                        out.push_str(&format!(
+                                            "    local.get ${payload_ptr_local}\n"
+                                        ));
+                                        if peels_to_string(&field_ty) {
+                                            out.push_str(&format!(
+                                                "    i64.load offset={byte_off}\n"
+                                            ));
+                                            out.push_str("    i32.wrap_i64\n");
+                                            let sv_tmp = format!("__svs_{inner_off}_{bname}");
+                                            out.push_str(&format!("    local.tee ${sv_tmp}\n"));
+                                            out.push_str(&format!(
+                                                "    i32.load offset={MVL_STRING_OFFSET_PTR}\n"
+                                            ));
+                                            out.push_str(&format!("    local.set ${bname}_ptr\n"));
+                                            out.push_str(&format!("    local.get ${sv_tmp}\n"));
+                                            out.push_str(&format!(
+                                                "    i32.load offset={MVL_STRING_OFFSET_LEN}\n"
+                                            ));
+                                            out.push_str(&format!("    local.set ${bname}_len\n"));
+                                        } else {
+                                            emit_payload_load(out, &field_ty, byte_off, ctx);
+                                            out.push_str(&format!("    local.set ${bname}\n"));
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    _ => {}
                 }
                 emit_match_body(out, &arm.body, ctx);
                 out.push_str("    else\n");
@@ -3203,6 +3381,89 @@ fn emit_match_impl(
                                 out.push_str(&format!("    i64.load offset={byte_off}\n"));
                                 out.push_str("    i32.wrap_i64\n");
                                 let sv_tmp = format!("__sv_{}_{}", byte_off, name.len());
+                                out.push_str(&format!("    local.tee ${sv_tmp}\n"));
+                                out.push_str(&format!(
+                                    "    i32.load offset={MVL_STRING_OFFSET_PTR}\n"
+                                ));
+                                out.push_str(&format!("    local.set ${name}_ptr\n"));
+                                out.push_str(&format!("    local.get ${sv_tmp}\n"));
+                                out.push_str(&format!(
+                                    "    i32.load offset={MVL_STRING_OFFSET_LEN}\n"
+                                ));
+                                out.push_str(&format!("    local.set ${name}_len\n"));
+                            } else {
+                                emit_payload_load(out, &field_ty, byte_off, ctx);
+                                out.push_str(&format!("    local.set ${name}\n"));
+                            }
+                        }
+                    }
+                }
+                emit_match_body(out, &arm.body, ctx);
+                out.push_str("    else\n");
+                open_ifs += 1;
+            }
+            // `Variant { field: pat, .. }` — struct-shaped payload-enum pattern.
+            // Same payload layout as TupleStruct (positional 8-byte slots) —
+            // only the pattern syntax differs — so this reorders `named_fields`
+            // to the variant's declared slot order (`pv.field_names`) and then
+            // reuses the identical discriminant-check + payload-load sequence.
+            Pattern::Struct {
+                name: variant_name,
+                fields: named_fields,
+                ..
+            } => {
+                let type_name = variant_name.split_once("::").map(|(t, _)| t).unwrap_or("");
+                let pv_opt = ctx
+                    .payload_enums
+                    .get(type_name)
+                    .and_then(|info| info.variants.iter().find(|v| v.name == *variant_name));
+                let Some(pv) = pv_opt else {
+                    out.push_str(&format!(
+                        "    ;; unsupported Struct pattern (unknown variant): {variant_name}\n"
+                    ));
+                    for _ in 0..open_ifs {
+                        out.push_str("    end\n");
+                    }
+                    return;
+                };
+                ctx.needs_runtime.set(true);
+                let disc = pv.disc;
+                let pat_off = arm.pattern.span().offset;
+                out.push_str(&format!("    local.get ${temp}\n"));
+                out.push_str("    i32.load offset=0\n");
+                out.push_str(&format!("    i32.const {disc}\n"));
+                out.push_str("    i32.eq\n");
+                out.push_str(&if_open);
+                let payload_ptr_local = format!("__pp_{span_offset}_{pat_off}");
+                out.push_str(&format!("    local.get ${temp}\n"));
+                out.push_str("    i32.load offset=4\n");
+                out.push_str(&format!("    local.set ${payload_ptr_local}\n"));
+                // Bind each named field in its declared slot order — a struct
+                // pattern need not mention every field (partial destructure,
+                // `..`), so look each declared name up in the pattern rather
+                // than iterating the pattern's own (unordered) field list.
+                for (slot, fname) in pv.field_names.clone().iter().enumerate() {
+                    let Some((_, pat)) = named_fields.iter().find(|(n, _)| n == fname) else {
+                        continue;
+                    };
+                    if let Pattern::Ident(name, _) = pat {
+                        if name != "_" && !name.contains("::") {
+                            let field_ty = pv.fields.get(slot).cloned().unwrap_or(Ty::Int);
+                            let byte_off = (slot as u32) * 8;
+                            out.push_str(&format!("    local.get ${payload_ptr_local}\n"));
+                            if peels_to_string(&field_ty) {
+                                out.push_str(&format!("    i64.load offset={byte_off}\n"));
+                                out.push_str("    i32.wrap_i64\n");
+                                // Named unlike the TupleStruct arm's `__sv_<byte_off>_*`
+                                // (keyed on positional slot, trivially known there):
+                                // `collect_match_arm_locals` can't compute a struct
+                                // pattern's declared slot order without a
+                                // payload_enums lookup it doesn't have access to
+                                // (#2073's still-open TupleStruct byte_off gap), so
+                                // this temp is keyed on the pattern's own span + field
+                                // name instead — both collect and emit sides can
+                                // derive that without any registry lookup.
+                                let sv_tmp = format!("__svs_{pat_off}_{name}");
                                 out.push_str(&format!("    local.tee ${sv_tmp}\n"));
                                 out.push_str(&format!(
                                     "    i32.load offset={MVL_STRING_OFFSET_PTR}\n"
@@ -3626,27 +3887,60 @@ fn collect_match_arm_locals(
                 }
             }
         }
-        Pattern::Err { inner, .. } => {
-            if let Pattern::Ident(name, _) = inner.as_ref() {
-                if name != "_" {
-                    // Bind at the Result's actual Err-payload type (#2066) —
-                    // mirrors the Ok arm's #2038 fix above. A hardcoded
-                    // Ty::Bool (i32) here declared e.g. an Int/Float
-                    // payload's local as i32, then `local.set` on the
-                    // i64/f64-reinterpreted extraction value failed
-                    // validation. String keeps the i32 placeholder — it's
-                    // extracted as a raw *MvlString pointer, not unpacked
-                    // to (ptr, len).
-                    let err_ty = result_err_ty(scrutinee_ty).cloned().unwrap_or(Ty::String);
-                    let ty = if peels_to_string(&err_ty) {
-                        Ty::Bool
-                    } else {
-                        err_ty
-                    };
-                    locals.push((name.clone(), ty));
+        Pattern::Err { inner, .. } => match inner.as_ref() {
+            Pattern::Ident(name, _) if name != "_" => {
+                // Bind at the Result's actual Err-payload type (#2066) —
+                // mirrors the Ok arm's #2038 fix above. A hardcoded
+                // Ty::Bool (i32) here declared e.g. an Int/Float
+                // payload's local as i32, then `local.set` on the
+                // i64/f64-reinterpreted extraction value failed
+                // validation. String keeps the i32 placeholder — it's
+                // extracted as a raw *MvlString pointer, not unpacked
+                // to (ptr, len).
+                let err_ty = result_err_ty(scrutinee_ty).cloned().unwrap_or(Ty::String);
+                let ty = if peels_to_string(&err_ty) {
+                    Ty::Bool
+                } else {
+                    err_ty
+                };
+                locals.push((name.clone(), ty));
+            }
+            // Struct-shaped variant pattern with bound fields (e.g.
+            // `Err(AuthError::AccountLocked { attempts })`) — names must
+            // match what the emit-side `Pattern::Err` arm computes exactly:
+            // (match span_offset, inner pattern's own span offset).
+            Pattern::Struct {
+                fields: named_fields,
+                span: inner_span,
+                ..
+            } => {
+                locals.push((
+                    format!("__ev_{}_{}", span_offset, inner_span.offset),
+                    Ty::Bool, // i32 placeholder
+                ));
+                locals.push((
+                    format!("__epp_{}_{}", span_offset, inner_span.offset),
+                    Ty::Bool, // i32 placeholder
+                ));
+                for (_, pat) in named_fields {
+                    if let Pattern::Ident(bound, _) = pat {
+                        if bound != "_" && !bound.contains("::") {
+                            // Real field type isn't resolvable here without a
+                            // payload_enums lookup this pre-pass doesn't have
+                            // access to (same #2073-class limitation as the
+                            // TupleStruct/Struct arms below) — Int/Bool-shaped
+                            // fields (the common case) still declare correctly.
+                            locals.push((bound.clone(), Ty::Int));
+                            locals.push((format!("{bound}_ptr"), Ty::Bool));
+                            locals.push((format!("{bound}_len"), Ty::Bool));
+                            locals
+                                .push((format!("__svs_{}_{}", inner_span.offset, bound), Ty::Bool));
+                        }
+                    }
                 }
             }
-        }
+            _ => {}
+        },
         Pattern::TupleStruct {
             name: vname,
             fields: pats,
@@ -3677,8 +3971,61 @@ fn collect_match_arm_locals(
                 }
             }
         }
+        Pattern::Struct {
+            name: vname,
+            fields: named_fields,
+            span,
+            ..
+        } => {
+            locals.push((
+                format!("__pp_{}_{}", span_offset, span.offset),
+                Ty::Bool, // i32 placeholder
+            ));
+            let _ = vname;
+            for (n, pat) in named_fields {
+                if let Pattern::Ident(bound, _) = pat {
+                    if bound != "_" && !bound.contains("::") {
+                        // Real field type isn't resolvable here without a
+                        // payload_enums lookup this pre-pass doesn't have
+                        // access to (same limitation as #2073's TupleStruct
+                        // gap above) — Int/Bool-shaped fields (the common
+                        // case) still declare correctly; a struct/i32-shaped
+                        // field would need the same ctx-threading fix as #2073.
+                        let _ = n;
+                        locals.push((bound.clone(), Ty::Int));
+                        locals.push((format!("{bound}_ptr"), Ty::Bool));
+                        locals.push((format!("{bound}_len"), Ty::Bool));
+                        locals.push((format!("__svs_{}_{}", span.offset, bound), Ty::Bool));
+                    }
+                }
+            }
+        }
         _ => {}
     }
+}
+
+/// If `pattern` names a qualified enum variant (e.g. `Weekday::Mon`, bare or
+/// as an empty `TupleStruct`, or a struct-shaped `Variant { field: pat }`),
+/// return that name. `None` for wildcards, plain bindings, and payload
+/// sub-patterns. Mirrors the LLVM backend's `qualified_variant_name`.
+fn wasm_qualified_variant_name(pattern: &Pattern) -> Option<&str> {
+    match pattern {
+        Pattern::TupleStruct { name, .. } => Some(name.as_str()),
+        Pattern::Struct { name, .. } => Some(name.as_str()),
+        Pattern::Ident(name, _) if name.contains("::") => Some(name.as_str()),
+        _ => None,
+    }
+}
+
+/// Resolve a qualified enum-variant name (e.g. `AuthError::AccountLocked`) to
+/// its `PayloadVariant`, if the owning type is a payload-carrying enum.
+/// `None` for pure-unit enums (their discriminant lives in `ctx.enum_variants`
+/// instead) or unresolvable names.
+fn payload_variant_for<'a>(qname: &str, ctx: &'a Ctx) -> Option<&'a PayloadVariant> {
+    let type_name = qname.split_once("::").map(|(t, _)| t).unwrap_or("");
+    ctx.payload_enums
+        .get(type_name)
+        .and_then(|info| info.variants.iter().find(|v| v.name == qname))
 }
 
 /// WASM equality opcode for a scrutinee type. Types beyond scalar defaults
@@ -4633,6 +4980,7 @@ fn emit_generic_fn(
     let mut locals: Vec<(String, Ty)> = Vec::new();
     collect_locals_block(&f.body, &mut locals);
     collect_locals_ctx(&f.body, &mut locals, &mono_ctx);
+    dedup_locals_keep_last(&mut locals);
     for (name, ty) in &locals {
         let concrete = resolve_ty_param(ty, type_subst);
         if peels_to_string(&concrete) {
@@ -4889,10 +5237,7 @@ fn emit_actor_method(out: &mut String, info: &ActorInfo, m: &TirActorMethod, ctx
     let mut locals: Vec<(String, Ty)> = Vec::new();
     collect_locals_block(&m.body, &mut locals);
     collect_locals_ctx(&m.body, &mut locals, ctx);
-    {
-        let mut seen = std::collections::HashSet::new();
-        locals.retain(|(name, _)| seen.insert(name.clone()));
-    }
+    dedup_locals_keep_last(&mut locals);
     for (name, ty) in &locals {
         body.push_str(&format!("    (local ${} {})\n", name, wasm_ty(ty, ctx)));
     }
@@ -4959,10 +5304,7 @@ fn emit_extension_method(out: &mut String, f: &TirFn, ctx: &Ctx) {
     let mut locals: Vec<(String, Ty)> = Vec::new();
     collect_locals_block(&f.body, &mut locals);
     collect_locals_ctx(&f.body, &mut locals, ctx);
-    {
-        let mut seen = std::collections::HashSet::new();
-        locals.retain(|(name, _)| seen.insert(name.clone()));
-    }
+    dedup_locals_keep_last(&mut locals);
     for (name, ty) in &locals {
         body.push_str(&format!("    (local ${} {})\n", name, wasm_ty(ty, ctx)));
     }
@@ -5414,16 +5756,20 @@ fn collect_payload_enums(types: &[TirTypeDecl]) -> HashMap<String, PayloadEnumIn
             }
             let mut pvs = Vec::new();
             for (disc, v) in vs.iter().enumerate() {
-                let fields: Vec<Ty> = match &v.fields {
-                    TirVariantFields::Unit => vec![],
-                    TirVariantFields::Tuple(tys) => tys.clone(),
-                    TirVariantFields::Struct(fs) => fs.iter().map(|f| f.ty.clone()).collect(),
+                let (fields, field_names): (Vec<Ty>, Vec<String>) = match &v.fields {
+                    TirVariantFields::Unit => (vec![], vec![]),
+                    TirVariantFields::Tuple(tys) => (tys.clone(), vec![]),
+                    TirVariantFields::Struct(fs) => (
+                        fs.iter().map(|f| f.ty.clone()).collect(),
+                        fs.iter().map(|f| f.name.clone()).collect(),
+                    ),
                 };
                 let payload_size = fields.iter().map(|_| 8u32).sum::<u32>();
                 pvs.push(PayloadVariant {
                     name: format!("{}::{}", td.name, v.name),
                     disc: disc as i32,
                     fields,
+                    field_names,
                     payload_size,
                 });
             }

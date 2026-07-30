@@ -976,14 +976,89 @@ impl TextEmitter {
     }
 
     /// If `pattern` names a qualified enum variant (e.g. `Weekday::Mon`,
-    /// whether written bare or as an empty `TupleStruct`), return that name.
-    /// `None` for wildcards, plain bindings, and payload sub-patterns.
+    /// whether written bare, as an empty `TupleStruct`, or as a struct-shaped
+    /// `Variant { field: pat, .. }`), return that name. `None` for wildcards,
+    /// plain bindings, and payload sub-patterns.
     pub(super) fn qualified_variant_name(pattern: &Pattern) -> Option<&str> {
         match pattern {
             Pattern::TupleStruct { name, .. } => Some(name.as_str()),
+            Pattern::Struct { name, .. } => Some(name.as_str()),
             Pattern::Ident(name, _) if name.contains("::") => Some(name.as_str()),
             _ => None,
         }
+    }
+
+    /// Extract and bind a struct-shaped enum-variant pattern's named fields
+    /// (`Variant { field: binding, .. }`) out of an already-loaded `{i8,ptr}`
+    /// payload-enum value `val`. Named fields are reordered to the variant's
+    /// declared field order (`enum_struct_variant_field_names`) and then read
+    /// via the same positional `getelementptr`+`load` sequence `TupleStruct`
+    /// patterns use — struct- and tuple-shaped variants share an identical
+    /// payload layout, only the pattern syntax differs. Returns the bound
+    /// local names, for the caller to remove from scope at the arm's exit.
+    pub(super) fn bind_struct_variant_fields_tir(
+        &mut self,
+        variant_name: &str,
+        fields: &[(String, Pattern)],
+        val: &str,
+    ) -> Vec<String> {
+        let field_tys: Vec<TypeExpr> = self
+            .variant_payload_types(variant_name)
+            .map(|s| s.to_vec())
+            .unwrap_or_default();
+        if field_tys.is_empty() {
+            return Vec::new();
+        }
+        let ordered_names = self
+            .module
+            .enum_struct_variant_field_names
+            .get(variant_name)
+            .cloned()
+            .unwrap_or_default();
+        if ordered_names.len() != field_tys.len() {
+            return Vec::new();
+        }
+
+        let payload_ptr = self.next_reg();
+        self.push_instr(&format!(
+            "{payload_ptr} = extractvalue {RESULT_LLVM_TY} {val}, 1"
+        ));
+        self.fn_ctx
+            .reg_types
+            .insert(payload_ptr.clone(), "ptr".into());
+
+        let n_slots = field_tys.len();
+        let mut bound = Vec::new();
+        for (slot, fname) in ordered_names.iter().enumerate() {
+            let Some((_, pat)) = fields.iter().find(|(n, _)| n == fname) else {
+                continue;
+            };
+            let Pattern::Ident(var_name, _) = pat else {
+                continue;
+            };
+            if var_name == "_" || var_name.contains("::") {
+                continue;
+            }
+            let field_ty_expr = &field_tys[slot];
+            let field_llvm = self.llvm_ty_ctx(field_ty_expr);
+            let slot_ptr = self.next_reg();
+            self.push_instr(&format!(
+                "{slot_ptr} = getelementptr [{n_slots} x i64], ptr {payload_ptr}, i32 0, i32 {slot}"
+            ));
+            let field_val = self.next_reg();
+            self.push_instr(&format!("{field_val} = load {field_llvm}, ptr {slot_ptr}"));
+            self.fn_ctx
+                .reg_types
+                .insert(field_val.clone(), field_llvm.clone());
+            self.fn_ctx
+                .locals
+                .insert(var_name.clone(), field_val.clone());
+            self.fn_ctx
+                .local_mvl_types
+                .insert(var_name.clone(), field_ty_expr.clone());
+            bound.push(var_name.clone());
+        }
+        bound
     }
 
     /// Load the discriminant (as `i8`) of tuple-payload slot `slot` out of

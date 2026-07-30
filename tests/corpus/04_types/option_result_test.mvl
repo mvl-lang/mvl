@@ -237,3 +237,76 @@ test fn result_err_int_bound_beyond_i32_range() -> Unit {
         Err(e) => assert_eq(e, 9999999999),
     }
 }
+
+// Regression (#2075): match dispatch on an enum with a struct-shaped
+// payload variant crashed both backends. LLVM's `switch condition must
+// have integer type` came from switching directly on the wrapped enum's
+// `{tag,ptr}` tagged-union value instead of extracting its own
+// discriminant first. WASM either trapped (`unreachable`) or failed to
+// assemble (`unknown local`) because neither backend's checker/codegen
+// path resolved a `Pattern::Struct` field's type — it was silently bound
+// as `Ty::Unknown`, and no match-arm-local collection pass declared or
+// extracted a struct-shaped binding at all. Multiple qualified `Err(...)`
+// arms in one match (as below) additionally exercises the two-level
+// dispatch neither backend's *single*-qualified-arm path ever reached —
+// on WASM specifically, every qualified `Err` arm previously lowered to
+// the same bare `tag == 1` check, so only the first one listed ever fired.
+type AccessError = enum {
+    NotFound,
+    InvalidPassword,
+    AccountLocked { attempts: Int where self >= 0 },
+}
+
+fn classify_access_error(e: AccessError) -> Int {
+    match e {
+        AccessError::NotFound => 1,
+        AccessError::InvalidPassword => 2,
+        AccessError::AccountLocked { attempts: attempts } => attempts,
+    }
+}
+
+test fn struct_payload_variant_bare_match_unit_arms() -> Unit {
+    assert_eq(classify_access_error(AccessError::NotFound), 1);
+    assert_eq(classify_access_error(AccessError::InvalidPassword), 2);
+}
+
+test fn struct_payload_variant_bare_match_bound_field() -> Unit {
+    assert_eq(classify_access_error(AccessError::AccountLocked { attempts: 3 }), 3);
+}
+
+fn authorize(ok: Bool, locked: Bool) -> Result[Int, AccessError] {
+    if ok {
+        Ok(42)
+    } else if locked {
+        Err(AccessError::AccountLocked { attempts: 5 })
+    } else {
+        Err(AccessError::NotFound)
+    }
+}
+
+test fn struct_payload_variant_result_err_ok_path() -> Unit {
+    match authorize(true, false) {
+        Ok(v) => assert_eq(v, 42),
+        Err(AccessError::NotFound) => assert_eq(1, 0),
+        Err(AccessError::InvalidPassword) => assert_eq(1, 0),
+        Err(AccessError::AccountLocked { attempts: attempts }) => assert_eq(attempts, 0),
+    }
+}
+
+test fn struct_payload_variant_result_err_unit_variant() -> Unit {
+    match authorize(false, false) {
+        Ok(_) => assert_eq(1, 0),
+        Err(AccessError::NotFound) => assert_eq(1, 1),
+        Err(AccessError::InvalidPassword) => assert_eq(1, 0),
+        Err(AccessError::AccountLocked { attempts: attempts }) => assert_eq(attempts, -1),
+    }
+}
+
+test fn struct_payload_variant_result_err_bound_field() -> Unit {
+    match authorize(false, true) {
+        Ok(_) => assert_eq(1, 0),
+        Err(AccessError::NotFound) => assert_eq(1, 0),
+        Err(AccessError::InvalidPassword) => assert_eq(1, 0),
+        Err(AccessError::AccountLocked { attempts: attempts }) => assert_eq(attempts, 5),
+    }
+}
