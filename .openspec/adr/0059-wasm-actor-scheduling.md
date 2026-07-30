@@ -158,8 +158,10 @@ bug, not backpressure.
 **Good**
 
 - No new runtime ABI surface; `runtime/wasm` is unchanged.
-- No tables or indirect calls — the emitted WAT stays within the constructs the
-  emitter already produces, and stays readable.
+- No cross-module tables or indirect calls — dispatch never crosses the
+  `--preload` boundary, and actor dispatch stays static. (An intra-module
+  `funcref` table now backs `List[T]` higher-order dispatch, per the §2 scope
+  note above — #2014.)
 - Sync reads are cheaper and simpler than on LLVM.
 - Translatable to self-hosted MVL later (#1815) with no host-specific machinery.
 

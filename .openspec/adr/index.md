@@ -60,6 +60,6 @@
 | [0056](0056-bounded-quantifier-refinements.md) | Bounded quantifiers in refinement predicates via L3 expansion — `forall i in [lo..hi]. p` unrolls into conjunction of instantiated bodies | Accepted |
 | [0057](0057-regex-membership-refinements.md) | Regex membership refinements — `self matches /pattern/` in refinement predicates via Z3 string theory | Accepted |
 | [0058](0058-z3-real-theory-float-refinements.md) | Z3 Real theory for Float refinements — parallel Real domain path in Layer 5 for Float-typed parameters | Accepted |
-| [0059](0059-wasm-actor-scheduling.md) | WASM actor model — run-to-completion scheduling on WASI preview 1, in-module scheduler with compile-time static dispatch | Accepted |
+| [0059](0059-wasm-actor-scheduling.md) | WASM actor model — run-to-completion scheduling on WASI preview 1, in-module scheduler with compile-time static dispatch | Accepted (§2 scope-amended 2026-07-30) |
 | ~~0060~~ | ~~Reserved for #2050 (declared source of truth must be executable and falsifiable)~~ | Not yet written |
 | [0061](0061-assurance-vocabulary.md) | Assurance vocabulary — the case and three levels below it (traceability, verification, evidence) | Accepted |

@@ -633,19 +633,37 @@ fn compile_wat(prog: &Program, module_name: &str, assert_mode: AssertMode) -> St
 /// want a hard gate can compare `stubbed_fns()` against an expected set —
 /// `make wasm-stub-report` does exactly that over the corpus.
 fn warn_about_stubs(compiler: &WasmTextCompiler, source_label: &str) {
-    let stubbed = compiler.stubbed_fns();
-    if stubbed.is_empty() {
-        return;
+    if let Some(msg) = stub_warning_message(&compiler.stubbed_fns(), source_label) {
+        eprint!("{msg}");
     }
-    eprintln!(
-        "warning: {source_label}: {} function(s) compiled to `unreachable` \
+}
+
+/// The phrase `make wasm-stub-report` greps for in this warning.
+///
+/// The gate is a `grep` over stderr, so the wording is load-bearing: rewording
+/// it without updating the Makefile would turn the gate into a permanent
+/// "0 stubs" pass with every unit test still green. `stub_warning_names_each_fn`
+/// pins both halves.
+pub const STUB_WARNING_PHRASE: &str = "compiled to `unreachable`";
+
+/// Rendered warning for a stubbed module, or `None` when nothing stubbed.
+///
+/// Split out from `warn_about_stubs` so the exact text can be asserted without
+/// capturing stderr.
+fn stub_warning_message(stubbed: &[String], source_label: &str) -> Option<String> {
+    if stubbed.is_empty() {
+        return None;
+    }
+    let mut msg = format!(
+        "warning: {source_label}: {} function(s) {STUB_WARNING_PHRASE} \
          because the WASM backend does not support something in their bodies. \
-         Calling any of them traps at runtime:",
+         Calling any of them traps at runtime:\n",
         stubbed.len()
     );
-    for name in &stubbed {
-        eprintln!("  - {name}");
+    for name in stubbed {
+        msg.push_str(&format!("  - {name}\n"));
     }
+    Some(msg)
 }
 
 /// Merge sibling `TirProgram`s into one flat program.
@@ -955,6 +973,47 @@ fn run_one_case(
         }
     }
 
+    // `wasm-tools parse` only assembles — it accepts modules that are
+    // structurally well-formed but type-invalid (a body that declares
+    // `(result i32)` and pushes nothing assembles fine). Validation is a
+    // separate pass, and skipping it let three classes of silently-invalid
+    // module through: an uninterned literal leaving the stack short, a
+    // dangling `call $Foo__Int` nobody emitted, and an undeclared local in a
+    // monomorphized body. Each exited 0 with zero stubs reported (#2014).
+    let validate = process::Command::new(wasm_tools_bin)
+        .arg("validate")
+        .arg(wasm_tmp.path())
+        .output();
+    match validate {
+        Ok(o) if o.status.success() => {}
+        Ok(o) => {
+            let stderr = String::from_utf8_lossy(&o.stderr);
+            let mut out = format!("\n  FAIL (validate): {file_str}\n");
+            if verbose {
+                out.push_str(&format!("    wasm-tools: {stderr}\n"));
+                out.push_str("    --- WAT ---\n");
+                for line in wat.lines().take(40) {
+                    out.push_str(&format!("    {line}\n"));
+                }
+            } else {
+                let first = stderr.lines().next().unwrap_or("");
+                out.push_str(&format!("    {first}\n"));
+            }
+            return CaseResult {
+                passed: false,
+                output: out,
+                err_output: String::new(),
+            };
+        }
+        Err(e) => {
+            return CaseResult {
+                passed: false,
+                output: String::new(),
+                err_output: format!("  FAIL (wasm-tools spawn): {file_str}: {e}\n"),
+            }
+        }
+    }
+
     let mut wasmtime_cmd = process::Command::new(wasmtime_bin);
     wasmtime_cmd.arg("run");
     if let Some(runtime) = runtime_wasm {
@@ -1152,5 +1211,28 @@ fn which(name: &str) -> Option<PathBuf> {
         None
     } else {
         Some(PathBuf::from(path))
+    }
+}
+
+#[cfg(test)]
+mod stub_warning_tests {
+    use super::*;
+
+    #[test]
+    fn stub_warning_names_each_fn() {
+        let msg = stub_warning_message(&["List_take__Str".to_string()], "demo.mvl")
+            .expect("a stubbed fn must warn");
+        // The Makefile greps for this phrase and then for the `  - ` name lines.
+        assert!(msg.contains(STUB_WARNING_PHRASE), "{msg}");
+        assert!(msg.contains("\n  - List_take__Str\n"), "{msg}");
+        assert!(
+            msg.starts_with("warning: demo.mvl: 1 function(s) "),
+            "{msg}"
+        );
+    }
+
+    #[test]
+    fn no_stubs_means_no_warning() {
+        assert!(stub_warning_message(&[], "demo.mvl").is_none());
     }
 }

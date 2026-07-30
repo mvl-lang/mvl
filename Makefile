@@ -2,7 +2,7 @@
 .ONESHELL:
 SHELL := /bin/bash
 
-.PHONY: help version build build-runtime-wasm test test-full test-unit test-rust-integration test-requirements test-error-messages test-fmt-roundtrip test-rust-rust test-rust-llvm test-mvl-llvm test-rust-wasm test-mvl-wasm test-rust-tokio test-runtime-rust test-runtime-llvm test-runtime-wasm test-checker-parity test-checker-parity-update test-solver test-stdlib check-compiler assure-compiler test-mvl test-bootstrap-e2e test-bdd test-grammar-coverage bump-vendor-pins test-examples test-examples-rust test-examples-llvm test-examples-wasm coverage traceability verification evidence validate-keywords lint mvl-lint format format-check format-mvl format-mvl-check assurance assurance-gate audit-backend-ast audit-cli-prelude check-adr docs docs-serve install install-runtime setup doctor clean fuzz-rust fuzz-llvm fuzz-diff fuzz-mvl test-fuzz-list mutants mutants-actors
+.PHONY: help version build build-runtime-wasm test test-full test-unit test-rust-integration test-requirements test-error-messages test-fmt-roundtrip test-rust-rust test-rust-llvm test-mvl-llvm test-rust-wasm test-mvl-wasm test-rust-tokio test-runtime-rust test-runtime-llvm test-runtime-wasm wasm-stub-report test-checker-parity test-checker-parity-update test-solver test-stdlib check-compiler assure-compiler test-mvl test-bootstrap-e2e test-bdd test-grammar-coverage bump-vendor-pins test-examples test-examples-rust test-examples-llvm test-examples-wasm coverage traceability verification evidence validate-keywords lint mvl-lint format format-check format-mvl format-mvl-check assurance assurance-gate audit-backend-ast audit-cli-prelude check-adr docs docs-serve install install-runtime setup doctor clean fuzz-rust fuzz-llvm fuzz-diff fuzz-mvl test-fuzz-list mutants mutants-actors
 
 .DEFAULT_GOAL := help
 
@@ -189,6 +189,7 @@ TEST_FULL_EXTRA_SUITES := \
 	"BDD               |test-bdd" \
 	"Backend rust/llvm |test-rust-llvm" \
 	"Backend rust/wasm |test-rust-wasm" \
+	"WASM stub gate     |wasm-stub-report" \
 	"Examples (Rust)   |test-examples-rust" \
 	"Examples (LLVM)   |test-examples-llvm" \
 	"Examples (WASM)   |test-examples-wasm" \
@@ -439,11 +440,23 @@ test-rust-wasm: build build-runtime-wasm ## rust/wasm — WASM-supported corpus 
 # This pins the set: every file in WASM_CORPUS must emit zero stubs. A new gap
 # fails here, in the commit that introduces it, instead of being discovered
 # later. Excluded files are allowed to stub — that is what excluding them means.
+#
+# Scope note: this target checks *stubbing only*. Module validity is checked by
+# `test-rust-wasm`, which is where the real module gets assembled — a `build` of
+# a `test fn`-only corpus file has no `main`, so it never emits the WASI blob and
+# legitimately references an undefined `$mvl_println`. Validating the `build`
+# artifact here would flag four corpus files that are fine under the test runner.
 wasm-stub-report: build ## Fail if any WASM_CORPUS file emits `unreachable` stubs (#2014)
-	@tmp=$$(mktemp -d); bad=0; \
+	@tmp=$$(mktemp -d) || exit 1; bad=0; \
 	for f in $(WASM_CORPUS_FILES); do \
-	  warn=$$(cd $$tmp && MVL_NO_REEXEC=1 $(CURDIR)/$(MVL) build --backend=wasm $(CURDIR)/$$f 2>&1 >/dev/null \
-	    | grep -A99 'compiled to `unreachable`' || true); \
+	  err=$$(cd $$tmp && MVL_NO_REEXEC=1 $(CURDIR)/$(MVL) build --backend=wasm $(CURDIR)/$$f 2>&1 >/dev/null); \
+	  rc=$$?; \
+	  if [ $$rc -ne 0 ]; then \
+	    bad=1; printf "  \033[31m✗  %s (build failed, exit %s)\033[0m\n" "$$f" "$$rc"; \
+	    echo "$$err" | sed -n '1,3s/^/       /p'; \
+	    continue; \
+	  fi; \
+	  warn=$$(echo "$$err" | grep -A99 'compiled to `unreachable`' || true); \
 	  if [ -n "$$warn" ]; then \
 	    bad=1; printf "  \033[31m✗  %s\033[0m\n" "$$f"; \
 	    echo "$$warn" | sed -n 's/^  - /       /p'; \

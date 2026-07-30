@@ -35,9 +35,11 @@
 //!
 //! Drop emission on the emitter side is best-effort — at every function's
 //! implicit-return point, the emitter drops each `__ms_*` temp local it
-//! allocated. Explicit `return` statements are not yet drop-aware; those
-//! paths leak (fine for phase-2 corpus tests which all end via
-//! implicit return).
+//! allocated. Explicit `return` statements are drop-aware too: `emit_stmt`'s
+//! `Return` arm sweeps the same heap locals, excluding the one being returned
+//! so it survives for the caller. Function *parameters* are deliberately
+//! excluded from that sweep — they are borrowed, not owned, and dropping one
+//! freed the caller's array (#2014).
 //!
 //! ## Symbol convention
 //!
@@ -737,7 +739,11 @@ pub unsafe extern "C" fn _mvl_array_drop(a: i32) {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn _mvl_array_slice(a: i32, start: i64, end: i64) -> i32 {
     if a == 0 {
-        return _mvl_array_new(8, 0);
+        // Null in, null out. The earlier `_mvl_array_new(8, 0)` fabricated an
+        // 8-byte-stride array regardless of what the caller's elements actually
+        // are, so any later push/get/drop against the result would have used the
+        // wrong stride. Every other null guard in this file returns 0.
+        return 0;
     }
     let arr = unsafe { &*(a as usize as *const MvlArray) };
     let es = arr.elem_size;
@@ -2545,8 +2551,45 @@ mod tests {
     #[test]
     fn slice_null_array_yields_empty() {
         let s = unsafe { _mvl_array_slice(0, 0, 3) };
+        // Null in, null out — not a fabricated array with a guessed elem_size.
+        assert_eq!(s, 0, "null receiver must not allocate");
         assert_eq!(unsafe { _mvl_array_len(s) }, 0);
         unsafe { _mvl_array_drop(s) };
+    }
+
+    /// Cross-backend parity guard, matching the three `_mvl_string_split` ones.
+    ///
+    /// `_mvl_array_slice` is a port of `runtime/llvm`'s `_mvl_list_slice`, whose
+    /// clamping is `start.max(0).min(len)` / `end.max(0).min(len)` with
+    /// `hi.saturating_sub(lo)`. A corpus file that slices under both backends
+    /// compares *results*, so a divergence here surfaces as a rust/wasm ↔
+    /// rust/rust parity failure rather than a unit-test failure — pin the
+    /// agreement directly instead.
+    #[test]
+    fn slice_clamping_matches_llvm_list_slice() {
+        // (start, end, expected) over [10, 20, 30, 40].
+        let cases: &[(i64, i64, &[i64])] = &[
+            (0, 4, &[10, 20, 30, 40]),
+            (1, 3, &[20, 30]),
+            (0, 99, &[10, 20, 30, 40]), // end past len clamps to len
+            (10, 20, &[]),              // start past len is empty
+            (3, 1, &[]),                // reversed range is empty
+            (-5, 2, &[10, 20]),         // negative start clamps to 0
+            (2, 2, &[]),                // zero-length window
+        ];
+        for (start, end, expect) in cases {
+            let a = unsafe { i64_array(&[10, 20, 30, 40]) };
+            let s = unsafe { _mvl_array_slice(a, *start, *end) };
+            let got: Vec<i64> = (0..unsafe { _mvl_array_len(s) })
+                .map(|i| unsafe { get_i64(s, i) })
+                .collect();
+            assert_eq!(
+                got, *expect,
+                "slice({start}, {end}) diverges from _mvl_list_slice"
+            );
+            unsafe { _mvl_array_drop(s) };
+            unsafe { _mvl_array_drop(a) };
+        }
     }
 
     /// The slice must be an independent buffer — mutating the source afterwards

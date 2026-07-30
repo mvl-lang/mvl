@@ -44,10 +44,18 @@
 //!
 //! Also supported since this list was last accurate: structs and their fields,
 //! payload enums / `Option` / `Result`, `List` / `Set` and their methods, string
-//! equality, `MvlString` refcount + drops, and generic monomorphization.
+//! equality, `MvlString` refcount + drops, generic monomorphization, and
+//! non-capturing higher-order fns — lambda literals become top-level functions
+//! reached through an intra-module funcref table + `call_indirect`, which is
+//! what backs `List[T]::map`/`filter`/`fold`/`sort_by`/`min_by`/`max_by`
+//! (#2014).
 //!
 //! Deliberately not supported (later phases of #1817):
-//! - Closures / higher-order fns
+//! - *Capturing* closures — these need an environment representation, not just
+//!   a function pointer. See `03_functions/higher_order_test.mvl` and
+//!   `07_ownership/lambda_capture_test.mvl`, both still in
+//!   `WASM_CORPUS_EXCLUDE`. A capturing lambda is detected and stubbed rather
+//!   than emitted, so the failure stays inside the one function.
 //! - `Map` beyond `Map[String, Int]`
 //! - String concat (`_mvl_string_concat` wiring is incomplete)
 //! - Arbitrary-fd `write`/`read`/`open` (real files, WASI preopens),
@@ -305,7 +313,7 @@ struct Ctx<'a> {
     lambdas: &'a std::cell::RefCell<Vec<LambdaEntry>>,
     /// Span → table index, so re-emitting the same lambda expression reuses its
     /// slot instead of allocating a second one.
-    lambda_slots: &'a std::cell::RefCell<HashMap<(u32, u32), u32>>,
+    lambda_slots: &'a std::cell::RefCell<HashMap<(u32, u32, String), u32>>,
     /// Distinct `(type $sig… (func …))` declarations `call_indirect` needs,
     /// keyed by generated name. A `BTreeMap` so module output is deterministic.
     indirect_sigs: &'a std::cell::RefCell<std::collections::BTreeMap<String, String>>,
@@ -401,7 +409,10 @@ const RUNTIME_IMPORTS: &[(&str, &str)] = &[
     ("_mvl_array_new", "(param i32 i32) (result i32)"),
     ("_mvl_array_len", "(param i32) (result i64)"),
     ("_mvl_array_is_empty", "(param i32) (result i32)"),
-    ("_mvl_array_push", "(param i32 i32)"),
+    // No `_mvl_array_push` (the untyped, pointer-taking form): the runtime
+    // exports it and `runtime/llvm` uses it internally, but no emit site here
+    // ever produces `call $_mvl_array_push` — only the typed variants below.
+    // Declaring it read like a live contract.
     ("_mvl_array_push_i32", "(param i32 i32)"),
     ("_mvl_array_push_i64", "(param i32 i64)"),
     ("_mvl_array_push_f64", "(param i32 f64)"),
@@ -508,45 +519,35 @@ impl Backend for WasmTextCompiler {
         // (entry + siblings), and a stale list would blame the wrong one.
         self.stubbed.borrow_mut().clear();
 
-        let fns: Vec<&TirFn> = tir
-            .fns
-            .iter()
-            .filter(|f| !f.is_builtin && f.receiver_type.is_none() && f.type_params.is_empty())
-            .collect();
-
-        // All TirFn entries, including generics — needed for monomorphization lookup.
-        let all_fns: Vec<&TirFn> = tir
-            .fns
-            .iter()
-            .filter(|f| !f.is_builtin && f.receiver_type.is_none())
-            .collect();
-
-        // User-defined, non-generic extension methods (`fn Type::method(self, ...)`)
-        // (#2054). These carry a `receiver_type` and were previously dropped from
-        // every emission path — neither `fns`/`all_fns` above (which require
-        // `receiver_type.is_none()`) nor the generic-instantiation path (which
-        // requires `type_params` non-empty) ever saw them.
-        let ext_methods: Vec<&TirFn> = tir
-            .fns
-            .iter()
-            .filter(|f| !f.is_builtin && f.type_params.is_empty() && f.receiver_type.is_some())
-            .collect();
-
-        // Generic extension methods (`fn List[T]::flatten(self)`) — the fourth
-        // bucket (#2014). These carry a `receiver_type` *and* non-empty
-        // `type_params`, so all three filters above reject them: `fns`/`all_fns`
-        // require no receiver, and `ext_methods` requires no type params. That
-        // left every pure-MVL `List[T]` method in `std/lists.mvl` unemitted, and
-        // any body calling one got `unreachable`.
+        // Partition `tir.fns` on (has receiver?, is generic?). One pass and a
+        // 2×2 match, so exhaustiveness and exclusivity are visible rather than
+        // derived from four overlapping filter predicates — a bucket silently
+        // matching none of them is exactly how every pure-MVL `List[T]` method
+        // in `std/lists.mvl` went unemitted before #2014.
         //
-        // Unlike `ext_methods` these are not emitted directly — a generic body
-        // has no single WASM signature. They are monomorphized per call site by
-        // `collect_generic_instantiations` below, like generic plain fns.
-        let generic_ext_methods: Vec<&TirFn> = tir
-            .fns
-            .iter()
-            .filter(|f| !f.is_builtin && !f.type_params.is_empty() && f.receiver_type.is_some())
-            .collect();
+        // Only `plain_fns` and `ext_methods` are emitted directly. The two
+        // generic buckets have no single WASM signature, so they are
+        // monomorphized per call site by `collect_generic_instantiations`.
+        let mut plain_fns: Vec<&TirFn> = Vec::new();
+        let mut generic_fns: Vec<&TirFn> = Vec::new();
+        let mut ext_methods: Vec<&TirFn> = Vec::new();
+        let mut generic_ext_methods: Vec<&TirFn> = Vec::new();
+        for f in &tir.fns {
+            if f.is_builtin {
+                continue;
+            }
+            match (f.receiver_type.is_some(), f.type_params.is_empty()) {
+                (false, true) => plain_fns.push(f),
+                (false, false) => generic_fns.push(f),
+                (true, true) => ext_methods.push(f),
+                (true, false) => generic_ext_methods.push(f),
+            }
+        }
+        let fns = plain_fns;
+        // Receiverless fns of both kinds — the monomorphization lookup needs the
+        // generic ones, and the literal/instantiation walkers want both.
+        let all_fns: Vec<&TirFn> = fns.iter().chain(generic_fns.iter()).copied().collect();
+
         let struct_methods: std::collections::HashSet<(String, String)> = ext_methods
             .iter()
             .map(|f| {
@@ -580,7 +581,24 @@ impl Backend for WasmTextCompiler {
         // `ext_methods` above) but still need their string literals interned
         // here — otherwise a literal inside one emits as `;; missing literal`
         // with nothing pushed to the stack (#2058 follow-up).
-        let literal_scan_fns: Vec<&TirFn> = fns.iter().chain(ext_methods.iter()).copied().collect();
+        //
+        // Generic bodies must be scanned too. They are emitted via
+        // `emit_generic_fn` per instantiation rather than directly, but the
+        // literals they reference are the same data-section entries, and a
+        // literal reachable *only* from a generic body was interned by nobody:
+        // `fn List[T]::tag(self) -> String { "x" }` emitted a body containing
+        // just `;; missing literal: "x"` under a `(result i32 i32)` signature,
+        // i.e. a stack-underflow module that `wasm-tools parse` accepts and
+        // `validate` rejects — with no stub recorded (#2014). `all_fns` covers
+        // the generic plain fns (it is `fns` plus those); `generic_ext_methods`
+        // covers the fourth bucket.
+        let literal_scan_fns: Vec<&TirFn> = fns
+            .iter()
+            .chain(ext_methods.iter())
+            .chain(all_fns.iter())
+            .chain(generic_ext_methods.iter())
+            .copied()
+            .collect();
         let (literals, heap_start) =
             collect_literals(&literal_scan_fns, &tir.actors, needs_wasi, &audit_relabels);
         let (enum_types, enum_variants) = collect_enums(&tir.types);
@@ -612,7 +630,7 @@ impl Backend for WasmTextCompiler {
         // Owned here so every derived Ctx (monomorphized instance, lambda body)
         // can borrow the same registries — the module has one funcref table.
         let lambdas: std::cell::RefCell<Vec<LambdaEntry>> = std::cell::RefCell::new(Vec::new());
-        let lambda_slots: std::cell::RefCell<HashMap<(u32, u32), u32>> =
+        let lambda_slots: std::cell::RefCell<HashMap<(u32, u32, String), u32>> =
             std::cell::RefCell::new(HashMap::new());
         let indirect_sigs: std::cell::RefCell<std::collections::BTreeMap<String, String>> =
             std::cell::RefCell::new(std::collections::BTreeMap::new());
@@ -645,8 +663,14 @@ impl Backend for WasmTextCompiler {
         };
 
         // Collect unique generic-function instantiations needed by the corpus fns.
-        let instantiations =
-            collect_generic_instantiations(&fns, &all_fns, &generic_ext_methods, &tir.actors, &ctx);
+        let instantiations = collect_generic_instantiations(
+            &fns,
+            &all_fns,
+            &ext_methods,
+            &generic_ext_methods,
+            &tir.actors,
+            &ctx,
+        );
 
         // Emit fns into a scratch buffer first — `emit_assert_eq` on
         // String flips `ctx.needs_runtime`, and we only know whether to
@@ -1066,6 +1090,48 @@ fn emit_contract_check(
 /// enclosing function. That is deliberate for refcounted boxes
 /// (`Option`/`Result`/structs), where identity-cloning a handle that is later
 /// dropped twice is a double-free rather than a visible failure.
+/// Whether `.slice(start, end)` can be lowered for this receiver.
+///
+/// `_mvl_array_slice` copies the element range byte-wise at `elem_size`
+/// granularity into a fresh array with its own refcount. For scalar elements
+/// that is a complete copy. For elements that are themselves *pointers* —
+/// `*MvlString`, and any other heap handle — it duplicates the pointer without
+/// bumping the pointee's refcount, so the slice aliases the parent's elements
+/// while `local_drop_fn` maps *both* arrays to `_mvl_string_ptr_array_drop`.
+/// Each element then gets dropped twice: a use-after-free and a double-free
+/// that Rust's wasm allocator does not detect, so it corrupts silently rather
+/// than trapping.
+///
+/// So `List[String]::take`/`::skip`/`.slice()` stubs until the runtime grows an
+/// element-aware copy. Same reasoning as [`clone_is_supported`]: a loud stub
+/// beats miscompiled ownership (#2014).
+fn slice_is_supported(ty: &Ty, ctx: &Ctx) -> bool {
+    match collection_elem_ty(ty) {
+        None => false,
+        Some(elem) => {
+            let elem = resolve_ty_param(elem, ctx.type_subst);
+            // Scalars are copied whole; anything pointer-shaped is aliased.
+            if peels_to_string(&elem)
+                || collection_elem_ty(&elem).is_some()
+                || map_key_val_ty(&elem).is_some()
+                || option_inner_ty(&elem).is_some()
+                || result_ok_ty(&elem).is_some()
+            {
+                return false;
+            }
+            // Structs and payload enums are boxed pointers too; unit-variant
+            // enums are a bare i32 discriminant and copy fine.
+            match named_type_name(&elem) {
+                Some(name) => {
+                    !ctx.struct_layouts.contains_key(name.as_str())
+                        && !ctx.payload_enums.contains_key(name.as_str())
+                }
+                None => true,
+            }
+        }
+    }
+}
+
 fn clone_is_supported(ty: &Ty, ctx: &Ctx) -> bool {
     if collection_elem_ty(ty).is_some() {
         return true;
@@ -1154,6 +1220,62 @@ fn undeclared_local_ref<'a>(
     }
     None
 }
+
+/// A `Ctx` for emitting a *separate* function body under `type_subst`.
+///
+/// Used for monomorphized instantiations and for lambda bodies lifted to
+/// top-level functions. Both sites previously hand-copied all 24 fields, and
+/// this PR's first cut had to hand-add six more to each — a silent hazard,
+/// because getting `lambdas`/`lambda_slots` wrong does not fail to compile: two
+/// lambdas would claim table index 0 and `call_indirect` would call the wrong
+/// one.
+///
+/// Module-wide registries are shared by reference. Per-body state is reset,
+/// because an instantiation is a different function and not a continuation of
+/// whatever triggered it — `self_type` in particular, or `self.field` inside a
+/// generic body would resolve against the caller's actor layout (#2012).
+fn derived_ctx<'a>(base: &Ctx<'a>, type_subst: &'a HashMap<String, Ty>) -> Ctx<'a> {
+    Ctx {
+        // Shared: module-wide, read-only.
+        needs_wasi: base.needs_wasi,
+        literals: base.literals,
+        audit_relabels: base.audit_relabels,
+        enum_types: base.enum_types,
+        enum_variants: base.enum_variants,
+        struct_layouts: base.struct_layouts,
+        payload_enums: base.payload_enums,
+        type_aliases: base.type_aliases,
+        generic_fn_map: base.generic_fn_map,
+        actors: base.actors,
+        struct_methods: base.struct_methods,
+        generic_methods: base.generic_methods,
+        assert_mode: base.assert_mode,
+        // Shared: module-wide, mutable. One funcref table and one stub list per
+        // module, so a lambda nested in this body claims a real slot and a stub
+        // here stays visible to `stubbed_fns`.
+        stubbed: base.stubbed,
+        lambdas: base.lambdas,
+        lambda_slots: base.lambda_slots,
+        indirect_sigs: base.indirect_sigs,
+        // Carried across so labels stay unique and a runtime need propagates.
+        label_counter: Cell::new(base.label_counter.get()),
+        needs_runtime: Cell::new(base.needs_runtime.get()),
+        // Per-body: reset.
+        type_subst,
+        string_params: std::cell::RefCell::new(std::collections::HashSet::new()),
+        fn_locals: std::cell::RefCell::new(Vec::new()),
+        fn_params: std::cell::RefCell::new(Vec::new()),
+        fn_let_inits: std::cell::RefCell::new(HashMap::new()),
+        self_type: std::cell::RefCell::new(None),
+    }
+}
+
+/// Marker an emit site writes when it cannot lower a construct. Its *presence
+/// in a body* is what makes the enclosing function stub, so producers and the
+/// five scan sites must spell it identically — `";;unsupported"` or
+/// `";; not supported"` would ship an invalid body silently, the one failure
+/// `emit_stub_body` cannot catch. A `const` makes that a compile-time check.
+const UNSUPPORTED_MARKER: &str = ";; unsupported";
 
 /// Record that `wasm_name`'s body was discarded in favour of `unreachable`, and
 /// emit the marker comment.
@@ -1521,7 +1643,7 @@ fn emit_fn(out: &mut String, f: &TirFn, ctx: &Ctx) {
         body.push_str("    local.get $__result_CONTRACT\n");
     }
 
-    if body.contains(";; unsupported") {
+    if body.contains(UNSUPPORTED_MARKER) {
         emit_stub_body(out, wasm_name, ctx);
     } else {
         out.push_str(&body);
@@ -1696,7 +1818,29 @@ fn collect_locals_ctx_stmt(stmt: &TirStmt, locals: &mut Vec<(String, Ty)>, ctx: 
             collect_locals_ctx_expr(cond, locals, ctx);
             collect_locals_ctx(body, locals, ctx);
         }
-        TirStmt::For { iter, body, .. } => {
+        TirStmt::For {
+            iter, body, span, ..
+        } => {
+            // `collect_locals_stmt`'s String branch tests the element type as
+            // written, so inside a monomorphized body it sees `T` — not a
+            // String — and takes the `else` branch, declaring the loop variable
+            // as a single `T`-typed local. The `_ptr`/`_len` pair still comes
+            // out right, because the emission loop expands any String-typed
+            // local itself once `type_subst` resolves `T`. What nobody declares
+            // is the `*MvlString` unpack temp: `emit_for_stmt` emits
+            // `local.tee $__for_ms_<off>` regardless. An undeclared local makes
+            // wasm-tools reject the *whole* module, so a single
+            // `for s in strings` inside any instantiated generic body sank every
+            // unrelated function in the file too (#2014).
+            //
+            // Only the temp is pushed here — adding `_ptr`/`_len` as well would
+            // collide with the emission-time expansion ("duplicate local").
+            let elem = collection_elem_ty(&iter.ty)
+                .cloned()
+                .map(|t| resolve_ty_param(&t, ctx.type_subst));
+            if elem.is_some_and(|e| peels_to_string(&e)) {
+                locals.push((format!("__for_ms_{}", span.offset), Ty::Bool));
+            }
             collect_locals_ctx_expr(iter, locals, ctx);
             collect_locals_ctx(body, locals, ctx);
         }
@@ -2655,7 +2799,15 @@ fn emit_expr(out: &mut String, expr: &TirExpr, ctx: &Ctx) {
             }
             // If the callee is a generic function, use the mangled monomorphized name.
             if let Some((type_params, fn_params)) = ctx.generic_fn_map.get(name.as_str()) {
-                let subst = infer_type_subst_from_args(type_params, fn_params, args);
+                let mut subst = infer_type_subst_from_args(type_params, fn_params, args);
+                // Resolve through the enclosing instantiation, exactly as the
+                // collection side does. Inside a monomorphized body the argument
+                // types are still written in the *callee's* type params, so
+                // without this a generic fn calling another (or itself) mangled
+                // to `__T`/`__Unknown` — a symbol nobody emitted (#2014).
+                for v in subst.values_mut() {
+                    *v = resolve_ty_param(v, ctx.type_subst);
+                }
                 let mangled = mangle_generic_name(name, type_params, &subst);
                 out.push_str(&format!("    call ${mangled}\n"));
             } else {
@@ -3032,7 +3184,10 @@ fn emit_expr(out: &mut String, expr: &TirExpr, ctx: &Ctx) {
             receiver,
             method,
             args,
-        } if collection_elem_ty(&receiver.ty).is_some() && method == "slice" && args.len() == 2 => {
+        } if method == "slice"
+            && args.len() == 2
+            && slice_is_supported(&resolve_ty_param(&receiver.ty, ctx.type_subst), ctx) =>
+        {
             ctx.needs_runtime.set(true);
             emit_expr(out, receiver, ctx);
             emit_expr(out, &args[0], ctx);
@@ -3050,8 +3205,10 @@ fn emit_expr(out: &mut String, expr: &TirExpr, ctx: &Ctx) {
             ctx.needs_runtime.set(true);
             let elem_ty = collection_elem_ty(&receiver.ty).cloned().unwrap_or(Ty::Int);
             // String elements are stored as *MvlString (i32); Bool/enum/struct are
-            // i32 too. Everything else (Int, Float) is i64.
-            let getter = if is_i32(&elem_ty, ctx) || is_string_ty(&elem_ty, ctx) {
+            // i32 too. Everything else (Int, Float) is i64. Asked via `wasm_ty`
+            // so this agrees with `push_op_for`/`list_elem_load_op` by
+            // construction rather than by two predicates happening to match.
+            let getter = if wasm_ty(&elem_ty, ctx) == "i32" || is_string_ty(&elem_ty, ctx) {
                 "_mvl_array_get_option_i32"
             } else {
                 "_mvl_array_get_option_i64"
@@ -5199,6 +5356,15 @@ fn is_i32(ty: &Ty, ctx: &Ctx) -> bool {
         Ty::Named(name, _) if ctx.type_aliases.contains_key(name.as_str()) => {
             is_i32(&ctx.type_aliases[name.as_str()].clone(), ctx)
         }
+        // An unsubstituted type param inside a monomorphized body — resolve it,
+        // as `wasm_ty`/`is_float_ctx`/`is_string_ty` all do. Without this arm
+        // `is_i32` was the odd one out: with `U → Bool` it answered `false`
+        // while `wasm_ty(U)` answered `"i32"`, so the `.get` arm picked
+        // `_mvl_array_get_option_i64` and read 8 bytes where
+        // `_mvl_array_push_i32` had written 4 (#2014).
+        Ty::Named(name, _) if ctx.type_subst.contains_key(name.as_str()) => {
+            is_i32(&ctx.type_subst[name.as_str()].clone(), ctx)
+        }
         Ty::List(_) | Ty::Array(_, _) | Ty::Set(_) | Ty::Map(_, _) => true,
         Ty::Option(_) | Ty::Result(_, _) => true,
         Ty::Ref(_, inner) | Ty::Labeled(_, inner) | Ty::Refined(inner, _) => is_i32(inner, ctx),
@@ -5269,6 +5435,21 @@ fn mangle_ty_tag(ty: &Ty) -> String {
         Ty::Named(name, _) => name.clone(),
         Ty::Option(inner) => format!("Opt_{}", mangle_ty_tag(inner)),
         Ty::List(inner) => format!("List_{}", mangle_ty_tag(inner)),
+        // These six used to fall through to the `"Unknown"` backstop. Because
+        // `collect_generic_instantiations` dedups on the *mangled name*, two
+        // different substitutions that both tagged `Unknown` collapsed onto one
+        // emitted body and every call site got whichever was collected first —
+        // a silently wrong callee. Newly reachable once `map`/`filter`/`fold`
+        // could be instantiated on collection-shaped element types (#2014).
+        Ty::Set(inner) => format!("Set_{}", mangle_ty_tag(inner)),
+        Ty::Array(inner, _) => format!("Arr_{}", mangle_ty_tag(inner)),
+        Ty::Map(k, v) => format!("Map_{}_{}", mangle_ty_tag(k), mangle_ty_tag(v)),
+        Ty::Result(ok, err) => format!("Res_{}_{}", mangle_ty_tag(ok), mangle_ty_tag(err)),
+        Ty::Unit => "Unit".to_string(),
+        Ty::Fn(params, ret, _, _) => {
+            let ps: Vec<String> = params.iter().map(mangle_ty_tag).collect();
+            format!("Fn_{}_r_{}", ps.join("_"), mangle_ty_tag(ret))
+        }
         Ty::Ref(_, inner) | Ty::Labeled(_, inner) | Ty::Refined(inner, _) => mangle_ty_tag(inner),
         _ => "Unknown".to_string(),
     }
@@ -5305,11 +5486,7 @@ fn infer_type_subst(generic_fn: &TirFn, args: &[TirExpr]) -> HashMap<String, Ty>
 
     let mut subst = HashMap::new();
     for (param, arg) in generic_fn.params.iter().zip(args.iter()) {
-        if let Ty::Named(ref tname, ref targs) = param.ty {
-            if targs.is_empty() && param_names.contains(tname.as_str()) {
-                subst.entry(tname.clone()).or_insert_with(|| arg.ty.clone());
-            }
-        }
+        unify_ty_params(&param.ty, &arg.ty, &param_names, &mut subst);
     }
     subst
 }
@@ -5325,11 +5502,7 @@ fn infer_type_subst_from_args(
         type_params.iter().map(|gp| gp.name().to_string()).collect();
     let mut subst = HashMap::new();
     for (param, arg) in fn_params.iter().zip(args.iter()) {
-        if let Ty::Named(ref tname, ref targs) = param.ty {
-            if targs.is_empty() && param_names.contains(tname.as_str()) {
-                subst.entry(tname.clone()).or_insert_with(|| arg.ty.clone());
-            }
-        }
+        unify_ty_params(&param.ty, &arg.ty, &param_names, &mut subst);
     }
     subst
 }
@@ -5400,15 +5573,34 @@ fn mangle_generic_method_name(
 /// `fn(Float) -> Bool` differ, but `fn(Int) -> Int` and `fn(UInt) -> UInt` do
 /// not, and must not produce two incompatible declarations for the same shape.
 fn indirect_sig(params: &[Ty], ret: &Ty, ctx: &Ctx) -> (String, String) {
-    let ps: Vec<&str> = params.iter().map(|p| wasm_ty(p, ctx)).collect();
+    // Strings are two i32s (ptr, len) everywhere in this emitter, and
+    // `emit_one_lambda_fn` declares them that way. `wasm_ty` has no `Ty::String`
+    // arm — it falls through to the `_ => "i64"` default — which is harmless at
+    // every other call site because they all test `peels_to_string` first and
+    // branch to the pair convention. This was the one site that did not, so a
+    // `fn(String) -> Bool` lambda got `(type (func (param i64) (result i32)))`
+    // against an actual `(param $s_ptr i32) (param $s_len i32)` body. WASM only
+    // type-checks `call_indirect` *dynamically*, so that mismatch passed
+    // validation and trapped at runtime (#2014).
     let mut name = String::from("$sig");
     let mut decl = String::from("(func");
-    for p in &ps {
+    let push = |slot: &str, name: &mut String, decl: &mut String| {
         name.push('_');
-        name.push_str(p);
-        decl.push_str(&format!(" (param {p})"));
+        name.push_str(slot);
+        decl.push_str(&format!(" (param {slot})"));
+    };
+    for p in params {
+        if peels_to_string(p) {
+            push("i32", &mut name, &mut decl);
+            push("i32", &mut name, &mut decl);
+        } else {
+            push(wasm_ty(p, ctx), &mut name, &mut decl);
+        }
     }
-    if !matches!(ret, Ty::Unit) {
+    if peels_to_string(ret) {
+        name.push_str("_r_i32_i32");
+        decl.push_str(" (result i32 i32)");
+    } else if !matches!(ret, Ty::Unit) {
         let r = wasm_ty(ret, ctx);
         name.push_str("_r_");
         name.push_str(r);
@@ -5429,18 +5621,40 @@ fn register_indirect_sig(params: &[Ty], ret: &Ty, ctx: &Ctx) -> String {
 
 /// Assign (or reuse) a table slot for a lambda literal, returning its index.
 ///
-/// Keyed on the source span, matching how the emitter names its other
-/// span-derived temporaries — the same lambda encountered twice must land in one
-/// slot, not two.
+/// Keyed on the source span *and* the enclosing type substitution. The span
+/// alone is not identifying: one lambda literal inside a generic body is
+/// compiled once per instantiation, and each copy has a different signature.
+/// Keying on the span alone handed the `T → String` instantiation the slot and
+/// the compiled body belonging to `T → Int`, so `List_filter__Str` called the
+/// i64 lambda through `call_indirect` and trapped on the dynamic type check.
+/// Where two concrete types happen to lower to the same WASM width it was worse
+/// than a trap — the wrong specialization ran silently (#2014).
 fn register_lambda(expr: &TirExpr, params: &[TirParam], body: &TirExpr, ctx: &Ctx) -> u32 {
-    let key = (expr.span.offset, expr.span.len);
+    // Canonical, order-independent tag for the substitution.
+    let subst_tag = {
+        let mut pairs: Vec<String> = ctx
+            .type_subst
+            .iter()
+            .map(|(k, v)| format!("{k}={}", mangle_ty_tag(v)))
+            .collect();
+        pairs.sort();
+        pairs.join(",")
+    };
+    let key = (expr.span.offset, expr.span.len, subst_tag.clone());
     if let Some(idx) = ctx.lambda_slots.borrow().get(&key) {
         return *idx;
     }
     let mut lambdas = ctx.lambdas.borrow_mut();
     let idx = lambdas.len() as u32;
+    // The emitted function name must be per-instantiation too, or two table
+    // entries would share one symbol.
+    let suffix = if subst_tag.is_empty() {
+        String::new()
+    } else {
+        format!("__{}", mangle_ident(&subst_tag))
+    };
     lambdas.push(LambdaEntry {
-        wasm_name: format!("__lambda_{}_{}", key.0, key.1),
+        wasm_name: format!("__lambda_{}_{}{}", key.0, key.1, suffix),
         params: params.to_vec(),
         body: body.clone(),
         ret_ty: body.ty.clone(),
@@ -5448,6 +5662,13 @@ fn register_lambda(expr: &TirExpr, params: &[TirParam], body: &TirExpr, ctx: &Ct
     });
     ctx.lambda_slots.borrow_mut().insert(key, idx);
     idx
+}
+
+/// Sanitize a substitution tag into a WAT-identifier-safe suffix.
+fn mangle_ident(s: &str) -> String {
+    s.chars()
+        .map(|c| if c.is_alphanumeric() { c } else { '_' })
+        .collect()
 }
 
 /// The resolved `Ty::Fn` behind a name, when that name is a function-typed
@@ -5517,35 +5738,7 @@ fn emit_one_lambda_fn(
     type_subst: &HashMap<String, Ty>,
     ctx: &Ctx,
 ) {
-    let lam_ctx = Ctx {
-        needs_wasi: ctx.needs_wasi,
-        literals: ctx.literals,
-        audit_relabels: ctx.audit_relabels,
-        enum_types: ctx.enum_types,
-        enum_variants: ctx.enum_variants,
-        struct_layouts: ctx.struct_layouts,
-        payload_enums: ctx.payload_enums,
-        type_aliases: ctx.type_aliases,
-        type_subst,
-        generic_fn_map: ctx.generic_fn_map,
-        label_counter: Cell::new(ctx.label_counter.get()),
-        needs_runtime: Cell::new(ctx.needs_runtime.get()),
-        string_params: std::cell::RefCell::new(std::collections::HashSet::new()),
-        assert_mode: ctx.assert_mode,
-        fn_locals: std::cell::RefCell::new(Vec::new()),
-        fn_let_inits: std::cell::RefCell::new(HashMap::new()),
-        actors: ctx.actors,
-        self_type: std::cell::RefCell::new(None),
-        struct_methods: ctx.struct_methods,
-        generic_methods: ctx.generic_methods,
-        // Shared, so a nested lambda registers into the one real table and gets
-        // picked up by `emit_lambda_fns`'s drain loop.
-        fn_params: std::cell::RefCell::new(Vec::new()),
-        stubbed: ctx.stubbed,
-        lambdas: ctx.lambdas,
-        lambda_slots: ctx.lambda_slots,
-        indirect_sigs: ctx.indirect_sigs,
-    };
+    let lam_ctx = derived_ctx(ctx, type_subst);
 
     let ret = resolve_ty_param(ret_ty, type_subst);
     out.push_str(&format!("  (func ${wasm_name}"));
@@ -5613,7 +5806,7 @@ fn emit_one_lambda_fn(
             "    ;; unsupported: lambda captures `{captured}` — closures need an environment\n"
         ));
         emit_stub_body(out, wasm_name, ctx);
-    } else if body_buf.contains(";; unsupported") {
+    } else if body_buf.contains(UNSUPPORTED_MARKER) {
         emit_stub_body(out, wasm_name, ctx);
     } else {
         out.push_str(&body_buf);
@@ -5713,9 +5906,16 @@ pub fn emitter_handles_method_natively(receiver_ty: &Ty, method: &str) -> bool {
         );
     }
     if collection_elem_ty(receiver_ty).is_some() {
+        // `clone` and `slice` have native arms too. Both are conditional —
+        // `clone_is_supported` / `slice_is_supported` gate them on the element
+        // type — so this answers for the shape and the emitter's own guard has
+        // the final say. Listing them keeps this function honest about which
+        // methods have arms at all; omitting them was harmless only because
+        // `slice` is `builtin` in std/lists.mvl (no body to instantiate) and
+        // `clone` has no std declaration, i.e. by luck rather than by design.
         return matches!(
             method,
-            "len" | "is_empty" | "get" | "push" | "contains" | "insert"
+            "len" | "is_empty" | "get" | "push" | "contains" | "insert" | "clone" | "slice"
         );
     }
     false
@@ -5832,6 +6032,7 @@ impl GenericCallees<'_> {
 fn collect_generic_instantiations<'a>(
     fns: &[&'a TirFn],
     all_fns: &[&'a TirFn],
+    ext_methods: &[&'a TirFn],
     generic_ext_methods: &[&'a TirFn],
     actors: &[TirActorDecl],
     _ctx: &Ctx,
@@ -5866,6 +6067,17 @@ fn collect_generic_instantiations<'a>(
     let top: HashMap<String, Ty> = HashMap::new();
 
     for f in fns {
+        collect_instantiations_in_block(&f.body, &callees, &top, &mut seen, &mut result);
+    }
+    // Non-generic extension methods are emitted directly by
+    // `emit_extension_method`, through the same `emit_expr` arms that mangle a
+    // generic callee's name — so `fn Widget::doubled(self) { self.items.map(f) }`
+    // emitted `call $List_map__Int__Int` while collection, seeded only from
+    // `fns`, never discovered it. The module then failed to link on a symbol
+    // nobody emitted (#2014). Before generic ext methods were emittable at all
+    // this stubbed loudly instead; making them emittable without seeding their
+    // callers turned a stub into an invalid module.
+    for f in ext_methods {
         collect_instantiations_in_block(&f.body, &callees, &top, &mut seen, &mut result);
     }
     // Actor method bodies are emitted as functions but are not in `tir.fns`, so
@@ -6022,8 +6234,43 @@ fn collect_instantiations_in_expr<'a>(
     match &expr.kind {
         TirExprKind::Unary { expr: inner, .. }
         | TirExprKind::Consume(inner)
-        | TirExprKind::Borrow { expr: inner, .. } => {
+        | TirExprKind::Borrow { expr: inner, .. }
+        | TirExprKind::Propagate(inner)
+        | TirExprKind::FieldAccess { expr: inner, .. }
+        | TirExprKind::Relabel { expr: inner, .. } => {
             collect_instantiations_in_expr(inner, callees, outer, seen, result);
+        }
+        // A lambda's *body* is a separate emission unit: `emit_one_lambda_fn`
+        // runs `emit_expr` over it, which mangles any generic callee it finds.
+        // Skipping it here meant `xss.map(|row: List[Int]| row.first())` emitted
+        // `call $List_first__Int` for an instance collection never discovered —
+        // the module then failed to link (#2014). Previously near-unreachable,
+        // since a generic call rarely sat inside a lambda; lambda arguments to
+        // generic methods are now the common case.
+        TirExprKind::Lambda { body, .. } => {
+            collect_instantiations_in_expr(body, callees, outer, seen, result);
+        }
+        TirExprKind::List { elems } | TirExprKind::Set { elems } => {
+            for e in elems {
+                collect_instantiations_in_expr(e, callees, outer, seen, result);
+            }
+        }
+        TirExprKind::Map { pairs } => {
+            for (k, v) in pairs {
+                collect_instantiations_in_expr(k, callees, outer, seen, result);
+                collect_instantiations_in_expr(v, callees, outer, seen, result);
+            }
+        }
+        TirExprKind::Construct { fields, .. } | TirExprKind::Spawn { fields, .. } => {
+            for (_, e) in fields {
+                collect_instantiations_in_expr(e, callees, outer, seen, result);
+            }
+        }
+        TirExprKind::Select { arms } => {
+            for arm in arms {
+                collect_instantiations_in_expr(&arm.expr, callees, outer, seen, result);
+                collect_instantiations_in_block(&arm.body, callees, outer, seen, result);
+            }
         }
         TirExprKind::Binary { left, right, .. } => {
             collect_instantiations_in_expr(left, callees, outer, seen, result);
@@ -6052,7 +6299,13 @@ fn collect_instantiations_in_expr<'a>(
                 }
             }
         }
-        _ => {} // FnCall handled above; others don't need recursion for generics
+        // FnCall/MethodCall recurse above. `Literal`/`Var` have no
+        // sub-expressions, and `Quantifier` is spec-only, erased before codegen.
+        TirExprKind::Literal(_)
+        | TirExprKind::Var(_)
+        | TirExprKind::Quantifier(_)
+        | TirExprKind::FnCall { .. }
+        | TirExprKind::MethodCall { .. } => {}
     }
 }
 
@@ -6068,39 +6321,7 @@ fn emit_generic_fn(
 ) {
     // Build a temporary Ctx with the type_subst active so wasm_ty resolves
     // type params to their concrete types.
-    let mono_ctx = Ctx {
-        needs_wasi: ctx.needs_wasi,
-        literals: ctx.literals,
-        audit_relabels: ctx.audit_relabels,
-        enum_types: ctx.enum_types,
-        enum_variants: ctx.enum_variants,
-        struct_layouts: ctx.struct_layouts,
-        payload_enums: ctx.payload_enums,
-        type_aliases: ctx.type_aliases,
-        type_subst,
-        generic_fn_map: ctx.generic_fn_map,
-        label_counter: Cell::new(ctx.label_counter.get()),
-        needs_runtime: Cell::new(ctx.needs_runtime.get()),
-        string_params: std::cell::RefCell::new(std::collections::HashSet::new()),
-        assert_mode: ctx.assert_mode,
-        fn_locals: std::cell::RefCell::new(Vec::new()),
-        fn_let_inits: std::cell::RefCell::new(HashMap::new()),
-        actors: ctx.actors,
-        // A monomorphized instantiation is a different function, not a
-        // continuation of whatever triggered it — reset like `string_params`
-        // and `fn_locals` above, or `self.field` inside the generic body would
-        // resolve against the caller's actor layout (#2012).
-        self_type: std::cell::RefCell::new(None),
-        struct_methods: ctx.struct_methods,
-        generic_methods: ctx.generic_methods,
-        // Shared: one funcref table per module, so a lambda inside a
-        // monomorphized body claims a real slot (#2014).
-        fn_params: std::cell::RefCell::new(Vec::new()),
-        stubbed: ctx.stubbed,
-        lambdas: ctx.lambdas,
-        lambda_slots: ctx.lambda_slots,
-        indirect_sigs: ctx.indirect_sigs,
-    };
+    let mono_ctx = derived_ctx(ctx, type_subst);
 
     // Set up string_params for params whose concrete type is String.
     {
@@ -6180,7 +6401,7 @@ fn emit_generic_fn(
     let mut body_buf = String::new();
     emit_block(&mut body_buf, &f.body, &mono_ctx);
 
-    if body_buf.contains(";; unsupported") {
+    if body_buf.contains(UNSUPPORTED_MARKER) {
         emit_stub_body(out, mangled_name, ctx);
     } else {
         out.push_str(&body_buf);
@@ -6524,7 +6745,7 @@ fn emit_actor_method(out: &mut String, info: &ActorInfo, m: &TirActorMethod, ctx
     *ctx.fn_let_inits.borrow_mut() = let_inits;
     emit_block(&mut body, &m.body, ctx);
 
-    if body.contains(";; unsupported") {
+    if body.contains(UNSUPPORTED_MARKER) {
         emit_stub_body(out, &fn_name, ctx);
     } else {
         out.push_str(&body);
@@ -6594,7 +6815,7 @@ fn emit_extension_method(out: &mut String, f: &TirFn, ctx: &Ctx) {
     *ctx.fn_let_inits.borrow_mut() = let_inits;
     emit_block(&mut body, &f.body, ctx);
 
-    if body.contains(";; unsupported") {
+    if body.contains(UNSUPPORTED_MARKER) {
         emit_stub_body(out, &wasm_name, ctx);
     } else {
         out.push_str(&body);
@@ -8577,5 +8798,260 @@ mod stub_reporting_tests {
             ),
             Some("k")
         );
+    }
+}
+
+/// Regression tests for the #2014 review findings.
+///
+/// Every test here asserts on a *validated module*, not on substrings of the
+/// emitted text. That distinction is the point: each bug below produced WAT
+/// that `wasm-tools parse` accepted and `wasm-tools validate` rejected, so a
+/// `wat.contains(..)` assertion could not have caught any of them.
+#[cfg(test)]
+mod validated_module_tests {
+    use super::*;
+    use crate::mvl::parser::Parser;
+
+    fn emit(src: &str) -> (String, Vec<String>) {
+        let (mut p, errs) = Parser::new(src);
+        assert!(errs.is_empty(), "lex errors: {errs:?}");
+        let prog = p.parse_program();
+        assert!(p.errors().is_empty(), "parse errors: {:?}", p.errors());
+        let mut expr_types = crate::mvl::checker::collect_prelude_expr_types(&[]);
+        expr_types.extend(crate::mvl::checker::check(&prog).expr_types);
+        let all_fns = crate::mvl::passes::mono::collect_fns([&prog]);
+        let mono = crate::mvl::passes::mono::monomorphize(&prog, &all_fns, &expr_types);
+        let tir = crate::mvl::ir::lower::lower(&prog, &mono, &expr_types);
+        let c = WasmTextCompiler::new();
+        let wat = c.emit_program(&tir, "test");
+        (wat, c.stubbed_fns())
+    }
+
+    /// Assemble and type-validate. Panics with the offending WAT on failure.
+    fn validate(wat: &str) {
+        let bytes = match wat::parse_str(wat) {
+            Ok(b) => b,
+            Err(e) => panic!("failed to assemble emitted WAT: {e}\n--- WAT ---\n{wat}"),
+        };
+        if let Err(e) = wasmparser::Validator::new().validate_all(&bytes) {
+            panic!("emitted module failed validation: {e}\n--- WAT ---\n{wat}");
+        }
+    }
+
+    fn emit_and_validate(src: &str) -> Vec<String> {
+        let (wat, stubbed) = emit(src);
+        validate(&wat);
+        stubbed
+    }
+
+    /// A user-declared HOF, so these tests do not depend on `std/lists.mvl`.
+    const MYMAP: &str = "pub fn List[T]::mymap[U](self, f: fn(T) -> U) -> List[U] {\n\
+                             let r: ref List[U] = [];\n\
+                             for x in self { r.push(f(x)) };\n\
+                             r\n\
+                         }\n";
+
+    /// A literal reachable only from a generic extension method was interned by
+    /// nobody, so the body was just `;; missing literal` under a
+    /// `(result i32 i32)` signature — a stack-underflow module.
+    #[test]
+    fn literal_only_inside_generic_ext_method_is_interned() {
+        let stubbed = emit_and_validate(
+            "pub fn List[T]::tag_me(self) -> String { \"ONLYHERE\" }\n\
+             test fn t() -> Unit {\n\
+                 let xs: List[Int] = [1, 2, 3];\n\
+                 assert_eq(xs.tag_me().len(), 8);\n\
+             }\n",
+        );
+        assert!(stubbed.is_empty(), "unexpected stubs: {stubbed:?}");
+    }
+
+    /// Same gap for a generic *plain* fn — `fns` also requires no type params.
+    #[test]
+    fn literal_only_inside_generic_plain_fn_is_interned() {
+        let stubbed = emit_and_validate(
+            "pub fn label_of[T](x: T) -> String { \"PLAINONLY\" }\n\
+             test fn t() -> Unit { assert_eq(label_of(1).len(), 9); }\n",
+        );
+        assert!(stubbed.is_empty(), "unexpected stubs: {stubbed:?}");
+    }
+
+    /// A non-generic extension method's body was never scanned for
+    /// instantiations, so it emitted a `call` to a symbol nobody defined.
+    #[test]
+    fn ext_method_body_seeds_generic_instantiation() {
+        let stubbed = emit_and_validate(&format!(
+            "{MYMAP}\
+             type Widget = struct {{ items: List[Int] }}\n\
+             pub fn Widget::doubled(self) -> List[Int] {{ self.items.mymap(|x: Int| x * 2) }}\n\
+             test fn t() -> Unit {{\n\
+                 let w: Widget = Widget {{ items: [1, 2, 3] }};\n\
+                 assert_eq(w.doubled().len(), 3);\n\
+             }}\n"
+        ));
+        assert!(stubbed.is_empty(), "unexpected stubs: {stubbed:?}");
+    }
+
+    /// A generic call nested inside a lambda *body* was invisible to
+    /// instantiation collection, which never recursed into `Lambda`.
+    #[test]
+    fn generic_call_nested_in_lambda_body_is_instantiated() {
+        let stubbed = emit_and_validate(&format!(
+            "{MYMAP}\
+             pub fn List[T]::second_len(self) -> Int {{ self.len() }}\n\
+             test fn t() -> Unit {{\n\
+                 let xss: List[List[Int]] = [[1, 2], [3, 4]];\n\
+                 let ls: List[Int] = xss.mymap(|row: List[Int]| row.second_len());\n\
+                 assert_eq(ls.len(), 2);\n\
+             }}\n"
+        ));
+        assert!(stubbed.is_empty(), "unexpected stubs: {stubbed:?}");
+    }
+
+    /// One generic fn calling another bound `T` only from inside `List[T]`,
+    /// which the old bare-`Ty::Named` inference could not see — it mangled to
+    /// `__Unknown`.
+    #[test]
+    fn generic_fn_calling_generic_fn_resolves_type_params() {
+        let (wat, stubbed) = emit(
+            "fn inner_len[T](xs: List[T]) -> Int { xs.len() }\n\
+             fn outer_len[T](xs: List[T]) -> Int { inner_len(xs) }\n\
+             test fn t() -> Unit {\n\
+                 let xs: List[Int] = [1, 2, 3];\n\
+                 assert_eq(outer_len(xs), 3);\n\
+             }\n",
+        );
+        validate(&wat);
+        assert!(stubbed.is_empty(), "unexpected stubs: {stubbed:?}");
+        assert!(
+            !wat.contains("Unknown"),
+            "an unresolved type param leaked into a mangled name: {wat}"
+        );
+    }
+
+    /// A lambda inside a generic body is compiled once per instantiation. Keying
+    /// its table slot on the span alone gave `T → String` the `T → Int` body.
+    #[test]
+    fn lambda_in_generic_body_gets_a_slot_per_instantiation() {
+        let stubbed = emit_and_validate(&format!(
+            "{MYMAP}\
+             pub fn List[T]::tag_each(self) -> List[Int] {{ self.mymap(|x: T| 1) }}\n\
+             test fn t() -> Unit {{\n\
+                 let xs: List[Int] = [1, 2, 3];\n\
+                 let ss: List[String] = [\"a\", \"b\"];\n\
+                 assert_eq(xs.tag_each().len(), 3);\n\
+                 assert_eq(ss.tag_each().len(), 2);\n\
+             }}\n"
+        ));
+        assert!(stubbed.is_empty(), "unexpected stubs: {stubbed:?}");
+    }
+
+    /// `for s in strings` inside a monomorphized body needs a `__for_ms_*`
+    /// unpack temp that the ctx-blind locals pass could not know about.
+    #[test]
+    fn string_element_for_loop_in_generic_body_declares_its_temp() {
+        let stubbed = emit_and_validate(&format!(
+            "{MYMAP}\
+             test fn t() -> Unit {{\n\
+                 let ss: List[String] = [\"aa\", \"b\"];\n\
+                 let ls: List[Int] = ss.mymap(|s: String| s.len());\n\
+                 assert_eq(ls.len(), 2);\n\
+             }}\n"
+        ));
+        assert!(stubbed.is_empty(), "unexpected stubs: {stubbed:?}");
+    }
+
+    /// A `fn(String) -> Int` lambda is `(param i32 i32)`, but `indirect_sig`
+    /// asked `wasm_ty`, which has no String arm and defaulted to i64. WASM
+    /// checks `call_indirect` types dynamically, so this trapped at runtime
+    /// rather than failing validation.
+    #[test]
+    fn string_typed_lambda_signature_uses_ptr_len_pair() {
+        let (wat, stubbed) = emit(&format!(
+            "{MYMAP}\
+             test fn t() -> Unit {{\n\
+                 let ss: List[String] = [\"aa\", \"b\"];\n\
+                 let ls: List[Int] = ss.mymap(|s: String| s.len());\n\
+                 assert_eq(ls.len(), 2);\n\
+             }}\n"
+        ));
+        validate(&wat);
+        assert!(stubbed.is_empty(), "unexpected stubs: {stubbed:?}");
+        // The lambda body takes (ptr, len), so its `(type)` must too. The old
+        // i64 form passed validation and trapped only when `call_indirect` ran.
+        assert!(
+            wat.contains("(func (param i32) (param i32) (result i64))"),
+            "String lambda signature must be a (ptr, len) pair: {wat}"
+        );
+        assert!(
+            !wat.contains("(func (param i64) (result i64))"),
+            "String param must not collapse to i64: {wat}"
+        );
+    }
+
+    /// `mangle_ty_tag` collapsed six constructors to `"Unknown"`, and
+    /// instantiation dedup keys on the mangled name — so two different
+    /// substitutions shared one emitted body and one call site won.
+    #[test]
+    fn mangle_ty_tag_distinguishes_collection_constructors() {
+        let tags = [
+            mangle_ty_tag(&Ty::Set(Box::new(Ty::Int))),
+            mangle_ty_tag(&Ty::Map(Box::new(Ty::String), Box::new(Ty::Int))),
+            mangle_ty_tag(&Ty::Result(Box::new(Ty::Int), Box::new(Ty::String))),
+            mangle_ty_tag(&Ty::Unit),
+            mangle_ty_tag(&Ty::List(Box::new(Ty::Int))),
+            mangle_ty_tag(&Ty::Option(Box::new(Ty::Int))),
+        ];
+        let unique: std::collections::HashSet<&String> = tags.iter().collect();
+        assert_eq!(unique.len(), tags.len(), "tags collide: {tags:?}");
+        assert!(
+            !tags.iter().any(|t| t == "Unknown"),
+            "a known constructor still tags as Unknown: {tags:?}"
+        );
+    }
+
+    /// `.slice()` on a `List[String]` byte-copies element *pointers* without a
+    /// refcount bump, so parent and slice both drop each string. Must stub
+    /// rather than miscompile ownership.
+    /// `.slice()` is the builtin `take`/`skip` are written over, so it is what
+    /// the guard has to gate. Called directly here — this harness does not load
+    /// `std/lists.mvl`, so `take` itself is not in scope.
+    #[test]
+    fn slice_on_string_list_stubs_instead_of_double_freeing() {
+        let (wat, stubbed) = emit(
+            "test fn t() -> Unit {\n\
+                 let xs: List[String] = [\"a\", \"b\", \"c\"];\n\
+                 let ys: List[String] = xs.slice(0, 2);\n\
+                 assert_eq(ys.len(), 2);\n\
+             }\n",
+        );
+        validate(&wat);
+        assert_eq!(stubbed, vec!["t".to_string()], "the caller must stub");
+        assert!(
+            !wat.contains("call $_mvl_array_slice"),
+            "a String-element slice must not be lowered: {wat}"
+        );
+    }
+
+    /// Scalar slicing is a complete copy and must keep working.
+    #[test]
+    fn slice_on_int_list_still_lowers() {
+        let (wat, stubbed) = emit(
+            "test fn t() -> Unit {\n\
+                 let xs: List[Int] = [1, 2, 3, 4];\n\
+                 let ys: List[Int] = xs.slice(0, 2);\n\
+                 assert_eq(ys.len(), 2);\n\
+             }\n",
+        );
+        validate(&wat);
+        assert!(stubbed.is_empty(), "unexpected stubs: {stubbed:?}");
+        assert!(wat.contains("call $_mvl_array_slice"));
+    }
+
+    /// The marker is the stub trigger; the five scan sites and every producer
+    /// must agree on its spelling.
+    #[test]
+    fn unsupported_marker_spelling_is_pinned() {
+        assert_eq!(UNSUPPORTED_MARKER, ";; unsupported");
     }
 }
