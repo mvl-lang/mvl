@@ -718,6 +718,50 @@ pub unsafe extern "C" fn _mvl_array_drop(a: i32) {
     }
 }
 
+/// `_mvl_array_slice(a, start, end)` — new array holding elements
+/// `[start, end)`, with both bounds clamped into `[0, len]` and a reversed
+/// range yielding an empty array (#2014).
+///
+/// Port of `runtime/llvm/`'s `_mvl_list_slice`. Backs `List[T]::take`
+/// (`self.slice(0, n)`) and `::skip` (`self.slice(n, self.len())`), which are
+/// pure-MVL wrappers over the `slice` builtin.
+///
+/// Elements are copied byte-wise at `elem_size` granularity, so this is correct
+/// for scalar arrays but does *not* refcount-bump `*MvlString` elements: a
+/// slice of a `List[String]` aliases the parent's strings, and dropping both
+/// with `_mvl_string_ptr_array_drop` would double-free. The corpus slices only
+/// scalar lists; `List[String]::take` would need an element-aware copy first.
+///
+/// # Safety
+/// `a` must be a valid `MvlArray` pointer or null.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn _mvl_array_slice(a: i32, start: i64, end: i64) -> i32 {
+    if a == 0 {
+        return _mvl_array_new(8, 0);
+    }
+    let arr = unsafe { &*(a as usize as *const MvlArray) };
+    let es = arr.elem_size;
+    let len = arr.len as i64;
+    let lo = start.clamp(0, len);
+    let hi = end.clamp(0, len);
+    let count = (hi - lo).max(0);
+    let out = _mvl_array_new(es, count as i32);
+    if count == 0 {
+        return out;
+    }
+    let dst = unsafe { &mut *(out as usize as *mut MvlArray) };
+    let bytes = (count as usize) * (es as usize);
+    unsafe {
+        core::ptr::copy_nonoverlapping(
+            (arr.ptr as usize + (lo as usize) * (es as usize)) as *const u8,
+            dst.ptr as *mut u8,
+            bytes,
+        );
+    }
+    dst.len = count as i32;
+    out
+}
+
 /// `_mvl_string_ptr_array_drop(a)` — refcount decrement for a `List[String]`
 /// array. When the refcount hits zero each element `*MvlString` is dropped
 /// via `_mvl_string_drop`, then the backing buffer and struct are freed.
@@ -2425,6 +2469,113 @@ mod tests {
         assert_eq!(unsafe { _mvl_array_len(a) }, 3);
         assert_eq!(unsafe { get_i64(a, 0) }, 100);
         assert_eq!(unsafe { get_i64(a, 2) }, 300);
+        unsafe { _mvl_array_drop(a) };
+    }
+
+    // ── slice (#2014) ────
+    //
+    // Backs `List[T]::take` (`slice(0, n)`) and `::skip`
+    // (`slice(n, self.len())`), so the clamping cases below are the ones those
+    // wrappers actually hit at the ends of a list.
+    unsafe fn i64_array(vals: &[i64]) -> i32 {
+        let a = _mvl_array_new(8, vals.len() as i32);
+        for v in vals {
+            unsafe { _mvl_array_push_i64(a, *v) };
+        }
+        a
+    }
+
+    unsafe fn slice_vals(src: &[i64], start: i64, end: i64) -> Vec<i64> {
+        let a = unsafe { i64_array(src) };
+        let s = unsafe { _mvl_array_slice(a, start, end) };
+        let n = unsafe { _mvl_array_len(s) };
+        let out = (0..n).map(|i| unsafe { get_i64(s, i) }).collect();
+        unsafe { _mvl_array_drop(s) };
+        unsafe { _mvl_array_drop(a) };
+        out
+    }
+
+    #[test]
+    fn slice_middle_range() {
+        assert_eq!(unsafe { slice_vals(&[1, 2, 3, 4], 1, 3) }, vec![2, 3]);
+    }
+
+    #[test]
+    fn slice_take_prefix() {
+        // `take(3)`
+        assert_eq!(
+            unsafe { slice_vals(&[10, 20, 30, 40], 0, 3) },
+            vec![10, 20, 30]
+        );
+    }
+
+    #[test]
+    fn slice_skip_suffix() {
+        // `skip(2)` — end is the full length.
+        assert_eq!(unsafe { slice_vals(&[10, 20, 30, 40], 2, 4) }, vec![30, 40]);
+    }
+
+    #[test]
+    fn slice_clamps_end_past_len() {
+        // `take(99)` on a 2-element list yields the whole list, not garbage.
+        assert_eq!(unsafe { slice_vals(&[7, 8], 0, 99) }, vec![7, 8]);
+    }
+
+    #[test]
+    fn slice_clamps_negative_start() {
+        assert_eq!(unsafe { slice_vals(&[7, 8], -5, 1) }, vec![7]);
+    }
+
+    #[test]
+    fn slice_reversed_range_is_empty() {
+        assert_eq!(unsafe { slice_vals(&[1, 2, 3], 2, 1) }, Vec::<i64>::new());
+    }
+
+    #[test]
+    fn slice_start_past_len_is_empty() {
+        // `skip(n)` where n >= len — the empty tail.
+        assert_eq!(unsafe { slice_vals(&[1, 2], 5, 9) }, Vec::<i64>::new());
+    }
+
+    #[test]
+    fn slice_of_empty_is_empty() {
+        assert_eq!(unsafe { slice_vals(&[], 0, 3) }, Vec::<i64>::new());
+    }
+
+    #[test]
+    fn slice_null_array_yields_empty() {
+        let s = unsafe { _mvl_array_slice(0, 0, 3) };
+        assert_eq!(unsafe { _mvl_array_len(s) }, 0);
+        unsafe { _mvl_array_drop(s) };
+    }
+
+    /// The slice must be an independent buffer — mutating the source afterwards
+    /// must not change it.
+    #[test]
+    fn slice_does_not_alias_source_buffer() {
+        let a = unsafe { i64_array(&[1, 2, 3]) };
+        let s = unsafe { _mvl_array_slice(a, 0, 2) };
+        unsafe { _mvl_array_push_i64(a, 99) };
+        assert_eq!(unsafe { _mvl_array_len(s) }, 2);
+        assert_eq!(unsafe { get_i64(s, 0) }, 1);
+        assert_eq!(unsafe { get_i64(s, 1) }, 2);
+        unsafe { _mvl_array_drop(s) };
+        unsafe { _mvl_array_drop(a) };
+    }
+
+    #[test]
+    fn slice_preserves_i32_elem_size() {
+        let a = _mvl_array_new(4, 4);
+        unsafe {
+            _mvl_array_push_i32(a, 11);
+            _mvl_array_push_i32(a, 22);
+            _mvl_array_push_i32(a, 33);
+        }
+        let s = unsafe { _mvl_array_slice(a, 1, 3) };
+        assert_eq!(unsafe { _mvl_array_len(s) }, 2);
+        let p = unsafe { _mvl_array_get(s, 0) };
+        assert_eq!(unsafe { *(p as usize as *const i32) }, 22);
+        unsafe { _mvl_array_drop(s) };
         unsafe { _mvl_array_drop(a) };
     }
 

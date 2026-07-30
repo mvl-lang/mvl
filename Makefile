@@ -380,20 +380,27 @@ test-runtime-llvm: ## Unit-test runtime/llvm/ crate natively (peer of test-runti
 	cargo test -p mvl_runtime_llvm
 
 # WASM cases the backend actually handles — everything under tests/corpus/
-# *except* the closure/HOF- and split-heavy cases below (Phase 2 of epic
-# #1817). Coverage is now the norm rather than the exception, so this is an
-# exclude list: new corpus files are included automatically, and only need
-# adding here if the WASM backend can't handle them yet.
+# *except* the cases below. Coverage is now the norm rather than the exception,
+# so this is an exclude list: new corpus files are included automatically, and
+# only need adding here if the WASM backend can't handle them yet.
 #
 # 12_actors runs on the single-threaded run-to-completion scheduler emitted
 # into the module itself (#2012, ADR-0059) — semantics only, no parallelism.
+#
+# All of 13_stdlib now runs (#2014): generic extension methods monomorphize,
+# and non-capturing lambdas pass as funcref table indices called through
+# `call_indirect` (see the scope note in ADR-0059 §2 for why that does not
+# contradict the actor-dispatch decision).
+#
+# The two remaining exclusions need *capturing* closures, which is a distinct
+# piece of work — an environment representation, not just a function pointer.
+# `higher_order_test.mvl` returns closures from a factory
+# (`make_adder(k) -> fn(Int) -> Int`) and `lambda_capture_test.mvl` tests
+# capture-by-value directly. Both would need the `{fn_ptr, env_ptr}` pair the
+# LLVM backend builds in `emit_closures_tir.rs`.
 WASM_CORPUS_EXCLUDE := \
 	tests/corpus/03_functions/higher_order_test.mvl \
-	tests/corpus/07_ownership/lambda_capture_test.mvl \
-	tests/corpus/13_stdlib/list_hof_test.mvl \
-	tests/corpus/13_stdlib/list_method_fallback_test.mvl \
-	tests/corpus/13_stdlib/list_sort_by_test.mvl \
-	tests/corpus/13_stdlib/parse_test.mvl
+	tests/corpus/07_ownership/lambda_capture_test.mvl
 
 # Directories with nothing excluded pass through whole — mvlr prints a
 # per-test checkmark + pass/fail count for a directory arg, but runs a bare
