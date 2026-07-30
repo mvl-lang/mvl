@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Schuberg Philis
 
-//! Layer 4 — Cooper's algorithm for Presburger arithmetic.
+//! Layer 4 — linear arithmetic via Fourier-Motzkin elimination.
 //!
 //! Handles refinement predicates that Layers 1–3 cannot decide by applying
 //! quantifier elimination over linear integer arithmetic.
@@ -452,7 +452,8 @@ fn fm_eliminate(constraints: Vec<LinTerm>, vars: &[String]) -> bool {
 
 // ── Entry point ───────────────────────────────────────────────────────────────
 
-/// Try to prove or refute `pred` for `arg` using Cooper's algorithm (Layer 4).
+/// Try to prove or refute `pred` for `arg` via Fourier-Motzkin elimination
+/// and a divisibility check (Layer 4).
 ///
 /// Returns `None` when the predicate is non-linear or the system is too
 /// complex; the caller should fall back to `RuntimeCheck`.

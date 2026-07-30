@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Schuberg Philis
 //
-// compiler/solver/layer4.mvl — Layer 4: Presburger / Cooper's algorithm.
+// compiler/solver/layer4.mvl — Layer 4: linear arithmetic via Fourier-Motzkin elimination.
 //
 // Port of src/mvl/checker/solver/layer4.rs.
 //
@@ -379,7 +379,8 @@ partial fn fm_eliminate(constraints: List[LinTerm], vars: List[String]) -> Bool 
 
 // ── Entry point ───────────────────────────────────────────────────────────────
 
-/// Try to prove or refute `pred` for `arg` using Cooper's algorithm (Layer 4).
+/// Try to prove or refute `pred` for `arg` via Fourier-Motzkin elimination
+/// and a divisibility check (Layer 4).
 pub partial fn try_cooper(
     pred:     RefExpr,
     arg:      Expr,
