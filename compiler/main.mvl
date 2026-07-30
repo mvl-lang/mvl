@@ -103,7 +103,7 @@ partial fn lex_and_parse(src: String) -> Program {
 
 // ── Argument helpers ──────────────────────────────────────────────────────────
 
-total fn dir_from_arg(v: String) -> Path {
+pub total fn dir_from_arg(v: String) -> Path {
     join(path("."), v)
 }
 

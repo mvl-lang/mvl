@@ -232,28 +232,6 @@ total fn mk_total_fn(name: String, block: TirBlock) -> TirFn {
     }
 }
 
-total fn mk_partial_fn(name: String) -> TirFn {
-    TirFn {
-        name:              name,
-        original_name:     name,
-        visible:           false,
-        is_test:           false,
-        is_builtin:        false,
-        receiver_type:     None,
-        type_params:       [],
-        constraints:       [],
-        totality:          Some(Totality::Partial),
-        params:            [],
-        ret_ty:            Ty::Unit,
-        return_refinement: None,
-        effects:           [],
-        pre_conds:         [],
-        post_conds:        [],
-        body:              mk_empty_block(),
-        span:              SourceLoc { line: 0, col: 0 },
-    }
-}
-
 total fn mk_self_call_block(fn_name: String) -> TirBlock {
     let call_expr: TirExpr = TirExpr {
         kind: TirExprKind::FnCall { name: fn_name, args: [], type_args: [] },

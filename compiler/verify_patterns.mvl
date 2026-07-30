@@ -248,24 +248,6 @@ total fn any_wildcard(patterns: List[Pattern], variant_names: List[String]) -> B
 
 fn dloc() -> SourceLoc { SourceLoc { line: 0, col: 0 } }
 
-fn mk_arm(p: Pattern) -> TirMatchArm {
-    TirMatchArm {
-        pattern: p,
-        guard:   None,
-        body:    TirMatchBody::Block(TirBlock { stmts: [], span: dloc() }),
-        span:    dloc(),
-    }
-}
-
-fn mk_guarded(p: Pattern) -> TirMatchArm {
-    TirMatchArm {
-        pattern: p,
-        guard:   Some(RefExpr::Integer { value: 1, span: dloc() }),
-        body:    TirMatchBody::Block(TirBlock { stmts: [], span: dloc() }),
-        span:    dloc(),
-    }
-}
-
 test fn pattern_has_some_true_for_some() -> Unit {
     assert_eq(pattern_has_some(Pattern::Some([], dloc())), true)
 }

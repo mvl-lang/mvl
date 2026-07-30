@@ -329,7 +329,7 @@ total fn unbox_expr(cell: List[Expr]) -> Expr {
 
 total fn box_pat(p: Pattern) -> List[Pattern] { [p] }
 
-total fn unbox_pat(cell: List[Pattern]) -> Pattern {
+pub total fn unbox_pat(cell: List[Pattern]) -> Pattern {
     match cell.get(0) { Some(p) => p, None => Pattern::Wildcard(empty_loc()) }
 }
 
@@ -1068,7 +1068,7 @@ partial fn parse_expr_depth(ps: ParserState, max_depth: Int) -> ExprR
     parse_binary_prec(ps, 0, max_depth)
 }
 
-partial fn parse_expr(ps: ParserState) -> ExprR {
+pub partial fn parse_expr(ps: ParserState) -> ExprR {
     parse_expr_depth(ps, 20)
 }
 
@@ -1106,7 +1106,7 @@ partial fn parse_let_stmt(ps: ParserState, max_depth: Int) -> StmtR
 }
 
 // True if the current token could start a statement (not a `}` or Eof).
-total fn is_stmt_start(ps: ParserState) -> Bool {
+pub total fn is_stmt_start(ps: ParserState) -> Bool {
     let is_end: Bool = ps_at_eof(ps) || ps_at_punct(ps, "}");
     !is_end
 }

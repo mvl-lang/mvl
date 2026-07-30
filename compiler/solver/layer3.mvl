@@ -22,10 +22,10 @@
 partial fn rewrite_expr(expr: Expr) -> Expr { expr }
 
 /// Functions with this many or more execution paths bail out.
-total fn max_paths() -> Int { 32 }
+const MAX_PATHS: Int = 32;
 
 /// Blocks nested more deeply than this are treated conservatively.
-total fn max_depth() -> Int { 64 }
+const MAX_DEPTH: Int = 64;
 
 // ── Path representation ────────────────────────────────────────────────────────
 
@@ -105,7 +105,7 @@ pub partial fn try_symbolic(
     let paths: ref List[ExecPath] = [];
     collect_block_paths(body, [], paths, 0);
 
-    if paths.len() == 0 || paths.len() >= max_paths() { return None }
+    if paths.len() == 0 || paths.len() >= MAX_PATHS { return None }
 
     let any_undecided: ref Bool = false;
     let j: ref Int = 0;
@@ -156,7 +156,7 @@ partial fn collect_block_paths(
     paths:  ref List[ExecPath],
     depth:  Int,
 ) -> Unit {
-    if depth > max_depth() || paths.len() >= max_paths() { return () }
+    if depth > MAX_DEPTH || paths.len() >= MAX_PATHS { return () }
     let n: Int = block.stmts.len();
     let i: ref Int = 0;
     while i < n {
@@ -292,7 +292,7 @@ partial fn collect_expr_paths(
     paths:  ref List[ExecPath],
     depth:  Int,
 ) -> Unit {
-    if depth > max_depth() || paths.len() >= max_paths() { return () }
+    if depth > MAX_DEPTH || paths.len() >= MAX_PATHS { return () }
     match expr {
         Expr::If(ie) => {
             let cond: Expr = match ie.cond.get(0) {

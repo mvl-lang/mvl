@@ -246,7 +246,7 @@ partial fn branches_are_dual(
 ///
 /// Returns Some(error) on mismatch or deadlock, None if they are valid duals.
 /// Prefers the more specific SessionDeadlock error when the failure is mutual blocking.
-partial fn check_dual(
+pub partial fn check_dual(
     a:    SessionTy,
     b:    SessionTy,
     span: SourceLoc,
