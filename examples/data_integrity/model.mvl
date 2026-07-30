@@ -10,7 +10,7 @@
 // stored password hashes).  This example demonstrates IFC on the
 // *output* side — a verdict derived from Secret material is
 // declassified via a single audited release, complementing the
-// taint-input pattern in `etcs_movement_authority` and
+// taint-input pattern in `etcs_move_authority` and
 // `grid_protection`.
 //
 // Standard: FIPS 140-3 (US federal cryptographic module validation) +

@@ -6,7 +6,7 @@
 // section, train leaves section); the interlocking-layer above accepts
 // only commands that keep the table in a safe state.
 //
-// Companion to `examples/etcs_movement_authority/` (ticket #1906), which
+// Companion to `examples/etcs_move_authority/` (ticket #1906), which
 // operates at the per-train supervision layer.  This example operates at
 // the fleet level.
 //

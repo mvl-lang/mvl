@@ -2,7 +2,7 @@
 .ONESHELL:
 SHELL := /bin/bash
 
-.PHONY: help version build build-runtime-wasm test test-full test-unit test-rust-integration test-requirements test-error-messages test-fmt-roundtrip test-rust-rust test-rust-llvm test-mvl-llvm test-rust-wasm test-mvl-wasm test-rust-tokio test-runtime-rust test-runtime-llvm test-runtime-wasm test-checker-parity test-checker-parity-update test-solver test-stdlib check-compiler assure-compiler test-mvl test-bootstrap-e2e test-bdd test-grammar-coverage bump-vendor-pins test-examples test-examples-rust test-examples-llvm coverage traceability verification evidence validate-keywords lint mvl-lint format format-check format-mvl format-mvl-check assurance assurance-gate audit-backend-ast audit-cli-prelude check-adr docs docs-serve install install-runtime setup doctor clean fuzz-rust fuzz-llvm fuzz-diff fuzz-mvl test-fuzz-list mutants mutants-actors
+.PHONY: help version build build-runtime-wasm test test-full test-unit test-rust-integration test-requirements test-error-messages test-fmt-roundtrip test-rust-rust test-rust-llvm test-mvl-llvm test-rust-wasm test-mvl-wasm test-rust-tokio test-runtime-rust test-runtime-llvm test-runtime-wasm test-checker-parity test-checker-parity-update test-solver test-stdlib check-compiler assure-compiler test-mvl test-bootstrap-e2e test-bdd test-grammar-coverage bump-vendor-pins test-examples test-examples-rust test-examples-llvm test-examples-wasm coverage traceability verification evidence validate-keywords lint mvl-lint format format-check format-mvl format-mvl-check assurance assurance-gate audit-backend-ast audit-cli-prelude check-adr docs docs-serve install install-runtime setup doctor clean fuzz-rust fuzz-llvm fuzz-diff fuzz-mvl test-fuzz-list mutants mutants-actors
 
 .DEFAULT_GOAL := help
 
@@ -191,6 +191,7 @@ TEST_FULL_EXTRA_SUITES := \
 	"Backend rust/wasm |test-rust-wasm" \
 	"Examples (Rust)   |test-examples-rust" \
 	"Examples (LLVM)   |test-examples-llvm" \
+	"Examples (WASM)   |test-examples-wasm" \
 	"MVL compiler      |test-mvl" \
 	"Backend mvl/llvm  |test-mvl-llvm" 
 
@@ -444,6 +445,13 @@ test-examples-rust: build ## Run Rust transpiler smoke build for every example s
 
 test-examples-llvm: build ## Run LLVM backend tests for every example subdirectory
 	@examples/test-all.sh --llvm
+
+test-examples-wasm: build build-runtime-wasm ## Run WASM backend tests for every example subdirectory (only examples with a test-wasm target)
+	@command -v wasm-tools > /dev/null 2>&1 || { \
+	  printf "  \033[31m✗  wasm-tools not installed — 'cargo install wasm-tools'\033[0m\n"; exit 1; }
+	@command -v wasmtime > /dev/null 2>&1 || { \
+	  printf "  \033[31m✗  wasmtime not installed — see https://wasmtime.dev/\033[0m\n"; exit 1; }
+	@examples/test-all.sh --wasm
 
 # === Quality ===
 

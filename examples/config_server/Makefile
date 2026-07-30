@@ -8,12 +8,14 @@
 #   LLVM                 — pure tests only (handler_test.mvl); extern stubs return defaults
 #
 # Run from this directory or from the repo root.
-.PHONY: help guard-mvl build check prove lint test-solver test test-llvm assurance mcdc mutate fuzz smoke run all clean
+.PHONY: help guard-mvl build check prove lint test-solver test test-llvm test-wasm assurance mcdc mutate fuzz smoke run all clean
 
 .DEFAULT_GOAL := help
 
 MVL  := ../../target/debug/mvl
 DIR  := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
+MVLR := ../../tools/mvlr
+WASM_RUNTIME := ../../target/wasm32-wasip1/debug/mvl_runtime_wasm.wasm
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z0-9_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-12s\033[0m %s\n", $$1, $$2}'
@@ -63,6 +65,9 @@ test: guard-mvl ## Run all tests (transpiler backend; extern bridge required)
 
 test-llvm: guard-mvl ## Run pure tests only via LLVM backend (no extern calls)
 	$(MVL) test $(DIR)handler_test.mvl --backend=llvm
+
+test-wasm: guard-mvl ## Run tests via WASM backend
+	MVL_RUNTIME_WASM=$(WASM_RUNTIME) $(MVLR) --mvl=$(MVL) --compiler=rust --backend=wasm $(DIR)handler_test.mvl
 
 assurance: guard-mvl ## Assurance report: spec coverage, MC/DC, mutation score (verbose)
 	$(MVL) assurance $(DIR) --verbose

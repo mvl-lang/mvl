@@ -6,7 +6,7 @@
 // when a fault is detected — overcurrent, differential mismatch, ground
 // fault, or reverse power flow.
 //
-// Companion to `examples/etcs_movement_authority/` (rail kinematics via
+// Companion to `examples/etcs_move_authority/` (rail kinematics via
 // nonlinear obligations) and `examples/dose_scheduling/` (medical
 // nonlinear pharma).  Same solver theory (QF-NIA) surfaces different
 // physics: here it's electrical grid protection.

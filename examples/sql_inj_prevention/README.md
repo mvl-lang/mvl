@@ -1,4 +1,4 @@
-# sql_injection_prevention — QF-Strings + IFC-on-taint case study
+# sql_inj_prevention — QF-Strings + IFC-on-taint case study
 
 A database query-construction kernel that structurally prevents SQL injection
 (OWASP A03:2021, CWE-89) by combining information-flow control (IFC) with

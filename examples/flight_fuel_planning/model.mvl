@@ -9,7 +9,7 @@
 // Level C for FMS-adjacent software).
 //
 // Companion to `examples/dose_scheduling/` (pharma L5) and
-// `examples/etcs_movement_authority/` (rail L5).  Together the three
+// `examples/etcs_move_authority/` (rail L5).  Together the three
 // cases triangulate the paper's L5 claim across medical / rail /
 // aviation domains — the L5 role is domain-agnostic, driven by the
 // underlying arithmetic (products, quotients, three-variable ceilings)

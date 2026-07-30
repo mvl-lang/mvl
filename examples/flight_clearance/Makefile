@@ -1,11 +1,13 @@
 # flight_clearance example — MC/DC coverage demonstration
 # Run from this directory or from the repo root.
-.PHONY: help guard-mvl check prove lint test-solver test test-llvm assurance mcdc mutate smoke run run-llvm all clean
+.PHONY: help guard-mvl check prove lint test-solver test test-llvm test-wasm assurance mcdc mutate smoke run run-llvm all clean
 
 .DEFAULT_GOAL := help
 
 MVL  := ../../target/debug/mvl
 DIR  := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
+MVLR := ../../tools/mvlr
+WASM_RUNTIME := ../../target/wasm32-wasip1/debug/mvl_runtime_wasm.wasm
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z0-9_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-12s\033[0m %s\n", $$1, $$2}'
@@ -52,6 +54,9 @@ test: guard-mvl ## Run unit tests
 
 test-llvm: guard-mvl ## Run unit tests via LLVM backend
 	$(MVL) test $(DIR) --backend=llvm
+
+test-wasm: guard-mvl ## Run tests via WASM backend
+	MVL_RUNTIME_WASM=$(WASM_RUNTIME) $(MVLR) --mvl=$(MVL) --compiler=rust --backend=wasm $(DIR)
 
 mcdc: guard-mvl ## Run MC/DC coverage analysis (56/57 unique-cause; coupled clause exempt)
 	$(MVL) mcdc $(DIR) --verbose --masking $(ARGS)

@@ -1,4 +1,4 @@
-# sql_injection_prevention example — QF-Strings + IFC-on-taint demonstration (OWASP)
+# sql_inj_prevention example — QF-Strings + IFC-on-taint demonstration (OWASP)
 # Run from this directory or from the repo root.
 .PHONY: help guard-mvl check prove lint test-solver test test-llvm coverage assurance mcdc mutate smoke run run-llvm all clean test-owasp
 
@@ -71,7 +71,7 @@ all: check test assurance ## Full pipeline: check + test + assurance + coverage 
 
 test-owasp: guard-mvl ## OWASP A03:2021 assurance envelope: static proof + tests + coverage + MC/DC
 	@echo "════════════════════════════════════════════════════════════════"
-	@echo "  OWASP A03:2021 assurance envelope — sql_injection_prevention"
+	@echo "  OWASP A03:2021 assurance envelope — sql_inj_prevention"
 	@echo "  Input validation (SQL injection prevention): three independent axes"
 	@echo "════════════════════════════════════════════════════════════════"
 	@echo ""
@@ -111,4 +111,4 @@ run-llvm: guard-mvl ## Execute demo scenarios via LLVM backend
 	$(MVL) run $(DIR)main.mvl --backend=llvm
 
 clean: ## Remove build artifacts
-	rm -rf $(TMPDIR)mvl_build_sql_injection_prevention
+	rm -rf $(TMPDIR)mvl_build_sql_inj_prevention

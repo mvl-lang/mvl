@@ -2,9 +2,9 @@
 
 Communications-Based Train Control at the fleet-tracking layer. A bounded occupancy table records which train (if any) occupies each track section; the dispatcher issues placement and removal commands; the interlocking layer accepts only commands that keep the table in a safe state.
 
-**Standard.** EN 50128 SIL 4 (same as ETCS movement authority in `examples/etcs_movement_authority/`).
+**Standard.** EN 50128 SIL 4 (same as ETCS movement authority in `examples/etcs_move_authority/`).
 **Ticket.** `mvl-lang/mvl#1910`.
-**Sibling case at a different abstraction level.** `etcs_movement_authority` supervises one train against its Movement Authority; this example tracks the fleet.
+**Sibling case at a different abstraction level.** `etcs_move_authority` supervises one train against its Movement Authority; this example tracks the fleet.
 
 ## Files
 
