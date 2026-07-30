@@ -380,6 +380,32 @@ pub fn stem(path: &str) -> String {
     }
 }
 
+/// Short, stable hash of `path`'s canonicalized form.
+///
+/// `mvl build`'s scratch workspace is named `mvl_build_{version}_{crate_name}`,
+/// where `crate_name` is just [`stem`] — the file's base name with no directory
+/// component. Two different source files sharing a base name (e.g. any two
+/// examples' own `main.mvl`) therefore resolve to the *same* scratch
+/// directory. Concurrent `mvl build`/`mvl test` invocations on such files
+/// race to write different generated Rust source into the same `src/main.rs`,
+/// corrupting each other's output (#2068). Appending this hash to the
+/// directory name disambiguates by the file's real identity while keeping
+/// the same file's repeated builds mapped to the same directory (preserving
+/// the incremental-rebuild caching this scratch-dir reuse exists for).
+///
+/// Falls back to hashing the raw (uncanonicalized) path if the file doesn't
+/// exist yet — canonicalize requires the path to exist, but the caller may
+/// call this before the file is written.
+pub fn scratch_dir_disambiguator(path: &str) -> String {
+    use std::hash::{Hash, Hasher};
+    let canon = std::fs::canonicalize(path)
+        .map(|p| p.display().to_string())
+        .unwrap_or_else(|_| path.to_string());
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    canon.hash(&mut hasher);
+    format!("{:x}", hasher.finish())
+}
+
 /// Derive a dot-separated module name from `file_path` relative to `base_dir`.
 ///
 /// `base_dir` is the directory passed to the CLI command (e.g. `mvl check src/`).

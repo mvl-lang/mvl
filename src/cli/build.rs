@@ -259,12 +259,22 @@ pub fn run(
     // its own mvl_runtime copy. Including the compiler version prevents stale
     // Cargo artifacts from a previous mvl release from causing type mismatches
     // when the runtime signature changes between versions.
-    // Layout: temp/mvl_build_{version}_{name}/{name}/  (crate)
-    //         temp/mvl_build_{version}_{name}/mvl_runtime/ (runtime)
+    // Layout: temp/mvl_build_{version}_{name}_{path_hash}/{name}/  (crate)
+    //         temp/mvl_build_{version}_{name}_{path_hash}/mvl_runtime/ (runtime)
     // The Cargo.toml path dep `./mvl_runtime` resolves from within the crate dir.
+    //
+    // `path_hash` disambiguates two different source files that happen to
+    // share a base name (e.g. any two examples' own `main.mvl`) — without
+    // it, concurrent `mvl build` invocations on such files race to write
+    // different generated Rust source into the same scratch `src/main.rs`
+    // (#2068). Keying on the file's own path (not just its name) still maps
+    // repeated builds of the *same* file to the same directory, preserving
+    // the incremental-rebuild caching this scratch-dir reuse exists for.
     let compiler_version = env!("CARGO_PKG_VERSION");
-    let tmp_workspace =
-        std::env::temp_dir().join(format!("mvl_build_{compiler_version}_{crate_name}"));
+    let path_hash = loader::scratch_dir_disambiguator(&file_path);
+    let tmp_workspace = std::env::temp_dir().join(format!(
+        "mvl_build_{compiler_version}_{crate_name}_{path_hash}"
+    ));
     let tmp_dir = tmp_workspace.join(&crate_name);
     let src_dir = tmp_dir.join("src");
     fs::create_dir_all(&src_dir).unwrap_or_else(|e| {
