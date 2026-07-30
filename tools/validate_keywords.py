@@ -38,15 +38,24 @@ def keywords_from_ebnf(path: Path) -> set[str]:
     The block uses labelled comment lines:
         (* Declaration:     fn  type  const  use  pub  extern  impl  builtin  *)
     We take every word that appears after the colon on such lines, until the
-    (* === Lexical === *) section starts.
+    *next* `(* === ... === *)` section header — not hardcoded to "Lexical".
+    mvl-spec 0.1.5 inserted "Contextual Keywords" / "Builtin Types" /
+    "Stdlib IFC Labels" documentation sections between "Reserved Keywords"
+    and "Lexical", each prose about words that are explicitly NOT reserved
+    (e.g. "`let end = 5;` is legal, so it is not reserved"). Stopping at the
+    next section boundary — whatever it's named — keeps those out of the
+    keyword scan regardless of what gets inserted there in the future.
     """
     text = path.read_text()
-    start = text.find("=== Reserved Keywords ===")
+    marker = "=== Reserved Keywords ==="
+    start = text.find(marker)
     if start == -1:
         raise ValueError(f"{path}: could not find Reserved Keywords section")
-    end = text.find("=== Lexical ===", start)
-    if end == -1:
-        raise ValueError(f"{path}: could not find Lexical section after Reserved Keywords")
+    body_start = start + len(marker)
+    next_section = re.search(r"\(\*\s*===", text[body_start:])
+    if next_section is None:
+        raise ValueError(f"{path}: could not find a section boundary after Reserved Keywords")
+    end = body_start + next_section.start()
     section = text[start:end]
     keywords: set[str] = set()
     for line in section.splitlines():
