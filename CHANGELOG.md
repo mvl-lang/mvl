@@ -50,6 +50,11 @@
 
 - **WASM backend: a `match` arm whose block body's only statement was a trailing `if`/`else if`/`else` chain caused a WASM validator stack-imbalance, not merely a wrong result.** The chain lowers to `TirStmt::If`, not a bare trailing expression, so the block-type inference used for match arms gave up and reported no result type for the *entire* match — even though every arm still left a value on the stack. Fixed by recursing into a trailing `TirStmt::If`/`TirStmt::Match` the same way nested `if`/`else if` chains already do.
 
+### Fixed — #2062
+
+- **LLVM backend: non-generic user-defined extension methods on custom structs (e.g. `fn Counter::increment(self) { ... }`) had no call-site dispatch at all.** Their bodies were already emitted correctly and their signatures already registered — `emit_method_call_tir`'s only extension-method fallback just never routed to them, handling only *generic* extension methods on a small hardcoded set of builtin base types. A plain `counter.increment()` fell through the entire dispatch match and silently did nothing. The `to_string` dispatch arm was a symptom of the same gap: it matched by method name only, regardless of receiver type, so it always shadowed a struct's own `to_string` — the LLVM-side mirror of #2058's WASM fix, just with nothing (previously) to shadow.
+- **WASM backend: `emit_extension_method` (added by #2058) had the same return-path drop-sweep bug as #2023/#2052** — a `String`-returning extension method's own result got freed by the blanket heap-drop sweep before the caller read it. Same fix: exclude the trailing statement's temp from the sweep instead of dropping everything unconditionally.
+
 ### Changed
 
 - **`vendor/mvl-spec` bumped 0.1.4 → 0.1.5.** Caught a second-order tooling bug from the previous bump (#2044): the new spec release documents which words are deliberately *not* reserved keywords in a prose block sitting between the `Reserved Keywords` and `Lexical` EBNF sections, and `validate_keywords.py` was scanning everything between those two fixed markers as keyword listings — every English word in the new prose became a false-positive "extra keyword". Fixed by stopping the scan at whichever `=== ... ===` section header comes next, not a hardcoded "Lexical".
