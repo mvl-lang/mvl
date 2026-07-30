@@ -248,6 +248,15 @@ struct Ctx<'a> {
     /// missed, so a call to a method on the user's own struct routes to
     /// `${receiver_type}_${method}` instead of falling to `;; unsupported`.
     struct_methods: &'a std::collections::HashSet<(String, String)>,
+    /// Generic extension methods in scope, keyed `(receiver_type, method)`
+    /// (#2014). The emission-side half of the same registry
+    /// `collect_generic_instantiations` walks: a `MethodCall` that reaches the
+    /// end of the builtin dispatch chain consults this and, on a hit, emits a
+    /// direct `call` to the monomorphized instance.
+    ///
+    /// Both sides go through `resolve_generic_method_call` so the name emitted
+    /// here is by construction the name that got instantiated.
+    generic_methods: &'a HashMap<(String, String), &'a TirFn>,
 }
 
 impl Ctx<'_> {
@@ -447,6 +456,22 @@ impl Backend for WasmTextCompiler {
             .iter()
             .filter(|f| !f.is_builtin && f.type_params.is_empty() && f.receiver_type.is_some())
             .collect();
+
+        // Generic extension methods (`fn List[T]::flatten(self)`) — the fourth
+        // bucket (#2014). These carry a `receiver_type` *and* non-empty
+        // `type_params`, so all three filters above reject them: `fns`/`all_fns`
+        // require no receiver, and `ext_methods` requires no type params. That
+        // left every pure-MVL `List[T]` method in `std/lists.mvl` unemitted, and
+        // any body calling one got `unreachable`.
+        //
+        // Unlike `ext_methods` these are not emitted directly — a generic body
+        // has no single WASM signature. They are monomorphized per call site by
+        // `collect_generic_instantiations` below, like generic plain fns.
+        let generic_ext_methods: Vec<&TirFn> = tir
+            .fns
+            .iter()
+            .filter(|f| !f.is_builtin && !f.type_params.is_empty() && f.receiver_type.is_some())
+            .collect();
         let struct_methods: std::collections::HashSet<(String, String)> = ext_methods
             .iter()
             .map(|f| {
@@ -497,6 +522,18 @@ impl Backend for WasmTextCompiler {
             .filter(|f| !f.type_params.is_empty())
             .map(|f| (f.name.clone(), (f.type_params.clone(), f.params.clone())))
             .collect();
+        let generic_methods: HashMap<(String, String), &TirFn> = generic_ext_methods
+            .iter()
+            .map(|f| {
+                (
+                    (
+                        f.receiver_type.clone().expect("filtered above"),
+                        f.name.clone(),
+                    ),
+                    *f,
+                )
+            })
+            .collect();
         let ctx = Ctx {
             needs_wasi,
             literals: &literals,
@@ -517,10 +554,12 @@ impl Backend for WasmTextCompiler {
             actors: &actors,
             self_type: std::cell::RefCell::new(None),
             struct_methods: &struct_methods,
+            generic_methods: &generic_methods,
         };
 
         // Collect unique generic-function instantiations needed by the corpus fns.
-        let instantiations = collect_generic_instantiations(&fns, &all_fns, &tir.actors, &ctx);
+        let instantiations =
+            collect_generic_instantiations(&fns, &all_fns, &generic_ext_methods, &tir.actors, &ctx);
 
         // Emit fns into a scratch buffer first — `emit_assert_eq` on
         // String flips `ctx.needs_runtime`, and we only know whether to
@@ -2653,6 +2692,35 @@ fn emit_expr(out: &mut String, expr: &TirExpr, ctx: &Ctx) {
             emit_expr(out, receiver, ctx);
             out.push_str(&format!("    call $_mvl_array_{method}\n"));
         }
+        // `.push(x)` on List — append in place, returns Unit (#2014).
+        //
+        // `_mvl_array_push_*` existed only for building list *literals* before
+        // this; the method itself had no arm, so every `std/lists.mvl` body was
+        // unsupported — each one is `let result: ref List[U] = []; …
+        // result.push(…)`. That made this a prerequisite for `flatten` and for
+        // every HOF, not a separate nicety.
+        //
+        // Element encoding matches the `TirExprKind::List` literal arm: a
+        // String element arrives as (ptr, len) and is wrapped into a
+        // *MvlString first; everything else uses the typed push for its WASM
+        // type. Nothing is left on the stack — `push` is Unit-typed, and the
+        // runtime mutates the array through the pointer.
+        TirExprKind::MethodCall {
+            receiver,
+            method,
+            args,
+        } if collection_elem_ty(&receiver.ty).is_some() && method == "push" && args.len() == 1 => {
+            ctx.needs_runtime.set(true);
+            let elem_ty = collection_elem_ty(&receiver.ty).cloned().unwrap_or(Ty::Int);
+            emit_expr(out, receiver, ctx);
+            emit_expr(out, &args[0], ctx);
+            if is_string_ty(&elem_ty, ctx) {
+                out.push_str("    call $_mvl_string_new\n");
+                out.push_str("    call $_mvl_array_push_i32\n");
+            } else {
+                out.push_str(&format!("    call {}\n", push_op_for(&elem_ty, ctx)));
+            }
+        }
         // `.get(i)` on List / Array — returns `Option[T]` (heap-allocated
         // MvlOption). Element type comes from the receiver's collection
         // type. Runtime handles the OOB check + Option wrapping.
@@ -2934,6 +3002,42 @@ fn emit_expr(out: &mut String, expr: &TirExpr, ctx: &Ctx) {
                 emit_expr(out, a, ctx);
             }
             out.push_str(&format!("    call ${receiver_type}_{method}\n"));
+        }
+        // Generic extension method (`xs.flatten()`, `xs.first()`) — #2014.
+        // Last resort, after every builtin special case *and* the non-generic
+        // struct-method arm: a `List` method the emitter handles natively
+        // (`.len()`, `.push()`) must keep its inline lowering rather than
+        // routing through a monomorphized `std/lists.mvl` body.
+        //
+        // `resolve_generic_method_call` is the same function
+        // `collect_generic_instantiations` used, so `mangled` is guaranteed to
+        // name an instance that was actually emitted.
+        TirExprKind::MethodCall {
+            receiver,
+            method,
+            args,
+        } if resolve_generic_method_call(
+            receiver,
+            method,
+            args,
+            ctx.generic_methods,
+            ctx.type_subst,
+        )
+        .is_some() =>
+        {
+            let (_, _, mangled) = resolve_generic_method_call(
+                receiver,
+                method,
+                args,
+                ctx.generic_methods,
+                ctx.type_subst,
+            )
+            .expect("guarded above");
+            emit_expr(out, receiver, ctx);
+            for a in args {
+                emit_expr(out, a, ctx);
+            }
+            out.push_str(&format!("    call ${mangled}\n"));
         }
         other => {
             out.push_str(&format!("    ;; unsupported expr: {other:?}\n"));
@@ -4898,30 +5002,225 @@ fn infer_type_subst_from_args(
     subst
 }
 
-/// Scan all non-generic function bodies for calls to generic functions.
+/// Receiver-type name for method *dispatch* purposes, unlike
+/// [`named_type_name`] which only answers for `Ty::Named`.
+///
+/// Extension methods are declared as `fn List[T]::first(self)`, and the parser
+/// stores the head name verbatim — `Some("List")`. But a `List[Int]` receiver
+/// has type `Ty::List(..)`, never `Ty::Named("List", ..)`, so matching a call
+/// site against that declaration needs the built-in constructors spelled back
+/// out as their MVL names (#2014). This is why `List[T]::map` was invisible to
+/// `is_struct_method_call` even after #2054 added the non-generic bucket.
+fn receiver_type_name(ty: &Ty) -> Option<String> {
+    let mut cur = ty;
+    loop {
+        match cur {
+            Ty::Labeled(_, inner) | Ty::Refined(inner, _) | Ty::Ref(_, inner) => cur = inner,
+            Ty::Named(n, _) => return Some(n.clone()),
+            Ty::List(_) | Ty::Array(_, _) => return Some("List".to_string()),
+            Ty::Set(_) => return Some("Set".to_string()),
+            Ty::Map(_, _) => return Some("Map".to_string()),
+            Ty::Option(_) => return Some("Option".to_string()),
+            Ty::Result(_, _) => return Some("Result".to_string()),
+            Ty::String => return Some("String".to_string()),
+            _ => return None,
+        }
+    }
+}
+
+/// Mangled WASM name for one instantiation of a generic extension method.
+///
+/// Includes the receiver type, so `List[T]::first` and `Set[T]::first` cannot
+/// collide on `first__Int`.
+fn mangle_generic_method_name(
+    receiver_type: &str,
+    method: &str,
+    type_params: &[GenericParam],
+    subst: &HashMap<String, Ty>,
+) -> String {
+    format!(
+        "{receiver_type}_{}",
+        mangle_generic_name(method, type_params, subst)
+    )
+}
+
+/// True when the `MethodCall` dispatch chain in `emit_expr` already lowers
+/// `(receiver, method)` itself, so a generic `std/*.mvl` body must not be
+/// monomorphized for it.
+///
+/// The chain checks its builtin arms *before* the generic-method arm, so
+/// without this filter the two halves disagree: emission would use the native
+/// arm while collection still instantiated the std body, leaving a dead
+/// monomorphized function in the module. That is not merely wasteful — the
+/// dead body can be *invalid*, and a WASM module is rejected as a whole. The
+/// first version of #2014 emitted a dead `Option_unwrap_or__Str` whose body
+/// failed validation with "expected i32, found i64", which broke
+/// `parse_test.mvl` even though nothing ever called it.
+///
+/// Grouped by receiver shape rather than method name alone, because the same
+/// name can be native on one receiver and pure MVL on another: `concat` is a
+/// runtime call on `String` but a `std/lists.mvl` body on `List`.
+///
+/// Keep in sync with the guards in `emit_expr`'s `MethodCall` arms. A name
+/// added there but missed here yields a dead instantiation; the reverse
+/// silently drops a method back to `;; unsupported`.
+///
+/// `pub` because `cli::wasm_text`'s prelude pull-in loop needs the same answer:
+/// lowering a std body the emitter never calls emits a dead function, and for
+/// e.g. `String::contains`/`String::trim` that dead body itself stubs to
+/// `unreachable` — noise that reads like missing support in a `.wat` dump.
+pub fn emitter_handles_method_natively(receiver_ty: &Ty, method: &str) -> bool {
+    if peels_to_string(receiver_ty) {
+        return matches!(
+            method,
+            "len"
+                | "is_empty"
+                | "contains"
+                | "starts_with"
+                | "ends_with"
+                | "find"
+                | "concat"
+                | "substring"
+                | "to_upper"
+                | "to_lower"
+                | "trim"
+                | "replace"
+                | "split"
+                | "parse_int"
+        );
+    }
+    if matches!(receiver_ty, Ty::Float) && method == "to_string" {
+        return true;
+    }
+    if option_inner_ty(receiver_ty).is_some() || result_ok_ty(receiver_ty).is_some() {
+        return method == "unwrap_or";
+    }
+    if map_key_val_ty(receiver_ty).is_some() {
+        return matches!(
+            method,
+            "len" | "is_empty" | "get" | "insert" | "contains_key"
+        );
+    }
+    if collection_elem_ty(receiver_ty).is_some() {
+        return matches!(
+            method,
+            "len" | "is_empty" | "get" | "push" | "contains" | "insert"
+        );
+    }
+    false
+}
+
+/// Resolve a method call against the generic extension methods in scope,
+/// returning the callee, its full type substitution, and the mangled name.
+///
+/// **Both instantiation collection and code emission must call this**, or they
+/// disagree about the callee's name and the module references a symbol that was
+/// never emitted. That is the entire reason this is a shared function rather
+/// than the obvious two-lines-each at both sites.
+///
+/// `outer` is the substitution of the enclosing instantiation (empty at the top
+/// level): a call inside `List_first__Int`'s body still describes its receiver
+/// as `List[T]`, so the actual types are resolved through `outer` before
+/// unification. Returns `None` unless every type param got bound — a partial
+/// substitution would mangle to a name like `List_map__T__Int`.
+fn resolve_generic_method_call<'a>(
+    receiver: &TirExpr,
+    method: &str,
+    args: &[TirExpr],
+    methods: &HashMap<(String, String), &'a TirFn>,
+    outer: &HashMap<String, Ty>,
+) -> Option<(&'a TirFn, HashMap<String, Ty>, String)> {
+    if emitter_handles_method_natively(&receiver.ty, method) {
+        return None;
+    }
+    let recv_name = receiver_type_name(&receiver.ty)?;
+    let gm = *methods.get(&(recv_name.clone(), method.to_string()))?;
+
+    let param_names: std::collections::HashSet<String> = gm
+        .type_params
+        .iter()
+        .map(|gp| gp.name().to_string())
+        .collect();
+    let mut subst = HashMap::new();
+
+    // `self` is params[0] (the parser synthesises it); the remaining formals
+    // line up with the call's arguments.
+    let mut formals = gm.params.iter();
+    if let Some(self_param) = formals.next() {
+        let actual = resolve_ty_param(&receiver.ty, outer);
+        unify_ty_params(&self_param.ty, &actual, &param_names, &mut subst);
+    }
+    for (formal, arg) in formals.zip(args.iter()) {
+        let actual = resolve_ty_param(&arg.ty, outer);
+        unify_ty_params(&formal.ty, &actual, &param_names, &mut subst);
+    }
+
+    if subst.len() != gm.type_params.len() {
+        return None;
+    }
+    let mangled = mangle_generic_method_name(&recv_name, &gm.name, &gm.type_params, &subst);
+    Some((gm, subst, mangled))
+}
+
+/// The two kinds of generic callee a body can reference, in one place so the
+/// recursive walkers below take a single parameter instead of two parallel
+/// maps.
+///
+/// `fns` is keyed by name; `methods` by `(receiver_type, method_name)` because
+/// the method name alone is ambiguous — `List[T]::first` and a hypothetical
+/// `Set[T]::first` are different functions (#2014).
+struct GenericCallees<'a> {
+    fns: HashMap<&'a str, &'a TirFn>,
+    methods: HashMap<(String, String), &'a TirFn>,
+}
+
+impl GenericCallees<'_> {
+    fn is_empty(&self) -> bool {
+        self.fns.is_empty() && self.methods.is_empty()
+    }
+}
+
+/// Scan all non-generic function bodies for calls to generic functions and to
+/// generic extension methods.
 /// Returns unique (generic_fn_ref, type_subst, mangled_name) triples.
 fn collect_generic_instantiations<'a>(
     fns: &[&'a TirFn],
     all_fns: &[&'a TirFn],
+    generic_ext_methods: &[&'a TirFn],
     actors: &[TirActorDecl],
     _ctx: &Ctx,
 ) -> Vec<(&'a TirFn, HashMap<String, Ty>, String)> {
     // Build lookup: fn_name → TirFn for generic fns
-    let generic_fns: HashMap<&str, &TirFn> = all_fns
-        .iter()
-        .filter(|f| !f.type_params.is_empty())
-        .map(|f| (f.name.as_str(), *f))
-        .collect();
+    let callees = GenericCallees {
+        fns: all_fns
+            .iter()
+            .filter(|f| !f.type_params.is_empty())
+            .map(|f| (f.name.as_str(), *f))
+            .collect(),
+        methods: generic_ext_methods
+            .iter()
+            .map(|f| {
+                (
+                    (
+                        f.receiver_type.clone().expect("filtered by caller"),
+                        f.name.clone(),
+                    ),
+                    *f,
+                )
+            })
+            .collect(),
+    };
 
-    if generic_fns.is_empty() {
+    if callees.is_empty() {
         return vec![];
     }
 
     let mut seen: std::collections::HashMap<String, ()> = std::collections::HashMap::new();
     let mut result = vec![];
+    let top: HashMap<String, Ty> = HashMap::new();
 
     for f in fns {
-        collect_instantiations_in_block(&f.body, &generic_fns, &mut seen, &mut result);
+        collect_instantiations_in_block(&f.body, &callees, &top, &mut seen, &mut result);
     }
     // Actor method bodies are emitted as functions but are not in `tir.fns`, so
     // a generic called only from a behaviour would never be instantiated and the
@@ -4929,7 +5228,28 @@ fn collect_generic_instantiations<'a>(
     // literal walker had.
     for ad in actors {
         for m in &ad.methods {
-            collect_instantiations_in_block(&m.body, &generic_fns, &mut seen, &mut result);
+            collect_instantiations_in_block(&m.body, &callees, &top, &mut seen, &mut result);
+        }
+    }
+    // A generic extension method's own body may call another one — `first`/`last`
+    // are `self.get(..)`, `take`/`skip` are `self.slice(..)`, `rev` is
+    // `self.reverse()`. Walking only user code would emit `List_rev__Int` with a
+    // call to a `List_reverse__Int` that was never emitted, so the module fails
+    // to link. Iterate to a fixpoint: each pass may discover callees one level
+    // deeper, and `seen` keeps it terminating.
+    //
+    // Each instance is scanned under *its own* substitution, not `top` — the
+    // body of `List_first__Int` still says `self.get(0)` on a `List[T]`, so
+    // scanning it with an empty `outer` would look for `List_get__T`.
+    let mut scanned = 0;
+    while scanned < result.len() {
+        let batch: Vec<(&TirFn, HashMap<String, Ty>)> = result[scanned..]
+            .iter()
+            .map(|(f, s, _)| (*f, s.clone()))
+            .collect();
+        scanned = result.len();
+        for (f, subst) in batch {
+            collect_instantiations_in_block(&f.body, &callees, &subst, &mut seen, &mut result);
         }
     }
     result
@@ -4937,18 +5257,20 @@ fn collect_generic_instantiations<'a>(
 
 fn collect_instantiations_in_block<'a>(
     block: &TirBlock,
-    generic_fns: &HashMap<&str, &'a TirFn>,
+    callees: &GenericCallees<'a>,
+    outer: &HashMap<String, Ty>,
     seen: &mut std::collections::HashMap<String, ()>,
     result: &mut Vec<(&'a TirFn, HashMap<String, Ty>, String)>,
 ) {
     for stmt in &block.stmts {
-        collect_instantiations_in_stmt(stmt, generic_fns, seen, result);
+        collect_instantiations_in_stmt(stmt, callees, outer, seen, result);
     }
 }
 
 fn collect_instantiations_in_stmt<'a>(
     stmt: &TirStmt,
-    generic_fns: &HashMap<&str, &'a TirFn>,
+    callees: &GenericCallees<'a>,
+    outer: &HashMap<String, Ty>,
     seen: &mut std::collections::HashMap<String, ()>,
     result: &mut Vec<(&'a TirFn, HashMap<String, Ty>, String)>,
 ) {
@@ -4957,22 +5279,22 @@ fn collect_instantiations_in_stmt<'a>(
         | TirStmt::Return {
             value: Some(expr), ..
         } => {
-            collect_instantiations_in_expr(expr, generic_fns, seen, result);
+            collect_instantiations_in_expr(expr, callees, outer, seen, result);
         }
         TirStmt::Let { init, .. } | TirStmt::Assign { value: init, .. } => {
-            collect_instantiations_in_expr(init, generic_fns, seen, result);
+            collect_instantiations_in_expr(init, callees, outer, seen, result);
         }
         TirStmt::If {
             cond, then, else_, ..
         } => {
-            collect_instantiations_in_expr(cond, generic_fns, seen, result);
-            collect_instantiations_in_block(then, generic_fns, seen, result);
+            collect_instantiations_in_expr(cond, callees, outer, seen, result);
+            collect_instantiations_in_block(then, callees, outer, seen, result);
             match else_ {
                 Some(TirElseBranch::Block(b)) => {
-                    collect_instantiations_in_block(b, generic_fns, seen, result);
+                    collect_instantiations_in_block(b, callees, outer, seen, result);
                 }
                 Some(TirElseBranch::If(s)) => {
-                    collect_instantiations_in_stmt(s, generic_fns, seen, result);
+                    collect_instantiations_in_stmt(s, callees, outer, seen, result);
                 }
                 None => {}
             }
@@ -4981,20 +5303,20 @@ fn collect_instantiations_in_stmt<'a>(
         | TirStmt::For {
             iter: cond, body, ..
         } => {
-            collect_instantiations_in_expr(cond, generic_fns, seen, result);
-            collect_instantiations_in_block(body, generic_fns, seen, result);
+            collect_instantiations_in_expr(cond, callees, outer, seen, result);
+            collect_instantiations_in_block(body, callees, outer, seen, result);
         }
         TirStmt::Match {
             scrutinee, arms, ..
         } => {
-            collect_instantiations_in_expr(scrutinee, generic_fns, seen, result);
+            collect_instantiations_in_expr(scrutinee, callees, outer, seen, result);
             for arm in arms {
                 match &arm.body {
                     TirMatchBody::Expr(e) => {
-                        collect_instantiations_in_expr(e, generic_fns, seen, result);
+                        collect_instantiations_in_expr(e, callees, outer, seen, result);
                     }
                     TirMatchBody::Block(b) => {
-                        collect_instantiations_in_block(b, generic_fns, seen, result);
+                        collect_instantiations_in_block(b, callees, outer, seen, result);
                     }
                 }
             }
@@ -5005,13 +5327,21 @@ fn collect_instantiations_in_stmt<'a>(
 
 fn collect_instantiations_in_expr<'a>(
     expr: &TirExpr,
-    generic_fns: &HashMap<&str, &'a TirFn>,
+    callees: &GenericCallees<'a>,
+    outer: &HashMap<String, Ty>,
     seen: &mut std::collections::HashMap<String, ()>,
     result: &mut Vec<(&'a TirFn, HashMap<String, Ty>, String)>,
 ) {
     if let TirExprKind::FnCall { name, args, .. } = &expr.kind {
-        if let Some(gf) = generic_fns.get(name.as_str()) {
-            let subst = infer_type_subst(gf, args);
+        if let Some(gf) = callees.fns.get(name.as_str()) {
+            let mut subst = infer_type_subst(gf, args);
+            // Resolve through the enclosing instantiation: inside
+            // `List_first__Int`'s body the arg types are still written in terms
+            // of `T`, so an unresolved binding here would mangle to `__T` and
+            // reference a function nobody emits.
+            for v in subst.values_mut() {
+                *v = resolve_ty_param(v, outer);
+            }
             if subst.len() == gf.type_params.len() {
                 let mangled = mangle_generic_name(&gf.name, &gf.type_params, &subst);
                 if seen.insert(mangled.clone(), ()).is_none() {
@@ -5020,7 +5350,26 @@ fn collect_instantiations_in_expr<'a>(
             }
         }
         for a in args {
-            collect_instantiations_in_expr(a, generic_fns, seen, result);
+            collect_instantiations_in_expr(a, callees, outer, seen, result);
+        }
+    }
+    // Generic extension method call (`xs.flatten()`, `xs.map(f)`) — #2014.
+    if let TirExprKind::MethodCall {
+        receiver,
+        method,
+        args,
+    } = &expr.kind
+    {
+        if let Some((gm, subst, mangled)) =
+            resolve_generic_method_call(receiver, method, args, &callees.methods, outer)
+        {
+            if seen.insert(mangled.clone(), ()).is_none() {
+                result.push((gm, subst, mangled));
+            }
+        }
+        collect_instantiations_in_expr(receiver, callees, outer, seen, result);
+        for a in args {
+            collect_instantiations_in_expr(a, callees, outer, seen, result);
         }
     }
     // Recurse into sub-expressions.
@@ -5028,31 +5377,31 @@ fn collect_instantiations_in_expr<'a>(
         TirExprKind::Unary { expr: inner, .. }
         | TirExprKind::Consume(inner)
         | TirExprKind::Borrow { expr: inner, .. } => {
-            collect_instantiations_in_expr(inner, generic_fns, seen, result);
+            collect_instantiations_in_expr(inner, callees, outer, seen, result);
         }
         TirExprKind::Binary { left, right, .. } => {
-            collect_instantiations_in_expr(left, generic_fns, seen, result);
-            collect_instantiations_in_expr(right, generic_fns, seen, result);
+            collect_instantiations_in_expr(left, callees, outer, seen, result);
+            collect_instantiations_in_expr(right, callees, outer, seen, result);
         }
         TirExprKind::If { cond, then, else_ } => {
-            collect_instantiations_in_expr(cond, generic_fns, seen, result);
-            collect_instantiations_in_block(then, generic_fns, seen, result);
+            collect_instantiations_in_expr(cond, callees, outer, seen, result);
+            collect_instantiations_in_block(then, callees, outer, seen, result);
             if let Some(e) = else_ {
-                collect_instantiations_in_expr(e, generic_fns, seen, result);
+                collect_instantiations_in_expr(e, callees, outer, seen, result);
             }
         }
         TirExprKind::Block(b) => {
-            collect_instantiations_in_block(b, generic_fns, seen, result);
+            collect_instantiations_in_block(b, callees, outer, seen, result);
         }
         TirExprKind::Match { scrutinee, arms } => {
-            collect_instantiations_in_expr(scrutinee, generic_fns, seen, result);
+            collect_instantiations_in_expr(scrutinee, callees, outer, seen, result);
             for arm in arms {
                 match &arm.body {
                     TirMatchBody::Expr(e) => {
-                        collect_instantiations_in_expr(e, generic_fns, seen, result);
+                        collect_instantiations_in_expr(e, callees, outer, seen, result);
                     }
                     TirMatchBody::Block(b) => {
-                        collect_instantiations_in_block(b, generic_fns, seen, result);
+                        collect_instantiations_in_block(b, callees, outer, seen, result);
                     }
                 }
             }
@@ -5097,6 +5446,7 @@ fn emit_generic_fn(
         // resolve against the caller's actor layout (#2012).
         self_type: std::cell::RefCell::new(None),
         struct_methods: ctx.struct_methods,
+        generic_methods: ctx.generic_methods,
     };
 
     // Set up string_params for params whose concrete type is String.
@@ -5156,6 +5506,22 @@ fn emit_generic_fn(
         }
     }
 
+    // Publish locals and `let` initializers, as `emit_fn` /
+    // `emit_extension_method` do. Body emitters read both out of the Ctx
+    // rather than as arguments — without them a monomorphized body's
+    // `self.field = …` cannot find its layout and `return name` cannot trace
+    // back to the heap-owning temp. Stored with the *declared* types (matching
+    // the two callers above); resolution through `type_subst` happens at each
+    // read site, since `mono_ctx.type_subst` is live for the whole body.
+    *mono_ctx.fn_locals.borrow_mut() = locals.clone();
+    let mut let_inits = HashMap::new();
+    collect_let_inits_block(&f.body, &mut let_inits);
+    *mono_ctx.fn_let_inits.borrow_mut() = let_inits;
+    // A generic *extension* method has a receiver, so `self` needs a bound type
+    // name for the same reason `emit_extension_method` sets one (#2014). Plain
+    // generic fns have no receiver and leave it `None`.
+    *mono_ctx.self_type.borrow_mut() = f.receiver_type.clone();
+
     // Emit body.
     let mut body_buf = String::new();
     emit_block(&mut body_buf, &f.body, &mono_ctx);
@@ -5174,8 +5540,18 @@ fn emit_generic_fn(
     }
 }
 
-/// Resolve a type that may be a generic type param name.
+/// Resolve a type that may be a generic type param name, substituting
+/// recursively through every type constructor.
+///
+/// The recursion into `List`/`Map`/`Set`/`Option`/`Result`/`Array`/`Fn` and
+/// `Named`'s own type arguments matters for generic *extension methods*
+/// (#2014): `List[T]::flatten` declares `self: List[List[T]]` and returns
+/// `List[T]`, so a substitution of `T → Int` has to reach inside two
+/// constructors to produce `List[Int]`. Substituting only at the top level
+/// left `wasm_ty` looking at a bare `Ty::Named("T")`, which falls through to
+/// its `_ => "i64"` default — an array pointer silently typed as i64.
 fn resolve_ty_param(ty: &Ty, subst: &HashMap<String, Ty>) -> Ty {
+    let rec = |t: &Ty| Box::new(resolve_ty_param(t, subst));
     match ty {
         Ty::Named(name, args) if args.is_empty() => {
             if let Some(concrete) = subst.get(name.as_str()) {
@@ -5184,11 +5560,96 @@ fn resolve_ty_param(ty: &Ty, subst: &HashMap<String, Ty>) -> Ty {
                 ty.clone()
             }
         }
-        Ty::Ref(m, inner) => Ty::Ref(*m, Box::new(resolve_ty_param(inner, subst))),
-        Ty::Refined(inner, pred) => {
-            Ty::Refined(Box::new(resolve_ty_param(inner, subst)), pred.clone())
-        }
+        Ty::Named(name, args) => Ty::Named(name.clone(), args.iter().map(|a| *rec(a)).collect()),
+        Ty::Ref(m, inner) => Ty::Ref(*m, rec(inner)),
+        Ty::Refined(inner, pred) => Ty::Refined(rec(inner), pred.clone()),
+        Ty::Labeled(label, inner) => Ty::Labeled(label.clone(), rec(inner)),
+        Ty::List(inner) => Ty::List(rec(inner)),
+        Ty::Set(inner) => Ty::Set(rec(inner)),
+        Ty::Option(inner) => Ty::Option(rec(inner)),
+        Ty::Ptr(inner) => Ty::Ptr(rec(inner)),
+        Ty::Array(inner, n) => Ty::Array(rec(inner), *n),
+        Ty::Map(k, v) => Ty::Map(rec(k), rec(v)),
+        Ty::Result(ok, err) => Ty::Result(rec(ok), rec(err)),
+        Ty::Fn(params, ret, effects, totality) => Ty::Fn(
+            params.iter().map(|p| *rec(p)).collect(),
+            rec(ret),
+            effects.clone(),
+            totality.clone(),
+        ),
         _ => ty.clone(),
+    }
+}
+
+/// Structurally match a generic function's *declared* parameter type against
+/// the *actual* type at a call site, binding type-param names along the way.
+///
+/// `infer_type_subst` only matches a whole parameter that is exactly a bare
+/// type param (`fn f[T](x: T)`), which is enough for plain generic fns but not
+/// for extension methods (#2014): the binding for `T` in `List[T]::map` comes
+/// from *inside* the receiver's type, matching declared `List[T]` against
+/// actual `List[Int]`. Wrappers (`ref`, refinement, label) are peeled on both
+/// sides independently so a `ref List[Int]` receiver still binds `T → Int`.
+///
+/// Existing bindings win — the first occurrence of a param decides it, so a
+/// mismatched later occurrence cannot silently overwrite an earlier one.
+fn unify_ty_params(
+    declared: &Ty,
+    actual: &Ty,
+    param_names: &std::collections::HashSet<String>,
+    subst: &mut HashMap<String, Ty>,
+) {
+    // Peel wrappers that carry no information for substitution purposes.
+    fn peel(t: &Ty) -> &Ty {
+        let mut cur = t;
+        loop {
+            match cur {
+                Ty::Ref(_, inner) | Ty::Refined(inner, _) | Ty::Labeled(_, inner) => cur = inner,
+                _ => return cur,
+            }
+        }
+    }
+    let (declared, actual) = (peel(declared), peel(actual));
+
+    if let Ty::Named(name, args) = declared {
+        if args.is_empty() && param_names.contains(name.as_str()) {
+            subst.entry(name.clone()).or_insert_with(|| actual.clone());
+            return;
+        }
+    }
+
+    match (declared, actual) {
+        (Ty::List(d), Ty::List(a))
+        | (Ty::Set(d), Ty::Set(a))
+        | (Ty::Option(d), Ty::Option(a))
+        | (Ty::Ptr(d), Ty::Ptr(a))
+        | (Ty::Array(d, _), Ty::Array(a, _)) => unify_ty_params(d, a, param_names, subst),
+        // A fixed-size array flows into a `List[T]` parameter, and a bare list
+        // literal can land where an `Array[T, N]` is declared — bind the
+        // element either way rather than giving up on the shape mismatch.
+        (Ty::List(d), Ty::Array(a, _)) | (Ty::Array(d, _), Ty::List(a)) => {
+            unify_ty_params(d, a, param_names, subst)
+        }
+        (Ty::Map(dk, dv), Ty::Map(ak, av)) => {
+            unify_ty_params(dk, ak, param_names, subst);
+            unify_ty_params(dv, av, param_names, subst);
+        }
+        (Ty::Result(dok, derr), Ty::Result(aok, aerr)) => {
+            unify_ty_params(dok, aok, param_names, subst);
+            unify_ty_params(derr, aerr, param_names, subst);
+        }
+        (Ty::Fn(dp, dr, ..), Ty::Fn(ap, ar, ..)) => {
+            for (d, a) in dp.iter().zip(ap.iter()) {
+                unify_ty_params(d, a, param_names, subst);
+            }
+            unify_ty_params(dr, ar, param_names, subst);
+        }
+        (Ty::Named(dn, da), Ty::Named(an, aa)) if dn == an => {
+            for (d, a) in da.iter().zip(aa.iter()) {
+                unify_ty_params(d, a, param_names, subst);
+            }
+        }
+        _ => {}
     }
 }
 
@@ -6838,5 +7299,240 @@ mod tests {
         assert!(wat.contains("(local $v_len i32)"), "{wat}");
         assert!(wat.contains("local.set $v_ptr"), "{wat}");
         assert!(wat.contains("local.set $v_len"), "{wat}");
+    }
+}
+
+// ── Generic extension methods (#2014) ────────────────────────────────────
+//
+// `List[T]::flatten` and friends carry a `receiver_type` *and* type params,
+// which put them outside every emission bucket before #2014. These tests use
+// a user-declared generic extension method rather than `std/lists.mvl` so
+// they stay independent of the prelude the CLI assembles.
+
+#[cfg(test)]
+mod generic_ext_method_tests {
+    use super::*;
+    use crate::mvl::parser::Parser;
+
+    fn compile(src: &str) -> String {
+        let (mut p, errs) = Parser::new(src);
+        assert!(errs.is_empty(), "lex errors: {errs:?}");
+        let prog = p.parse_program();
+        assert!(p.errors().is_empty(), "parse errors: {:?}", p.errors());
+        let mut expr_types = crate::mvl::checker::collect_prelude_expr_types(&[]);
+        expr_types.extend(crate::mvl::checker::check(&prog).expr_types);
+        let all_fns = crate::mvl::passes::mono::collect_fns([&prog]);
+        let mono = crate::mvl::passes::mono::monomorphize(&prog, &all_fns, &expr_types);
+        let tir = crate::mvl::ir::lower::lower(&prog, &mono, &expr_types);
+        WasmTextCompiler::new().emit_program(&tir, "test")
+    }
+
+    /// The bucket gap itself: before #2014 this body stubbed to `unreachable`.
+    #[test]
+    fn generic_ext_method_emits_monomorphized_body_and_call() {
+        let wat = compile(
+            "pub fn List[T]::tally(self) -> Int { 7 }\n\
+             test fn t() -> Unit { let xs: List[Int] = [1, 2]; assert_eq(xs.tally(), 7); }\n",
+        );
+        // Mangled with the receiver type, so `Set[T]::tally` could coexist.
+        assert!(
+            wat.contains("(func $List_tally__Int (param $self i32) (result i64)"),
+            "{wat}"
+        );
+        assert!(wat.contains("call $List_tally__Int"), "{wat}");
+        assert!(!wat.contains("body stubbed"), "{wat}");
+    }
+
+    /// Two element types must produce two distinct instances, not one shared
+    /// body typed by whichever call site was walked first.
+    #[test]
+    fn distinct_element_types_get_distinct_instances() {
+        let wat = compile(
+            "pub fn List[T]::tally(self) -> Int { 7 }\n\
+             test fn t() -> Unit {\n\
+                 let xs: List[Int] = [1];\n\
+                 let ys: List[Bool] = [true];\n\
+                 assert_eq(xs.tally(), 7);\n\
+                 assert_eq(ys.tally(), 7);\n\
+             }\n",
+        );
+        assert!(wat.contains("(func $List_tally__Int"), "{wat}");
+        assert!(wat.contains("(func $List_tally__Bool"), "{wat}");
+    }
+
+    /// A method returning `List[T]` needs `resolve_ty_param` to substitute
+    /// *inside* the constructor; a shallow substitution left the result typed
+    /// from `wasm_ty`'s `_ => "i64"` default instead of an i32 array pointer.
+    #[test]
+    fn generic_ext_method_returning_list_resolves_element_type() {
+        let wat = compile(
+            "pub fn List[T]::dup(self) -> List[T] { self }\n\
+             test fn t() -> Unit {\n\
+                 let xs: List[Int] = [1, 2];\n\
+                 assert_eq(xs.dup().len(), 2);\n\
+             }\n",
+        );
+        assert!(
+            wat.contains("(func $List_dup__Int (param $self i32) (result i32)"),
+            "{wat}"
+        );
+        assert!(!wat.contains("body stubbed"), "{wat}");
+    }
+
+    /// One generic method calling another must instantiate the callee under the
+    /// *caller's* substitution — scanning with an empty one looks for
+    /// `List_inner__T` and emits a call to a function nobody defines.
+    #[test]
+    fn nested_generic_method_call_instantiates_callee() {
+        let wat = compile(
+            "pub fn List[T]::inner(self) -> Int { 3 }\n\
+             pub fn List[T]::outer(self) -> Int { self.inner() }\n\
+             test fn t() -> Unit { let xs: List[Int] = [1]; assert_eq(xs.outer(), 3); }\n",
+        );
+        assert!(wat.contains("(func $List_outer__Int"), "{wat}");
+        assert!(wat.contains("(func $List_inner__Int"), "{wat}");
+        assert!(wat.contains("call $List_inner__Int"), "{wat}");
+        // No unresolved-substitution leftovers.
+        assert!(!wat.contains("__T"), "{wat}");
+    }
+
+    /// `.push()` had no dispatch arm at all — `_mvl_array_push_*` was reachable
+    /// only from list *literals*. Every `std/lists.mvl` body needs it.
+    #[test]
+    fn list_push_method_emits_typed_push() {
+        let wat = compile(
+            "test fn t() -> Unit {\n\
+                 let acc: ref List[Int] = [];\n\
+                 acc.push(5);\n\
+                 assert_eq(acc.len(), 1);\n\
+             }\n",
+        );
+        assert!(wat.contains("call $_mvl_array_push_i64"), "{wat}");
+        assert!(!wat.contains("body stubbed"), "{wat}");
+    }
+
+    /// A natively-dispatched method must NOT also be monomorphized: emission
+    /// prefers its builtin arm, so the instance would be dead — and a dead
+    /// invalid body is enough to make wasmtime reject the whole module (the
+    /// `Option_unwrap_or__Str` regression).
+    #[test]
+    fn natively_handled_method_is_not_monomorphized() {
+        let wat = compile(
+            "pub fn List[T]::len(self) -> Int { 99 }\n\
+             test fn t() -> Unit { let xs: List[Int] = [1, 2]; assert_eq(xs.len(), 2); }\n",
+        );
+        assert!(!wat.contains("$List_len__Int"), "{wat}");
+        assert!(wat.contains("call $_mvl_array_len"), "{wat}");
+    }
+
+    #[test]
+    fn emitter_handles_method_natively_is_receiver_shaped() {
+        // `concat` is a runtime call on String but a pure-MVL body on List —
+        // a name-only check would wrongly claim both.
+        assert!(emitter_handles_method_natively(&Ty::String, "concat"));
+        assert!(!emitter_handles_method_natively(
+            &Ty::List(Box::new(Ty::Int)),
+            "concat"
+        ));
+        assert!(emitter_handles_method_natively(
+            &Ty::List(Box::new(Ty::Int)),
+            "push"
+        ));
+        assert!(!emitter_handles_method_natively(
+            &Ty::List(Box::new(Ty::Int)),
+            "flatten"
+        ));
+        assert!(emitter_handles_method_natively(
+            &Ty::Option(Box::new(Ty::Int)),
+            "unwrap_or"
+        ));
+    }
+
+    #[test]
+    fn receiver_type_name_maps_builtin_constructors() {
+        // The parser stores `fn List[T]::first` under "List", but a receiver's
+        // type is `Ty::List`, never `Ty::Named("List", _)`.
+        assert_eq!(
+            receiver_type_name(&Ty::List(Box::new(Ty::Int))).as_deref(),
+            Some("List")
+        );
+        assert_eq!(
+            receiver_type_name(&Ty::Ref(true, Box::new(Ty::List(Box::new(Ty::Int))))).as_deref(),
+            Some("List"),
+            "ref wrapper must peel"
+        );
+        assert_eq!(
+            receiver_type_name(&Ty::Named("Logger".into(), vec![])).as_deref(),
+            Some("Logger")
+        );
+    }
+
+    #[test]
+    fn resolve_ty_param_substitutes_inside_constructors() {
+        let subst: HashMap<String, Ty> = [("T".to_string(), Ty::Int)].into_iter().collect();
+        // `List[List[T]]` — flatten's own receiver, two constructors deep.
+        let nested = Ty::List(Box::new(Ty::List(Box::new(Ty::Named("T".into(), vec![])))));
+        assert_eq!(
+            resolve_ty_param(&nested, &subst),
+            Ty::List(Box::new(Ty::List(Box::new(Ty::Int))))
+        );
+        // Map values and Result payloads too.
+        let m = Ty::Map(
+            Box::new(Ty::String),
+            Box::new(Ty::Named("T".into(), vec![])),
+        );
+        assert_eq!(
+            resolve_ty_param(&m, &subst),
+            Ty::Map(Box::new(Ty::String), Box::new(Ty::Int))
+        );
+    }
+
+    #[test]
+    fn unify_ty_params_binds_from_inside_receiver() {
+        let names: std::collections::HashSet<String> = ["T".to_string()].into_iter().collect();
+
+        // declared `List[T]` vs actual `List[Int]` → T = Int.
+        let mut subst = HashMap::new();
+        unify_ty_params(
+            &Ty::List(Box::new(Ty::Named("T".into(), vec![]))),
+            &Ty::List(Box::new(Ty::Int)),
+            &names,
+            &mut subst,
+        );
+        assert_eq!(subst.get("T"), Some(&Ty::Int));
+
+        // flatten's shape: `List[List[T]]` vs `List[List[Bool]]`.
+        let mut subst = HashMap::new();
+        unify_ty_params(
+            &Ty::List(Box::new(Ty::List(Box::new(Ty::Named("T".into(), vec![]))))),
+            &Ty::List(Box::new(Ty::List(Box::new(Ty::Bool)))),
+            &names,
+            &mut subst,
+        );
+        assert_eq!(subst.get("T"), Some(&Ty::Bool));
+
+        // A `ref` receiver still binds — wrappers peel on both sides.
+        let mut subst = HashMap::new();
+        unify_ty_params(
+            &Ty::List(Box::new(Ty::Named("T".into(), vec![]))),
+            &Ty::Ref(true, Box::new(Ty::List(Box::new(Ty::Float)))),
+            &names,
+            &mut subst,
+        );
+        assert_eq!(subst.get("T"), Some(&Ty::Float));
+
+        // First binding wins rather than being overwritten by a later mismatch.
+        let mut subst = HashMap::new();
+        let declared = Ty::Map(
+            Box::new(Ty::Named("T".into(), vec![])),
+            Box::new(Ty::Named("T".into(), vec![])),
+        );
+        unify_ty_params(
+            &declared,
+            &Ty::Map(Box::new(Ty::Int), Box::new(Ty::String)),
+            &names,
+            &mut subst,
+        );
+        assert_eq!(subst.get("T"), Some(&Ty::Int));
     }
 }
