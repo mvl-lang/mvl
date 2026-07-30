@@ -5,6 +5,11 @@
 # (root `make test-examples` depends on `build`).
 set -uo pipefail
 
+# Prevent the mvl binary from re-execing to the installed pinned toolchain.
+# Without this, a stale installed binary would silently run instead of the
+# freshly-built dev binary this script requires (see Makefile:136-139).
+export MVL_NO_REEXEC=1
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
