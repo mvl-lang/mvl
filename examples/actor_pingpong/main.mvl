@@ -1,21 +1,9 @@
-// actor_pingpong/main.mvl — Two actors exchanging messages.
+// actor_pingpong/main.mvl — CLI entry point for the ping-pong demo.
 //
-// This is the ONLY file with Console effect.
-// The actor model enforces the split:
-//   actor Pong  = receives ping, replies with pong
-//   actor Ping  = initiates exchange, replies with ping until rounds done
-//   main()      = creates actors, starts exchange, waits for completion
-//
-// Demonstrates:
-//   1. actor keyword with private mutable state
-//   2. pub fn as async message handler (behavior)
-//      - No return type (implicit Unit)
-//      - Params must be sendable: iso, val, or tag
-//   3. fn as private helper (synchronous, never called from outside)
-//   4. actor <Name> { <fields> } for actor creation — returns named handle
-//   5. tag capability — identity-only reference, sendable, no read/write
-//   6. val capability — deeply immutable, sendable, shareable across actors
-//   7. implicit lifecycle — fn main() drains all actor mailboxes on exit (#1048)
+// The actor types and message protocol live in pingpong.mvl (a sibling
+// module), not here — main.mvl is the entry point, not a module, so
+// pingpong_test.mvl can `use pingpong.{...}` directly instead of
+// redeclaring the actors under test (see .openspec/patterns/006).
 //
 // Expected output (5 rounds):
 //   Pong  <-- ping #0
@@ -28,7 +16,6 @@
 //   Ping  --> pong #3
 //   Pong  <-- ping #4
 //   Ping  --> pong #4
-//   Done -- 5 ping-pong rounds complete.
 //
 // Usage:
 //   mvl run examples/actor_pingpong/main.mvl
@@ -37,6 +24,7 @@
 use std.args.{parse_args, opt_positional, get_int, ArgType, ArgValue}
 use std.env.{exit}
 use std.ifc.{taint}
+use pingpong.{Ping, Pong}
 
 // ═══════════════════════════════════════════════════════════════════════════
 // SESSION ADMISSION
@@ -54,81 +42,6 @@ fn default_rounds(n: Int where n > 0) -> Int { n }
 
 fn admit_session_tag(raw: Tainted[String]) -> String {
     relabel trust(raw, "SESSION-TAG-WHITELIST")
-}
-
-// ═══════════════════════════════════════════════════════════════════════════
-// MESSAGE TYPES
-// val = deeply immutable, safe to share across actors without copying.
-// ═══════════════════════════════════════════════════════════════════════════
-
-// Sent by Ping to Pong.  seq is the round counter, starting at 0.
-type PingMsg = struct { seq: Int }
-
-// Sent by Pong to Ping.  seq echoes the round counter back.
-type PongMsg = struct { seq: Int }
-
-// ═══════════════════════════════════════════════════════════════════════════
-// PONG ACTOR
-//
-// Waits for PingMsg messages, logs each one, and replies with a PongMsg.
-// Does not initiate any communication — purely reactive.
-// ═══════════════════════════════════════════════════════════════════════════
-
-actor Pong {
-    // Private mutable state — visible only inside this actor.
-    received: Int
-
-    // Private helper: synchronous, never called from outside.
-    fn log(seq: Int where self >= 0) -> Unit ! Console {
-        println("Pong  <-- ping #".concat(seq.to_string()))
-    }
-
-    // Behavior (async message handler).
-    //
-    //   val msg     — immutable PingMsg; no ownership transfer needed
-    //   tag sender  — identity-only Ping handle; Pong cannot read Ping's state,
-    //                 but can send messages to it
-    pub fn ping(val msg: PingMsg, tag sender: Ping) ! Console + Send {
-        self.received = self.received + 1
-        log(msg.seq)
-        sender.pong(PongMsg { seq: msg.seq })
-    }
-}
-
-// ═══════════════════════════════════════════════════════════════════════════
-// PING ACTOR
-//
-// Kicks off the exchange and keeps replying until `rounds` messages have
-// been sent.  Stops cleanly when the round limit is reached.
-// ═══════════════════════════════════════════════════════════════════════════
-
-actor Ping {
-    // Private mutable state.
-    rounds:  Int   // stop after this many rounds
-    sent:    Int   // how many pings have been sent so far
-    partner: Pong  // tag-capability reference to the Pong actor
-
-    // Private helper: synchronous, never called from outside.
-    fn log(seq: Int where self >= 0) -> Unit ! Console {
-        println("Ping  --> pong #".concat(seq.to_string()))
-    }
-
-    // Behavior: send the first ping to kick off the exchange.
-    pub fn start() ! Console + Send {
-        self.sent = self.sent + 1
-        self.partner.ping(PingMsg { seq: 0 }, self)
-    }
-
-    // Behavior: receive a pong reply and send the next ping, if rounds remain.
-    //
-    //   val msg — immutable PongMsg; seq echoes the round we just completed
-    pub fn pong(val msg: PongMsg) ! Console + Send {
-        log(msg.seq)
-        if self.sent < self.rounds {
-            self.sent = self.sent + 1
-            self.partner.ping(PingMsg { seq: msg.seq + 1 }, self)
-        }
-    }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

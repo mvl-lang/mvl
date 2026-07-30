@@ -1117,8 +1117,51 @@ impl RustEmitter {
         // (#1794), so they only need the runtime import when they contain
         // their own `tir.actors`.  Emitting the preamble for a re-exported
         // handle would leave an unused `use mvl_runtime::actors::*;`.
-        let emits_actor_decls =
-            !tir.actors.is_empty() || (!force_runtime && !prelude_actors.is_empty());
+        //
+        // Entry-module-only extra case: the entry file declares NO actors of
+        // its own but spawns one declared in a sibling module (e.g. main.mvl
+        // with its actors moved to a sibling for testability). Without this,
+        // `has_actors` stayed false, `mvl_join_actors()` never got injected
+        // into `fn main()` below, and the process could exit before the
+        // spawned actors' background threads finished — the actor exchange
+        // then produces flaky, truncated, or entirely missing output
+        // depending on OS thread scheduling.
+        let entry_spawns_sibling_actor = !force_runtime
+            && tir.actors.is_empty()
+            && sibling_tirs.iter().any(|st| !st.actors.is_empty())
+            && {
+                let sibling_actor_names: std::collections::HashSet<&str> = sibling_tirs
+                    .iter()
+                    .flat_map(|st| st.actors.iter().map(|a| a.name.as_str()))
+                    .collect();
+                tir.fns.iter().any(|f| {
+                    use crate::mvl::ir::visit::{walk_tir_expr, Visit};
+                    use crate::mvl::ir::{TirExpr, TirExprKind};
+                    struct SpawnFinder<'a> {
+                        actor_names: &'a std::collections::HashSet<&'a str>,
+                        found: bool,
+                    }
+                    impl<'a> Visit<'a> for SpawnFinder<'a> {
+                        fn visit_tir_expr(&mut self, e: &'a TirExpr) {
+                            if let TirExprKind::Spawn { actor_type, .. } = &e.kind {
+                                if self.actor_names.contains(actor_type.as_str()) {
+                                    self.found = true;
+                                }
+                            }
+                            walk_tir_expr(self, e);
+                        }
+                    }
+                    let mut sf = SpawnFinder {
+                        actor_names: &sibling_actor_names,
+                        found: false,
+                    };
+                    sf.visit_tir_block(&f.body);
+                    sf.found
+                })
+            };
+        let emits_actor_decls = !tir.actors.is_empty()
+            || (!force_runtime && !prelude_actors.is_empty())
+            || entry_spawns_sibling_actor;
         if emits_actor_decls {
             self.has_actors = true;
             self.emit_actor_runtime_preamble();
