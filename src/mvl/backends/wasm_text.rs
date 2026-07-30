@@ -1100,10 +1100,12 @@ fn collect_let_inits_block(block: &TirBlock, map: &mut HashMap<String, TirExpr>)
 
 fn collect_let_inits_stmt(stmt: &TirStmt, map: &mut HashMap<String, TirExpr>) {
     match stmt {
-        TirStmt::Let { pattern, init, .. } => {
-            if let Pattern::Ident(name, _) = pattern {
-                map.insert(name.clone(), init.clone());
-            }
+        TirStmt::Let {
+            pattern: Pattern::Ident(name, _),
+            init,
+            ..
+        } => {
+            map.insert(name.clone(), init.clone());
         }
         TirStmt::If { then, else_, .. } => {
             collect_let_inits_block(then, map);
