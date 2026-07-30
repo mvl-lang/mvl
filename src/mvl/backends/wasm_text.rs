@@ -574,9 +574,9 @@ impl Backend for WasmTextCompiler {
 /// `Result[Int, Unknown]` and `Err("x")` with type `Result[Unknown, String]`
 /// both lower to i32 and are recognised as compatible block types.
 fn if_stmt_result_ty(then: &TirBlock, else_: &Option<TirElseBranch>, ctx: &Ctx) -> Option<Ty> {
-    let t = block_trailing_ty(then)?;
+    let t = block_trailing_ty(then, ctx)?;
     let e = match else_ {
-        Some(TirElseBranch::Block(b)) => block_trailing_ty(b)?,
+        Some(TirElseBranch::Block(b)) => block_trailing_ty(b, ctx)?,
         Some(TirElseBranch::If(nested)) => match nested.as_ref() {
             TirStmt::If {
                 then: t2,
@@ -598,13 +598,25 @@ fn if_stmt_result_ty(then: &TirBlock, else_: &Option<TirElseBranch>, ctx: &Ctx) 
     }
 }
 
-/// Type of a block's trailing expression, if the block ends in one and
-/// that expression is non-Unit.  Used to decide if a `TirStmt::If`'s
-/// branches leave a value on the WASM stack.
-fn block_trailing_ty(block: &TirBlock) -> Option<Ty> {
+/// Type of a block's trailing statement, if it leaves a non-Unit value on
+/// the stack. Used to decide if a `TirStmt::If`'s branches (or a match
+/// arm's block body) leave a value behind that the enclosing block-type
+/// needs to declare.
+///
+/// Recurses into a trailing `TirStmt::If`/`TirStmt::Match` — not just a bare
+/// `TirStmt::Expr` — because the TIR lowerer emits those for what reads as a
+/// trailing expression (e.g. a match arm body `{ if c { A } else { B } }`).
+/// Without this, a block-bodied arm whose tail is itself an if/else chain or
+/// nested match silently reports no result type, and the *enclosing* match's
+/// `if`s all end up emitted without `(result ...)` even though every arm
+/// still leaves a value on the stack — a WASM validator stack-imbalance
+/// (#2053), not a MVL-level bug.
+fn block_trailing_ty(block: &TirBlock, ctx: &Ctx) -> Option<Ty> {
     let last = block.stmts.last()?;
     match last {
         TirStmt::Expr { expr, .. } if !matches!(expr.ty, Ty::Unit) => Some(expr.ty.clone()),
+        TirStmt::If { then, else_, .. } => if_stmt_result_ty(then, else_, ctx),
+        TirStmt::Match { arms, .. } => match_arms_result_ty(arms, ctx),
         _ => None,
     }
 }
@@ -995,14 +1007,40 @@ fn peels_to_string(ty: &Ty) -> bool {
     }
 }
 
-/// Extract the binding name from a `return expr` expression so the returned
-/// value can be excluded from heap drops (it must survive for the caller).
-/// Mirrors LLVM's `exclude_returned_value_tir`.
-fn exclude_returned_local(expr: &TirExpr) -> Option<&str> {
+/// Extract the fn-local name holding a `return expr` expression's value so
+/// it can be excluded from heap drops (it must survive for the caller).
+/// Mirrors LLVM's `exclude_returned_value_tir` for the `Var`/`Consume`/
+/// `Relabel` cases, but also has to cover WASM-specific temps:
+/// allocation-returning String methods, `Float.to_string()`, and
+/// `format(...)` materialize their `*MvlString` result into a span-keyed
+/// `__ms_*` local (`collect_locals_expr`, `mvl_string_temp_name`) rather
+/// than a named binding. When the return expression *is* one of these
+/// calls directly, that temp — not any named `Var` — is the value being
+/// returned, and the drop sweep must skip it instead of freeing it out
+/// from under the caller (#2023, #2052).
+fn exclude_returned_local(expr: &TirExpr) -> Option<String> {
     match &expr.kind {
-        TirExprKind::Var(name) => Some(name.as_str()),
+        TirExprKind::Var(name) => Some(name.clone()),
         TirExprKind::Consume(inner) => exclude_returned_local(inner),
         TirExprKind::Relabel { expr: inner, .. } => exclude_returned_local(inner),
+        TirExprKind::MethodCall {
+            receiver, method, ..
+        } if peels_to_string(&receiver.ty)
+            && matches!(
+                method.as_str(),
+                "concat" | "substring" | "to_upper" | "to_lower" | "trim" | "replace"
+            ) =>
+        {
+            Some(mvl_string_temp_name(expr))
+        }
+        TirExprKind::MethodCall {
+            receiver, method, ..
+        } if matches!(receiver.ty, Ty::Float) && method == "to_string" => {
+            Some(mvl_string_temp_name(expr))
+        }
+        TirExprKind::FnCall { name, args, .. } if name == "format" && args.len() == 2 => {
+            Some(mvl_string_temp_name(expr))
+        }
         _ => None,
     }
 }
@@ -1136,7 +1174,17 @@ fn emit_fn(out: &mut String, f: &TirFn, ctx: &Ctx) {
         // Note: `__ma_*` (MvlArray literal temps) are intentionally absent
         // from `local_drop_fn` — they alias the same pointer as the
         // user-bound list local. Dropping both would double-free.
-        emit_fn_heap_drops(out, &locals, None);
+        //
+        // A trailing bare-expression statement (no `return` keyword) is the
+        // fn's implicit return value — same exclusion rule as the explicit
+        // path, needed so e.g. `fn f(a, b) -> String { a.concat(b) }` doesn't
+        // free its own `*MvlString` result before the caller reads it
+        // (#2023, #2052).
+        let implicit_exclude = match f.body.stmts.last() {
+            Some(TirStmt::Expr { expr, .. }) => exclude_returned_local(expr),
+            _ => None,
+        };
+        emit_fn_heap_drops(out, &locals, implicit_exclude.as_deref());
     }
     out.push_str("  )\n");
 }
@@ -1636,7 +1684,7 @@ fn emit_stmt(out: &mut String, stmt: &TirStmt, ctx: &Ctx) {
             // The exclude keeps the return value alive for the caller;
             // all other live heap locals are freed here (not at fn exit).
             let excluded = exclude_returned_local(e);
-            emit_fn_heap_drops(out, &ctx.fn_locals.borrow(), excluded);
+            emit_fn_heap_drops(out, &ctx.fn_locals.borrow(), excluded.as_deref());
             out.push_str("    return\n");
         }
         TirStmt::Return { value: None, .. } => {
@@ -3630,7 +3678,7 @@ fn match_arms_result_ty(arms: &[TirMatchArm], ctx: &Ctx) -> Option<Ty> {
     for arm in arms {
         let arm_ty = match &arm.body {
             TirMatchBody::Expr(e) if !matches!(e.ty, Ty::Unit) => e.ty.clone(),
-            TirMatchBody::Block(b) => block_trailing_ty(b)?,
+            TirMatchBody::Block(b) => block_trailing_ty(b, ctx)?,
             _ => return None,
         };
         match &ty {
