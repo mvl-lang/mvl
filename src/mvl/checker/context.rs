@@ -404,8 +404,38 @@ impl TypeEnv {
             "write".into(),
             FnInfo {
                 params: vec![fd_ty.clone(), Ty::String],
-                ret: Ty::Result(Box::new(Ty::Unit), Box::new(io_error_ty)),
+                ret: Ty::Result(Box::new(Ty::Unit), Box::new(io_error_ty.clone())),
                 effects: console_eff,
+                ..Default::default()
+            },
+        );
+        // read_file / _read_file (#2076) — `pub builtin fn` in std/io.mvl.
+        // Registered here (not left to `load_rust_backed_stdlib_fns`,
+        // which strips *every* `builtin fn` declaration from its loaded
+        // prelude — including these two, with nothing else to fall back
+        // on) so the checker still resolves them under the "Transpile"
+        // prelude pipeline `llvm_text.rs`/`wasm_text.rs` use: without this,
+        // both single-file backends see `read_file` as an undefined
+        // function, same failure mode this fixes for `write` above.
+        let file_read_eff = vec![Effect::new("FileRead", Span::new(0, 0, 0, 0))];
+        self.fns.insert(
+            "_read_file".into(),
+            FnInfo {
+                params: vec![Ty::String],
+                ret: Ty::Result(Box::new(Ty::String), Box::new(io_error_ty.clone())),
+                effects: file_read_eff.clone(),
+                ..Default::default()
+            },
+        );
+        self.fns.insert(
+            "read_file".into(),
+            FnInfo {
+                params: vec![Ty::String],
+                ret: Ty::Result(
+                    Box::new(Ty::Labeled("Tainted".into(), Box::new(Ty::String))),
+                    Box::new(io_error_ty.clone()),
+                ),
+                effects: file_read_eff,
                 ..Default::default()
             },
         );

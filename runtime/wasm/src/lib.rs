@@ -1539,6 +1539,104 @@ pub unsafe extern "C" fn _mvl_format(tmpl_ptr: i32, tmpl_len: i32, values: i32) 
     alloc_mvl_string(&result)
 }
 
+// ── std.io::read_file (#2076) ────────────────────────────────────────────
+//
+// WASI file read, backed directly by wasm32-wasip1's `std::fs` — no
+// hand-declared `path_open`/`fd_read` WASI imports needed the way #2056's
+// `write(fd, msg)` hand-declares `fd_write` in `wasm_text.rs`'s inline WAT
+// prelude; `std::fs::read_to_string` already lowers to the right WASI
+// syscalls for this target. Backs both `std.io::read_file` and
+// `std.io::_read_file` (std/io.mvl) identically — `Tainted[String]`/`Path`
+// erase to the same `(ptr, len)` representation as `String` at this layer.
+//
+// `IoError` variant discriminants below (0=NotFound, 1=PermissionDenied,
+// 2=AlreadyExists, 3=Other(String)) match std/io.mvl's declaration order
+// — the same order `collect_payload_enums` (wasm_text.rs) assigns via
+// `enumerate()` — and the existing `IO_ERR_*` constants in
+// `runtime/llvm/src/stdlib/io.rs`.
+
+const IO_ERR_NOT_FOUND: i32 = 0;
+const IO_ERR_PERMISSION_DENIED: i32 = 1;
+const IO_ERR_ALREADY_EXISTS: i32 = 2;
+const IO_ERR_OTHER: i32 = 3;
+
+/// Build an `IoError` payload-enum header: the same 8-byte
+/// `{disc: i32, payload_ptr: i32}` shape `emit_enum_variant_construct`
+/// (wasm_text.rs) builds for every other payload enum, so a caller that
+/// binds a named `Err(e)` and matches on it (`IoError::NotFound => ...`)
+/// decodes it exactly like compiler-emitted construction would. `msg` is
+/// `Some` only for `Other`; its bytes become a fresh `MvlString`, stored
+/// as an i64-widened pointer at payload offset 0 — matching
+/// `emit_payload_store`'s String-field convention.
+fn alloc_io_error(disc: i32, msg: Option<&[u8]>) -> i32 {
+    let header = _mvl_struct_alloc(8);
+    if header == 0 {
+        return 0;
+    }
+    unsafe {
+        *(header as usize as *mut i32) = disc;
+    }
+    let payload_ptr = match msg {
+        Some(bytes) => {
+            let str_ptr = alloc_mvl_string(bytes);
+            let payload = _mvl_struct_alloc(8);
+            if payload != 0 {
+                unsafe {
+                    *(payload as usize as *mut i64) = str_ptr as i64;
+                }
+            }
+            payload
+        }
+        None => 0,
+    };
+    unsafe {
+        *((header as usize + 4) as *mut i32) = payload_ptr;
+    }
+    header
+}
+
+/// Map a `std::io::Error` to an allocated `IoError` header, mirroring
+/// `runtime/rust/src/stdlib/io.rs::sanitize_io_error`'s NotFound /
+/// PermissionDenied / AlreadyExists / Other(kind-string) cases.
+fn io_error_from_std(e: &std::io::Error) -> i32 {
+    match e.kind() {
+        std::io::ErrorKind::NotFound => alloc_io_error(IO_ERR_NOT_FOUND, None),
+        std::io::ErrorKind::PermissionDenied => alloc_io_error(IO_ERR_PERMISSION_DENIED, None),
+        std::io::ErrorKind::AlreadyExists => alloc_io_error(IO_ERR_ALREADY_EXISTS, None),
+        _ => alloc_io_error(IO_ERR_OTHER, Some(e.to_string().as_bytes())),
+    }
+}
+
+/// `read_file(path)` / `_read_file(path)` — read a file's entire contents.
+/// `path` is a raw `(ptr, len)` byte range. Returns a heap-allocated
+/// `MvlResult`:
+///   Ok  -> `_mvl_result_ok_i32(<*MvlString>)`
+///   Err -> `_mvl_result_err_i32(<IoError header ptr>)` — #2066's
+///   non-String Err-payload convention (`ok_value` holds the header
+///   pointer, `err_ptr` stays 0). The header/payload are leaked on drop,
+///   same tradeoff `runtime/llvm`'s `LlvmEnumError::with_str` already
+///   documents as "acceptable for MVP error paths."
+///
+/// # Safety
+/// `path_ptr..path_ptr+path_len` must be valid readable memory.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn _mvl_io_read_file(path_ptr: i32, path_len: i32) -> i32 {
+    let path_bytes = unsafe { slice_or_empty(path_ptr, path_len) };
+    let path = match core::str::from_utf8(path_bytes) {
+        Ok(s) => s,
+        Err(_) => {
+            return _mvl_result_err_i32(alloc_io_error(
+                IO_ERR_OTHER,
+                Some(b"path is not valid UTF-8"),
+            ));
+        }
+    };
+    match std::fs::read_to_string(path) {
+        Ok(contents) => _mvl_result_ok_i32(alloc_mvl_string(contents.as_bytes())),
+        Err(e) => _mvl_result_err_i32(io_error_from_std(&e)),
+    }
+}
+
 // ── Tests ────────────────────────────────────────────────────────────────
 //
 // Compiled + run under wasm32-wasip1 so the i32-pointer ABI works as it

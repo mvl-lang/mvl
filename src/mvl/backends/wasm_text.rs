@@ -382,6 +382,12 @@ const RUNTIME_IMPORTS: &[(&str, &str)] = &[
     // Group H — String parse ops. Take raw (ptr, len) byte slice; return
     // heap-allocated MvlResult pointer.
     ("_mvl_string_parse_int", "(param i32 i32) (result i32)"),
+    // std.io::read_file / _read_file (#2076) — WASI file read via
+    // wasm32-wasip1's `std::fs`, no hand-rolled `path_open`/`fd_read`
+    // imports needed (unlike #2056's write-side `fd_write`). Takes the
+    // path as a raw (ptr, len) byte slice; returns a heap-allocated
+    // MvlResult (Ok(*MvlString) / Err(*IoError header)).
+    ("_mvl_io_read_file", "(param i32 i32) (result i32)"),
     // Group I — IFC audit event (#2013). Five (ptr, len) string pairs:
     // transition, from_label, to_label, tag, location. No return value.
     (
@@ -2190,6 +2196,20 @@ fn emit_expr(out: &mut String, expr: &TirExpr, ctx: &Ctx) {
                 out.push_str("    end\n");
                 return;
             }
+            // `read_file(path)` / `_read_file(path)` (std.io, #2076) — file
+            // read via the preloaded `runtime/wasm/` crate's
+            // `_mvl_io_read_file`, not hand-rolled WASI imports (reads need
+            // path/rights marshalling `fd_write` didn't; wasm32-wasip1's
+            // `std::fs` already does it correctly inside the crate).
+            // `Tainted[String]`/`Path` erase to the same (ptr, len)
+            // representation as `String` at this layer, so both builtin
+            // names route through the same runtime call unconditionally.
+            if (name == "read_file" || name == "_read_file") && args.len() == 1 {
+                ctx.needs_runtime.set(true);
+                emit_expr(out, &args[0], ctx); // (ptr, len)
+                out.push_str("    call $_mvl_io_read_file\n");
+                return;
+            }
             // `now()` (std.time, #2056) — real wall-clock read via WASI
             // `clock_time_get`, heap-boxed as an opaque nanoseconds handle.
             // `Instant` is MVL-visible as `struct {}` (no fields) — the
@@ -3211,22 +3231,41 @@ fn emit_match_impl(
                 open_ifs += 1;
             }
             // `Ok(inner)` pattern on Result[T, E]. Check tag == 0, bind inner.
-            Pattern::Ok { inner, .. } => {
+            Pattern::Ok { inner, span } => {
                 ctx.needs_runtime.set(true);
                 let ok_ty = result_ok_ty(&scrutinee.ty).cloned().unwrap_or(Ty::Int);
-                let (_, getter) = result_ops_for_ok(&ok_ty, ctx);
                 out.push_str(&format!("    local.get ${temp}\n"));
                 out.push_str("    call $_mvl_result_tag\n");
                 out.push_str("    i32.eqz\n"); // 1 when tag == 0 (Ok)
                 out.push_str(&if_open);
                 if let Pattern::Ident(name, _) = inner.as_ref() {
                     if name != "_" {
-                        out.push_str(&format!("    local.get ${temp}\n"));
-                        out.push_str(&format!("    call ${getter}\n"));
-                        if is_float_ctx(&ok_ty, ctx) {
-                            out.push_str("    f64.reinterpret_i64\n");
+                        if is_string_ty(&ok_ty, ctx) {
+                            // `Result[String, E]`'s Ok slot stores the
+                            // `*MvlString` pointer as i32 (same convention as
+                            // `Option[String]`'s `Some`, #2056) — bind the
+                            // split (ptr, len) locals every other String
+                            // variable uses, not a single generic local
+                            // (#2076; `read_file`'s Ok payload is the first
+                            // WASM-backend builtin with Ok=String).
+                            let scratch = mvl_ok_string_temp_name(span);
+                            out.push_str(&format!("    local.get ${temp}\n"));
+                            out.push_str("    call $_mvl_result_value_i32\n");
+                            out.push_str(&format!("    local.tee ${scratch}\n"));
+                            out.push_str(&format!("    i32.load offset={MVL_STRING_OFFSET_PTR}\n"));
+                            out.push_str(&format!("    local.set ${name}_ptr\n"));
+                            out.push_str(&format!("    local.get ${scratch}\n"));
+                            out.push_str(&format!("    i32.load offset={MVL_STRING_OFFSET_LEN}\n"));
+                            out.push_str(&format!("    local.set ${name}_len\n"));
+                        } else {
+                            let (_, getter) = result_ops_for_ok(&ok_ty, ctx);
+                            out.push_str(&format!("    local.get ${temp}\n"));
+                            out.push_str(&format!("    call ${getter}\n"));
+                            if is_float_ctx(&ok_ty, ctx) {
+                                out.push_str("    f64.reinterpret_i64\n");
+                            }
+                            out.push_str(&format!("    local.set ${name}\n"));
                         }
-                        out.push_str(&format!("    local.set ${name}\n"));
                     }
                 }
                 emit_match_body(out, &arm.body, ctx);
@@ -3956,7 +3995,7 @@ fn collect_match_arm_locals(
                 }
             }
         }
-        Pattern::Ok { inner, .. } => {
+        Pattern::Ok { inner, span } => {
             if let Pattern::Ident(name, _) = inner.as_ref() {
                 if name != "_" {
                     // Bind at the Result's actual Ok-payload type (#2038) — a
@@ -3964,7 +4003,19 @@ fn collect_match_arm_locals(
                     // payload's local as `i64`, then `local.set` on the
                     // `f64.reinterpret_i64`'d value fails validation.
                     let ty = result_ok_ty(scrutinee_ty).cloned().unwrap_or(Ty::Int);
-                    locals.push((name.clone(), ty));
+                    if peels_to_string(&ty) {
+                        // Split (ptr, len) locals — mirrors `Pattern::Some`'s
+                        // String handling above (#2056) and #2076's
+                        // `read_file`, the first Ok=String builtin. Plus a
+                        // scratch local for the `*MvlString` pointer itself
+                        // while it's being unpacked (see the emit-side
+                        // `Pattern::Ok` arm).
+                        locals.push((format!("{name}_ptr"), Ty::Bool)); // i32
+                        locals.push((format!("{name}_len"), Ty::Bool)); // i32
+                        locals.push((mvl_ok_string_temp_name(span), Ty::Bool)); // i32
+                    } else {
+                        locals.push((name.clone(), ty));
+                    }
                 }
             }
         }
@@ -4211,6 +4262,14 @@ fn mvl_string_temp_name(expr: &TirExpr) -> String {
 /// itself across arms in one match.
 fn mvl_some_string_temp_name(pattern_span: &Span) -> String {
     format!("__mvs_{}_{}", pattern_span.offset, pattern_span.len)
+}
+
+/// Temp local holding the `*MvlString` pointer while an `Ok(v)` match arm
+/// on `Result[String, E]` unpacks it into the `v_ptr`/`v_len` locals every
+/// other String variable uses (#2076, mirrors `mvl_some_string_temp_name`
+/// for #2056). Keyed by the `Ok(...)` pattern's own span.
+fn mvl_ok_string_temp_name(pattern_span: &Span) -> String {
+    format!("__mvo_{}_{}", pattern_span.offset, pattern_span.len)
 }
 
 /// Temp local name for the `*MvlArray` pointer stashed during a list
@@ -6682,6 +6741,35 @@ mod tests {
         // `stderr()`/`stdout()` heap-allocate an `Fd { inner }` like any
         // other struct literal.
         assert!(wat.contains("call $_mvl_struct_alloc"), "{wat}");
+    }
+
+    /// `read_file(path)` routes through the preloaded runtime's
+    /// `_mvl_io_read_file`, not a dangling `call $read_file` (#2076). The
+    /// `Ok(contents)` binding must split into `contents_ptr`/`contents_len`
+    /// locals like any other String — a Result[String, E] Ok payload had
+    /// no test coverage before this (#2038/#2066 only ever covered
+    /// Ok=Int/Float and Err=String).
+    #[test]
+    fn read_file_uses_mvl_io_read_file_runtime_shim() {
+        let wat = compile(
+            "type IoError = enum { NotFound, PermissionDenied, AlreadyExists, Other(String) }\n\
+             pub builtin fn read_file(p: String) -> Result[String, IoError] ! Console\n\
+             fn main() -> Unit ! Console {\n\
+                 match read_file(\"x\") {\n\
+                     Ok(contents) => println(contents),\n\
+                     Err(_) => println(\"error\"),\n\
+                 }\n\
+             }\n",
+        );
+        assert!(!wat.contains(";; unsupported"), "{wat}");
+        assert!(!wat.contains("body stubbed"), "{wat}");
+        assert!(!wat.contains("call $read_file\n"), "{wat}");
+        assert!(wat.contains("call $_mvl_io_read_file"), "{wat}");
+        // Split (ptr, len) locals for `contents`, not a single generic one.
+        assert!(wat.contains("(local $contents_ptr i32)"), "{wat}");
+        assert!(wat.contains("(local $contents_len i32)"), "{wat}");
+        assert!(!wat.contains("(local $contents i64)"), "{wat}");
+        assert!(wat.contains("call $_mvl_result_value_i32"), "{wat}");
     }
 
     /// `now()` / a module-private `_instant_epoch_seconds(t)` builtin route
