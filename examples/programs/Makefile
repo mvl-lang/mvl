@@ -26,7 +26,6 @@ ALL_PROGRAMS := $(sort $(shell find $(DIR) -name "*.mvl"))
 RUST_EXCLUDE :=
 
 LLVM_EXCLUDE := \
-	$(DIR)auth_handler.mvl \
 	$(DIR)random_dice/main.mvl
 
 WASM_EXCLUDE := \
@@ -69,13 +68,9 @@ test-solver: check ## Alias for check — per-file solver statistics
 
 test: check ## Alias for check (programs dir has no test functions)
 
-# auth_handler.mvl: `switch condition must have integer type` — LLVM match
-# dispatch on an enum with a struct-shaped payload variant
-# (AccountLocked { attempts: ... }) emits a switch directly on the tagged
-# union value instead of extracting its tag field first. Not extern-FFI —
-# a genuine, separate codegen bug (worth its own issue).
 # random_dice/main.mvl: extern "rust" FFI unsupported on --backend=llvm
-# (#2049).
+# (#2049). auth_handler.mvl's former exclusion (struct-payload enum match
+# crash, #2075) is fixed — it passes here now.
 test-llvm: ## Run all example programs via LLVM backend
 	@pass=0; fail=0; \
 	OK="\033[32m✓\033[0m"; FAIL="\033[31m✗\033[0m"; \
@@ -97,11 +92,14 @@ test-llvm: ## Run all example programs via LLVM backend
 		printf "  \033[31m✗  $$pass passed, $$fail failed\033[0m\n\n"; exit 1; \
 	fi
 
-# auth_handler.mvl, closure_lambdas.mvl, core_types_demo.mvl,
-# hof_lambdas.mvl, list_stubs.mvl: each traps (`unreachable`) at runtime on
-# the WASM backend — separate, pre-existing codegen gaps (closures/HOF
-# lambdas unsupported, a couple of missing builtins, and the same
-# match-dispatch bug noted above for auth_handler). Worth their own issues.
+# closure_lambdas.mvl, core_types_demo.mvl, hof_lambdas.mvl, list_stubs.mvl:
+# each traps (`unreachable`) at runtime on the WASM backend — separate,
+# pre-existing codegen gaps (closures/HOF lambdas unsupported, a couple of
+# missing builtins). Worth their own issues.
+# auth_handler.mvl: its #2075 match-dispatch crash is fixed, but it still
+# fails on WASM for a different, newly-found reason — struct field access
+# through a refined-type alias (`type UserId = Int where self > 0`) returns
+# a wrong equality result on WASM, breaking find_user's linear scan.
 # random_dice/main.mvl: extern "rust" FFI unsupported on --backend=wasm
 # (#2049).
 test-wasm: ## Run all example programs via WASM backend
