@@ -67,6 +67,10 @@
 
 - **`examples/test-all.sh` didn't set `MVL_NO_REEXEC`, so on a machine with a previously-installed toolchain sharing today's dev build's version string, every `mvl` invocation inside it silently re-exec'd to that stale binary instead of the one just built** — no error, just wrong results. The root Makefile already exports this for `make test-examples-*`, but the script is also invoked directly: CI's "Example smoke tests" job runs `bash examples/test-all.sh --full`, bypassing the Makefile entirely. Added the same export to the script itself.
 
+### Fixed
+
+- **`mvl test --backend=wasm` never preloaded the runtime module, so any WASM test file whose module imports from the `"runtime"` namespace traps at instantiation** (`unknown import: runtime::... has not been defined`) instead of running — unlike `mvl test --backend=llvm`, which already resolves and loads the LLVM runtime dylib. Added `lli::find_mvl_runtime_wasm_lib()` (mirroring the existing LLVM lookup: `MVL_RUNTIME_WASM` env var → XDG install path → sibling `target/wasm32-wasip1/{debug,release}/` cargo output), threaded through as `wasmtime run --preload runtime=<path>`. Unblocks most of `examples/programs/*.mvl` under `--backend=wasm` (9/15, up from ~1/15) — the remaining failures are separate, pre-existing gaps (extern FFI #2049, closures/HOF lambdas unsupported in the WASM backend, two missing-builtin traps, and one wasm-tools assemble failure).
+
 ### Changed
 
 - **`vendor/mvl-spec` bumped 0.1.4 → 0.1.5.** Caught a second-order tooling bug from the previous bump (#2044): the new spec release documents which words are deliberately *not* reserved keywords in a prose block sitting between the `Reserved Keywords` and `Lexical` EBNF sections, and `validate_keywords.py` was scanning everything between those two fixed markers as keyword listings — every English word in the new prose became a false-positive "extra keyword". Fixed by stopping the scan at whichever `=== ... ===` section header comes next, not a hardcoded "Lexical".
