@@ -26,7 +26,7 @@
 // ── Budget ────────────────────────────────────────────────────────────────────
 
 /// Maximum evaluation steps. Prevents non-termination in recursive functions.
-total fn eval_budget() -> Int { 10000 }
+const EVAL_BUDGET: Int = 10000;
 
 // ── ConstValue ────────────────────────────────────────────────────────────────
 
@@ -103,7 +103,7 @@ pub total fn all_literal_args(args: List[Expr]) -> Bool {
 /// Succeeds only when:
 ///   - fn_decl.effects is empty (pure function)
 ///   - all args reduce to literal values
-///   - evaluation completes within eval_budget() steps
+///   - evaluation completes within EVAL_BUDGET steps
 ///
 /// Returns None on any failure, deferring to runtime.
 pub partial fn try_fold_call(
@@ -134,7 +134,11 @@ pub partial fn try_fold_call(
         }
         i = i + 1
     }
-    let budget: ref Int = eval_budget();
+    // A `ref` binding needs an owned initializer, not a direct reference to
+    // a named `const` (same class of error as `infer.mvl::infer_list_lit`'s
+    // `Ty::Unknown` fix) — the intermediate `let` gives it one.
+    let budget_init: Int = EVAL_BUDGET;
+    let budget: ref Int = budget_init;
     match fn_decl.body {
         Some(body) => eval_block(body, env, fn_decls, budget),
         None       => None,
@@ -170,7 +174,7 @@ partial fn eval_block(
 }
 
 /// Evaluate a block, preserving the SigReturn signal so callers can propagate it.
-partial fn eval_block_signal(
+pub partial fn eval_block_signal(
     block: Block,
     env: ref Map[String, ConstValue],
     fn_decls: Map[String, FnDecl],

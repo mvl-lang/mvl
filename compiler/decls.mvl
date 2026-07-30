@@ -39,7 +39,7 @@ total fn split_once_decls(s: String, sep: String) -> Option[List[String]] {
     None
 }
 
-total fn list_contains_str_decls(list: List[String], s: String) -> Bool {
+pub total fn list_contains_str_decls(list: List[String], s: String) -> Bool {
     for item in list {
         if item == s { return true } else { () }
     }
@@ -303,7 +303,7 @@ test partial fn collect_declarations_registers_fn() -> Unit {
     }
 }
 
-total fn empty_prog() -> Program {
+pub total fn empty_prog() -> Program {
     Program {
         fns: [], types: [], uses: [], consts: [],
         externs: [], impls: [], actors: [],

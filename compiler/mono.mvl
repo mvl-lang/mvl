@@ -78,7 +78,7 @@ total fn subs_get(subs: MonoSubs, name: String) -> Option[TypeExpr] {
     if found { Some(result) } else { None }
 }
 
-total fn subs_len(subs: MonoSubs) -> Int {
+pub total fn subs_len(subs: MonoSubs) -> Int {
     subs.entries.len()
 }
 
@@ -101,7 +101,7 @@ partial fn type_name(te: TypeExpr) -> String {
 /// Mangle a function name with its instantiated type parameters.
 /// Non-generic functions are returned unchanged.
 /// e.g. "map" + [T, U] + {T→Int, U→String} → "map_Int_String"
-partial fn mangle_name(name: String, type_params: List[GenericParam], subs: MonoSubs) -> String {
+pub partial fn mangle_name(name: String, type_params: List[GenericParam], subs: MonoSubs) -> String {
     if type_params.len() == 0 {
         name
     } else {
@@ -162,7 +162,7 @@ partial fn substitute_param(p: Param, subs: MonoSubs) -> Param {
 }
 
 /// Apply subs to an FnDecl: substitute param/return types, clear type_params.
-partial fn substitute_decl(fd: FnDecl, subs: MonoSubs) -> FnDecl {
+pub partial fn substitute_decl(fd: FnDecl, subs: MonoSubs) -> FnDecl {
     FnDecl {
         visible:     fd.visible,
         is_test:     fd.is_test,
