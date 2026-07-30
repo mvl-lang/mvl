@@ -59,9 +59,21 @@
 
 - **WASM backend: `Result[T, E]`'s `Err(x)` constructor only supported a `String` payload — any other error type (a custom enum, an `Int`, a `Float`) stubbed the entire enclosing function to `unreachable`, a runtime trap rather than a compile error.** `Ok`'s constructor already dispatched by payload type; `Err`'s never got the same treatment. Untested by the corpus — every `Result[T, E]` case used `Result[T, String]`. Added `_mvl_result_err_i64`/`_i32` to the runtime, mirroring the existing Ok pair, and wired `Err`'s constructor, its match-arm extraction, and its bound-local type declaration to dispatch by the actual error type the same way `Ok` already does. Also fixed an adjacent dormant bug found in the process: `_mvl_result_err_str` only stored its string pointer in `err_ptr`, so the generic value-getters `Ok` already used returned 0 for any bound (not discarded) `Err(e)` string payload; and the old unconditional `i32.wrap_i64` on extraction silently truncated any genuinely `i64`-valued `Err` (e.g. `Int`) beyond i32 range.
 
+### Fixed — #2068
+
+- **`mvl build`'s Rust-backend scratch workspace collided across different source files sharing a base name.** The directory is named `mvl_build_{version}_{crate_name}`, where `crate_name` is just the file's stem — no directory component — so e.g. every example's `main.mvl` resolved to the identical `/tmp/mvl_build_{version}_main/`. Concurrent `mvl build`/`mvl run` invocations on two such files raced to write different generated Rust into the same `src/main.rs`, corrupting whichever write lost (a compile error referencing a completely unrelated file's types). Not examples-specific — the identical race already existed in `run_one_expect_case`, documented as "invoked concurrently... via `std::thread::scope`". Added `loader::scratch_dir_disambiguator` (a short hash of the canonicalized input path) to both the writer (`build.rs`) and the reader that must compute the same name (`test.rs`), keying the scratch dir on the file's real identity while still mapping repeated builds of the *same* file to the same directory.
+
+### Fixed — #2069
+
+- **`examples/test-all.sh` didn't set `MVL_NO_REEXEC`, so on a machine with a previously-installed toolchain sharing today's dev build's version string, every `mvl` invocation inside it silently re-exec'd to that stale binary instead of the one just built** — no error, just wrong results. The root Makefile already exports this for `make test-examples-*`, but the script is also invoked directly: CI's "Example smoke tests" job runs `bash examples/test-all.sh --full`, bypassing the Makefile entirely. Added the same export to the script itself.
+
 ### Changed
 
 - **`vendor/mvl-spec` bumped 0.1.4 → 0.1.5.** Caught a second-order tooling bug from the previous bump (#2044): the new spec release documents which words are deliberately *not* reserved keywords in a prose block sitting between the `Reserved Keywords` and `Lexical` EBNF sections, and `validate_keywords.py` was scanning everything between those two fixed markers as keyword listings — every English word in the new prose became a false-positive "extra keyword". Fixed by stopping the scan at whichever `=== ... ===` section header comes next, not a hardcoded "Lexical".
+- **`examples/test-all.sh` now runs all example subdirectories in parallel** (bounded by CPU count, `MAX_JOBS` override) instead of serially. Two examples' heavy Z3-refinement solving dominated ~70% of the serial runtime; `make test-examples-llvm` went from 1m35s to 37s. Not an LLVM-backend cost — the same checker+solver pipeline runs identically regardless of backend.
+- **`make test-examples-wasm`** added, mirroring `test-examples-llvm`, wired for the 10 examples confirmed passing under `--backend=wasm` via `tools/mvlr` (the project's existing test-fn-to-main shim for backends without native `mvl test --backend=wasm` dispatch).
+- **`make bump-vendor-pins`** added — a read-only report of available `vendor/mvl-spec`/`vendor/tree-sitter-mvl` updates (pinned version, latest tag, commits behind upstream `main`). Never mutates the submodule checkout or commits anything; bumping stays a deliberate, reviewed commit.
+- Renamed `examples/etcs_movement_authority` → `examples/etcs_move_authority` and `examples/sql_injection_prevention` → `examples/sql_inj_prevention`.
 
 ## [1.7.2] - 2026-07-28
 
