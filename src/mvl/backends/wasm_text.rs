@@ -309,6 +309,13 @@ const RUNTIME_IMPORTS: &[(&str, &str)] = &[
         "_mvl_string_replace",
         "(param i32 i32 i32 i32 i32 i32) (result i32)",
     ),
+    // `.split(sep)` — two (ptr, len) pairs in, `*MvlArray` out (#2014). The
+    // odd one out in Group B: the result is an array of `*MvlString`, not a
+    // `*MvlString`, so the call site does *not* run `emit_unpack_mvl_string`
+    // and the value stays a bare pointer. Ownership falls out of
+    // `local_drop_fn`, which already maps a `List[String]` local to
+    // `_mvl_string_ptr_array_drop`.
+    ("_mvl_string_split", "(param i32 i32 i32 i32) (result i32)"),
     // Group C — MvlArray (List[T] / Array[T, N] / Set[T] backing storage,
     // #1820). Pointer-typed as i32; elements accessed by byte offset with
     // `i32.load` / `i64.load` / `f64.load` on the pointer returned by
@@ -2460,6 +2467,20 @@ fn emit_expr(out: &mut String, expr: &TirExpr, ctx: &Ctx) {
             }
             out.push_str(&format!("    call $_mvl_string_{method}\n"));
             emit_unpack_mvl_string(out, expr);
+        }
+        // `String.split(sep)` — two (ptr, len) pairs in, `*MvlArray` of
+        // `*MvlString` out (#2014). Unlike its Group B neighbours above there
+        // is no `emit_unpack_mvl_string`: the result is already the array
+        // pointer every `List[T]` operation expects on the stack.
+        TirExprKind::MethodCall {
+            receiver,
+            method,
+            args,
+        } if peels_to_string(&receiver.ty) && method == "split" && args.len() == 1 => {
+            ctx.needs_runtime.set(true);
+            emit_expr(out, receiver, ctx);
+            emit_expr(out, &args[0], ctx);
+            out.push_str("    call $_mvl_string_split\n");
         }
         // `String.parse_int()` — returns a heap-allocated MvlResult pointer
         // (Group H import). Receiver is the raw (ptr, len) string on the stack.

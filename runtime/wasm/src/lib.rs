@@ -30,6 +30,8 @@
 //! - `_mvl_string_to_upper` / `_mvl_string_to_lower` — ASCII case fold
 //! - `_mvl_string_trim` — strip leading / trailing ASCII whitespace
 //! - `_mvl_string_replace` — non-overlapping byte-level replace-all
+//! - `_mvl_string_split` — split on a separator into a `List[String]`
+//!   (`*MvlArray` of `*MvlString`, so Group C's `elem_size == 4`)
 //!
 //! Drop emission on the emitter side is best-effort — at every function's
 //! implicit-return point, the emitter drops each `__ms_*` temp local it
@@ -362,6 +364,36 @@ pub unsafe extern "C" fn _mvl_string_replace(
     }
     out.extend_from_slice(&s[i..]);
     alloc_mvl_string(&out)
+}
+
+/// `s.split(sep)` — split on every occurrence of `sep`, returning a
+/// `List[String]`: an `MvlArray` with `elem_size == 4` holding one
+/// `*MvlString` per part. Drop it with `_mvl_string_ptr_array_drop`, never
+/// `_mvl_array_drop` — the latter leaks every element string.
+///
+/// Deliberately routed through `str::split` on a UTF-8 view rather than the
+/// byte-level scan `_mvl_string_replace` above uses. `runtime/llvm/`'s
+/// `_mvl_str_split` is `as_str(s).split(as_str(sep))`, and `as_str` is
+/// `from_utf8(..).unwrap_or("")` — identical here, so both backends agree
+/// bit-for-bit on the cases a byte scan would have to special-case by hand:
+/// an empty separator (Rust yields a leading and trailing `""` plus one part
+/// per char), an empty subject (one `""` part), and a separator longer than
+/// the subject (one part, the whole subject). Corpus parity between
+/// `test-rust-wasm` and `test-rust-rust` depends on that agreement, so
+/// resist "simplifying" this into a hand-rolled loop.
+///
+/// # Safety
+/// Both `(ptr, len)` pairs must describe valid ranges or be `(0, 0)`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn _mvl_string_split(sp: i32, sl: i32, sepp: i32, sepl: i32) -> i32 {
+    let text = core::str::from_utf8(unsafe { slice_or_empty(sp, sl) }).unwrap_or("");
+    let sep = core::str::from_utf8(unsafe { slice_or_empty(sepp, sepl) }).unwrap_or("");
+    // elem_size 4 — `*MvlString` is an i32 address on wasm32.
+    let arr = _mvl_array_new(4, 0);
+    for part in text.split(sep) {
+        unsafe { _mvl_array_push_i32(arr, alloc_mvl_string(part.as_bytes())) };
+    }
+    arr
 }
 
 /// `s.trim()` — strip leading and trailing ASCII whitespace (space,
@@ -2150,6 +2182,90 @@ mod tests {
             unsafe { _mvl_string_replace(addr(s), s.len() as i32, 0, 0, addr(t), t.len() as i32) };
         assert_eq!(unsafe { concat_result(ptr) }, b"hello");
         unsafe { _mvl_string_drop(ptr) };
+    }
+
+    // ── split (#2014) ────
+    //
+    // Collect a split result into owned Strings so each assertion reads as a
+    // plain slice comparison. Consumes the array via
+    // `_mvl_string_ptr_array_drop`, which is also the drop path the emitter
+    // picks for a `List[String]` local — so every one of these tests
+    // exercises that pairing, not just the split itself.
+    unsafe fn split_parts(s: &'static [u8], sep: &'static [u8]) -> Vec<Vec<u8>> {
+        let sep_ptr = if sep.is_empty() { 0 } else { addr(sep) };
+        let arr = unsafe { _mvl_string_split(addr(s), s.len() as i32, sep_ptr, sep.len() as i32) };
+        let n = unsafe { _mvl_array_len(arr) };
+        let mut out = Vec::new();
+        for i in 0..n {
+            let slot = unsafe { _mvl_array_get(arr, i) };
+            let sp = unsafe { core::ptr::read(slot as *const i32) };
+            out.push(unsafe { concat_result(sp) }.to_vec());
+        }
+        unsafe { _mvl_string_ptr_array_drop(arr) };
+        out
+    }
+
+    #[test]
+    fn split_basic_comma_separated() {
+        assert_eq!(
+            unsafe { split_parts(b"a,b,c", b",") },
+            vec![b"a", b"b", b"c"]
+        );
+    }
+
+    #[test]
+    fn split_separator_absent_yields_whole_subject() {
+        assert_eq!(
+            unsafe { split_parts(b"hello", b",") },
+            vec![b"hello".to_vec()]
+        );
+    }
+
+    #[test]
+    fn split_multichar_separator() {
+        assert_eq!(
+            unsafe { split_parts(b"one::two::three", b"::") },
+            vec![b"one".to_vec(), b"two".to_vec(), b"three".to_vec()]
+        );
+    }
+
+    #[test]
+    fn split_adjacent_separators_yield_empty_parts() {
+        assert_eq!(
+            unsafe { split_parts(b"a,,b", b",") },
+            vec![b"a".to_vec(), b"".to_vec(), b"b".to_vec()]
+        );
+    }
+
+    #[test]
+    fn split_leading_and_trailing_separator_yield_empty_edges() {
+        assert_eq!(
+            unsafe { split_parts(b",a,", b",") },
+            vec![b"".to_vec(), b"a".to_vec(), b"".to_vec()]
+        );
+    }
+
+    // The three cases the doc comment promises match `runtime/llvm/`'s
+    // `str::split` rather than a hand-rolled byte scan. Pinned here because a
+    // future "simplify this loop" would silently break rust/wasm ↔ rust/rust
+    // corpus parity, not any test in this file.
+    #[test]
+    fn split_empty_subject_yields_one_empty_part() {
+        assert_eq!(unsafe { split_parts(b"", b",") }, vec![b"".to_vec()]);
+    }
+
+    #[test]
+    fn split_empty_separator_matches_rust_str_split() {
+        // Rust yields a leading and trailing "" around one part per char.
+        assert_eq!(
+            unsafe { split_parts(b"ab", b"") },
+            vec![b"".to_vec(), b"a".to_vec(), b"b".to_vec(), b"".to_vec()]
+        );
+    }
+
+    #[test]
+    fn split_separator_longer_than_subject_yields_whole_subject() {
+        assert_eq!(unsafe { split_parts(b"ab", b"abcd") }, vec![b"ab".to_vec()]);
     }
 
     // ── find ────
