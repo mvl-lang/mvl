@@ -43,5 +43,4 @@ make -C tests/spikes/001-parser help
 
 1. Create `tests/spikes/NNN-topic/` with a `Makefile` following the pattern in `001-parser/Makefile`.
 2. Add an entry to the table above.
-3. Add a row to the `AGENTS.md` Spike Tests table.
-4. Do **not** wire it into `make test` or any CI target.
+3. Do **not** wire it into `make test` or any CI target.
