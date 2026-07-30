@@ -2,7 +2,7 @@
 .ONESHELL:
 SHELL := /bin/bash
 
-.PHONY: help version build build-runtime-wasm test test-full test-unit test-rust-integration test-requirements test-error-messages test-fmt-roundtrip test-rust-rust test-rust-llvm test-mvl-llvm test-rust-wasm test-mvl-wasm test-rust-tokio test-runtime-rust test-runtime-llvm test-runtime-wasm test-checker-parity test-checker-parity-update test-solver test-stdlib check-compiler assure-compiler test-mvl test-bootstrap-e2e test-bdd test-grammar-coverage test-examples test-examples-rust test-examples-llvm coverage validate-keywords lint mvl-lint format format-check format-mvl format-mvl-check assurance assurance-gate audit-backend-ast audit-cli-prelude check-adr docs docs-serve install install-runtime setup doctor clean fuzz-rust fuzz-llvm fuzz-diff fuzz-mvl test-fuzz-list mutants mutants-actors
+.PHONY: help version build build-runtime-wasm test test-full test-unit test-rust-integration test-requirements test-error-messages test-fmt-roundtrip test-rust-rust test-rust-llvm test-mvl-llvm test-rust-wasm test-mvl-wasm test-rust-tokio test-runtime-rust test-runtime-llvm test-runtime-wasm test-checker-parity test-checker-parity-update test-solver test-stdlib check-compiler assure-compiler test-mvl test-bootstrap-e2e test-bdd test-grammar-coverage test-examples test-examples-rust test-examples-llvm coverage traceability verification evidence validate-keywords lint mvl-lint format format-check format-mvl format-mvl-check assurance assurance-gate audit-backend-ast audit-cli-prelude check-adr docs docs-serve install install-runtime setup doctor clean fuzz-rust fuzz-llvm fuzz-diff fuzz-mvl test-fuzz-list mutants mutants-actors
 
 .DEFAULT_GOAL := help
 
@@ -482,17 +482,24 @@ format-mvl-check: build ## Check that all .mvl files are formatted (CI gate)
 	cargo run --quiet -- fmt tests/ --check
 	cargo run --quiet -- fmt std/ --check
 
-# === Assurance ===
+# === Assurance (ADR-0061: case = traceability + verification + evidence) ===
 
 coverage: ## Run Rust line coverage via cargo-llvm-cov (cached in target/llvm-cov.json)
 	@cargo build --manifest-path mvl_memory/Cargo.toml --target-dir target/llvm-cov-target 2>/dev/null
 	@cargo llvm-cov --json --ignore-run-fail > target/llvm-cov.json 2>/dev/null
 	@python3 -c "import json; d=json.load(open('target/llvm-cov.json')); t=d['data'][0]['totals']; l=t['lines']; f=t['functions']; print(f\"Lines: {l['covered']}/{l['count']} ({l['percent']:.1f}%)\"); print(f\"Functions: {f['covered']}/{f['count']} ({f['percent']:.1f}%)\")"
 
-assurance: ## Assurance dashboard (add VERBOSE=true for full output with legend)
+traceability: ## TRACEABILITY level: scenario-weighted spec<->impl<->test link ratios, no cargo/coverage dependency (fast)
+	@python3 tools/assurance.py --traceability-only $(if $(VERBOSE),--verbose)
+
+verification: test ## VERIFICATION level: does the program satisfy its spec? (alias for `make test`)
+
+evidence: coverage ## EVIDENCE level: what artefacts back the claims? (alias for `make coverage`)
+
+assurance: ## Assurance dashboard: the case, assembled from traceability + evidence (add VERBOSE=true for full output with legend)
 	@python3 tools/assurance.py $(if $(VERBOSE),--verbose)
 
-assurance-gate: ## CI gate: fail if below 75% completeness/coverage
+assurance-gate: ## CI gate: fail if completeness or scenario-weighted coverage is below 75%
 	@python3 tools/assurance.py --min 0.75
 
 # Budget for total unreachable!/panic! calls in src/mvl/ (production + inline tests).
