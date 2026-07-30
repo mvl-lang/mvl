@@ -123,11 +123,11 @@ partial fn dfs_visit(
             new_path.push(get_str(path, cp));
             cp = cp + 1
         }
-        new_path.push(node);
         let neighbors: List[String] = match graph.get(node) {
             Some(ns) => ns,
             None     => [],
         };
+        new_path.push(node);
         let result: ref DfsResult = DfsResult { cycle: [], found: false };
         let ni: ref Int = 0;
         while ni < neighbors.len() {
