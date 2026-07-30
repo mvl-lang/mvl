@@ -361,6 +361,9 @@ const RUNTIME_IMPORTS: &[(&str, &str)] = &[
     ("_mvl_result_ok_i64", "(param i64) (result i32)"),
     ("_mvl_result_ok_i32", "(param i32) (result i32)"),
     ("_mvl_result_err_str", "(param i32 i32) (result i32)"),
+    // Non-String Err payloads (#2066) — mirrors the Ok i64/i32 pair above.
+    ("_mvl_result_err_i64", "(param i64) (result i32)"),
+    ("_mvl_result_err_i32", "(param i32) (result i32)"),
     ("_mvl_result_tag", "(param i32) (result i32)"),
     ("_mvl_result_value_i64", "(param i32) (result i64)"),
     ("_mvl_result_value_i32", "(param i32) (result i32)"),
@@ -2114,16 +2117,22 @@ fn emit_expr(out: &mut String, expr: &TirExpr, ctx: &Ctx) {
                 }
                 return;
             }
-            // `Err(x)` constructor — `Err(s: String)` routes to
-            // `_mvl_result_err_str`. Other error types not yet supported.
+            // `Err(x)` constructor — dispatches by the Result's actual
+            // Err-payload type, mirroring `Ok` above (#2066; previously
+            // any non-String Err type stubbed the whole enclosing function
+            // to `unreachable`).
             if name == "Err" && args.len() == 1 && matches!(&expr.ty, Ty::Result(_, _)) {
+                ctx.needs_runtime.set(true);
                 let err_ty = result_err_ty(&expr.ty).cloned().unwrap_or(Ty::String);
+                emit_expr(out, &args[0], ctx);
                 if peels_to_string(&err_ty) {
-                    ctx.needs_runtime.set(true);
-                    emit_expr(out, &args[0], ctx);
                     out.push_str("    call $_mvl_result_err_str\n");
                 } else {
-                    out.push_str("    ;; unsupported Err type (only String errors supported)\n");
+                    if is_float_ctx(&err_ty, ctx) {
+                        out.push_str("    i64.reinterpret_f64\n");
+                    }
+                    let (err_ctor, _) = result_ops_for_err(&err_ty, ctx);
+                    out.push_str(&format!("    call ${err_ctor}\n"));
                 }
                 return;
             }
@@ -3049,19 +3058,30 @@ fn emit_match_impl(
             // `Err(inner)` pattern on Result[T, E]. Check tag == 1.
             Pattern::Err { inner, .. } => {
                 ctx.needs_runtime.set(true);
+                let err_ty = result_err_ty(&scrutinee.ty).cloned().unwrap_or(Ty::String);
                 out.push_str(&format!("    local.get ${temp}\n"));
                 out.push_str("    call $_mvl_result_tag\n");
                 // tag == 1 is truthy directly.
                 out.push_str(&if_open);
-                // Bind inner only if named and non-wildcard. For corpus the
-                // error is String — extracted as *MvlString i32; not
-                // unpacked to (ptr, len) since corpus Err arms discard it.
+                // Bind inner only if named and non-wildcard. Dispatches by
+                // the Result's actual Err-payload type (#2066) — String is
+                // extracted as *MvlString i32 (not unpacked to (ptr, len);
+                // no corpus/example Err arm uses the bound string as a
+                // String yet), a genuinely i64-shaped payload (Int, Float)
+                // keeps the full i64 getter instead of the old unconditional
+                // `i32.wrap_i64`, which silently truncated it.
                 if let Pattern::Ident(name, _) = inner.as_ref() {
                     if name != "_" {
                         out.push_str(&format!("    local.get ${temp}\n"));
-                        out.push_str("    call $_mvl_result_value_i64\n");
-                        // Narrow to i32 pointer for String payload.
-                        out.push_str("    i32.wrap_i64\n");
+                        if peels_to_string(&err_ty) {
+                            out.push_str("    call $_mvl_result_value_i32\n");
+                        } else {
+                            let (_, getter) = result_ops_for_err(&err_ty, ctx);
+                            out.push_str(&format!("    call ${getter}\n"));
+                            if is_float_ctx(&err_ty, ctx) {
+                                out.push_str("    f64.reinterpret_i64\n");
+                            }
+                        }
                         out.push_str(&format!("    local.set ${name}\n"));
                     }
                 }
@@ -3609,9 +3629,21 @@ fn collect_match_arm_locals(
         Pattern::Err { inner, .. } => {
             if let Pattern::Ident(name, _) = inner.as_ref() {
                 if name != "_" {
-                    // Err payload is *MvlString (i32). Use Bool as the i32
-                    // placeholder type — wasm_ty maps Bool → i32.
-                    locals.push((name.clone(), Ty::Bool));
+                    // Bind at the Result's actual Err-payload type (#2066) —
+                    // mirrors the Ok arm's #2038 fix above. A hardcoded
+                    // Ty::Bool (i32) here declared e.g. an Int/Float
+                    // payload's local as i32, then `local.set` on the
+                    // i64/f64-reinterpreted extraction value failed
+                    // validation. String keeps the i32 placeholder — it's
+                    // extracted as a raw *MvlString pointer, not unpacked
+                    // to (ptr, len).
+                    let err_ty = result_err_ty(scrutinee_ty).cloned().unwrap_or(Ty::String);
+                    let ty = if peels_to_string(&err_ty) {
+                        Ty::Bool
+                    } else {
+                        err_ty
+                    };
+                    locals.push((name.clone(), ty));
                 }
             }
         }
@@ -3951,6 +3983,22 @@ fn result_ops_for_ok(ok_ty: &Ty, ctx: &Ctx) -> (&'static str, &'static str) {
         ("_mvl_result_ok_i32", "_mvl_result_value_i32")
     } else {
         ("_mvl_result_ok_i64", "_mvl_result_value_i64")
+    }
+}
+
+/// Constructor and value-getter names for a `Result[T, E]` Err payload of
+/// `err_ty`, for the non-String case — `peels_to_string(err_ty)` callers
+/// route through `_mvl_result_err_str` instead, same split `Ok` already has
+/// between this function and its own String special-case (#2066). The
+/// getter is deliberately the *same* `_mvl_result_value_i32`/`_i64` pair
+/// `Ok` uses: both constructors now store their payload in the shared
+/// `ok_value` slot (`err_ptr` stays reserved for `_mvl_result_drop`'s
+/// String-ownership marker).
+fn result_ops_for_err(err_ty: &Ty, ctx: &Ctx) -> (&'static str, &'static str) {
+    if is_i32(err_ty, ctx) {
+        ("_mvl_result_err_i32", "_mvl_result_value_i32")
+    } else {
+        ("_mvl_result_err_i64", "_mvl_result_value_i64")
     }
 }
 

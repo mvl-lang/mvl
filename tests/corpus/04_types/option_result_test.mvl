@@ -176,3 +176,64 @@ test fn result_string_err_unwrap_or() -> Unit {
     let r: Result[String, String] = describe("");
     assert_eq(r.unwrap_or("default"), "default");
 }
+
+// Regression (#2066): `Result[T, E]::Err` only supported a String payload
+// in the WASM backend — any other Err type (a custom enum, a plain Int, a
+// Float) stubbed the *entire enclosing function* to `unreachable`, not a
+// compile error. `Ok`'s constructor already dispatched by payload type;
+// `Err`'s never got the same treatment. Also covers the paired extraction
+// bug: `Err(e) => ...e...` (a bound, actually-used payload, not `Err(_)`)
+// read the wrong runtime struct field for i64-shaped payloads, silently
+// truncating anything over i32 range via an unconditional `i32.wrap_i64`.
+type AuthError = enum { NotFound, InvalidPassword }
+
+fn authenticate(fail: Bool) -> Result[Int, AuthError] {
+    if fail {
+        Err(AuthError::InvalidPassword)
+    } else {
+        Ok(42)
+    }
+}
+
+fn describe_auth_error(e: AuthError) -> Int {
+    match e {
+        AuthError::NotFound => 1,
+        AuthError::InvalidPassword => 2,
+    }
+}
+
+test fn result_err_enum_ok_path() -> Unit {
+    match authenticate(false) {
+        Ok(v) => assert_eq(v, 42),
+        Err(_) => assert_eq(1, 0),
+    }
+}
+
+test fn result_err_enum_discarded() -> Unit {
+    match authenticate(true) {
+        Ok(_) => assert_eq(1, 0),
+        Err(_) => assert_eq(1, 1),
+    }
+}
+
+test fn result_err_enum_bound_and_used() -> Unit {
+    match authenticate(true) {
+        Ok(_) => assert_eq(1, 0),
+        Err(e) => assert_eq(describe_auth_error(e), 2),
+    }
+}
+
+fn parse_or_code(fail: Bool) -> Result[Int, Int] {
+    if fail {
+        Err(9999999999)
+    } else {
+        Ok(1)
+    }
+}
+
+test fn result_err_int_bound_beyond_i32_range() -> Unit {
+    match parse_or_code(true) {
+        Ok(_) => assert_eq(1, 0),
+        Err(e) => assert_eq(e, 9999999999),
+    }
+}

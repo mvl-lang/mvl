@@ -968,6 +968,12 @@ pub extern "C" fn _mvl_result_ok_i32(v: i32) -> i32 {
 /// Construct `Err(s)` from a raw string `(ptr, len)` byte slice.
 /// Copies bytes into a heap-allocated `MvlString`.
 ///
+/// Stores the resulting pointer in *both* `err_ptr` (so `_mvl_result_drop`
+/// still knows to free the string) and `ok_value` (so `_mvl_result_value_i32`/
+/// `_mvl_result_value_i64` — the same generic getters `Ok` payloads use —
+/// read it back correctly; previously only `err_ptr` was set, so those
+/// getters returned 0 for any bound `Err(e)` string payload) (#2066).
+///
 /// # Safety
 /// `ptr..ptr+len` must be valid readable memory.
 #[unsafe(no_mangle)]
@@ -976,10 +982,32 @@ pub unsafe extern "C" fn _mvl_result_err_str(ptr: i32, len: i32) -> i32 {
     let r = Box::new(MvlResult {
         tag: 1,
         rc: 1,
-        ok_value: 0,
+        ok_value: err_ptr as i64,
         err_ptr,
     });
     Box::into_raw(r) as i32
+}
+
+/// Construct `Err(v)` with an i64-typed non-String payload (#2066). Stores
+/// `v` in `ok_value` — the same slot `Ok` payloads use — since `err_ptr` is
+/// reserved for the `*MvlString` case `_mvl_result_err_str` handles above
+/// (it doubles as `_mvl_result_drop`'s ownership marker for that case; 0
+/// here means "nothing to free").
+#[unsafe(no_mangle)]
+pub extern "C" fn _mvl_result_err_i64(v: i64) -> i32 {
+    let r = Box::new(MvlResult {
+        tag: 1,
+        rc: 1,
+        ok_value: v,
+        err_ptr: 0,
+    });
+    Box::into_raw(r) as i32
+}
+
+/// Construct `Err(v)` with an i32-typed non-String payload. Upcasts to i64.
+#[unsafe(no_mangle)]
+pub extern "C" fn _mvl_result_err_i32(v: i32) -> i32 {
+    _mvl_result_err_i64(v as i64)
 }
 
 /// `_mvl_result_tag(r)` — 0 for Ok, 1 for Err.
