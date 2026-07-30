@@ -50,7 +50,7 @@ MVL `where` predicate
 └──────────┬────────────┘
            ↓ None
 ┌───────────────────────┐
-│ Layer 4: Cooper's QE  │  O(exp)  ~5%  — #593 (DONE)
+│ Layer 4: FM elim.     │  O(exp)  ~5%  — #593 (DONE)
 └──────────┬────────────┘
            ↓ None
 ┌───────────────────────┐
@@ -168,10 +168,11 @@ and path constraints, to prove return refinements.
 
 ---
 
-### Requirement 4: Layer 4 — Cooper's Presburger QE [MUST]
+### Requirement 4: Layer 4 — Linear Arithmetic via Fourier-Motzkin Elimination [MUST]
 
-The solver MUST implement Cooper's quantifier-elimination algorithm to decide
-linear integer arithmetic constraints that symbolic path analysis cannot handle.
+The solver MUST implement Fourier-Motzkin elimination with a divisibility
+check to decide linear integer arithmetic constraints that symbolic path
+analysis cannot handle.
 
 **Implementation:** `src/mvl/checker/solver/layer4.rs`
 
@@ -182,7 +183,7 @@ linear integer arithmetic constraints that symbolic path analysis cannot handle.
 #### Scenario: Linear arithmetic
 
 - GIVEN `fn always_nonzero(x: Int) -> Int where result != 0 { 2 * x + 1 }`
-- WHEN Layer 4 applies Cooper's algorithm
+- WHEN Layer 4 applies Fourier-Motzkin elimination
 - THEN `2x + 1 ≠ 0 ∀x` is proven by quantifier elimination → `Proven`
 
 #### Scenario: Complexity bound
@@ -363,7 +364,7 @@ performance hypothesis.
 | **#589** | Layer 1 — trivial pattern matching | 1 | DONE |
 | **#590** | Layer 2 — interval arithmetic | 2 | DONE |
 | **#592** | Layer 3 — symbolic path analysis | 3 | DONE |
-| **#593** | Cooper's algorithm (Layer 4) | 4 | DONE |
+| **#593** | Fourier-Motzkin elimination (Layer 4) | 4 | DONE |
 | **#543** | Z3 integration (Layer 5) | 5 | DONE |
 | **#594** | Layered dispatch + Z3 fallback | integration | OPEN |
 | **#596** | Builtin rewrite rules (Layer 3 ext.) | 3 | OPEN |
