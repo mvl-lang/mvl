@@ -18,6 +18,13 @@
 //! - `Bool.to_string()` (branch between interned `"true"` / `"false"`)
 //! - String literals — interned up front, emitted as `(data …)` sections
 //! - `println(s)` / `eprintln(s)` — WASI `fd_write` fd 1 / fd 2 + newline
+//! - `stdout()` / `stderr()` / `stdin()` — heap-allocated `Fd { inner }`
+//!   (1 / 2 / 0), `write(fd, msg)` — dynamic `fd_write` on the runtime `Fd`
+//!   value, no trailing newline. `now()` / `_instant_epoch_seconds(t)` —
+//!   WASI `clock_time_get` (real wall-clock reads, not faked). Together
+//!   these unblock `std.log` (#2056) for the common stdout/stderr case.
+//!   Arbitrary-fd `write`/`read` against `open()`-returned file descriptors
+//!   is still unsupported (no WASI preopen wiring).
 //! - `assert(cond)` / `assert_eq[T](a, b)` / `assert_ne[T](a, b)` — trap
 //!   via `unreachable` on failure. Type-directed equality.
 //! - `let` and `let ref` bindings — WASM locals, declared in a fn prelude
@@ -43,7 +50,8 @@
 //! - Closures / higher-order fns
 //! - `Map` beyond `Map[String, Int]`
 //! - String concat (`_mvl_string_concat` wiring is incomplete)
-//! - Other WASI hostcalls, `extern "wasm"` ABI — separate ticket
+//! - Arbitrary-fd `write`/`read`/`open` (real files, WASI preopens),
+//!   `extern "wasm"` ABI — separate ticket
 //!
 //! Actors (#2012, ADR-0059): supported for spawn, behaviour sends, and
 //! `pub test fn` synchronous reads. Single-threaded run-to-completion — the
@@ -64,6 +72,7 @@ use crate::mvl::ir::{
     TirMatchArm, TirMatchBody, TirParam, TirProgram, TirStmt, TirTypeBody, TirTypeDecl,
     TirVariantFields, UnaryOp,
 };
+use crate::mvl::parser::lexer::Span;
 
 pub struct WasmTextCompiler {
     pub assert_mode: AssertMode,
@@ -1309,6 +1318,13 @@ fn collect_locals_ctx_expr(expr: &TirExpr, locals: &mut Vec<(String, Ty)>, ctx: 
         }
         TirExprKind::Unary { expr: inner, .. } => collect_locals_ctx_expr(inner, locals, ctx),
         TirExprKind::FnCall { name, args, .. } => {
+            // `stdout()` / `stderr()` / `stdin()` (#2056) heap-allocate an
+            // `Fd` the same way `emit_struct_construct` does — same __st_*
+            // temp scheme so the tee/reload in the emitter above has a
+            // declared local to target.
+            if (name == "stdout" || name == "stderr" || name == "stdin") && args.is_empty() {
+                locals.push((struct_temp_name(expr), Ty::Bool)); // i32 placeholder
+            }
             // Enum-variant FnCall (`Shape::Circle(5)`) routed to emit_construct
             // needs the same __st_* and __ep_* temps as TirExprKind::Construct.
             if let Some((type_name, _)) = name.split_once("::") {
@@ -1896,6 +1912,71 @@ fn emit_expr(out: &mut String, expr: &TirExpr, ctx: &Ctx) {
                     emit_expr(out, a, ctx);
                 }
                 out.push_str("    call $mvl_eprintln\n");
+                return;
+            }
+            // `stdout()` / `stderr()` / `stdin()` (std.io, #2056) — pure
+            // constructors for the standard-stream `Fd` values. Heap-allocate
+            // an `Fd { inner: <fd number> }` exactly like a user struct
+            // literal so `logger.fd` field reads and dynamic `write(fd, …)`
+            // dispatch (below) see an ordinary Fd pointer.
+            if (name == "stdout" || name == "stderr" || name == "stdin") && args.is_empty() {
+                if let Some(layout) = ctx.struct_layouts.get("Fd") {
+                    if let Some(slot) = layout.fields.iter().find(|s| s.name == "inner") {
+                        ctx.needs_runtime.set(true);
+                        let fd_num: i64 = match name.as_str() {
+                            "stdout" => 1,
+                            "stderr" => 2,
+                            _ => 0,
+                        };
+                        let temp = struct_temp_name(expr);
+                        out.push_str(&format!("    i32.const {}\n", layout.total_size));
+                        out.push_str("    call $_mvl_struct_alloc\n");
+                        out.push_str(&format!("    local.tee ${temp}\n"));
+                        out.push_str(&format!("    i64.const {fd_num}\n"));
+                        out.push_str(&format!("    i64.store offset={}\n", slot.offset));
+                        out.push_str(&format!("    local.get ${temp}\n"));
+                        return;
+                    }
+                }
+            }
+            // `write(fd, msg)` (std.io, #2056) — dynamic dispatch on the
+            // runtime `Fd.inner` value via WASI `fd_write`. No trailing
+            // newline (unlike println/eprintln) — `std.log`'s `log_write`
+            // appends its own. A non-zero WASI errno traps rather than
+            // constructing a real `IoError` payload — same tradeoff
+            // println/eprintln already make by ignoring `fd_write`'s result.
+            // Arbitrary file fds from `open()` remain unsupported: `open`
+            // itself has no WASM body, so any caller stubs to `unreachable`.
+            if name == "write" && args.len() == 2 {
+                ctx.needs_runtime.set(true);
+                emit_field_access(out, &args[0], "inner", ctx); // i64 fd number
+                out.push_str("    i32.wrap_i64\n");
+                emit_expr(out, &args[1], ctx); // (ptr, len)
+                out.push_str("    call $mvl_write\n"); // -> i32 errno
+                out.push_str("    if (result i32)\n");
+                out.push_str("      unreachable\n");
+                out.push_str("    else\n");
+                out.push_str("      i64.const 0\n");
+                out.push_str("      call $_mvl_result_ok_i64\n");
+                out.push_str("    end\n");
+                return;
+            }
+            // `now()` (std.time, #2056) — real wall-clock read via WASI
+            // `clock_time_get`, heap-boxed as an opaque nanoseconds handle.
+            // `Instant` is MVL-visible as `struct {}` (no fields) — the
+            // nanosecond payload is a WASM-backend-only representation
+            // detail, same trick the Rust/LLVM backends already use.
+            if name == "now" && args.is_empty() {
+                out.push_str("    call $mvl_now\n");
+                return;
+            }
+            // `_instant_epoch_seconds(t)` (std.time, module-private) — reads
+            // the nanoseconds `$mvl_now` boxed and converts to whole seconds.
+            if name == "_instant_epoch_seconds" && args.len() == 1 {
+                emit_expr(out, &args[0], ctx);
+                out.push_str("    i64.load\n");
+                out.push_str("    i64.const 1000000000\n");
+                out.push_str("    i64.div_s\n");
                 return;
             }
             if name == "assert" && args.len() == 1 {
@@ -2842,22 +2923,41 @@ fn emit_match_impl(
             // `Some(inner)` pattern on Option[T]. Check tag == 0, then in
             // the arm body bind `inner` to the extracted payload via the
             // typed value getter. `Pattern::Ident("_")` skips the bind.
-            Pattern::Some { inner, .. } => {
+            Pattern::Some { inner, span } => {
                 ctx.needs_runtime.set(true);
                 let inner_ty = option_inner_ty(&scrutinee.ty).cloned().unwrap_or(Ty::Int);
-                let (_, getter) = option_ops_for(&inner_ty, ctx);
                 out.push_str(&format!("    local.get ${temp}\n"));
                 out.push_str("    call $_mvl_option_tag\n");
                 out.push_str("    i32.eqz\n"); // 1 when tag was 0 (Some)
                 out.push_str(&if_open);
                 if let Pattern::Ident(name, _) = inner.as_ref() {
                     if name != "_" {
-                        out.push_str(&format!("    local.get ${temp}\n"));
-                        out.push_str(&format!("    call ${getter}\n"));
-                        if is_float_ctx(&inner_ty, ctx) {
-                            out.push_str("    f64.reinterpret_i64\n");
+                        if is_string_ty(&inner_ty, ctx) {
+                            // `Option[String]`'s payload slot stores the
+                            // `*MvlString` pointer as i32 (same convention as
+                            // `.unwrap_or`, wasm_text.rs ~2420) — bind the
+                            // split (ptr, len) locals every other String
+                            // variable uses, not a single generic local
+                            // (#2056; `field_or_empty` in std/log.mvl hit this
+                            // via `match fields.get(k) { Some(v) => v, ... }`).
+                            let scratch = mvl_some_string_temp_name(span);
+                            out.push_str(&format!("    local.get ${temp}\n"));
+                            out.push_str("    call $_mvl_option_value_i32\n");
+                            out.push_str(&format!("    local.tee ${scratch}\n"));
+                            out.push_str(&format!("    i32.load offset={MVL_STRING_OFFSET_PTR}\n"));
+                            out.push_str(&format!("    local.set ${name}_ptr\n"));
+                            out.push_str(&format!("    local.get ${scratch}\n"));
+                            out.push_str(&format!("    i32.load offset={MVL_STRING_OFFSET_LEN}\n"));
+                            out.push_str(&format!("    local.set ${name}_len\n"));
+                        } else {
+                            let (_, getter) = option_ops_for(&inner_ty, ctx);
+                            out.push_str(&format!("    local.get ${temp}\n"));
+                            out.push_str(&format!("    call ${getter}\n"));
+                            if is_float_ctx(&inner_ty, ctx) {
+                                out.push_str("    f64.reinterpret_i64\n");
+                            }
+                            out.push_str(&format!("    local.set ${name}\n"));
                         }
-                        out.push_str(&format!("    local.set ${name}\n"));
                     }
                 }
                 emit_match_body(out, &arm.body, ctx);
@@ -3426,11 +3526,23 @@ fn collect_match_arm_locals(
     locals: &mut Vec<(String, Ty)>,
 ) {
     match &arm.pattern {
-        Pattern::Some { inner, .. } => {
+        Pattern::Some { inner, span } => {
             if let Pattern::Ident(name, _) = inner.as_ref() {
                 if name != "_" {
                     let ty = option_inner.cloned().unwrap_or(Ty::Int);
-                    locals.push((name.clone(), ty));
+                    if peels_to_string(&ty) {
+                        // Split (ptr, len) locals — matches every other
+                        // String variable's representation (#2056). Plus a
+                        // scratch local for the *MvlString pointer itself
+                        // while it's being unpacked (see the emit-side
+                        // `Pattern::Some` arm).
+                        locals.push((format!("{name}_ptr"), Ty::Bool)); // i32
+                        locals.push((format!("{name}_len"), Ty::Bool)); // i32
+                        locals.push((mvl_some_string_temp_name(span), Ty::Bool));
+                    // i32
+                    } else {
+                        locals.push((name.clone(), ty));
+                    }
                 }
             }
         }
@@ -3582,6 +3694,15 @@ fn emit_unpack_mvl_string(out: &mut String, expr: &TirExpr) {
 /// declarations → wasm-tools rejects the WAT.
 fn mvl_string_temp_name(expr: &TirExpr) -> String {
     format!("__ms_{}_{}", expr.span.offset, expr.span.len)
+}
+
+/// Temp local holding the `*MvlString` pointer while a `Some(v)` match arm
+/// on `Option[String]` unpacks it into the `v_ptr`/`v_len` locals every
+/// other String variable uses (#2056). Keyed by the `Some(...)` pattern's
+/// own span, not the arm body's — the same pattern can't collide with
+/// itself across arms in one match.
+fn mvl_some_string_temp_name(pattern_span: &Span) -> String {
+    format!("__mvs_{}_{}", pattern_span.offset, pattern_span.len)
 }
 
 /// Temp local name for the `*MvlArray` pointer stashed during a list
@@ -5467,6 +5588,13 @@ fn emit_wasi_runtime_common(
         "  (import \"wasi_snapshot_preview1\" \"fd_write\"\n    \
          (func $fd_write (param i32 i32 i32 i32) (result i32)))\n",
     );
+    // Used by `$mvl_now` (#2056) — real wall-clock read for `std.time.now()`.
+    // Imported unconditionally alongside `fd_write`, same as the existing
+    // convention: cheap to declare, no downside if the program never calls it.
+    out.push_str(
+        "  (import \"wasi_snapshot_preview1\" \"clock_time_get\"\n    \
+         (func $clock_time_get (param i32 i64 i32) (result i32)))\n",
+    );
     if own_memory {
         out.push_str("  (memory 1)\n");
         out.push_str("  (export \"memory\" (memory 0))\n");
@@ -5554,6 +5682,27 @@ const WASI_HELPERS: &str = r#"  (func $mvl_alloc (param $n i32) (result i32)
     (i32.store (i32.const 0) (i32.const 20))
     (i32.store (i32.const 4) (i32.const 1))
     (drop (call $fd_write (i32.const 2) (i32.const 0) (i32.const 1) (i32.const 8))))
+  ;; std.io write(fd, msg) (#2056) — dynamic fd_write on a runtime fd number,
+  ;; no trailing newline (unlike println/eprintln). Returns the raw WASI
+  ;; errno; the caller (emit_expr's `write` special case) traps on nonzero.
+  (func $mvl_write (param $fd i32) (param $ptr i32) (param $len i32) (result i32)
+    (i32.store (i32.const 0) (local.get $ptr))
+    (i32.store (i32.const 4) (local.get $len))
+    (call $fd_write (local.get $fd) (i32.const 0) (i32.const 1) (i32.const 16)))
+  ;; std.time now() (#2056) — boxes a real WASI clock_time_get read (clock id
+  ;; 0 = realtime) as an opaque nanoseconds handle. `_mvl_alloc` is the
+  ;; WASI-local bump allocator above, not the `runtime` crate's
+  ;; `_mvl_struct_alloc` — `now()`/`_instant_epoch_seconds` need no runtime
+  ;; import at all. `clock_time_get` requires its out-pointer 8-byte
+  ;; aligned; `$mvl_alloc`'s bump pointer isn't guaranteed aligned (it can
+  ;; land right after an odd-length string literal), so over-allocate by 8
+  ;; and round up.
+  (func $mvl_now (result i32)
+    (local $p i32)
+    (local.set $p (call $mvl_alloc (i32.const 16)))
+    (local.set $p (i32.and (i32.add (local.get $p) (i32.const 7)) (i32.const -8)))
+    (drop (call $clock_time_get (i32.const 0) (i64.const 0) (local.get $p)))
+    (local.get $p))
 "#;
 
 // ── Emitter tests ────────────────────────────────────────────────────────
@@ -5965,5 +6114,81 @@ mod tests {
             6,
             "expected 6 total inner-discriminant guards across all arms\n{wat}"
         );
+    }
+
+    /// `write(fd, msg)` on a dynamic `Fd` value routes through `$mvl_write`
+    /// (dynamic `fd_write`, no forced newline) rather than the generic
+    /// `call $write` — a dangling reference, since `write` is `builtin`
+    /// (#2056).
+    #[test]
+    fn write_on_dynamic_fd_uses_mvl_write_runtime_shim() {
+        let wat = compile(
+            "type Fd = struct { inner: Int }\n\
+             pub builtin fn stdout() -> Fd\n\
+             pub builtin fn stderr() -> Fd\n\
+             pub builtin fn write(fd: Fd, msg: String) -> Result[Unit, String] ! Console\n\
+             fn log_line(fd: Fd, line: String) -> Unit ! Console {\n\
+                 let _: Result[Unit, String] = write(fd, line);\n\
+             }\n\
+             fn main() -> Unit ! Console {\n\
+                 log_line(stderr(), \"hello\")\n\
+             }\n",
+        );
+        assert!(!wat.contains(";; unsupported"), "{wat}");
+        assert!(!wat.contains("body stubbed"), "{wat}");
+        assert!(!wat.contains("call $write\n"), "{wat}");
+        assert!(!wat.contains("call $stdout\n"), "{wat}");
+        assert!(!wat.contains("call $stderr\n"), "{wat}");
+        assert!(wat.contains("call $mvl_write"), "{wat}");
+        // `stderr()`/`stdout()` heap-allocate an `Fd { inner }` like any
+        // other struct literal.
+        assert!(wat.contains("call $_mvl_struct_alloc"), "{wat}");
+    }
+
+    /// `now()` / a module-private `_instant_epoch_seconds(t)` builtin route
+    /// through the WASI `clock_time_get` shim, not a dangling `call $now`
+    /// (#2056).
+    #[test]
+    fn now_and_epoch_seconds_use_wasi_clock_shim() {
+        let wat = compile(
+            "pub type Instant = struct {}\n\
+             pub builtin fn now() -> Instant ! Clock\n\
+             builtin fn _instant_epoch_seconds(t: Instant) -> Int\n\
+             fn main() -> Unit ! Clock + Console {\n\
+                 let t: Instant = now();\n\
+                 let secs: Int = _instant_epoch_seconds(t);\n\
+                 println(secs.to_string())\n\
+             }\n",
+        );
+        assert!(!wat.contains(";; unsupported"), "{wat}");
+        assert!(!wat.contains("body stubbed"), "{wat}");
+        assert!(!wat.contains("call $now\n"), "{wat}");
+        assert!(!wat.contains("call $_instant_epoch_seconds\n"), "{wat}");
+        assert!(wat.contains("call $mvl_now"), "{wat}");
+        assert!(wat.contains("call $clock_time_get"), "{wat}");
+    }
+
+    /// `Some(v) => v` on `Option[String]` binds `v` as the split (ptr, len)
+    /// locals every other String variable uses — not a single generic
+    /// local, which desyncs from how a bare `Var("v")` reference is always
+    /// emitted for a String-typed name (#2056; this is exactly the shape
+    /// `std/log.mvl`'s `field_or_empty` hit via `match fields.get(k) {
+    /// Some(v) => v, None => "" }`).
+    #[test]
+    fn some_string_match_binding_uses_split_locals() {
+        let wat = compile(
+            "fn first_or_empty(xs: List[String]) -> String {\n\
+                 match xs.get(0) {\n\
+                     Some(v) => v,\n\
+                     None => \"\",\n\
+                 }\n\
+             }\n",
+        );
+        assert!(!wat.contains(";; unsupported"), "{wat}");
+        assert!(!wat.contains("body stubbed"), "{wat}");
+        assert!(wat.contains("(local $v_ptr i32)"), "{wat}");
+        assert!(wat.contains("(local $v_len i32)"), "{wat}");
+        assert!(wat.contains("local.set $v_ptr"), "{wat}");
+        assert!(wat.contains("local.set $v_len"), "{wat}");
     }
 }
