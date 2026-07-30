@@ -228,6 +228,13 @@ struct Ctx<'a> {
     /// Set by `emit_fn` before body emission; read by `emit_stmt(Return)`
     /// to emit drops on explicit-return paths and by loop back-edges.
     fn_locals: std::cell::RefCell<Vec<(String, Ty)>>,
+    /// `let NAME = INIT` bindings for the current function body, name →
+    /// initializer expression. Set by `emit_fn`/`emit_extension_method`
+    /// before body emission; read by `exclude_returned_locals` so a
+    /// `return name` can trace back to the heap-owning temp `name`'s
+    /// initializer actually materialized (#2023/#2052's one-`let`-removed
+    /// case).
+    fn_let_inits: std::cell::RefCell<HashMap<String, TirExpr>>,
     /// Actor metadata by actor type name (#2012). Empty for programs with no
     /// actors, which is what keeps the actor scheduler out of every module.
     actors: &'a HashMap<String, ActorInfo>,
@@ -493,6 +500,7 @@ impl Backend for WasmTextCompiler {
             string_params: std::cell::RefCell::new(std::collections::HashSet::new()),
             assert_mode: self.assert_mode,
             fn_locals: std::cell::RefCell::new(Vec::new()),
+            fn_let_inits: std::cell::RefCell::new(HashMap::new()),
             actors: &actors,
             self_type: std::cell::RefCell::new(None),
             struct_methods: &struct_methods,
@@ -933,12 +941,14 @@ fn local_drop_fn(name: &str, ty: &Ty) -> Option<&'static str> {
 }
 
 /// Emit `local.get $name; call $drop_fn` for every heap-owning local,
-/// optionally skipping the one named `exclude` (the value being returned).
-/// All drop functions are null-safe, so uninitialized locals (value = 0)
-/// are harmless no-ops.
-fn emit_fn_heap_drops(out: &mut String, locals: &[(String, Ty)], exclude: Option<&str>) {
+/// skipping any named in `excludes` (the value(s) being returned — plural
+/// because `return name` may chase back through one or more `let` bindings
+/// to the temp that actually owns the heap allocation, see
+/// `exclude_returned_locals`). All drop functions are null-safe, so
+/// uninitialized locals (value = 0) are harmless no-ops.
+fn emit_fn_heap_drops(out: &mut String, locals: &[(String, Ty)], excludes: &[String]) {
     for (name, ty) in locals {
-        if exclude.map(|ex| ex == name.as_str()).unwrap_or(false) {
+        if excludes.iter().any(|ex| ex == name) {
             continue;
         }
         if let Some(drop_fn) = local_drop_fn(name, ty) {
@@ -1014,22 +1024,44 @@ fn peels_to_string(ty: &Ty) -> bool {
     }
 }
 
-/// Extract the fn-local name holding a `return expr` expression's value so
-/// it can be excluded from heap drops (it must survive for the caller).
-/// Mirrors LLVM's `exclude_returned_value_tir` for the `Var`/`Consume`/
-/// `Relabel` cases, but also has to cover WASM-specific temps:
-/// allocation-returning String methods, `Float.to_string()`, and
+/// Extract the fn-local name(s) holding a `return expr` expression's value
+/// so they can be excluded from heap drops (they must survive for the
+/// caller). Mirrors LLVM's `exclude_returned_value_tir` for the
+/// `Var`/`Consume`/`Relabel` cases, but also has to cover WASM-specific
+/// temps: allocation-returning String methods, `Float.to_string()`, and
 /// `format(...)` materialize their `*MvlString` result into a span-keyed
 /// `__ms_*` local (`collect_locals_expr`, `mvl_string_temp_name`) rather
 /// than a named binding. When the return expression *is* one of these
 /// calls directly, that temp — not any named `Var` — is the value being
 /// returned, and the drop sweep must skip it instead of freeing it out
 /// from under the caller (#2023, #2052).
-fn exclude_returned_local(expr: &TirExpr) -> Option<String> {
+///
+/// A `Var(name)` alone is not enough: `let s: String = a.concat(b); return
+/// s;` returns `Var("s")`, but `s` (split into `s_ptr`/`s_len` locals) is
+/// never itself drop-tracked — the actual heap owner is the `__ms_*` temp
+/// created when `a.concat(b)` was unpacked into `(ptr, len)` during the
+/// `let`. Excluding only `"s"` protects nothing, and the blanket drop sweep
+/// still frees that temp out from under the return value (same UAF class as
+/// #2023/#2052, one `let` removed). So `Var(name)` also looks `name` up in
+/// `ctx.fn_let_inits` — the whole function's `let`-bindings, collected once
+/// up front — and recurses into the initializer, chasing `let a = ...; let
+/// b = a; return b;` chains the same way.
+fn exclude_returned_locals(expr: &TirExpr, ctx: &Ctx) -> Vec<String> {
+    let mut out = Vec::new();
+    exclude_returned_locals_into(expr, ctx, &mut out);
+    out
+}
+
+fn exclude_returned_locals_into(expr: &TirExpr, ctx: &Ctx, out: &mut Vec<String>) {
     match &expr.kind {
-        TirExprKind::Var(name) => Some(name.clone()),
-        TirExprKind::Consume(inner) => exclude_returned_local(inner),
-        TirExprKind::Relabel { expr: inner, .. } => exclude_returned_local(inner),
+        TirExprKind::Var(name) => {
+            out.push(name.clone());
+            if let Some(init) = ctx.fn_let_inits.borrow().get(name).cloned() {
+                exclude_returned_locals_into(&init, ctx, out);
+            }
+        }
+        TirExprKind::Consume(inner) => exclude_returned_locals_into(inner, ctx, out),
+        TirExprKind::Relabel { expr: inner, .. } => exclude_returned_locals_into(inner, ctx, out),
         TirExprKind::MethodCall {
             receiver, method, ..
         } if peels_to_string(&receiver.ty)
@@ -1038,17 +1070,58 @@ fn exclude_returned_local(expr: &TirExpr) -> Option<String> {
                 "concat" | "substring" | "to_upper" | "to_lower" | "trim" | "replace"
             ) =>
         {
-            Some(mvl_string_temp_name(expr))
+            out.push(mvl_string_temp_name(expr));
         }
         TirExprKind::MethodCall {
             receiver, method, ..
         } if matches!(receiver.ty, Ty::Float) && method == "to_string" => {
-            Some(mvl_string_temp_name(expr))
+            out.push(mvl_string_temp_name(expr));
         }
         TirExprKind::FnCall { name, args, .. } if name == "format" && args.len() == 2 => {
-            Some(mvl_string_temp_name(expr))
+            out.push(mvl_string_temp_name(expr));
         }
-        _ => None,
+        _ => {}
+    }
+}
+
+/// Populate `ctx.fn_let_inits` with every `let NAME = INIT` binding in
+/// `body`, recursing into nested blocks (`if`/`else`, `while`, `match` arms)
+/// so a `let` above a conditional `return` is still found. Best-effort by
+/// name, like the rest of this module's span/name-keyed lookups — a
+/// shadowed name across sibling scopes can resolve to the wrong initializer,
+/// but the failure mode is a missed exclusion (leak) or a spurious one
+/// (also just a leak), never a new UAF, since this only ever adds
+/// exclusions on top of the existing direct-expression cases above.
+fn collect_let_inits_block(block: &TirBlock, map: &mut HashMap<String, TirExpr>) {
+    for stmt in &block.stmts {
+        collect_let_inits_stmt(stmt, map);
+    }
+}
+
+fn collect_let_inits_stmt(stmt: &TirStmt, map: &mut HashMap<String, TirExpr>) {
+    match stmt {
+        TirStmt::Let { pattern, init, .. } => {
+            if let Pattern::Ident(name, _) = pattern {
+                map.insert(name.clone(), init.clone());
+            }
+        }
+        TirStmt::If { then, else_, .. } => {
+            collect_let_inits_block(then, map);
+            match else_ {
+                Some(TirElseBranch::Block(b)) => collect_let_inits_block(b, map),
+                Some(TirElseBranch::If(nested)) => collect_let_inits_stmt(nested, map),
+                None => {}
+            }
+        }
+        TirStmt::While { body, .. } => collect_let_inits_block(body, map),
+        TirStmt::Match { arms, .. } => {
+            for arm in arms {
+                if let TirMatchBody::Block(b) = &arm.body {
+                    collect_let_inits_block(b, map);
+                }
+            }
+        }
+        _ => {}
     }
 }
 
@@ -1142,6 +1215,12 @@ fn emit_fn(out: &mut String, f: &TirFn, ctx: &Ctx) {
     // Publish the locals list so emit_stmt(Return) can emit drops on
     // explicit-return paths without threading locals through every call.
     *ctx.fn_locals.borrow_mut() = locals.clone();
+    // Publish this function's `let` bindings so `exclude_returned_locals`
+    // can chase a returned `Var(name)` back to its initializer (#2023,
+    // #2052's one-`let`-removed case).
+    let mut let_inits = HashMap::new();
+    collect_let_inits_block(&f.body, &mut let_inits);
+    *ctx.fn_let_inits.borrow_mut() = let_inits;
 
     emit_block(&mut body, &f.body, ctx);
 
@@ -1184,11 +1263,11 @@ fn emit_fn(out: &mut String, f: &TirFn, ctx: &Ctx) {
         // path, needed so e.g. `fn f(a, b) -> String { a.concat(b) }` doesn't
         // free its own `*MvlString` result before the caller reads it
         // (#2023, #2052).
-        let implicit_exclude = match f.body.stmts.last() {
-            Some(TirStmt::Expr { expr, .. }) => exclude_returned_local(expr),
-            _ => None,
+        let implicit_excludes = match f.body.stmts.last() {
+            Some(TirStmt::Expr { expr, .. }) => exclude_returned_locals(expr, ctx),
+            _ => Vec::new(),
         };
-        emit_fn_heap_drops(out, &locals, implicit_exclude.as_deref());
+        emit_fn_heap_drops(out, &locals, &implicit_excludes);
     }
     out.push_str("  )\n");
 }
@@ -1783,12 +1862,12 @@ fn emit_stmt(out: &mut String, stmt: &TirStmt, ctx: &Ctx) {
             // Drop all heap locals except the one being returned.
             // The exclude keeps the return value alive for the caller;
             // all other live heap locals are freed here (not at fn exit).
-            let excluded = exclude_returned_local(e);
-            emit_fn_heap_drops(out, &ctx.fn_locals.borrow(), excluded.as_deref());
+            let excluded = exclude_returned_locals(e, ctx);
+            emit_fn_heap_drops(out, &ctx.fn_locals.borrow(), &excluded);
             out.push_str("    return\n");
         }
         TirStmt::Return { value: None, .. } => {
-            emit_fn_heap_drops(out, &ctx.fn_locals.borrow(), None);
+            emit_fn_heap_drops(out, &ctx.fn_locals.borrow(), &[]);
             out.push_str("    return\n");
         }
         // `let x: T = init;`  (or `let x: ref T = init;` — same lowering)
@@ -4928,6 +5007,7 @@ fn emit_generic_fn(
         string_params: std::cell::RefCell::new(std::collections::HashSet::new()),
         assert_mode: ctx.assert_mode,
         fn_locals: std::cell::RefCell::new(Vec::new()),
+        fn_let_inits: std::cell::RefCell::new(HashMap::new()),
         actors: ctx.actors,
         // A monomorphized instantiation is a different function, not a
         // continuation of whatever triggered it — reset like `string_params`
@@ -5242,6 +5322,9 @@ fn emit_actor_method(out: &mut String, info: &ActorInfo, m: &TirActorMethod, ctx
         body.push_str(&format!("    (local ${} {})\n", name, wasm_ty(ty, ctx)));
     }
     *ctx.fn_locals.borrow_mut() = locals.clone();
+    let mut let_inits = HashMap::new();
+    collect_let_inits_block(&m.body, &mut let_inits);
+    *ctx.fn_let_inits.borrow_mut() = let_inits;
     emit_block(&mut body, &m.body, ctx);
 
     if body.contains(";; unsupported") {
@@ -5309,6 +5392,9 @@ fn emit_extension_method(out: &mut String, f: &TirFn, ctx: &Ctx) {
         body.push_str(&format!("    (local ${} {})\n", name, wasm_ty(ty, ctx)));
     }
     *ctx.fn_locals.borrow_mut() = locals.clone();
+    let mut let_inits = HashMap::new();
+    collect_let_inits_block(&f.body, &mut let_inits);
+    *ctx.fn_let_inits.borrow_mut() = let_inits;
     emit_block(&mut body, &f.body, ctx);
 
     if body.contains(";; unsupported") {
@@ -5321,11 +5407,11 @@ fn emit_extension_method(out: &mut String, f: &TirFn, ctx: &Ctx) {
         // { "...".concat(...) }`, no `return` keyword) must not have its own
         // *MvlString result freed by the blanket drop sweep before the caller
         // reads it.
-        let implicit_exclude = match f.body.stmts.last() {
-            Some(TirStmt::Expr { expr, .. }) => exclude_returned_local(expr),
-            _ => None,
+        let implicit_excludes = match f.body.stmts.last() {
+            Some(TirStmt::Expr { expr, .. }) => exclude_returned_locals(expr, ctx),
+            _ => Vec::new(),
         };
-        emit_fn_heap_drops(out, &locals, implicit_exclude.as_deref());
+        emit_fn_heap_drops(out, &locals, &implicit_excludes);
     }
     out.push_str("  )\n");
     *ctx.self_type.borrow_mut() = None;

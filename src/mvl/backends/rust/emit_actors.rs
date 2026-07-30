@@ -138,26 +138,31 @@ impl RustEmitter {
                 .any(|m| m.name == "on_exit" || m.name == "on_down");
 
         // ── 1. State struct ────────────────────────────────────────────────────
-        // `pub` — matches every other emitted struct (emit_types.rs, the handle
-        // struct just below). Previously private-by-default, which only ever
-        // worked because every existing example constructed its actors in the
-        // same file that declared them; the first cross-module actor spawn
-        // (a sibling module's `actor Name { ... }` constructor call) fails to
-        // compile without this.
-        self.line(&format!("pub struct {state_name} {{"));
+        // `pub(crate)` — cross-module `actor Name { ... }` construction needs
+        // this reachable from any module in the generated crate (previously
+        // private-by-default, which only ever worked because every existing
+        // example constructed its actors in the same file that declared
+        // them). Not full `pub`: unlike the handle struct just below (the
+        // actual public API — external code only ever holds a `Name`
+        // handle), this is an internal implementation detail — its raw
+        // `_self_ref` sender and mailbox enum should never be reachable
+        // outside the crate the actor was compiled into.
+        self.line(&format!("pub(crate) struct {state_name} {{"));
         self.push_indent();
         for field in &ad.fields {
             let ty_str = emit_ty(&field.ty);
-            self.line(&format!("pub {}: {ty_str},", field.name));
+            self.line(&format!("pub(crate) {}: {ty_str},", field.name));
         }
         if needs_spawnable {
             // Strong sender so behaviors can always clone `self` as a tag without
             // racing shutdown.  Nulled by the `_Shutdown` dispatch arm so the
             // channel closes naturally once the actor exits its dispatch loop.
-            self.line(&format!("pub _self_ref: Option<MvlSender<{msg_name}>>,"));
+            self.line(&format!(
+                "pub(crate) _self_ref: Option<MvlSender<{msg_name}>>,"
+            ));
             // `_self_id` mirrors the handle's `_id` so self-ref handle construction
             // can set the `_id` field (#1128).
-            self.line("pub _self_id: ActorId,");
+            self.line("pub(crate) _self_id: ActorId,");
         }
         self.pop_indent();
         self.line("}");
@@ -165,9 +170,10 @@ impl RustEmitter {
 
         // ── 2. Message enum (one variant per public behavior + system variants) ─
         if needs_spawnable {
-            // `pub` — reachable through the now-`pub` state struct's
-            // `_self_ref: Option<MvlSender<{msg_name}>>` field.
-            self.line(&format!("pub enum {msg_name} {{"));
+            // `pub(crate)` — reachable through the state struct's own
+            // `pub(crate) _self_ref: Option<MvlSender<{msg_name}>>` field;
+            // same crate-only scope, same rationale.
+            self.line(&format!("pub(crate) enum {msg_name} {{"));
             self.push_indent();
             for m in pub_methods.iter().filter(|m| !m.is_test) {
                 let variant = snake_to_pascal(&m.name);
@@ -505,11 +511,13 @@ impl RustEmitter {
         //    Shutdown protocol (#1048, #1125): the main body scope drops all actor
         //    handles before `mvl_join_actors()` runs.  `MvlReceiver::recv()` drains
         //    buffered messages then returns `None` once every sender is gone.
-        // `pub` — `actor Name { ... }` construction syntax has no MVL-level
-        // privacy qualifier, so it must be constructible from any module that
-        // imports `Name`, same as the state struct and handle struct above.
+        // `pub(crate)` — `actor Name { ... }` construction syntax has no
+        // MVL-level privacy qualifier, so it must be constructible from any
+        // module in the crate that imports `Name`; not full `pub` since its
+        // `state: {state_name}` parameter is the same crate-internal type
+        // as the state struct above.
         self.line(&format!(
-            "pub fn {start_fn}(mut state: {state_name}) -> {name} {{"
+            "pub(crate) fn {start_fn}(mut state: {state_name}) -> {name} {{"
         ));
         self.push_indent();
         // Assign unique actor ID (#1177).
