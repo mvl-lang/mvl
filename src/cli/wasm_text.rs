@@ -14,26 +14,32 @@ use mvl::mvl::backends::{AssertMode, Backend};
 use mvl::mvl::checker;
 use mvl::mvl::checker::types::Ty;
 use mvl::mvl::ir::visit::{walk_tir_expr, Visit};
-use mvl::mvl::ir::{TirExpr, TirExprKind, TirFn, TirProgram};
+use mvl::mvl::ir::{
+    TirExpr, TirExprKind, TirFn, TirProgram, TirTypeBody, TirTypeDecl, TirVariantFields,
+};
 use mvl::mvl::loader;
 use mvl::mvl::parser::ast::{Decl, FnDecl, Program, TypeDecl};
 use mvl::mvl::parser::lexer::Span;
 use mvl::mvl::parser::Parser;
 use mvl::mvl::pipeline::{load_full_prelude, PreludeMode};
+use mvl::mvl::stdlib;
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process;
 
 /// Collects every free-function name referenced via `TirExprKind::FnCall`,
-/// and every qualified enum-variant reference (`TirExprKind::Var("Type::Variant")`)
-/// in a function body — used to find prelude functions/types a program
-/// references but that never got lowered into the emitted module (#2045,
-/// #2046).
+/// every qualified enum-variant reference (`TirExprKind::Var("Type::Variant")`),
+/// and every extension-method dot-call (`TirExprKind::MethodCall`) whose
+/// receiver resolves to a named type — used to find prelude functions/types
+/// a program references but that never got lowered into the emitted module
+/// (#2045, #2046, #2056).
 #[derive(Default)]
 struct RefCollector {
     fn_calls: HashSet<String>,
     variant_refs: HashSet<String>,
+    /// `(receiver_type, method)` — e.g. `("Logger", "info")` for `logger.info(...)`.
+    method_refs: HashSet<(String, String)>,
 }
 
 impl<'a> Visit<'a> for RefCollector {
@@ -45,9 +51,28 @@ impl<'a> Visit<'a> for RefCollector {
             TirExprKind::Var(name) if name.contains("::") => {
                 self.variant_refs.insert(name.clone());
             }
+            TirExprKind::MethodCall {
+                receiver, method, ..
+            } => {
+                if let Some(type_name) = named_type_name(&receiver.ty) {
+                    self.method_refs.insert((type_name, method.clone()));
+                }
+            }
             _ => {}
         }
         walk_tir_expr(self, e);
+    }
+}
+
+/// Strip `Ref`/`Labeled`/`Refined` wrappers and return the underlying
+/// `Ty::Named` name, if any. Local copy of the same peel used by the WASM
+/// backend's `is_struct_method_call` — needed here to resolve a
+/// `MethodCall` receiver to the extension-method lookup key.
+fn named_type_name(ty: &Ty) -> Option<String> {
+    match ty {
+        Ty::Named(n, _) => Some(n.clone()),
+        Ty::Ref(_, inner) | Ty::Labeled(_, inner) | Ty::Refined(inner, _) => named_type_name(inner),
+        _ => None,
     }
 }
 
@@ -67,6 +92,150 @@ fn collect_type_decls<'a>(
     map
 }
 
+/// Collect all extension-method declarations (`fn Type::method(self, ...)`)
+/// from a list of programs, keyed by `(receiver_type, method_name)`.
+///
+/// Deliberately not merged into `mono::collect_fns`'s plain-name map: that
+/// map is keyed by bare name only, which collides across types that share a
+/// common method name (`len`, `get`, `is_empty`, ...). A `MethodCall`'s
+/// receiver type disambiguates here.
+fn collect_method_decls<'a>(
+    programs: impl IntoIterator<Item = &'a Program>,
+) -> HashMap<(String, String), FnDecl> {
+    let mut map = HashMap::new();
+    for prog in programs {
+        for decl in &prog.declarations {
+            if let Decl::Fn(fd) = decl {
+                if let Some(recv) = &fd.receiver_type {
+                    map.insert((recv.clone(), fd.name.clone()), fd.clone());
+                }
+            }
+        }
+    }
+    map
+}
+
+/// Recursively collect every `Ty::Named` name reachable from `ty` — through
+/// `Option`/`Result`/`List`/`Set`/`Array`/`Map`/`Ptr`/`Ref`/`Labeled`/
+/// `Refined`/`Fn` wrappers and generic type arguments.
+///
+/// Discovers prelude struct/enum types referenced only in *type position* —
+/// a param type, a return type, a struct field — which is invisible to
+/// `RefCollector`: such a reference is never a qualified `Type::Variant`
+/// `Var`, and never any kind of call (#2056). Without this, a type like
+/// `std.log`'s `Logger` or `std.io`'s `Fd` never lands in `merged.types`, so
+/// `wasm_ty`/`is_i32` never find it in `struct_layouts` and silently fall
+/// back to treating it as a plain `i64` — the function still "compiles",
+/// just with the wrong ABI shape for every caller.
+fn collect_named_types(ty: &Ty, out: &mut HashSet<String>) {
+    match ty {
+        Ty::Named(name, args) => {
+            out.insert(name.clone());
+            for a in args {
+                collect_named_types(a, out);
+            }
+        }
+        Ty::Option(inner) | Ty::Ptr(inner) | Ty::Set(inner) | Ty::List(inner) => {
+            collect_named_types(inner, out)
+        }
+        Ty::Array(inner, _) => collect_named_types(inner, out),
+        Ty::Result(a, b) | Ty::Map(a, b) => {
+            collect_named_types(a, out);
+            collect_named_types(b, out);
+        }
+        Ty::Ref(_, inner) | Ty::Refined(inner, _) | Ty::Labeled(_, inner) => {
+            collect_named_types(inner, out)
+        }
+        Ty::Fn(params, ret, _, _) => {
+            for p in params {
+                collect_named_types(p, out);
+            }
+            collect_named_types(ret, out);
+        }
+        _ => {}
+    }
+}
+
+/// Named types referenced by a `TirFn`'s params/return type.
+fn fn_type_refs(f: &TirFn, out: &mut HashSet<String>) {
+    for p in &f.params {
+        collect_named_types(&p.ty, out);
+    }
+    collect_named_types(&f.ret_ty, out);
+}
+
+/// Named types referenced by a `TirTypeDecl`'s own fields — struct fields,
+/// enum-variant payloads (tuple or struct-shaped), or an alias's target.
+/// Drives the transitive part of the type pull-in: once `Logger` is pulled
+/// in, its `fd: Fd` field must pull in `Fd` too.
+fn type_decl_field_refs(td: &TirTypeDecl, out: &mut HashSet<String>) {
+    match &td.body {
+        TirTypeBody::Struct { fields, .. } => {
+            for f in fields {
+                collect_named_types(&f.ty, out);
+            }
+        }
+        TirTypeBody::Enum(variants) => {
+            for v in variants {
+                match &v.fields {
+                    TirVariantFields::Unit => {}
+                    TirVariantFields::Tuple(tys) => {
+                        for t in tys {
+                            collect_named_types(t, out);
+                        }
+                    }
+                    TirVariantFields::Struct(fields) => {
+                        for f in fields {
+                            collect_named_types(&f.ty, out);
+                        }
+                    }
+                }
+            }
+        }
+        TirTypeBody::Alias(ty) => collect_named_types(ty, out),
+    }
+}
+
+/// Lower and merge every type reachable from `seed`, transitively following
+/// each newly-lowered type's own field types (#2056).
+fn pull_in_types(
+    merged: &mut TirProgram,
+    known_types: &mut HashSet<String>,
+    seed: HashSet<String>,
+    all_type_decls: &HashMap<String, TypeDecl>,
+    expr_types: &HashMap<Span, Ty>,
+) {
+    let mut worklist: Vec<String> = seed.into_iter().collect();
+    while let Some(name) = worklist.pop() {
+        if known_types.contains(&name) {
+            continue;
+        }
+        known_types.insert(name.clone());
+
+        let Some(td) = all_type_decls.get(&name) else {
+            continue;
+        };
+        let synthetic = Program {
+            declarations: vec![Decl::Type(td.clone())],
+            span: td.span,
+        };
+        let syn_mono =
+            mvl::mvl::passes::mono::monomorphize(&synthetic, &HashMap::new(), expr_types);
+        let syn_tir = mvl::mvl::ir::lower::lower(&synthetic, &syn_mono, expr_types);
+
+        let mut field_refs = HashSet::new();
+        for new_td in &syn_tir.types {
+            type_decl_field_refs(new_td, &mut field_refs);
+        }
+        for r in field_refs {
+            if !known_types.contains(&r) {
+                worklist.push(r);
+            }
+        }
+        merged.types.extend(syn_tir.types);
+    }
+}
+
 /// Pull in prelude functions and types that `merged` references by name but
 /// that were never lowered (#2045, #2046).
 ///
@@ -78,11 +247,13 @@ fn collect_type_decls<'a>(
 /// std.args.{ArgType}`) lowers to `TirExprKind::Var("ArgType::Int")`, and the
 /// WASM emitter only recognizes such names when the owning enum's `TirTypeDecl`
 /// is present in `merged.types` — otherwise it falls through to treating the
-/// name as a plain local (`local.get $ArgType::Int`, "unknown local").
+/// name as a plain local (`local.get $ArgType::Int`, "unknown local"). A
+/// struct/enum referenced only in type position (never a qualified Var, never
+/// a call) needs the same treatment — see `collect_named_types` (#2056).
 ///
 /// The LLVM backend avoids both gaps by lowering *every* prelude module and
 /// merging all of it in — too broad here: prelude functions the WASM backend
-/// doesn't support yet (e.g. `stdout()`, `exit()`) would break every program
+/// doesn't support yet (e.g. `open()`, `exit()`) would break every program
 /// that transitively pulls them in, even ones that never call them. Instead,
 /// walk outward from `merged` and lower only the specific missing
 /// functions/types, transitively.
@@ -95,10 +266,36 @@ fn pull_in_missing_prelude_items(
     merged: &mut TirProgram,
     all_fn_decls: &HashMap<String, FnDecl>,
     all_type_decls: &HashMap<String, TypeDecl>,
+    all_method_decls: &HashMap<(String, String), FnDecl>,
     expr_types: &HashMap<Span, Ty>,
 ) {
     let mut known_fns: HashSet<String> = merged.fns.iter().map(|f| f.name.clone()).collect();
     let mut known_types: HashSet<String> = merged.types.iter().map(|t| t.name.clone()).collect();
+    let mut known_methods: HashSet<(String, String)> = merged
+        .fns
+        .iter()
+        .filter_map(|f| f.receiver_type.clone().map(|r| (r, f.name.clone())))
+        .collect();
+
+    // `merged.types`/`merged.fns` already contain whatever the entry program
+    // directly named (e.g. `let logger: Logger = ...` pulls `Logger`'s own
+    // `TirTypeDecl` in during the very first `lower()`, before this function
+    // ever runs) — `known_types` above already marks those as known, so the
+    // main worklist below never re-visits them and never sees their field
+    // types. Seed once from the types already present so e.g. `Logger`'s
+    // `fd: Fd` field still pulls `Fd` in (#2056).
+    let mut initial_type_seed: HashSet<String> = HashSet::new();
+    for td in &merged.types {
+        type_decl_field_refs(td, &mut initial_type_seed);
+    }
+    pull_in_types(
+        merged,
+        &mut known_types,
+        initial_type_seed,
+        all_type_decls,
+        expr_types,
+    );
+
     let mut frontier: Vec<TirFn> = merged.fns.clone();
 
     while !frontier.is_empty() {
@@ -107,27 +304,22 @@ fn pull_in_missing_prelude_items(
             collector.visit_tir_block(&f.body);
         }
 
-        for name in collector.variant_refs {
-            let Some((type_name, _)) = name.split_once("::") else {
-                continue;
-            };
-            if known_types.contains(type_name) {
-                continue;
-            }
-            known_types.insert(type_name.to_string());
-
-            let Some(td) = all_type_decls.get(type_name) else {
-                continue;
-            };
-            let synthetic = Program {
-                declarations: vec![Decl::Type(td.clone())],
-                span: td.span,
-            };
-            let syn_mono =
-                mvl::mvl::passes::mono::monomorphize(&synthetic, &HashMap::new(), expr_types);
-            let syn_tir = mvl::mvl::ir::lower::lower(&synthetic, &syn_mono, expr_types);
-            merged.types.extend(syn_tir.types);
+        let mut type_seed: HashSet<String> = HashSet::new();
+        for f in &frontier {
+            fn_type_refs(f, &mut type_seed);
         }
+        for name in &collector.variant_refs {
+            if let Some((type_name, _)) = name.split_once("::") {
+                type_seed.insert(type_name.to_string());
+            }
+        }
+        pull_in_types(
+            merged,
+            &mut known_types,
+            type_seed,
+            all_type_decls,
+            expr_types,
+        );
 
         let mut newly_added: Vec<TirFn> = Vec::new();
         for name in collector.fn_calls {
@@ -149,11 +341,6 @@ fn pull_in_missing_prelude_items(
             let Some(fd) = all_fn_decls.get(&name) else {
                 continue; // Not a plain fn decl — extern, or unresolved (checker already flagged it).
             };
-            // Generics/methods/builtins are handled by their own dispatch
-            // paths — `emit_program`'s `fns` filter drops them regardless.
-            if !fd.type_params.is_empty() || fd.receiver_type.is_some() || fd.is_builtin {
-                continue;
-            }
 
             let synthetic = Program {
                 declarations: vec![Decl::Fn(fd.clone())],
@@ -162,11 +349,181 @@ fn pull_in_missing_prelude_items(
             let syn_fns = mvl::mvl::passes::mono::collect_fns([&synthetic]);
             let syn_mono = mvl::mvl::passes::mono::monomorphize(&synthetic, &syn_fns, expr_types);
             let syn_tir = mvl::mvl::ir::lower::lower(&synthetic, &syn_mono, expr_types);
+
+            // A `builtin fn` (e.g. `write(fd: Fd, ...)`) never gets its body
+            // pulled in below — but its *signature* can still name a type
+            // (`Fd`) nothing else ever references directly, so pull that in
+            // regardless of whether the fn itself is eligible for lowering
+            // (#2056).
+            let mut sig_types = HashSet::new();
+            for f in &syn_tir.fns {
+                fn_type_refs(f, &mut sig_types);
+            }
+            pull_in_types(
+                merged,
+                &mut known_types,
+                sig_types,
+                all_type_decls,
+                expr_types,
+            );
+
+            // Generics/methods/builtins are handled by their own dispatch
+            // paths — `emit_program`'s `fns` filter drops them regardless.
+            if !fd.type_params.is_empty() || fd.receiver_type.is_some() || fd.is_builtin {
+                continue;
+            }
+            newly_added.extend(syn_tir.fns);
+        }
+
+        // Extension-method dot-calls (`logger.info(...)`) — invisible to the
+        // `TirExprKind::FnCall` walk above, since a `MethodCall` never sets
+        // `name` to the bare method name. Without this, any prelude type
+        // (e.g. `std.log`'s `Logger`) whose methods aren't directly `use`d as
+        // free functions never gets its method bodies lowered, and the
+        // dot-call falls through the WASM backend's `is_struct_method_call`
+        // guard to the generic "unsupported method call" stub (#2056).
+        for (recv, method) in collector.method_refs {
+            let key = (recv.clone(), method.clone());
+            if known_methods.contains(&key) {
+                continue;
+            }
+            known_methods.insert(key.clone());
+
+            let Some(fd) = all_method_decls.get(&key) else {
+                continue; // Not a plain extension-method decl — builtin, or unresolved.
+            };
+
+            let synthetic = Program {
+                declarations: vec![Decl::Fn(fd.clone())],
+                span: fd.span,
+            };
+            let syn_fns = mvl::mvl::passes::mono::collect_fns([&synthetic]);
+            let syn_mono = mvl::mvl::passes::mono::monomorphize(&synthetic, &syn_fns, expr_types);
+            let syn_tir = mvl::mvl::ir::lower::lower(&synthetic, &syn_mono, expr_types);
+
+            let mut sig_types = HashSet::new();
+            for f in &syn_tir.fns {
+                fn_type_refs(f, &mut sig_types);
+            }
+            pull_in_types(
+                merged,
+                &mut known_types,
+                sig_types,
+                all_type_decls,
+                expr_types,
+            );
+
+            if !fd.type_params.is_empty() || fd.is_builtin {
+                continue;
+            }
             newly_added.extend(syn_tir.fns);
         }
 
         merged.fns.extend(newly_added.iter().cloned());
         frontier = newly_added;
+    }
+}
+
+/// `Fd`/`IoError` (and `stdout`/`stderr`/`write`, etc.) are registered
+/// directly in the checker (`register_builtins`, `checker/context.rs`) as
+/// always-visible without a `use std.io` import — the same tier as
+/// `println`/`eprintln`. Nothing in the prelude-assembly path mirrors that:
+/// `load_implicit_prelude` only loads a fixed pure-MVL set (core/strings/
+/// lists/effects), and `load_rust_backed_stdlib_fns` only loads modules a
+/// program's own `use` statements name. A program that reaches `Fd`
+/// transitively — `use std.log` alone, since `Logger.fd: Fd` and `std/log.mvl`
+/// itself never writes `use std.io` — never gets `io.mvl`'s type
+/// declarations into `all_type_decls`, so `pull_in_types` can never resolve
+/// `Fd` even though the checker already resolved it fine (#2056).
+///
+/// Only `Decl::Type` entries are kept — `stdout`/`stderr`/`write`/etc.'s
+/// `Decl::Fn` entries are deliberately left out: the checker already
+/// registers those names as builtins, and the WASM backend's codegen
+/// (`emit_expr`'s `write`/`stdout`/`stderr`/`now` special cases) matches on
+/// the literal call name regardless of whether a separate `FnDecl` exists,
+/// so re-adding them here would only risk a duplicate-declaration conflict
+/// in `check_with_prelude` for no benefit.
+///
+/// Scoped to the WASM backend only — `load_implicit_prelude` is shared by
+/// every backend and CLI command; broadening it risks shifting behavior
+/// (proof obligations, mutation targets, error text) for unrelated commands.
+fn load_io_types_prelude() -> Program {
+    let content = stdlib::stdlib_content("io.mvl").unwrap_or_else(|| {
+        panic!("stdlib file `io.mvl` not found — run `make install` or `mvl self install` to install the stdlib")
+    });
+    let (mut parser, _) = Parser::new(&content);
+    let mut prog = parser.parse_program();
+    prog.declarations.retain(|d| matches!(d, Decl::Type(_)));
+    prog
+}
+
+/// Append `load_io_types_prelude()` unless a program that directly `use`d
+/// `std.io` (via `load_rust_backed_stdlib_fns`) already loaded its
+/// declarations — avoids handing `check_with_prelude` two `Decl::Type("Fd")`
+/// entries across different `Program`s in the same prelude slice.
+fn ensure_io_types_prelude(prelude: &mut Vec<Program>) {
+    let already_loaded = prelude.iter().any(|p| {
+        p.declarations
+            .iter()
+            .any(|d| matches!(d, Decl::Type(td) if td.name == "Fd"))
+    });
+    if !already_loaded {
+        prelude.push(load_io_types_prelude());
+    }
+}
+
+/// Top-level name of a `Decl::Fn`/`Decl::Type`, for the dedup check in
+/// [`ensure_transitive_rust_backed_stdlib`].
+fn decl_name(d: &Decl) -> Option<String> {
+    match d {
+        Decl::Fn(fd) => Some(fd.name.clone()),
+        Decl::Type(td) => Some(td.name.clone()),
+        _ => None,
+    }
+}
+
+/// `load_rust_backed_stdlib_fns` only scans the `use` statements of the
+/// programs handed to it directly — it never looks inside a module *those*
+/// programs pulled in. `std/log.mvl` (itself loaded into `prelude` via
+/// `load_full_prelude` because the entry program did `use std.log`) has its
+/// own `use std.time.{now, format_instant}`, but nothing re-scans `log.mvl`
+/// for that: the entry program's own `use` list never named `std.time`, so
+/// `format_instant`'s real MVL body never lands in `all_fn_decls`, leaving a
+/// dangling `call $format_instant` (#2056).
+///
+/// Re-scans `prog` + the current `prelude` (which now includes whatever the
+/// first pass and `load_full_prelude` already loaded) and folds in anything
+/// genuinely new, bounded to a few rounds — RUST_BACKED_STDLIB is a short,
+/// shallow list (`io`, `net`, `process`, `random`, `regex`, `time`), so this
+/// converges in one or two rounds in practice; the bound is just a backstop
+/// against surprises, not a real depth requirement.
+fn ensure_transitive_rust_backed_stdlib(prog: &Program, prelude: &mut Vec<Program>) {
+    for _ in 0..4 {
+        let mut scan: Vec<Program> = vec![prog.clone()];
+        scan.extend(prelude.iter().cloned());
+        let found = loader::load_rust_backed_stdlib_fns(&scan);
+
+        let existing_names: HashSet<String> = prelude
+            .iter()
+            .flat_map(|p| p.declarations.iter())
+            .filter_map(decl_name)
+            .collect();
+
+        let mut added_any = false;
+        for np in found {
+            let brings_new = np
+                .declarations
+                .iter()
+                .filter_map(decl_name)
+                .any(|n| !existing_names.contains(&n));
+            if brings_new {
+                prelude.push(np);
+                added_any = true;
+            }
+        }
+        if !added_any {
+            break;
+        }
     }
 }
 
@@ -180,6 +537,8 @@ fn compile_wat(prog: &Program, module_name: &str, assert_mode: AssertMode) -> St
     prelude.extend(loader::load_rust_backed_stdlib_fns(std::slice::from_ref(
         prog,
     )));
+    ensure_io_types_prelude(&mut prelude);
+    ensure_transitive_rust_backed_stdlib(prog, &mut prelude);
 
     let mut expr_types = checker::collect_prelude_expr_types(&prelude);
     let check_result = checker::check_with_prelude(&prelude, prog);
@@ -204,9 +563,16 @@ fn compile_wat(prog: &Program, module_name: &str, assert_mode: AssertMode) -> St
 
     let all_fns = mvl::mvl::passes::mono::collect_fns(std::iter::once(prog).chain(prelude.iter()));
     let all_types = collect_type_decls(std::iter::once(prog).chain(prelude.iter()));
+    let all_methods = collect_method_decls(std::iter::once(prog).chain(prelude.iter()));
     let mono = mvl::mvl::passes::mono::monomorphize(prog, &all_fns, &expr_types);
     let mut entry_tir = mvl::mvl::ir::lower::lower(prog, &mono, &expr_types);
-    pull_in_missing_prelude_items(&mut entry_tir, &all_fns, &all_types, &expr_types);
+    pull_in_missing_prelude_items(
+        &mut entry_tir,
+        &all_fns,
+        &all_types,
+        &all_methods,
+        &expr_types,
+    );
 
     let mut compiler = WasmTextCompiler::new();
     compiler.assert_mode = assert_mode;
@@ -291,6 +657,8 @@ fn compile_wat_multi(
     prelude.extend(loader::load_rust_backed_stdlib_fns(std::slice::from_ref(
         prog,
     )));
+    ensure_io_types_prelude(&mut prelude);
+    ensure_transitive_rust_backed_stdlib(prog, &mut prelude);
 
     let mut expr_types = checker::collect_prelude_expr_types(&prelude);
     let check_result = checker::check_with_two_preludes(&prelude, &sibling_progs, prog);
@@ -315,6 +683,11 @@ fn compile_wat_multi(
             .chain(prelude.iter()),
     );
     let all_types = collect_type_decls(
+        std::iter::once(prog)
+            .chain(sibling_progs.iter().copied())
+            .chain(prelude.iter()),
+    );
+    let all_methods = collect_method_decls(
         std::iter::once(prog)
             .chain(sibling_progs.iter().copied())
             .chain(prelude.iter()),
@@ -351,8 +724,8 @@ fn compile_wat_multi(
             .collect::<Vec<_>>(),
     );
     // Pull in prelude functions/types referenced by name but never lowered —
-    // see `pull_in_missing_prelude_items` (#2045, #2046).
-    pull_in_missing_prelude_items(&mut merged, &all_fns, &all_types, &expr_types);
+    // see `pull_in_missing_prelude_items` (#2045, #2046, #2056).
+    pull_in_missing_prelude_items(&mut merged, &all_fns, &all_types, &all_methods, &expr_types);
 
     let mut compiler = WasmTextCompiler::new();
     compiler.assert_mode = assert_mode;
