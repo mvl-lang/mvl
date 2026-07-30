@@ -14,9 +14,15 @@
 # interleaves mid-line.
 set -uo pipefail
 
-# Prevent the mvl binary from re-execing to the installed pinned toolchain.
-# Without this, a stale installed binary would silently run instead of the
-# freshly-built dev binary this script requires (see Makefile:136-139).
+# Prevent every `mvl` invocation below from re-execing to a project-pinned
+# *installed* toolchain (src/main.rs, CLAUDE.md). The root Makefile already
+# exports this for `make test-examples-*`, but this script is also invoked
+# directly — e.g. CI's "Example smoke tests" job runs `bash examples/test-all.sh
+# --full`, bypassing the Makefile entirely — and any developer machine with
+# an older toolchain installed under the same version string (version numbers
+# don't guarantee identical binaries) would otherwise silently test that
+# stale binary instead of the one just built, with no error, just wrong
+# results (#2068).
 export MVL_NO_REEXEC=1
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
