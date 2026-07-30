@@ -13,8 +13,9 @@
 // Req 10: UserId refinement (> 0)
 // Req 11: Tainted input, Secret password, Public output
 //
+// expires_at=0 below because now_plus() is a stub returning 0.
 // Expected stdout:
-//   user 1: OK session, expires_at=0   (now_plus() is a stub returning 0)
+//   user 1: OK session, expires_at=0
 //   user 2: Err(NotFound)
 
 // Supporting types and stub functions (would be provided by a library in practice).
