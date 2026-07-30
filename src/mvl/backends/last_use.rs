@@ -57,9 +57,8 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::mvl::ir::{
-    TirBlock, TirElseBranch, TirExpr, TirExprKind, TirMatchBody, TirSelectArm, TirStmt,
+    Pattern, TirBlock, TirElseBranch, TirExpr, TirExprKind, TirMatchBody, TirSelectArm, TirStmt,
 };
-use crate::mvl::parser::ast::Pattern;
 use crate::mvl::parser::lexer::Span;
 
 /// Return the set of spans that are last uses of their respective variables.
@@ -359,8 +358,7 @@ impl LastUseTracker {
 mod tests {
     use super::*;
     use crate::mvl::checker::types::Ty;
-    use crate::mvl::ir::TirMatchArm;
-    use crate::mvl::parser::ast::RefExpr;
+    use crate::mvl::ir::{LetKind, RefExpr, TirMatchArm};
 
     fn sp(line: u32) -> Span {
         Span::new(line, 1, line as u64 as u32, 1)
@@ -388,7 +386,7 @@ mod tests {
 
     fn let_stmt(name: &str, init: TirExpr, line: u32) -> TirStmt {
         TirStmt::Let {
-            kind: crate::mvl::parser::ast::LetKind::Regular,
+            kind: LetKind::Regular,
             pattern: Pattern::Ident(name.to_string(), sp(line)),
             ty: Ty::String,
             init,
