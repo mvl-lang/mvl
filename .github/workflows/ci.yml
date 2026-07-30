@@ -78,13 +78,25 @@ jobs:
 
   # ── ISPE Assurance ──────────────────────────────────────────────────────────
   #
-  # Overall spec-coverage metric. Runs on every PR regardless of which files
-  # changed — it measures the project as a whole. Reports only, does not block.
+  # Overall spec-coverage metric (Traceability level, ADR-0061). Runs on every
+  # PR regardless of which files changed — it measures the project as a whole.
+  # Reports only, does not block.
+  #
+  # needs: [check] (Verification level) so this job only runs after `check`
+  # succeeds or is skipped (path-filtered out) — a green traceability ratio
+  # reported over code that fails to build reads as progress when it isn't
+  # (ADR-0061 SS5). `always()` is required to keep this job from being
+  # implicitly skipped when `check` fails; the explicit result check below
+  # does the actual gating.
   assurance:
     name: ISPE Assurance
-    needs: [changes]
+    needs: [changes, check]
     runs-on: ubuntu-latest
-    if: github.event_name == 'pull_request' && github.actor != 'dependabot[bot]' && needs.changes.outputs.code == 'true' && needs.changes.outputs.release != 'true'
+    if: >-
+      always() &&
+      github.event_name == 'pull_request' && github.actor != 'dependabot[bot]' &&
+      needs.changes.outputs.code == 'true' && needs.changes.outputs.release != 'true' &&
+      (needs.check.result == 'success' || needs.check.result == 'skipped')
     permissions:
       contents: read
       pull-requests: write

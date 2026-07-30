@@ -13,6 +13,15 @@ requirements (ADR-0001) and presents them as a structured dashboard.
 
 Referenced in ADRs 0006, 0012, 0014 but previously had no behavioral specification.
 
+**Vocabulary note (ADR-0061):** despite the command's name, everything this spec
+describes is the **Verification** level — per-file verdicts (Proven / Failed /
+Unchecked / N/A), not a traceability or evidence report. `mvl assurance` keeps
+its current name; ADR-0061 documents this as a deliberate, known divergence
+from a literal reading of the vocabulary rather than an oversight. The
+**Traceability** and **Evidence** levels are measured separately by
+`tools/assurance.py` (`make traceability` / `make evidence`), and the case that
+combines all three is `make assurance`.
+
 ## Requirements
 
 ### Requirement 1: Per-Module Requirement Verdicts [MUST]
