@@ -1,5 +1,31 @@
 # Changelog
 
+## [1.7.4] - 2026-07-31
+
+### Fixed — #2100
+
+- **WASM/LLVM backends: `path()`/`join()` — the only way to construct a `Path` — had no way to reach a caller.** #2093/#2094 wired the `Path`-taking `std.io` functions (`write_file`, `append`, `path_exists`, `is_file`, `is_dir`, `create_dir_all`, `remove`) to their runtime calls, but the shared `load_rust_backed_stdlib_fns` loader excluded `Path` as an opaque type — correct for LLVM, where it's a native handle, wrong for WASM, where it's a plain `{ inner: String }` struct — so a program calling `path(...)` on WASM produced a module with an undefined `$path` function. `load_rust_backed_stdlib_fns` now takes a backend-specific `opaque_types` list instead of a hardcoded LLVM-only one; the WASM `Path`-taking builtins now unwrap `Path.inner` via `emit_field_access` before calling into the runtime, matching the existing `Fd.inner` pattern `write` already used. On LLVM, the same functions' runtime symbols already existed but were never wired to a `builtin fn` the checker could see; `path_exists` also derived the wrong C symbol name (`_mvl_io_path_exists` instead of the real `_mvl_io_exists`), and `join`/`to_string` had no dispatch at all and silently fell through to an undefined LLVM function. Adds `tests/corpus/13_stdlib/io_path_test.mvl`, passing on all three backends.
+
+### Removed — #2102
+
+- **Deleted three unused legacy `std.time` runtime helpers** (`_mvl_time_now_systemtime`, `_mvl_time_now_instant`, `_mvl_time_iso8601_format`) from the WASM and LLVM runtimes — no corresponding `std/time.mvl` builtin and no emitter call site in any backend referenced them. Removed along with their tests, the dead WASM import declarations, and now-unused imports in `runtime/llvm/src/stdlib/time.rs`.
+
+### Added — #2095
+
+- **`make build-runtime-wasm` now shrinks the WASM runtime artifact with `wasm-opt -Oz`** after `cargo build`, cutting the debug build from a 3.1MB raw cargo copy to ~2.67MB by stripping debug info and inlining/pruning unreachable branches. `make doctor` gained a `wasm-opt` (binaryen) check alongside the existing `wasm-tools`/`wasmtime` checks. Exported functions are unaffected — `wasm-opt` treats exports as GC roots, so all 103 `extern "C"` symbols stay; per-program dead-function elimination remains a separate, larger follow-up.
+
+### Added — #2093
+
+- **`--backend=wasm` gained a `--target=wasm-browser` flag value**, alongside the existing default/`wasi` targets. The JS-host runtime doesn't exist yet, so `build`/`test` reject `wasm-browser` with a clear "not yet implemented" error instead of silently falling through to the WASI path. Target validation now branches on backend, since default/`tokio` (actor concurrency runtime) and default/`wasi`/`wasm-browser` (WASM host) are unrelated axes. `mvl run --backend=wasm` (never supported — wasmtime-based execution only runs via `build`/`test`) now also rejects with a message pointing at the right commands instead of silently falling through to the Rust build path. Follow-up (tracked in #2093): `runtime/wasm-browser/` JS-backed implementations, JS import interface, and docs.
+
+### Added — #2094
+
+- **WASM runtime parity for `std.env`, `std.io`, `std.time`, and `std.random`**: added 25 runtime functions (`set`/`remove_var`/`current_dir`/`chdir`/`exit`/`getuid`/`getgid`/`all` for env; `write_file`/`append`/`path_exists`/`is_file`/`is_dir`/`create_dir_all`/`remove` for io; `now`/`instant_epoch_seconds` for time, now routed through the runtime instead of an inline WASI `clock_time_get` shim; `int`/`float`/`bytes`/`choice_index`/`shuffle` for random) and wired emitter call sites for all of them in the WASM text backend.
+
+### Added
+
+- **WASM runtime upgraded from ASCII-only to full Unicode**, reaching parity with the Rust and LLVM backends (runtime artifact size +25%, 158KB → 198KB). `_mvl_string_len`/`_mvl_string_find`/`_mvl_string_substring` now operate on char counts/indices rather than byte counts/indices; `_mvl_string_to_upper`/`_mvl_string_to_lower` do full Unicode case folding; `_mvl_string_trim` strips Unicode whitespace, not just ASCII. New primitives: `_mvl_string_parse_float`, `_mvl_string_chars`, `_mvl_string_char_at`, `_mvl_string_byte_at`, `_mvl_string_from_bytes`, `_mvl_string_from_chars`.
+
 ## [1.7.3] - 2026-07-29
 
 ### Fixed — #2086
