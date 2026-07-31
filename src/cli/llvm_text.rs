@@ -35,9 +35,10 @@ fn prepare_llvm_text(
         std::iter::once(prog),
         PreludeMode::Transpile,
     ));
-    prelude.extend(loader::load_rust_backed_stdlib_fns(std::slice::from_ref(
-        prog,
-    )));
+    prelude.extend(loader::load_rust_backed_stdlib_fns(
+        std::slice::from_ref(prog),
+        loader::LLVM_OPAQUE_PTR_TYPES,
+    ));
     let builtins = loader::collect_llvm_text_builtins(std::slice::from_ref(prog));
 
     // Run checker to get expression types for the TIR lowering pass (#1302).
@@ -160,9 +161,10 @@ fn prepare_llvm_text_tir_multi(
             .chain(pkg_progs.iter()),
         PreludeMode::Transpile,
     ));
-    prelude.extend(loader::load_rust_backed_stdlib_fns(std::slice::from_ref(
-        prog,
-    )));
+    prelude.extend(loader::load_rust_backed_stdlib_fns(
+        std::slice::from_ref(prog),
+        loader::LLVM_OPAQUE_PTR_TYPES,
+    ));
     prelude.extend(pkg_progs.iter().cloned());
     let builtins = loader::collect_llvm_text_builtins(std::slice::from_ref(prog));
 

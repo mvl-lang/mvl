@@ -2050,6 +2050,37 @@ fn collect_locals_ctx_expr(expr: &TirExpr, locals: &mut Vec<(String, Ty)>, ctx: 
             if (name == "stdout" || name == "stderr" || name == "stdin") && args.is_empty() {
                 locals.push((struct_temp_name(expr), Ty::Bool)); // i32 placeholder
             }
+            // `write_file`/`append`/`path_exists`/`is_file`/`is_dir`/
+            // `create_dir_all`/`remove` (std.io) unwrap `Path.inner` via
+            // `emit_field_access` (#2100) — same `__sf_<off>_<len>` tee temp
+            // as an explicit `p.inner` `FieldAccess` node, but there is no
+            // such node in the TIR here (the field access is synthesized by
+            // the emitter, not the source), so it needs registering by hand.
+            const PATH_ARG_FNS: &[&str] = &[
+                "write_file",
+                "append",
+                "path_exists",
+                "is_file",
+                "is_dir",
+                "create_dir_all",
+                "remove",
+            ];
+            if PATH_ARG_FNS.contains(&name.as_str()) {
+                if let Some(path_arg) = args.first() {
+                    if let Some(sname) = named_type_name(&path_arg.ty) {
+                        if let Some(layout) = ctx.struct_layouts.get(&sname) {
+                            if let Some(slot) = layout.fields.iter().find(|s| s.name == "inner") {
+                                if peels_to_string(&slot.ty) {
+                                    locals.push((
+                                        format!("__sf_{}_{}", slot.offset, "inner".len()),
+                                        Ty::Bool, // i32 placeholder
+                                    ));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
             // Enum-variant FnCall (`Shape::Circle(5)`) routed to emit_construct
             // needs the same __st_* and __ep_* temps as TirExprKind::Construct.
             if let Some((type_name, _)) = name.split_once("::") {
@@ -2886,9 +2917,13 @@ fn emit_expr(out: &mut String, expr: &TirExpr, ctx: &Ctx) {
                 return;
             }
             // `write_file(path, content)` (std.io) — write content to file.
+            // `path`'s type is a real one-field struct (`Path { inner:
+            // String }`), not an erased (ptr, len) pair like `read_file`'s
+            // plain `String` param above — unwrap `.inner` the same way the
+            // `write` shim unwraps `Fd.inner` (#2100).
             if name == "write_file" && args.len() == 2 {
                 ctx.needs_runtime.set(true);
-                emit_expr(out, &args[0], ctx); // path (ptr, len)
+                emit_field_access(out, &args[0], "inner", ctx); // path (ptr, len)
                 emit_expr(out, &args[1], ctx); // content (ptr, len)
                 out.push_str("    call $_mvl_io_write_file\n");
                 return;
@@ -2896,7 +2931,7 @@ fn emit_expr(out: &mut String, expr: &TirExpr, ctx: &Ctx) {
             // `append(path, content)` (std.io) — append content to file.
             if name == "append" && args.len() == 2 {
                 ctx.needs_runtime.set(true);
-                emit_expr(out, &args[0], ctx); // path (ptr, len)
+                emit_field_access(out, &args[0], "inner", ctx); // path (ptr, len)
                 emit_expr(out, &args[1], ctx); // content (ptr, len)
                 out.push_str("    call $_mvl_io_append\n");
                 return;
@@ -2904,35 +2939,43 @@ fn emit_expr(out: &mut String, expr: &TirExpr, ctx: &Ctx) {
             // `path_exists(path)` (std.io) — check if path exists.
             if name == "path_exists" && args.len() == 1 {
                 ctx.needs_runtime.set(true);
-                emit_expr(out, &args[0], ctx);
+                emit_field_access(out, &args[0], "inner", ctx);
                 out.push_str("    call $_mvl_io_exists\n");
                 return;
             }
             // `is_file(path)` (std.io) — check if path is a file.
             if name == "is_file" && args.len() == 1 {
                 ctx.needs_runtime.set(true);
-                emit_expr(out, &args[0], ctx);
+                emit_field_access(out, &args[0], "inner", ctx);
                 out.push_str("    call $_mvl_io_is_file\n");
                 return;
             }
             // `is_dir(path)` (std.io) — check if path is a directory.
             if name == "is_dir" && args.len() == 1 {
                 ctx.needs_runtime.set(true);
-                emit_expr(out, &args[0], ctx);
+                emit_field_access(out, &args[0], "inner", ctx);
                 out.push_str("    call $_mvl_io_is_dir\n");
                 return;
             }
             // `create_dir_all(path)` (std.io) — create directory and parents.
             if name == "create_dir_all" && args.len() == 1 {
                 ctx.needs_runtime.set(true);
-                emit_expr(out, &args[0], ctx);
+                emit_field_access(out, &args[0], "inner", ctx);
                 out.push_str("    call $_mvl_io_create_dir_all\n");
                 return;
             }
             // `remove(path)` (std.io) — remove file or empty directory.
-            if name == "remove" && args.len() == 1 && matches!(&expr.ty, Ty::Result(_, _)) {
+            // No `expr.ty` guard, unlike an earlier version of this arm: the
+            // only free (non-method) single-arg `remove` in the stdlib is
+            // this one (`List`/`Map`'s equivalents are extension methods,
+            // called via `x.remove(...)` `MethodCall` nodes, never this
+            // `FnCall` arm). `cli::wasm_text::compile_wat`'s separate,
+            // intentionally-incomplete `check_with_prelude` pass doesn't
+            // reliably resolve `expr.ty` for RUST_BACKED_STDLIB builtins,
+            // silently defeating a type-based guard here (#2100).
+            if name == "remove" && args.len() == 1 {
                 ctx.needs_runtime.set(true);
-                emit_expr(out, &args[0], ctx);
+                emit_field_access(out, &args[0], "inner", ctx);
                 out.push_str("    call $_mvl_io_remove\n");
                 return;
             }

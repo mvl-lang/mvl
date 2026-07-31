@@ -654,18 +654,33 @@ pub fn load_mvl_native_stdlib_extras(progs: &[Program]) -> Vec<Program> {
     extras
 }
 
-/// Load pure-MVL function bodies from `RUST_BACKED_STDLIB` modules for the LLVM backend.
+/// Types whose LLVM runtime representation is an opaque native handle —
+/// struct construction/destruction of these in transpiled MVL would fail.
+/// Excludes String/List/Map etc. which are fine as opaque ptrs in function
+/// signatures. Pass to [`load_rust_backed_stdlib_fns`] from the LLVM backend.
+///
+/// `Path` is opaque here because the LLVM runtime represents it as a native
+/// handle (see `emit_path_builtin_tir`'s `_mvl_io_path` call) — this does
+/// NOT hold for the WASM backend, which represents `Path` as a plain
+/// `{ inner: String }` struct it can construct/destructure normally (#2100).
+pub const LLVM_OPAQUE_PTR_TYPES: &[&str] =
+    &["Path", "TcpListener", "TcpStream", "Stdout", "Stderr"];
+
+/// Load pure-MVL function bodies from `RUST_BACKED_STDLIB` modules for a
+/// transpiling backend (LLVM or WASM).
 ///
 /// The Rust transpiler handles these modules entirely via `mvl_runtime::stdlib::X::*`,
-/// but the LLVM backend only dispatches `builtin fn` declarations to C-ABI symbols.
-/// Non-builtin functions (`find_all`, `replace`, `format_datetime`, etc.) are written
-/// in MVL and need their bodies compiled to LLVM IR.
+/// but the LLVM/WASM backends only dispatch `builtin fn` declarations to their
+/// respective C-ABI symbols. Non-builtin functions (`find_all`, `replace`,
+/// `format_datetime`, etc.) are written in MVL and need their bodies compiled.
 ///
 /// This function loads each referenced RUST_BACKED_STDLIB module's `.mvl` source,
 /// strips type declarations (manually registered by `collect_stdlib_imports`) and
 /// `builtin fn` declarations (routed via the C-ABI dispatch table), and returns
-/// programs containing only the pure MVL function bodies.
-pub fn load_rust_backed_stdlib_fns(progs: &[Program]) -> Vec<Program> {
+/// programs containing only the pure MVL function bodies. `opaque_types` names
+/// types the calling backend cannot construct/destructure in transpiled MVL —
+/// their type decls and any fn referencing them in its signature are dropped too.
+pub fn load_rust_backed_stdlib_fns(progs: &[Program], opaque_types: &[&str]) -> Vec<Program> {
     use std::collections::HashSet;
     let mut loaded: HashSet<String> = HashSet::new();
     let mut extras: Vec<Program> = Vec::new();
@@ -702,30 +717,24 @@ pub fn load_rust_backed_stdlib_fns(progs: &[Program]) -> Vec<Program> {
                                     None
                                 })
                                 .collect();
-                            // Types the LLVM backend handles as opaque ptrs where
-                            // struct construction/destruction in MVL would fail.
-                            // Excludes String/List/Map etc. which are fine as opaque
-                            // ptrs in function signatures.
-                            const OPAQUE_PTR_TYPES: &[&str] =
-                                &["Path", "TcpListener", "TcpStream", "Stdout", "Stderr"];
                             // Keep type declarations (structs/enums needed by
                             // pure MVL functions) except for opaque-ptr types,
                             // and non-builtin function declarations that don't
                             // reference opaque-ptr types in their signature.
                             loaded_prog.declarations.retain(|d| match d {
-                                Decl::Type(td) => !OPAQUE_PTR_TYPES.contains(&td.name.as_str()),
+                                Decl::Type(td) => !opaque_types.contains(&td.name.as_str()),
                                 Decl::Fn(fd) => {
                                     if fd.is_builtin || builtin_names.contains(&fd.name) {
                                         return false;
                                     }
                                     // Skip functions that use opaque-ptr types in
-                                    // params or return — the LLVM backend can't
+                                    // params or return — the backend can't
                                     // construct or destructure those types.
                                     let uses_opaque = fd
                                         .params
                                         .iter()
-                                        .any(|p| type_uses_opaque(&p.ty, OPAQUE_PTR_TYPES))
-                                        || type_uses_opaque(&fd.return_type, OPAQUE_PTR_TYPES);
+                                        .any(|p| type_uses_opaque(&p.ty, opaque_types))
+                                        || type_uses_opaque(&fd.return_type, opaque_types);
                                     !uses_opaque
                                 }
                                 _ => false,
