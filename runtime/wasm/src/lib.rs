@@ -1899,6 +1899,379 @@ pub unsafe extern "C" fn _mvl_io_read_file(path_ptr: i32, path_len: i32) -> i32 
     }
 }
 
+// ── std.env — environment and process control ───────────────────────────
+//
+// WASI provides environment variables, command-line arguments, and process
+// exit via the wasm32-wasip1 target's `std::env` facade.
+
+/// `env.set(name, value)` — set an environment variable.
+/// Returns a `*MvlResult`: Ok(()) on success, Err(String) on failure.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn _mvl_env_set(name_ptr: i32, name_len: i32, val_ptr: i32, val_len: i32) -> i32 {
+    let name = match core::str::from_utf8(unsafe { slice_or_empty(name_ptr, name_len) }) {
+        Ok(s) => s,
+        Err(_) => return _mvl_result_err_i32(alloc_mvl_string(b"name is not valid UTF-8")),
+    };
+    let value = match core::str::from_utf8(unsafe { slice_or_empty(val_ptr, val_len) }) {
+        Ok(s) => s,
+        Err(_) => return _mvl_result_err_i32(alloc_mvl_string(b"value is not valid UTF-8")),
+    };
+    // WASI supports setting env vars
+    std::env::set_var(name, value);
+    _mvl_result_ok_i64(0) // Ok(Unit)
+}
+
+/// `env.remove_var(name)` — unset an environment variable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn _mvl_env_remove_var(name_ptr: i32, name_len: i32) {
+    if let Ok(name) = core::str::from_utf8(unsafe { slice_or_empty(name_ptr, name_len) }) {
+        std::env::remove_var(name);
+    }
+}
+
+/// `env.current_dir()` — get the current working directory.
+/// Returns a `*MvlResult`: Ok(*MvlString) on success, Err(*IoError) on failure.
+#[unsafe(no_mangle)]
+pub extern "C" fn _mvl_env_current_dir() -> i32 {
+    match std::env::current_dir() {
+        Ok(path) => {
+            let s = path.to_string_lossy();
+            _mvl_result_ok_i32(alloc_mvl_string(s.as_bytes()))
+        }
+        Err(e) => _mvl_result_err_i32(alloc_io_error(IO_ERR_OTHER, Some(e.to_string().as_bytes()))),
+    }
+}
+
+/// `env.chdir(path)` — change the current working directory.
+/// Returns a `*MvlResult`: Ok(()) on success, Err(*IoError) on failure.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn _mvl_env_chdir(path_ptr: i32, path_len: i32) -> i32 {
+    let path = match core::str::from_utf8(unsafe { slice_or_empty(path_ptr, path_len) }) {
+        Ok(s) => s,
+        Err(_) => return _mvl_result_err_i32(alloc_io_error(IO_ERR_OTHER, Some(b"path is not valid UTF-8"))),
+    };
+    match std::env::set_current_dir(path) {
+        Ok(()) => _mvl_result_ok_i64(0),
+        Err(e) => _mvl_result_err_i32(io_error_from_std(&e)),
+    }
+}
+
+/// `env.exit(code)` — terminate the process with the given exit code.
+#[unsafe(no_mangle)]
+pub extern "C" fn _mvl_env_exit(code: i64) -> ! {
+    std::process::exit(code as i32)
+}
+
+/// `env.getuid()` — effective user ID. Returns 0 on WASI (no Unix UIDs).
+#[unsafe(no_mangle)]
+pub extern "C" fn _mvl_env_getuid() -> i64 {
+    0 // WASI doesn't expose Unix UIDs
+}
+
+/// `env.getgid()` — effective group ID. Returns 0 on WASI (no Unix GIDs).
+#[unsafe(no_mangle)]
+pub extern "C" fn _mvl_env_getgid() -> i64 {
+    0 // WASI doesn't expose Unix GIDs
+}
+
+/// `env.all()` — return all environment variables as a List of (name, value) pairs.
+/// Returns a `*MvlArray` of struct pointers (each struct has two *MvlString fields).
+#[unsafe(no_mangle)]
+pub extern "C" fn _mvl_env_all() -> i32 {
+    // Each entry is a struct { name: *MvlString, value: *MvlString } = 8 bytes
+    let arr = _mvl_array_new(8, 0);
+    for (key, value) in std::env::vars() {
+        let name_ptr = alloc_mvl_string(key.as_bytes());
+        let value_ptr = alloc_mvl_string(value.as_bytes());
+        // Allocate struct with two i32 pointers
+        let entry = _mvl_struct_alloc(8);
+        unsafe {
+            *(entry as usize as *mut i32) = name_ptr;
+            *((entry as usize + 4) as *mut i32) = value_ptr;
+            _mvl_array_push_i32(arr, entry);
+        }
+    }
+    arr
+}
+
+// ── std.io — file system operations ──────────────────────────────────────
+//
+// WASI provides filesystem access via the wasm32-wasip1 target.
+
+/// `io.write_file(path, content)` — write content to a file, creating or truncating.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn _mvl_io_write_file(path_ptr: i32, path_len: i32, content_ptr: i32, content_len: i32) -> i32 {
+    let path = match core::str::from_utf8(unsafe { slice_or_empty(path_ptr, path_len) }) {
+        Ok(s) => s,
+        Err(_) => return _mvl_result_err_i32(alloc_io_error(IO_ERR_OTHER, Some(b"path is not valid UTF-8"))),
+    };
+    let content = unsafe { slice_or_empty(content_ptr, content_len) };
+    match std::fs::write(path, content) {
+        Ok(()) => _mvl_result_ok_i64(0),
+        Err(e) => _mvl_result_err_i32(io_error_from_std(&e)),
+    }
+}
+
+/// `io.append(path, content)` — append content to a file.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn _mvl_io_append(path_ptr: i32, path_len: i32, content_ptr: i32, content_len: i32) -> i32 {
+    let path = match core::str::from_utf8(unsafe { slice_or_empty(path_ptr, path_len) }) {
+        Ok(s) => s,
+        Err(_) => return _mvl_result_err_i32(alloc_io_error(IO_ERR_OTHER, Some(b"path is not valid UTF-8"))),
+    };
+    let content = unsafe { slice_or_empty(content_ptr, content_len) };
+    let file = std::fs::OpenOptions::new().create(true).append(true).open(path);
+    match file {
+        Ok(mut f) => {
+            use std::io::Write;
+            match f.write_all(content) {
+                Ok(()) => _mvl_result_ok_i64(0),
+                Err(e) => _mvl_result_err_i32(io_error_from_std(&e)),
+            }
+        }
+        Err(e) => _mvl_result_err_i32(io_error_from_std(&e)),
+    }
+}
+
+/// `io.path_exists(path)` — check if a path exists.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn _mvl_io_exists(path_ptr: i32, path_len: i32) -> i32 {
+    let path = match core::str::from_utf8(unsafe { slice_or_empty(path_ptr, path_len) }) {
+        Ok(s) => s,
+        Err(_) => return 0,
+    };
+    std::path::Path::new(path).exists() as i32
+}
+
+/// `io.is_file(path)` — check if path is a file.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn _mvl_io_is_file(path_ptr: i32, path_len: i32) -> i32 {
+    let path = match core::str::from_utf8(unsafe { slice_or_empty(path_ptr, path_len) }) {
+        Ok(s) => s,
+        Err(_) => return 0,
+    };
+    std::path::Path::new(path).is_file() as i32
+}
+
+/// `io.is_dir(path)` — check if path is a directory.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn _mvl_io_is_dir(path_ptr: i32, path_len: i32) -> i32 {
+    let path = match core::str::from_utf8(unsafe { slice_or_empty(path_ptr, path_len) }) {
+        Ok(s) => s,
+        Err(_) => return 0,
+    };
+    std::path::Path::new(path).is_dir() as i32
+}
+
+/// `io.create_dir_all(path)` — create a directory and all parent directories.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn _mvl_io_create_dir_all(path_ptr: i32, path_len: i32) -> i32 {
+    let path = match core::str::from_utf8(unsafe { slice_or_empty(path_ptr, path_len) }) {
+        Ok(s) => s,
+        Err(_) => return _mvl_result_err_i32(alloc_io_error(IO_ERR_OTHER, Some(b"path is not valid UTF-8"))),
+    };
+    match std::fs::create_dir_all(path) {
+        Ok(()) => _mvl_result_ok_i64(0),
+        Err(e) => _mvl_result_err_i32(io_error_from_std(&e)),
+    }
+}
+
+/// `io.remove(path)` — remove a file or empty directory.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn _mvl_io_remove(path_ptr: i32, path_len: i32) -> i32 {
+    let path = match core::str::from_utf8(unsafe { slice_or_empty(path_ptr, path_len) }) {
+        Ok(s) => s,
+        Err(_) => return _mvl_result_err_i32(alloc_io_error(IO_ERR_OTHER, Some(b"path is not valid UTF-8"))),
+    };
+    let p = std::path::Path::new(path);
+    let result = if p.is_dir() {
+        std::fs::remove_dir(path)
+    } else {
+        std::fs::remove_file(path)
+    };
+    match result {
+        Ok(()) => _mvl_result_ok_i64(0),
+        Err(e) => _mvl_result_err_i32(io_error_from_std(&e)),
+    }
+}
+
+// ── std.time — time and duration ─────────────────────────────────────────
+//
+// WASI provides wall-clock time via `std::time::SystemTime`.
+
+/// `time.now()` — current time as epoch seconds (i64).
+/// Returns a boxed i64 handle that can be passed to `_instant_epoch_seconds`.
+#[unsafe(no_mangle)]
+pub extern "C" fn _mvl_time_now() -> i32 {
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs() as i64;
+    let boxed = Box::new(secs);
+    Box::into_raw(boxed) as usize as i32
+}
+
+/// `time.now_systemtime()` — current time as epoch seconds (i64), direct return.
+#[unsafe(no_mangle)]
+pub extern "C" fn _mvl_time_now_systemtime() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs() as i64
+}
+
+/// `time.now_instant()` — current time as epoch nanoseconds (i64).
+#[unsafe(no_mangle)]
+pub extern "C" fn _mvl_time_now_instant() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos() as i64
+}
+
+/// `_instant_epoch_seconds(handle)` — read epoch seconds from an Instant handle.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn _mvl_time_instant_epoch_seconds(handle: i32) -> i64 {
+    if handle == 0 {
+        return 0;
+    }
+    unsafe { *(handle as usize as *const i64) }
+}
+
+/// `time.sleep(secs, nanos)` — sleep for the specified duration.
+#[unsafe(no_mangle)]
+pub extern "C" fn _mvl_time_thread_sleep(secs: i64, nanos: i64) {
+    let duration = std::time::Duration::new(secs.max(0) as u64, nanos.max(0) as u32);
+    std::thread::sleep(duration);
+}
+
+/// `time.iso8601_format(secs)` — format epoch seconds as ISO 8601 string.
+/// Returns a `*MvlString`.
+#[unsafe(no_mangle)]
+pub extern "C" fn _mvl_time_iso8601_format(secs: i64) -> i32 {
+    let (y, mo, d, h, mi, s) = epoch_to_ymd_hms(secs.max(0) as u64);
+    let formatted = format!("{y:04}-{mo:02}-{d:02}T{h:02}:{mi:02}:{s:02}Z");
+    alloc_mvl_string(formatted.as_bytes())
+}
+
+// ── std.random — pseudo-random number generation ─────────────────────────
+//
+// Uses a simple xorshift64 PRNG seeded from WASI's random_get or fallback.
+
+static RANDOM_STATE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+fn ensure_seeded() {
+    use std::sync::atomic::Ordering;
+    if RANDOM_STATE.load(Ordering::Relaxed) == 0 {
+        // Seed from system time + address entropy
+        let seed = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos() as u64;
+        let seed = seed ^ ((&RANDOM_STATE as *const _ as u64).wrapping_mul(0x517cc1b727220a95));
+        RANDOM_STATE.store(seed | 1, Ordering::Relaxed); // Ensure non-zero
+    }
+}
+
+fn xorshift64() -> u64 {
+    use std::sync::atomic::Ordering;
+    ensure_seeded();
+    let mut state = RANDOM_STATE.load(Ordering::Relaxed);
+    state ^= state << 13;
+    state ^= state >> 7;
+    state ^= state << 17;
+    RANDOM_STATE.store(state, Ordering::Relaxed);
+    state
+}
+
+/// `random.int(min, max)` — random integer in [min, max] inclusive.
+#[unsafe(no_mangle)]
+pub extern "C" fn _mvl_random_int(min: i64, max: i64) -> i64 {
+    if min >= max {
+        return min;
+    }
+    let range = (max - min + 1) as u64;
+    let r = xorshift64() % range;
+    min + r as i64
+}
+
+/// `random.float()` — random float in [0.0, 1.0).
+#[unsafe(no_mangle)]
+pub extern "C" fn _mvl_random_float() -> f64 {
+    let r = xorshift64();
+    // Convert to [0, 1) by dividing by 2^64
+    (r as f64) / (u64::MAX as f64 + 1.0)
+}
+
+/// `random.bytes(n)` — return n random bytes as a `*MvlArray` of i64 values [0, 255].
+#[unsafe(no_mangle)]
+pub extern "C" fn _mvl_random_bytes(n: i64) -> i32 {
+    let arr = _mvl_array_new(8, n.max(0) as i32); // elem_size 8 for i64
+    for _ in 0..n.max(0) {
+        let byte = (xorshift64() & 0xFF) as i64;
+        unsafe { _mvl_array_push_i64(arr, byte) };
+    }
+    arr
+}
+
+/// `random.choice_index(arr)` — random index from array, or -1 if empty.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn _mvl_random_choice_index(arr: i32) -> i64 {
+    if arr == 0 {
+        return -1;
+    }
+    let len = unsafe { _mvl_array_len(arr) };
+    if len == 0 {
+        return -1;
+    }
+    _mvl_random_int(0, len - 1)
+}
+
+/// `random.shuffle(arr)` — return a shuffled copy of the array (Fisher-Yates).
+/// Returns a new `*MvlArray`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn _mvl_random_shuffle(arr: i32) -> i32 {
+    if arr == 0 {
+        return _mvl_array_new(8, 0);
+    }
+    let src = unsafe { &*(arr as usize as *const MvlArray) };
+    let len = src.len as usize;
+    let elem_size = src.elem_size as usize;
+
+    // Clone the array
+    let clone = _mvl_array_new(src.elem_size, src.len);
+    let dst = unsafe { &mut *(clone as usize as *mut MvlArray) };
+    if len > 0 {
+        unsafe {
+            core::ptr::copy_nonoverlapping(
+                src.ptr as *const u8,
+                dst.ptr as *mut u8,
+                len * elem_size,
+            );
+        }
+        dst.len = src.len;
+    }
+
+    // Fisher-Yates shuffle
+    for i in (1..len).rev() {
+        let j = _mvl_random_int(0, i as i64) as usize;
+        if i != j {
+            // Swap elements at i and j
+            let ptr_i = (dst.ptr as usize + i * elem_size) as *mut u8;
+            let ptr_j = (dst.ptr as usize + j * elem_size) as *mut u8;
+            for k in 0..elem_size {
+                unsafe {
+                    let tmp = *ptr_i.add(k);
+                    *ptr_i.add(k) = *ptr_j.add(k);
+                    *ptr_j.add(k) = tmp;
+                }
+            }
+        }
+    }
+
+    clone
+}
+
 // ── Tests ────────────────────────────────────────────────────────────────
 //
 // Compiled + run under wasm32-wasip1 so the i32-pointer ABI works as it
@@ -3003,5 +3376,190 @@ mod tests {
         );
         assert_eq!(unsafe { _mvl_map_len(m) }, 1);
         unsafe { _mvl_map_drop_si64(m) };
+    }
+
+    // ── std.env tests ────────────────────────────────────────────────────────
+
+    #[test]
+    fn env_getuid_returns_zero_on_wasi() {
+        // WASI doesn't expose Unix UIDs, so we return 0
+        assert_eq!(_mvl_env_getuid(), 0);
+    }
+
+    #[test]
+    fn env_getgid_returns_zero_on_wasi() {
+        // WASI doesn't expose Unix GIDs, so we return 0
+        assert_eq!(_mvl_env_getgid(), 0);
+    }
+
+    #[test]
+    fn env_get_missing_var_is_none() {
+        let name = b"__MVL_TEST_NONEXISTENT_VAR_12345__";
+        let opt = unsafe { _mvl_env_get(addr(name), name.len() as i32) };
+        assert_eq!(unsafe { _mvl_option_tag(opt) }, 1); // None
+        unsafe { _mvl_option_drop(opt) };
+    }
+
+    #[test]
+    fn env_current_dir_returns_ok() {
+        let result = _mvl_env_current_dir();
+        // Should be Ok (tag 0), not Err
+        assert_eq!(unsafe { _mvl_result_tag(result) }, 0);
+        unsafe { _mvl_result_drop(result) };
+    }
+
+    // ── std.time tests ───────────────────────────────────────────────────────
+
+    #[test]
+    fn time_now_systemtime_is_positive() {
+        let secs = _mvl_time_now_systemtime();
+        // Should be well past Unix epoch (July 2026 > 1.7 billion seconds)
+        assert!(secs > 1_700_000_000);
+    }
+
+    #[test]
+    fn time_now_instant_is_positive() {
+        let nanos = _mvl_time_now_instant();
+        // Should be well past Unix epoch in nanoseconds
+        assert!(nanos > 1_700_000_000_000_000_000);
+    }
+
+    #[test]
+    fn time_now_returns_valid_handle() {
+        let handle = _mvl_time_now();
+        assert!(handle != 0);
+        let secs = unsafe { _mvl_time_instant_epoch_seconds(handle) };
+        assert!(secs > 1_700_000_000);
+    }
+
+    #[test]
+    fn time_iso8601_format_produces_valid_string() {
+        // 2026-07-31T12:00:00Z in epoch seconds (approximately)
+        let secs: i64 = 1785412800;
+        let ms = _mvl_time_iso8601_format(secs);
+        assert!(ms != 0);
+        let s = unsafe { &*(ms as usize as *const MvlString) };
+        let bytes = unsafe { slice_or_empty(s.ptr, s.len) };
+        let text = core::str::from_utf8(bytes).unwrap();
+        // Should be ISO 8601 format: YYYY-MM-DDTHH:MM:SSZ
+        assert!(text.len() == 20);
+        assert!(text.ends_with('Z'));
+        assert!(text.contains('T'));
+        unsafe { _mvl_string_drop(ms) };
+    }
+
+    // ── std.random tests ─────────────────────────────────────────────────────
+
+    #[test]
+    fn random_int_in_range() {
+        for _ in 0..100 {
+            let v = _mvl_random_int(10, 20);
+            assert!(v >= 10 && v <= 20);
+        }
+    }
+
+    #[test]
+    fn random_int_min_equals_max() {
+        let v = _mvl_random_int(42, 42);
+        assert_eq!(v, 42);
+    }
+
+    #[test]
+    fn random_int_min_greater_than_max_returns_min() {
+        let v = _mvl_random_int(100, 50);
+        assert_eq!(v, 100);
+    }
+
+    #[test]
+    fn random_float_in_zero_one() {
+        for _ in 0..100 {
+            let v = _mvl_random_float();
+            assert!(v >= 0.0 && v < 1.0);
+        }
+    }
+
+    #[test]
+    fn random_bytes_returns_correct_length() {
+        let arr = _mvl_random_bytes(10);
+        assert_eq!(unsafe { _mvl_array_len(arr) }, 10);
+        // Check values are in byte range [0, 255]
+        for i in 0..10 {
+            let ptr = unsafe { _mvl_array_get(arr, i) };
+            let val = unsafe { *(ptr as usize as *const i64) };
+            assert!(val >= 0 && val <= 255);
+        }
+        unsafe { _mvl_array_drop(arr) };
+    }
+
+    #[test]
+    fn random_bytes_zero_returns_empty() {
+        let arr = _mvl_random_bytes(0);
+        assert_eq!(unsafe { _mvl_array_len(arr) }, 0);
+        unsafe { _mvl_array_drop(arr) };
+    }
+
+    #[test]
+    fn random_choice_index_empty_returns_negative() {
+        let arr = _mvl_array_new(8, 0);
+        let idx = unsafe { _mvl_random_choice_index(arr) };
+        assert_eq!(idx, -1);
+        unsafe { _mvl_array_drop(arr) };
+    }
+
+    #[test]
+    fn random_choice_index_single_element() {
+        let arr = _mvl_array_new(8, 1);
+        unsafe { _mvl_array_push_i64(arr, 999) };
+        let idx = unsafe { _mvl_random_choice_index(arr) };
+        assert_eq!(idx, 0);
+        unsafe { _mvl_array_drop(arr) };
+    }
+
+    #[test]
+    fn random_shuffle_preserves_length() {
+        let arr = _mvl_array_new(8, 5);
+        for i in 0..5 {
+            unsafe { _mvl_array_push_i64(arr, i) };
+        }
+        let shuffled = unsafe { _mvl_random_shuffle(arr) };
+        assert_eq!(unsafe { _mvl_array_len(shuffled) }, 5);
+        unsafe { _mvl_array_drop(arr) };
+        unsafe { _mvl_array_drop(shuffled) };
+    }
+
+    #[test]
+    fn random_shuffle_returns_new_array() {
+        let arr = _mvl_array_new(8, 3);
+        for i in 0..3 {
+            unsafe { _mvl_array_push_i64(arr, i) };
+        }
+        let shuffled = unsafe { _mvl_random_shuffle(arr) };
+        // Should be a different pointer (new array)
+        assert!(arr != shuffled);
+        unsafe { _mvl_array_drop(arr) };
+        unsafe { _mvl_array_drop(shuffled) };
+    }
+
+    // ── std.io tests ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn io_exists_nonexistent_returns_false() {
+        let path = b"/nonexistent/path/that/should/not/exist";
+        let exists = unsafe { _mvl_io_exists(addr(path), path.len() as i32) };
+        assert_eq!(exists, 0);
+    }
+
+    #[test]
+    fn io_is_file_nonexistent_returns_false() {
+        let path = b"/nonexistent/path/that/should/not/exist";
+        let is_file = unsafe { _mvl_io_is_file(addr(path), path.len() as i32) };
+        assert_eq!(is_file, 0);
+    }
+
+    #[test]
+    fn io_is_dir_nonexistent_returns_false() {
+        let path = b"/nonexistent/path/that/should/not/exist";
+        let is_dir = unsafe { _mvl_io_is_dir(addr(path), path.len() as i32) };
+        assert_eq!(is_dir, 0);
     }
 }
