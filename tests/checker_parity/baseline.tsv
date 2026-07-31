@@ -58,6 +58,7 @@ tests/corpus/12_actors/intra_actor_test.mvl	ok
 tests/corpus/12_actors/ordering_test.mvl	ok
 tests/corpus/12_actors/spawn_test.mvl	ok
 tests/corpus/12_actors/state_mutation_test.mvl	ok
+tests/corpus/13_stdlib/io_path_test.mvl	ok
 tests/corpus/13_stdlib/list_hof_test.mvl	ok
 tests/corpus/13_stdlib/list_method_fallback_test.mvl	ok
 tests/corpus/13_stdlib/list_sort_by_test.mvl	ok
