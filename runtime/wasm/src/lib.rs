@@ -3377,4 +3377,189 @@ mod tests {
         assert_eq!(unsafe { _mvl_map_len(m) }, 1);
         unsafe { _mvl_map_drop_si64(m) };
     }
+
+    // ── std.env tests ────────────────────────────────────────────────────────
+
+    #[test]
+    fn env_getuid_returns_zero_on_wasi() {
+        // WASI doesn't expose Unix UIDs, so we return 0
+        assert_eq!(_mvl_env_getuid(), 0);
+    }
+
+    #[test]
+    fn env_getgid_returns_zero_on_wasi() {
+        // WASI doesn't expose Unix GIDs, so we return 0
+        assert_eq!(_mvl_env_getgid(), 0);
+    }
+
+    #[test]
+    fn env_get_missing_var_is_none() {
+        let name = b"__MVL_TEST_NONEXISTENT_VAR_12345__";
+        let opt = unsafe { _mvl_env_get(addr(name), name.len() as i32) };
+        assert_eq!(unsafe { _mvl_option_tag(opt) }, 1); // None
+        unsafe { _mvl_option_drop(opt) };
+    }
+
+    #[test]
+    fn env_current_dir_returns_ok() {
+        let result = _mvl_env_current_dir();
+        // Should be Ok (tag 0), not Err
+        assert_eq!(unsafe { _mvl_result_tag(result) }, 0);
+        unsafe { _mvl_result_drop(result) };
+    }
+
+    // ── std.time tests ───────────────────────────────────────────────────────
+
+    #[test]
+    fn time_now_systemtime_is_positive() {
+        let secs = _mvl_time_now_systemtime();
+        // Should be well past Unix epoch (July 2026 > 1.7 billion seconds)
+        assert!(secs > 1_700_000_000);
+    }
+
+    #[test]
+    fn time_now_instant_is_positive() {
+        let nanos = _mvl_time_now_instant();
+        // Should be well past Unix epoch in nanoseconds
+        assert!(nanos > 1_700_000_000_000_000_000);
+    }
+
+    #[test]
+    fn time_now_returns_valid_handle() {
+        let handle = _mvl_time_now();
+        assert!(handle != 0);
+        let secs = unsafe { _mvl_time_instant_epoch_seconds(handle) };
+        assert!(secs > 1_700_000_000);
+    }
+
+    #[test]
+    fn time_iso8601_format_produces_valid_string() {
+        // 2026-07-31T12:00:00Z in epoch seconds (approximately)
+        let secs: i64 = 1785412800;
+        let ms = _mvl_time_iso8601_format(secs);
+        assert!(ms != 0);
+        let s = unsafe { &*(ms as usize as *const MvlString) };
+        let bytes = unsafe { slice_or_empty(s.ptr, s.len) };
+        let text = core::str::from_utf8(bytes).unwrap();
+        // Should be ISO 8601 format: YYYY-MM-DDTHH:MM:SSZ
+        assert!(text.len() == 20);
+        assert!(text.ends_with('Z'));
+        assert!(text.contains('T'));
+        unsafe { _mvl_string_drop(ms) };
+    }
+
+    // ── std.random tests ─────────────────────────────────────────────────────
+
+    #[test]
+    fn random_int_in_range() {
+        for _ in 0..100 {
+            let v = _mvl_random_int(10, 20);
+            assert!(v >= 10 && v <= 20);
+        }
+    }
+
+    #[test]
+    fn random_int_min_equals_max() {
+        let v = _mvl_random_int(42, 42);
+        assert_eq!(v, 42);
+    }
+
+    #[test]
+    fn random_int_min_greater_than_max_returns_min() {
+        let v = _mvl_random_int(100, 50);
+        assert_eq!(v, 100);
+    }
+
+    #[test]
+    fn random_float_in_zero_one() {
+        for _ in 0..100 {
+            let v = _mvl_random_float();
+            assert!(v >= 0.0 && v < 1.0);
+        }
+    }
+
+    #[test]
+    fn random_bytes_returns_correct_length() {
+        let arr = _mvl_random_bytes(10);
+        assert_eq!(unsafe { _mvl_array_len(arr) }, 10);
+        // Check values are in byte range [0, 255]
+        for i in 0..10 {
+            let ptr = unsafe { _mvl_array_get(arr, i) };
+            let val = unsafe { *(ptr as usize as *const i64) };
+            assert!(val >= 0 && val <= 255);
+        }
+        unsafe { _mvl_array_drop(arr) };
+    }
+
+    #[test]
+    fn random_bytes_zero_returns_empty() {
+        let arr = _mvl_random_bytes(0);
+        assert_eq!(unsafe { _mvl_array_len(arr) }, 0);
+        unsafe { _mvl_array_drop(arr) };
+    }
+
+    #[test]
+    fn random_choice_index_empty_returns_negative() {
+        let arr = _mvl_array_new(8, 0);
+        let idx = unsafe { _mvl_random_choice_index(arr) };
+        assert_eq!(idx, -1);
+        unsafe { _mvl_array_drop(arr) };
+    }
+
+    #[test]
+    fn random_choice_index_single_element() {
+        let arr = _mvl_array_new(8, 1);
+        unsafe { _mvl_array_push_i64(arr, 999) };
+        let idx = unsafe { _mvl_random_choice_index(arr) };
+        assert_eq!(idx, 0);
+        unsafe { _mvl_array_drop(arr) };
+    }
+
+    #[test]
+    fn random_shuffle_preserves_length() {
+        let arr = _mvl_array_new(8, 5);
+        for i in 0..5 {
+            unsafe { _mvl_array_push_i64(arr, i) };
+        }
+        let shuffled = unsafe { _mvl_random_shuffle(arr) };
+        assert_eq!(unsafe { _mvl_array_len(shuffled) }, 5);
+        unsafe { _mvl_array_drop(arr) };
+        unsafe { _mvl_array_drop(shuffled) };
+    }
+
+    #[test]
+    fn random_shuffle_returns_new_array() {
+        let arr = _mvl_array_new(8, 3);
+        for i in 0..3 {
+            unsafe { _mvl_array_push_i64(arr, i) };
+        }
+        let shuffled = unsafe { _mvl_random_shuffle(arr) };
+        // Should be a different pointer (new array)
+        assert!(arr != shuffled);
+        unsafe { _mvl_array_drop(arr) };
+        unsafe { _mvl_array_drop(shuffled) };
+    }
+
+    // ── std.io tests ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn io_exists_nonexistent_returns_false() {
+        let path = b"/nonexistent/path/that/should/not/exist";
+        let exists = unsafe { _mvl_io_exists(addr(path), path.len() as i32) };
+        assert_eq!(exists, 0);
+    }
+
+    #[test]
+    fn io_is_file_nonexistent_returns_false() {
+        let path = b"/nonexistent/path/that/should/not/exist";
+        let is_file = unsafe { _mvl_io_is_file(addr(path), path.len() as i32) };
+        assert_eq!(is_file, 0);
+    }
+
+    #[test]
+    fn io_is_dir_nonexistent_returns_false() {
+        let path = b"/nonexistent/path/that/should/not/exist";
+        let is_dir = unsafe { _mvl_io_is_dir(addr(path), path.len() as i32) };
+        assert_eq!(is_dir, 0);
+    }
 }
