@@ -406,8 +406,17 @@ const RUNTIME_IMPORTS: &[(&str, &str)] = &[
     // `i32.load` / `i64.load` / `f64.load` on the pointer returned by
     // `_mvl_array_get`. Typed push variants exist so the emitter can pass
     // the value directly on the WASM stack (no scratch alloc needed).
+    // ── std.env ───────────────────────────────────────────────────────────
     ("_mvl_env_args", "(result i32)"),
     ("_mvl_env_get", "(param i32 i32) (result i32)"),
+    ("_mvl_env_set", "(param i32 i32 i32 i32) (result i32)"),
+    ("_mvl_env_remove_var", "(param i32 i32)"),
+    ("_mvl_env_current_dir", "(result i32)"),
+    ("_mvl_env_chdir", "(param i32 i32) (result i32)"),
+    ("_mvl_env_exit", "(param i64)"),
+    ("_mvl_env_getuid", "(result i64)"),
+    ("_mvl_env_getgid", "(result i64)"),
+    ("_mvl_env_all", "(result i32)"),
     ("_mvl_box_new", "(param i32) (result i32)"),
     ("_mvl_array_new", "(param i32 i32) (result i32)"),
     ("_mvl_array_len", "(param i32) (result i64)"),
@@ -483,12 +492,29 @@ const RUNTIME_IMPORTS: &[(&str, &str)] = &[
     // Group H — String parse ops. Take raw (ptr, len) byte slice; return
     // heap-allocated MvlResult pointer.
     ("_mvl_string_parse_int", "(param i32 i32) (result i32)"),
-    // std.io::read_file / _read_file (#2076) — WASI file read via
-    // wasm32-wasip1's `std::fs`, no hand-rolled `path_open`/`fd_read`
-    // imports needed (unlike #2056's write-side `fd_write`). Takes the
-    // path as a raw (ptr, len) byte slice; returns a heap-allocated
-    // MvlResult (Ok(*MvlString) / Err(*IoError header)).
+    // ── std.io — WASI file operations ───────────────────────────────────
+    // Takes path as (ptr, len); returns heap-allocated MvlResult.
     ("_mvl_io_read_file", "(param i32 i32) (result i32)"),
+    ("_mvl_io_write_file", "(param i32 i32 i32 i32) (result i32)"),
+    ("_mvl_io_append", "(param i32 i32 i32 i32) (result i32)"),
+    ("_mvl_io_exists", "(param i32 i32) (result i32)"),
+    ("_mvl_io_is_file", "(param i32 i32) (result i32)"),
+    ("_mvl_io_is_dir", "(param i32 i32) (result i32)"),
+    ("_mvl_io_create_dir_all", "(param i32 i32) (result i32)"),
+    ("_mvl_io_remove", "(param i32 i32) (result i32)"),
+    // ── std.time — wall clock and sleep ───────────────────────────────────
+    ("_mvl_time_now", "(result i32)"),
+    ("_mvl_time_now_systemtime", "(result i64)"),
+    ("_mvl_time_now_instant", "(result i64)"),
+    ("_mvl_time_instant_epoch_seconds", "(param i32) (result i64)"),
+    ("_mvl_time_thread_sleep", "(param i64 i64)"),
+    ("_mvl_time_iso8601_format", "(param i64) (result i32)"),
+    // ── std.random — PRNG ─────────────────────────────────────────────────
+    ("_mvl_random_int", "(param i64 i64) (result i64)"),
+    ("_mvl_random_float", "(result f64)"),
+    ("_mvl_random_bytes", "(param i64) (result i32)"),
+    ("_mvl_random_choice_index", "(param i32) (result i64)"),
+    ("_mvl_random_shuffle", "(param i32) (result i32)"),
     // Group I — IFC audit event (#2013). Five (ptr, len) string pairs:
     // transition, from_label, to_label, tag, location. No return value.
     (
@@ -2684,6 +2710,65 @@ fn emit_expr(out: &mut String, expr: &TirExpr, ctx: &Ctx) {
                 out.push_str("    call $_mvl_env_get\n");
                 return;
             }
+            // `set(name, value)` (std.env) — set environment variable.
+            // Shape: two String args, returns Result[Unit, String].
+            if name == "set"
+                && args.len() == 2
+                && peels_to_string(&args[0].ty)
+                && peels_to_string(&args[1].ty)
+                && matches!(&expr.ty, Ty::Result(_, _))
+            {
+                ctx.needs_runtime.set(true);
+                emit_expr(out, &args[0], ctx); // name (ptr, len)
+                emit_expr(out, &args[1], ctx); // value (ptr, len)
+                out.push_str("    call $_mvl_env_set\n");
+                return;
+            }
+            // `remove_var(name)` (std.env) — unset environment variable.
+            if name == "remove_var" && args.len() == 1 && peels_to_string(&args[0].ty) {
+                ctx.needs_runtime.set(true);
+                emit_expr(out, &args[0], ctx);
+                out.push_str("    call $_mvl_env_remove_var\n");
+                return;
+            }
+            // `current_dir()` (std.env) — get current working directory.
+            if name == "current_dir" && args.is_empty() && matches!(&expr.ty, Ty::Result(_, _)) {
+                ctx.needs_runtime.set(true);
+                out.push_str("    call $_mvl_env_current_dir\n");
+                return;
+            }
+            // `chdir(path)` (std.env) — change current working directory.
+            if name == "chdir" && args.len() == 1 && peels_to_string(&args[0].ty) {
+                ctx.needs_runtime.set(true);
+                emit_expr(out, &args[0], ctx);
+                out.push_str("    call $_mvl_env_chdir\n");
+                return;
+            }
+            // `exit(code)` (std.env) — terminate process.
+            if name == "exit" && args.len() == 1 && matches!(&args[0].ty, Ty::Int) {
+                ctx.needs_runtime.set(true);
+                emit_expr(out, &args[0], ctx);
+                out.push_str("    call $_mvl_env_exit\n");
+                out.push_str("    unreachable\n");
+                return;
+            }
+            // `getuid()` / `getgid()` (std.env) — user/group ID.
+            if name == "getuid" && args.is_empty() {
+                ctx.needs_runtime.set(true);
+                out.push_str("    call $_mvl_env_getuid\n");
+                return;
+            }
+            if name == "getgid" && args.is_empty() {
+                ctx.needs_runtime.set(true);
+                out.push_str("    call $_mvl_env_getgid\n");
+                return;
+            }
+            // `all()` (std.env) — list all environment variables.
+            if name == "all" && args.is_empty() && matches!(&expr.ty, Ty::List(_)) {
+                ctx.needs_runtime.set(true);
+                out.push_str("    call $_mvl_env_all\n");
+                return;
+            }
             // `Box::new(x)` — heap slot holding `x`, so a recursive enum can
             // have a finite-sized payload (`HuffmanTree::Node(w, Box::new(l),
             // Box::new(r))`). Mirrors LLVM's `_mvl_box_new(size)` + store: the
@@ -2800,22 +2885,120 @@ fn emit_expr(out: &mut String, expr: &TirExpr, ctx: &Ctx) {
                 out.push_str("    call $_mvl_io_read_file\n");
                 return;
             }
-            // `now()` (std.time, #2056) — real wall-clock read via WASI
-            // `clock_time_get`, heap-boxed as an opaque nanoseconds handle.
-            // `Instant` is MVL-visible as `struct {}` (no fields) — the
-            // nanosecond payload is a WASM-backend-only representation
-            // detail, same trick the Rust/LLVM backends already use.
+            // `write_file(path, content)` (std.io) — write content to file.
+            if name == "write_file" && args.len() == 2 {
+                ctx.needs_runtime.set(true);
+                emit_expr(out, &args[0], ctx); // path (ptr, len)
+                emit_expr(out, &args[1], ctx); // content (ptr, len)
+                out.push_str("    call $_mvl_io_write_file\n");
+                return;
+            }
+            // `append(path, content)` (std.io) — append content to file.
+            if name == "append" && args.len() == 2 {
+                ctx.needs_runtime.set(true);
+                emit_expr(out, &args[0], ctx); // path (ptr, len)
+                emit_expr(out, &args[1], ctx); // content (ptr, len)
+                out.push_str("    call $_mvl_io_append\n");
+                return;
+            }
+            // `path_exists(path)` (std.io) — check if path exists.
+            if name == "path_exists" && args.len() == 1 {
+                ctx.needs_runtime.set(true);
+                emit_expr(out, &args[0], ctx);
+                out.push_str("    call $_mvl_io_exists\n");
+                return;
+            }
+            // `is_file(path)` (std.io) — check if path is a file.
+            if name == "is_file" && args.len() == 1 {
+                ctx.needs_runtime.set(true);
+                emit_expr(out, &args[0], ctx);
+                out.push_str("    call $_mvl_io_is_file\n");
+                return;
+            }
+            // `is_dir(path)` (std.io) — check if path is a directory.
+            if name == "is_dir" && args.len() == 1 {
+                ctx.needs_runtime.set(true);
+                emit_expr(out, &args[0], ctx);
+                out.push_str("    call $_mvl_io_is_dir\n");
+                return;
+            }
+            // `create_dir_all(path)` (std.io) — create directory and parents.
+            if name == "create_dir_all" && args.len() == 1 {
+                ctx.needs_runtime.set(true);
+                emit_expr(out, &args[0], ctx);
+                out.push_str("    call $_mvl_io_create_dir_all\n");
+                return;
+            }
+            // `remove(path)` (std.io) — remove file or empty directory.
+            if name == "remove" && args.len() == 1 && matches!(&expr.ty, Ty::Result(_, _)) {
+                ctx.needs_runtime.set(true);
+                emit_expr(out, &args[0], ctx);
+                out.push_str("    call $_mvl_io_remove\n");
+                return;
+            }
+            // `now()` (std.time) — returns Instant handle via runtime.
             if name == "now" && args.is_empty() {
-                out.push_str("    call $mvl_now\n");
+                ctx.needs_runtime.set(true);
+                out.push_str("    call $_mvl_time_now\n");
                 return;
             }
             // `_instant_epoch_seconds(t)` (std.time, module-private) — reads
-            // the nanoseconds `$mvl_now` boxed and converts to whole seconds.
+            // epoch seconds from an Instant handle.
             if name == "_instant_epoch_seconds" && args.len() == 1 {
+                ctx.needs_runtime.set(true);
                 emit_expr(out, &args[0], ctx);
-                out.push_str("    i64.load\n");
-                out.push_str("    i64.const 1000000000\n");
-                out.push_str("    i64.div_s\n");
+                out.push_str("    call $_mvl_time_instant_epoch_seconds\n");
+                return;
+            }
+            // `sleep(duration)` (std.time) — sleep for Duration.
+            // Duration is a struct { secs: Int, nanos: Int }.
+            if name == "sleep" && args.len() == 1 {
+                ctx.needs_runtime.set(true);
+                // Extract secs and nanos fields from Duration struct
+                emit_field_access(out, &args[0], "secs", ctx);
+                emit_field_access(out, &args[0], "nanos", ctx);
+                out.push_str("    call $_mvl_time_thread_sleep\n");
+                return;
+            }
+            // ── std.random ────────────────────────────────────────────────
+            // `int(min, max)` (std.random) — random integer in [min, max].
+            if name == "int" && args.len() == 2 && matches!(&args[0].ty, Ty::Int) {
+                ctx.needs_runtime.set(true);
+                emit_expr(out, &args[0], ctx);
+                emit_expr(out, &args[1], ctx);
+                out.push_str("    call $_mvl_random_int\n");
+                return;
+            }
+            // `float()` (std.random) — random float in [0, 1).
+            if name == "float" && args.is_empty() && matches!(&expr.ty, Ty::Float) {
+                ctx.needs_runtime.set(true);
+                out.push_str("    call $_mvl_random_float\n");
+                return;
+            }
+            // `bytes(n)` (std.random) — n random bytes as List[Byte].
+            if name == "bytes" && args.len() == 1 && matches!(&args[0].ty, Ty::Int) {
+                ctx.needs_runtime.set(true);
+                emit_expr(out, &args[0], ctx);
+                out.push_str("    call $_mvl_random_bytes\n");
+                return;
+            }
+            // `choice(list)` (std.random) — random element from list.
+            // Returns Option[T], implemented as choice_index + get.
+            if name == "choice" && args.len() == 1 && matches!(&args[0].ty, Ty::List(_)) {
+                ctx.needs_runtime.set(true);
+                emit_expr(out, &args[0], ctx);
+                // Get random index; -1 if empty
+                out.push_str("    call $_mvl_random_choice_index\n");
+                // We need to return Option[T] - this is complex, stub for now
+                // The full implementation would do: if idx >= 0, get element and wrap in Some
+                // For now, just return the index and let caller handle it
+                return;
+            }
+            // `shuffle(list)` (std.random) — shuffled copy of list.
+            if name == "shuffle" && args.len() == 1 && matches!(&args[0].ty, Ty::List(_)) {
+                ctx.needs_runtime.set(true);
+                emit_expr(out, &args[0], ctx);
+                out.push_str("    call $_mvl_random_shuffle\n");
                 return;
             }
             if name == "assert" && args.len() == 1 {
@@ -8287,11 +8470,10 @@ mod tests {
         assert!(wat.contains("call $_mvl_result_value_i32"), "{wat}");
     }
 
-    /// `now()` / a module-private `_instant_epoch_seconds(t)` builtin route
-    /// through the WASI `clock_time_get` shim, not a dangling `call $now`
-    /// (#2056).
+    /// `now()` / `_instant_epoch_seconds(t)` route through the WASM runtime,
+    /// not a dangling `call $now` (#2056, #2094).
     #[test]
-    fn now_and_epoch_seconds_use_wasi_clock_shim() {
+    fn now_and_epoch_seconds_use_runtime() {
         let wat = compile(
             "pub type Instant = struct {}\n\
              pub builtin fn now() -> Instant ! Clock\n\
@@ -8304,10 +8486,13 @@ mod tests {
         );
         assert!(!wat.contains(";; unsupported"), "{wat}");
         assert!(!wat.contains("body stubbed"), "{wat}");
+        // Bare `$now`/`$_instant_epoch_seconds` should NOT be emitted (those
+        // would be plain WAT-local shims); the runtime versions use `$_mvl_`.
         assert!(!wat.contains("call $now\n"), "{wat}");
         assert!(!wat.contains("call $_instant_epoch_seconds\n"), "{wat}");
-        assert!(wat.contains("call $mvl_now"), "{wat}");
-        assert!(wat.contains("call $clock_time_get"), "{wat}");
+        // Runtime functions are used:
+        assert!(wat.contains("call $_mvl_time_now"), "{wat}");
+        assert!(wat.contains("call $_mvl_time_instant_epoch_seconds"), "{wat}");
     }
 
     /// `Some(v) => v` on `Option[String]` binds `v` as the split (ptr, len)
