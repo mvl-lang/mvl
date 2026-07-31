@@ -504,14 +504,11 @@ const RUNTIME_IMPORTS: &[(&str, &str)] = &[
     ("_mvl_io_remove", "(param i32 i32) (result i32)"),
     // ── std.time — wall clock and sleep ───────────────────────────────────
     ("_mvl_time_now", "(result i32)"),
-    ("_mvl_time_now_systemtime", "(result i64)"),
-    ("_mvl_time_now_instant", "(result i64)"),
     (
         "_mvl_time_instant_epoch_seconds",
         "(param i32) (result i64)",
     ),
     ("_mvl_time_thread_sleep", "(param i64 i64)"),
-    ("_mvl_time_iso8601_format", "(param i64) (result i32)"),
     // ── std.random — PRNG ─────────────────────────────────────────────────
     ("_mvl_random_int", "(param i64 i64) (result i64)"),
     ("_mvl_random_float", "(result f64)"),
