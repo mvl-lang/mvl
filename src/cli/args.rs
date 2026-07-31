@@ -169,17 +169,35 @@ pub(super) fn parse_backend(args: &[String]) -> &str {
 
 /// Parse `--target=<name>` from args; defaults to `"default"`.
 ///
-/// Valid targets: `default` (std::thread + mpsc), `tokio` (tokio tasks + channels).
-pub(super) fn parse_target_or_exit(args: &[String]) -> &str {
+/// The set of valid targets depends on `backend`:
+/// - `backend == "wasm"`: `default`/`wasi` (WASI host, current behavior) or
+///   `wasm-browser` (JS host imports, no WASI). `default` and `wasi` are
+///   equivalent and both normalize to `"wasi"`.
+/// - every other backend: `default` (std::thread + mpsc) or `tokio` (tokio
+///   tasks + channels) — the actor concurrency runtime, unrelated to WASM.
+pub(super) fn parse_target_or_exit<'a>(args: &'a [String], backend: &str) -> &'a str {
     let target = args
         .iter()
         .find_map(|a| a.strip_prefix("--target="))
         .unwrap_or("default");
-    match target {
-        "default" | "tokio" => target,
-        other => {
-            eprintln!("error: unknown target '{other}' (supported: default, tokio)");
-            process::exit(1);
+    if backend == "wasm" {
+        match target {
+            "default" | "wasi" => "wasi",
+            "wasm-browser" => target,
+            other => {
+                eprintln!(
+                    "error: unknown target '{other}' for --backend=wasm (supported: default, wasi, wasm-browser)"
+                );
+                process::exit(1);
+            }
+        }
+    } else {
+        match target {
+            "default" | "tokio" => target,
+            other => {
+                eprintln!("error: unknown target '{other}' (supported: default, tokio)");
+                process::exit(1);
+            }
         }
     }
 }

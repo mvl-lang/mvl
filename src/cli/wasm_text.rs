@@ -841,7 +841,8 @@ fn resolve_entry_path(path: &str) -> String {
 }
 
 /// `mvl build --backend=wasm <file>` — write `<stem>.wat`.
-pub(super) fn build_project_wasm(path: &str, assert_mode: AssertMode) {
+pub(super) fn build_project_wasm(path: &str, assert_mode: AssertMode, target: &str) {
+    exit_if_wasm_browser_unimplemented(target);
     let file_path = resolve_entry_path(path);
     let (prog, _src) = super::parse_or_exit(&file_path);
     let module_name = loader::stem(&file_path);
@@ -1088,9 +1089,21 @@ fn run_one_case(
     }
 }
 
+/// Bail out with a clear message until the `wasm-browser` target's JS-host
+/// runtime and emitter path exist (tracked in #2093). `wasi` is a no-op here.
+fn exit_if_wasm_browser_unimplemented(target: &str) {
+    if target == "wasm-browser" {
+        eprintln!(
+            "error: --target=wasm-browser is not yet implemented (tracked in #2093) — use --target=wasi (default)"
+        );
+        process::exit(1);
+    }
+}
+
 /// `mvl test <path> --backend=wasm` — discover files with `fn main` +
 /// `// expect:` annotations, emit WAT, run under wasmtime, compare output.
-pub(super) fn cmd_test_wasm(path: &str, quiet: bool, verbose: bool) {
+pub(super) fn cmd_test_wasm(path: &str, quiet: bool, verbose: bool, target: &str) {
+    exit_if_wasm_browser_unimplemented(target);
     let wasm_tools_bin = which("wasm-tools").unwrap_or_else(|| {
         eprintln!("error: `wasm-tools` not found — install with 'cargo install wasm-tools'");
         process::exit(1);

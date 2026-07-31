@@ -87,7 +87,7 @@ pub(super) fn dispatch(args: &[String]) {
             let stdlib_profile = args::parse_stdlib_profile(args);
             let assert_mode = args::parse_assert_mode_or_exit(args);
             let optimize_proved = args::parse_optimize_proved(args);
-            let target = args::parse_target_or_exit(args);
+            let target = args::parse_target_or_exit(args, backend);
             let verbose = args.iter().any(|a| a == "--verbose" || a == "-v");
             if verbose {
                 eprintln!("stdlib profile: {stdlib_profile}");
@@ -98,7 +98,7 @@ pub(super) fn dispatch(args: &[String]) {
             if backend == "llvm" {
                 llvm_text::build_project_llvm_text(&path);
             } else if backend == "wasm" {
-                wasm_text::build_project_wasm(&path, assert_mode);
+                wasm_text::build_project_wasm(&path, assert_mode, target);
             } else {
                 build::run(
                     &path,
@@ -118,7 +118,7 @@ pub(super) fn dispatch(args: &[String]) {
             let stdlib_profile = args::parse_stdlib_profile(args);
             let assert_mode = args::parse_assert_mode_or_exit(args);
             let optimize_proved = args::parse_optimize_proved(args);
-            let target = args::parse_target_or_exit(args);
+            let target = args::parse_target_or_exit(args, backend);
             let release = args.iter().any(|a| a == "--release");
             check::maybe_check_proven_stdlib_or_exit(stdlib_profile);
             let path_idx = args::path_arg_index(args);
@@ -130,6 +130,9 @@ pub(super) fn dispatch(args: &[String]) {
                 .collect();
             if backend == "llvm" {
                 llvm_text::run_project_llvm_text(&path);
+            } else if backend == "wasm" {
+                eprintln!("error: `mvl run --backend=wasm` is not supported — use `mvl build --backend=wasm` (via wasmtime) or `mvl test --backend=wasm`");
+                process::exit(1);
             } else {
                 build::run(
                     &path,
@@ -156,7 +159,8 @@ pub(super) fn dispatch(args: &[String]) {
             if backend == "llvm" {
                 llvm_text::cmd_test_llvm_text(&path, quiet, verbose);
             } else if backend == "wasm" {
-                wasm_text::cmd_test_wasm(&path, quiet, verbose);
+                let target = args::parse_target_or_exit(args, backend);
+                wasm_text::cmd_test_wasm(&path, quiet, verbose, target);
             } else {
                 let expect_only = args.iter().any(|a| a == "--expect");
                 if expect_only {
