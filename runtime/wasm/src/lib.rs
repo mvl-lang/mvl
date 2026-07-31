@@ -504,6 +504,28 @@ unsafe fn reclaim_byte_buffer(ptr: i32, len_bytes: usize, cap_bytes: usize) {
     }
 }
 
+/// `_mvl_box_new(size) -> ptr` — heap slot of `size` bytes for a `Box[T]`.
+///
+/// Backs `Box::new(x)`, which MVL needs to make a recursive enum payload
+/// finite-sized (`HuffmanTree::Node(w, Box::new(l), Box::new(r))`). The
+/// emitter stores the value into the returned slot itself, so this only has to
+/// hand back writable, correctly-sized, zeroed memory.
+///
+/// Port of `runtime/llvm`'s `_mvl_box_new`, which mallocs. Here it reuses
+/// `alloc_byte_buffer`, the same allocator `MvlArray` element storage uses.
+///
+/// Returns 0 for a non-positive size rather than aborting: the emitter only
+/// ever passes a fixed 4 or 8, so a 0 here means a caller bug, and returning a
+/// null the caller will trap on beats killing the module.
+#[unsafe(no_mangle)]
+pub extern "C" fn _mvl_box_new(size: i32) -> i32 {
+    if size <= 0 {
+        return 0;
+    }
+    let (ptr, _cap) = alloc_byte_buffer(size as usize);
+    ptr
+}
+
 /// Create a new `MvlArray` with the given element size and initial capacity.
 /// Returns a heap pointer with `rc = 1`. `initial_cap` is clamped up to
 /// `ARRAY_INITIAL_CAP` (4).

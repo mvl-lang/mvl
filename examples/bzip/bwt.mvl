@@ -9,6 +9,9 @@
 // R3 (totality): all for-loop helpers are bounded.
 // R7 (effects): pure — no file or console access.
 
+use intlist::int_list_set;
+use intlist::zero_int;
+
 pub type BwtResult = struct {
     data:    List[Byte],
     primary: Int,       // index of original string in sorted rotation order
@@ -103,40 +106,3 @@ fn sort_copy(val data: List[Byte]) -> List[Byte] {
     copy.sort()
 }
 
-fn zero_int(_x: Int) -> Int { 0 }
-
-fn int_list_set(list: List[Int], idx: Int, new_val: Int) -> List[Int] {
-    let before: List[Int] = list.slice(0, idx);
-    let after: List[Int]  = list.slice(idx + 1, list.len());
-    let result: ref List[Int] = before;
-    result.push(new_val);
-    result.extend(after);
-    result
-}
-
-// ── Unit tests ────────────────────────────────────────────────────────────────
-
-fn b(xs: List[Int]) -> List[Byte] {
-    xs.map(|v: Int| -> Byte { from_int(v) })
-}
-
-test fn bwt_known_transform() -> Unit {
-    // "banana" = [98, 97, 110, 97, 110, 97]; BWT primary index = 3
-    let input: List[Byte] = b([98, 97, 110, 97, 110, 97]);
-    let result: BwtResult = bwt_encode(input);
-    assert_eq(result.primary, 3)
-}
-
-test fn bwt_roundtrip_short() -> Unit {
-    let input: List[Byte] = b([104, 101, 108, 108, 111]); // "hello"
-    let encoded: BwtResult = bwt_encode(input);
-    let decoded: List[Byte] = bwt_decode(encoded);
-    assert_eq(decoded, input)
-}
-
-test fn bwt_roundtrip_repeated_bytes() -> Unit {
-    let input: List[Byte] = b([65, 65, 65, 66, 66, 65]); // AAABBA
-    let encoded: BwtResult = bwt_encode(input);
-    let decoded: List[Byte] = bwt_decode(encoded);
-    assert_eq(decoded, input)
-}

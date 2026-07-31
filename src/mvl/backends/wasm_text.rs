@@ -406,6 +406,7 @@ const RUNTIME_IMPORTS: &[(&str, &str)] = &[
     // `i32.load` / `i64.load` / `f64.load` on the pointer returned by
     // `_mvl_array_get`. Typed push variants exist so the emitter can pass
     // the value directly on the WASM stack (no scratch alloc needed).
+    ("_mvl_box_new", "(param i32) (result i32)"),
     ("_mvl_array_new", "(param i32 i32) (result i32)"),
     ("_mvl_array_len", "(param i32) (result i64)"),
     ("_mvl_array_is_empty", "(param i32) (result i32)"),
@@ -2195,6 +2196,12 @@ fn collect_locals_expr(expr: &TirExpr, locals: &mut Vec<(String, Ty)>) {
             if name == "format" && args.len() == 2 {
                 locals.push((mvl_string_temp_name(expr), Ty::Bool));
             }
+            // Slot pointer for `Box::new(x)` — `i32.store` consumes the
+            // address, so the emitter tees it into this local to keep it as the
+            // expression's value. Ty::Bool is this file's i32-slot convention.
+            if name == "Box::new" && args.len() == 1 {
+                locals.push((box_temp_name(&args[0]), Ty::Bool));
+            }
         }
         TirExprKind::MethodCall {
             receiver,
@@ -2578,6 +2585,51 @@ fn emit_expr(out: &mut String, expr: &TirExpr, ctx: &Ctx) {
                 // Callee index goes on top of the stack, after the arguments.
                 out.push_str(&format!("    local.get ${name}\n"));
                 out.push_str(&format!("    call_indirect (type {sig})\n"));
+                return;
+            }
+            // `from_int(n)` / `wrapping_from_int(n)` — Byte construction from
+            // an Int. A Byte is an i32 slot here (see `is_i32`) and an Int is
+            // i64, so this is a plain narrowing with no runtime call, mirroring
+            // LLVM's `trunc i64 … to i8`. `from_int` carries the refinement
+            // `n >= 0 && n <= 255`, which the checker discharges; the extra
+            // `i32.and 0xFF` gives `wrapping_from_int` its documented wrap and
+            // costs nothing on the checked path.
+            //
+            // Without this arm the emitter fell through to `call $from_int`, a
+            // symbol nothing declares — `examples/bzip` assembled to a module
+            // that no runtime would load.
+            if (name == "from_int" || name == "wrapping_from_int") && args.len() == 1 {
+                emit_expr(out, &args[0], ctx);
+                out.push_str("    i32.wrap_i64\n");
+                out.push_str("    i32.const 255\n");
+                out.push_str("    i32.and\n");
+                return;
+            }
+            // `Box::new(x)` — heap slot holding `x`, so a recursive enum can
+            // have a finite-sized payload (`HuffmanTree::Node(w, Box::new(l),
+            // Box::new(r))`). Mirrors LLVM's `_mvl_box_new(size)` + store: the
+            // runtime hands back zeroed memory and the store happens here,
+            // widths chosen the same way every other slot in this emitter is.
+            //
+            // Without this arm the emitter emitted `call $Box::new`, a symbol
+            // nothing declares — `examples/bzip` produced an unloadable module.
+            if name == "Box::new" && args.len() == 1 {
+                let inner = resolve_ty_param(&args[0].ty, ctx.type_subst);
+                let is32 = wasm_ty(&inner, ctx) == "i32";
+                let size = if is32 { 4 } else { 8 };
+                ctx.needs_runtime.set(true);
+                out.push_str(&format!("    i32.const {size}\n"));
+                out.push_str("    call $_mvl_box_new\n");
+                // Keep the pointer: [ptr] → [ptr, ptr] → store consumes one.
+                let slot = box_temp_name(&args[0]);
+                out.push_str(&format!("    local.tee ${slot}\n"));
+                emit_expr(out, &args[0], ctx);
+                out.push_str(if is32 {
+                    "    i32.store\n"
+                } else {
+                    "    i64.store\n"
+                });
+                out.push_str(&format!("    local.get ${slot}\n"));
                 return;
             }
             // Route builtins that don't have MVL bodies through the runtime
@@ -4863,6 +4915,14 @@ fn mvl_string_temp_name(expr: &TirExpr) -> String {
     format!("__ms_{}_{}", expr.span.offset, expr.span.len)
 }
 
+/// Temp local holding the `Box::new` slot pointer while its payload is stored.
+/// `i32.store` consumes the address, so the pointer has to be kept somewhere to
+/// be the expression's value. Keyed by the boxed argument's span, matching how
+/// every other temp here is named.
+fn box_temp_name(arg: &TirExpr) -> String {
+    format!("__bx_{}_{}", arg.span.offset, arg.span.len)
+}
+
 /// Temp local holding the `*MvlString` pointer while a `Some(v)` match arm
 /// on `Option[String]` unpacks it into the `v_ptr`/`v_len` locals every
 /// other String variable uses (#2056). Keyed by the `Some(...)` pattern's
@@ -5274,6 +5334,12 @@ fn wasm_ty(ty: &Ty, ctx: &Ctx) -> &'static str {
             }
             "i64"
         }
+        // `Box[T]` is a heap pointer, so an i32 address on wasm32 — like every
+        // other boxed handle below. Without this it fell to the `_ => "i64"`
+        // default, and `emit_payload_store` then skipped the
+        // `i64.extend_i32_u` widen an 8-byte payload slot needs: the i32 from
+        // `_mvl_box_new` met an `i64.store` and the module failed to validate.
+        Ty::Named(name, _) if name == "Box" => "i32",
         Ty::Named(name, _) if ctx.enum_types.contains(name) => "i32",
         // Heap-allocated struct pointer (#1821).
         Ty::Named(name, _) if ctx.struct_layouts.contains_key(name.as_str()) => "i32",
@@ -5341,6 +5407,8 @@ fn is_string_ty(ty: &Ty, ctx: &Ctx) -> bool {
 fn is_i32(ty: &Ty, ctx: &Ctx) -> bool {
     match ty {
         Ty::Bool | Ty::Byte => true,
+        // `Box[T]` — heap pointer, i32 on wasm32. Must agree with `wasm_ty`.
+        Ty::Named(name, _) if name == "Box" => true,
         Ty::Named(name, _)
             if ctx.enum_types.contains(name)
                 || ctx.struct_layouts.contains_key(name.as_str())
@@ -9046,6 +9114,55 @@ mod validated_module_tests {
         validate(&wat);
         assert!(stubbed.is_empty(), "unexpected stubs: {stubbed:?}");
         assert!(wat.contains("call $_mvl_array_slice"));
+    }
+
+    /// `from_int(n)` narrows an i64 Int to an i32 Byte slot. Emitting
+    /// `call $from_int` — a symbol nothing declares — made every module using
+    /// it unloadable (`examples/bzip`).
+    #[test]
+    fn from_int_lowers_inline_without_a_call() {
+        let (wat, stubbed) = emit(
+            "test fn t() -> Unit {\n\
+                 let b: Byte = from_int(65);\n\
+                 assert_eq(b, from_int(65));\n\
+             }\n",
+        );
+        validate(&wat);
+        assert!(stubbed.is_empty(), "unexpected stubs: {stubbed:?}");
+        assert!(
+            !wat.contains("call $from_int"),
+            "from_int must lower inline, not call an undeclared symbol: {wat}"
+        );
+        assert!(wat.contains("i32.wrap_i64"), "{wat}");
+    }
+
+    /// `Box::new(x)` heap-allocates a slot so a recursive enum payload is
+    /// finite-sized. Two separate bugs: the missing `$Box::new` symbol, and
+    /// `Box[T]` falling through `wasm_ty`'s i64 default so the i32 pointer was
+    /// stored into an 8-byte payload slot without the widen.
+    #[test]
+    fn box_new_allocates_and_is_pointer_typed() {
+        let (wat, stubbed) = emit(
+            "type Tree = enum {\n\
+                 Leaf(Int),\n\
+                 Node(Int, Box[Tree]),\n\
+             }\n\
+             test fn t() -> Unit {\n\
+                 let leaf: Tree = Tree::Leaf(1);\n\
+                 let node: Tree = Tree::Node(2, Box::new(leaf));\n\
+                 match node {\n\
+                     Tree::Node(w, _) => assert_eq(w, 2),\n\
+                     Tree::Leaf(v) => assert_eq(v, 0),\n\
+                 }\n\
+             }\n",
+        );
+        validate(&wat);
+        assert!(stubbed.is_empty(), "unexpected stubs: {stubbed:?}");
+        assert!(
+            !wat.contains("call $Box::new"),
+            "Box::new must route to the runtime shim: {wat}"
+        );
+        assert!(wat.contains("call $_mvl_box_new"), "{wat}");
     }
 
     /// The marker is the stub trigger; the five scan sites and every producer

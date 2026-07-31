@@ -15,6 +15,10 @@
 // Huffman tree: a Leaf holds a symbol+weight; a Node combines two subtrees.
 // Box[HuffmanTree] is required for the recursive variant — the compiler
 // rejects unboxed recursive types (infinite size).
+use intlist::empty_code;
+use intlist::int_list_set;
+use intlist::zero_int;
+
 pub type HuffmanTree = enum {
     Leaf(Int, Int),                               // (symbol, weight)
     Node(Int, Box[HuffmanTree], Box[HuffmanTree]), // (weight, left, right)
@@ -49,17 +53,7 @@ pub total fn count_freqs(val data: List[Int]) -> List[Int] {
     freqs
 }
 
-fn zero_int(_x: Int) -> Int { 0 }
-
 // Functional update: return new list with list[idx] = new_v.
-fn int_list_set(list: List[Int], idx: Int, new_v: Int) -> List[Int] {
-    let before: List[Int] = list.slice(0, idx);
-    let after: List[Int]  = list.slice(idx + 1, list.len());
-    let result: ref List[Int] = before;
-    result.push(new_v);
-    result.extend(after);
-    result
-}
 
 // Functional update for List[List[Int]].
 fn ll_set(list: List[List[Int]], idx: Int, new_v: List[Int]) -> List[List[Int]] {
@@ -115,8 +109,6 @@ pub total fn build_tree(val freqs: List[Int]) -> Option[BuildResult] {
         })
     }
 }
-
-fn empty_code(_x: Int) -> List[Int] { [] }
 
 // Build the initial priority queue: one leaf per symbol with freq > 0.
 // Uses a state struct so the for body is a single assignment (no nesting).
