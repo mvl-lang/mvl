@@ -40,6 +40,7 @@ doctor: ## Check that all dev tools are available
 	check /opt/homebrew/opt/llvm/bin/lli "brew install llvm  (required for LLVM backend)"; \
 	check wasm-tools    "cargo install wasm-tools  (required for WASM backend)"; \
 	check wasmtime      "https://wasmtime.dev/  (required for WASM backend)"; \
+	check wasm-opt      "brew install binaryen  (required to shrink runtime/wasm/, #2095)"; \
 	if rustup target list --installed 2>/dev/null | grep -q '^wasm32-wasip1$$'; then \
 	  printf "  $$OK wasm32-wasip1 target\n"; \
 	else \
@@ -474,11 +475,14 @@ wasm-stub-report: build ## Fail if any WASM_CORPUS file emits `unreachable` stub
 # `(import "runtime" ...)` declarations for programs that need it.
 WASM_RUNTIME_PATH := $(CURDIR)/target/wasm32-wasip1/debug/mvl_runtime_wasm.wasm
 
-build-runtime-wasm: ## Build runtime/wasm/ crate → wasm32-wasip1 target
+build-runtime-wasm: ## Build runtime/wasm/ crate → wasm32-wasip1 target, shrunk with wasm-opt -Oz (#2095)
 	@rustup target list --installed | grep -q wasm32-wasip1 || { \
 	  echo "installing wasm32-wasip1 target..."; \
 	  rustup target add wasm32-wasip1; }
+	@command -v wasm-opt > /dev/null 2>&1 || { \
+	  printf "  \033[31m✗  wasm-opt not installed — 'brew install binaryen'\033[0m\n"; exit 1; }
 	cargo build -p mvl_runtime_wasm --target wasm32-wasip1 $(BUILD_CARGO_FLAGS)
+	wasm-opt -Oz -o $(WASM_RUNTIME_PATH) $(WASM_RUNTIME_PATH)
 
 test-runtime-wasm: ## Unit-test runtime/wasm/ under wasmtime (wasm32-wasip1 target)
 	@rustup target list --installed | grep -q wasm32-wasip1 || { \
