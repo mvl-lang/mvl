@@ -506,7 +506,10 @@ const RUNTIME_IMPORTS: &[(&str, &str)] = &[
     ("_mvl_time_now", "(result i32)"),
     ("_mvl_time_now_systemtime", "(result i64)"),
     ("_mvl_time_now_instant", "(result i64)"),
-    ("_mvl_time_instant_epoch_seconds", "(param i32) (result i64)"),
+    (
+        "_mvl_time_instant_epoch_seconds",
+        "(param i32) (result i64)",
+    ),
     ("_mvl_time_thread_sleep", "(param i64 i64)"),
     ("_mvl_time_iso8601_format", "(param i64) (result i32)"),
     // ── std.random — PRNG ─────────────────────────────────────────────────
@@ -8492,7 +8495,10 @@ mod tests {
         assert!(!wat.contains("call $_instant_epoch_seconds\n"), "{wat}");
         // Runtime functions are used:
         assert!(wat.contains("call $_mvl_time_now"), "{wat}");
-        assert!(wat.contains("call $_mvl_time_instant_epoch_seconds"), "{wat}");
+        assert!(
+            wat.contains("call $_mvl_time_instant_epoch_seconds"),
+            "{wat}"
+        );
     }
 
     /// `Some(v) => v` on `Option[String]` binds `v` as the split (ptr, len)
