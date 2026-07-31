@@ -1,0 +1,30 @@
+// intlist.mvl — small List[Int] helpers shared by bwt, huffman, and the
+// roundtrip tests.
+//
+// These were previously copy-pasted into each module. Same-directory modules
+// compile to one flat symbol space under `--backend=wasm`, so the duplicates
+// collided outright: `mvl build --backend=wasm main.mvl` failed with
+// "duplicate function `int_list_set`" and the example could not be built at
+// all. Sharing one definition fixes that and removes the drift risk of three
+// copies that have to stay in step.
+
+/// Zero, ignoring its argument. Used as the seed for `List::fill`-style
+/// initialisation via `map`.
+pub fn zero_int(_x: Int) -> Int { 0 }
+
+/// The empty code word, ignoring its argument. Seed for a `List[List[Int]]`
+/// code table.
+pub fn empty_code(_x: Int) -> List[Int] { [] }
+
+/// `list` with index `idx` replaced by `new_val`.
+///
+/// MVL lists are immutable at the element level, so this rebuilds: everything
+/// before `idx`, then the new value, then everything after.
+pub fn int_list_set(list: List[Int], idx: Int, new_val: Int) -> List[Int] {
+    let before: List[Int] = list.slice(0, idx);
+    let after: List[Int]  = list.slice(idx + 1, list.len());
+    let result: ref List[Int] = before;
+    result.push(new_val);
+    result.extend(after);
+    result
+}

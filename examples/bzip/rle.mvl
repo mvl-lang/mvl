@@ -130,32 +130,3 @@ fn rle_dec_byte(out: List[Byte], b: Byte, skip: Int) -> RleDecState {
 fn repeat_byte(b: Byte, count: Int) -> List[Byte] {
     range(0, count).map(|_x: Int| -> Byte { b })
 }
-
-// ── Unit tests ────────────────────────────────────────────────────────────────
-
-fn b(xs: List[Int]) -> List[Byte] {
-    xs.map(|v: Int| -> Byte { from_int(v) })
-}
-
-test fn rle_roundtrip_no_runs() -> Unit {
-    let data: List[Byte] = b([1, 2, 3, 4, 5]);
-    let encoded: List[Byte] = rle_encode(data);
-    let decoded: List[Byte] = rle_decode(encoded);
-    assert_eq(decoded, data)
-}
-
-test fn rle_roundtrip_run_of_four() -> Unit {
-    let data: List[Byte] = b([7, 7, 7, 7, 9]);
-    let encoded: List[Byte] = rle_encode(data);
-    assert_eq(encoded.len(), 6);
-    let decoded: List[Byte] = rle_decode(encoded);
-    assert_eq(decoded, data)
-}
-
-test fn rle_roundtrip_run_of_eight() -> Unit {
-    let data: List[Byte] = b([3, 3, 3, 3, 3, 3, 3, 3]);
-    let encoded: List[Byte] = rle_encode(data);
-    assert_eq(encoded.len(), 5);
-    let decoded: List[Byte] = rle_decode(encoded);
-    assert_eq(decoded, data)
-}

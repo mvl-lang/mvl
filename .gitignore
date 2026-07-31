@@ -35,6 +35,12 @@ librust_out.rlib
 *.ll
 *.bc
 
+# WASM text output — `mvl build --backend=wasm` writes `<stem>.wat` into the
+# working directory, so building an example in place leaves one behind.
+# Scoped to examples/ rather than a blanket `*.wat`: the reference modules in
+# tests/spikes/006-wasm-backend/ are checked in on purpose.
+examples/**/*.wat
+
 # Fuzzing runtime artifacts (cargo-fuzz)
 fuzz/corpus/
 fuzz/artifacts/
