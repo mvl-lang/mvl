@@ -2708,6 +2708,23 @@ fn emit_expr(out: &mut String, expr: &TirExpr, ctx: &Ctx) {
                     }
                 }
             }
+            // A qualified name (`Type::Variant`) that matched neither
+            // `enum_variants` nor `payload_enums` above means the owning
+            // enum's `TirTypeDecl` was never pulled into this module (e.g. a
+            // prelude enum reached only via a `let` annotation, never a call
+            // — see `pull_in_missing_prelude_items`, #2090). Falling through
+            // to the plain-local path below would emit `local.get
+            // $Type::Variant`, which is not a valid local name/reference and
+            // makes `wasm-tools` reject the whole module rather than just
+            // this function. No local ever legitimately contains "::" (see
+            // the `!contains("::")` guards used throughout this file for
+            // real bindings), so this is unambiguous. Stub instead.
+            if name.contains("::") {
+                out.push_str(&format!(
+                    "    ;; unsupported: qualified variant `{name}` — owning enum not registered\n"
+                ));
+                return;
+            }
             // All String variables (params, let-bindings, match-arm bindings)
             // use split (ptr, len) locals named $name_ptr / $name_len.
             // Also handles generic type params (e.g. T=String) by resolving
@@ -2939,24 +2956,41 @@ fn emit_expr(out: &mut String, expr: &TirExpr, ctx: &Ctx) {
             // literal so `logger.fd` field reads and dynamic `write(fd, …)`
             // dispatch (below) see an ordinary Fd pointer.
             if (name == "stdout" || name == "stderr" || name == "stdin") && args.is_empty() {
-                if let Some(layout) = ctx.struct_layouts.get("Fd") {
-                    if let Some(slot) = layout.fields.iter().find(|s| s.name == "inner") {
-                        ctx.needs_runtime.set(true);
-                        let fd_num: i64 = match name.as_str() {
-                            "stdout" => 1,
-                            "stderr" => 2,
-                            _ => 0,
-                        };
-                        let temp = struct_temp_name(expr);
-                        out.push_str(&format!("    i32.const {}\n", layout.total_size));
-                        out.push_str("    call $_mvl_struct_alloc\n");
-                        out.push_str(&format!("    local.tee ${temp}\n"));
-                        out.push_str(&format!("    i64.const {fd_num}\n"));
-                        out.push_str(&format!("    i64.store offset={}\n", slot.offset));
-                        out.push_str(&format!("    local.get ${temp}\n"));
-                        return;
-                    }
-                }
+                // A `struct_layouts` miss here used to fall through silently
+                // to the generic `FnCall` emission at the bottom of this
+                // match, writing a dangling `call $stdout`/`$stderr`/`$stdin`
+                // to a function with no body and no import — a module that
+                // cannot assemble at all (#2090). Stub instead: the
+                // `UNSUPPORTED_MARKER` comment below is caught by the
+                // whole-body scan at fn-emission time and replaced with a
+                // well-formed `unreachable`, same as every other
+                // unsupported-construct site in this file.
+                let Some(layout) = ctx.struct_layouts.get("Fd") else {
+                    out.push_str(&format!(
+                        "    ;; unsupported: {name}() — Fd struct layout not registered\n"
+                    ));
+                    return;
+                };
+                let Some(slot) = layout.fields.iter().find(|s| s.name == "inner") else {
+                    out.push_str(&format!(
+                        "    ;; unsupported: {name}() — Fd.inner field not registered\n"
+                    ));
+                    return;
+                };
+                ctx.needs_runtime.set(true);
+                let fd_num: i64 = match name.as_str() {
+                    "stdout" => 1,
+                    "stderr" => 2,
+                    _ => 0,
+                };
+                let temp = struct_temp_name(expr);
+                out.push_str(&format!("    i32.const {}\n", layout.total_size));
+                out.push_str("    call $_mvl_struct_alloc\n");
+                out.push_str(&format!("    local.tee ${temp}\n"));
+                out.push_str(&format!("    i64.const {fd_num}\n"));
+                out.push_str(&format!("    i64.store offset={}\n", slot.offset));
+                out.push_str(&format!("    local.get ${temp}\n"));
+                return;
             }
             // `write(fd, msg)` (std.io, #2056) — dynamic dispatch on the
             // runtime `Fd.inner` value via WASI `fd_write`. No trailing
@@ -5006,13 +5040,21 @@ fn emit_field_access(out: &mut String, recv: &TirExpr, field: &str, ctx: &Ctx) {
         }
     };
     let Some(layout) = ctx.struct_layouts.get(&struct_name) else {
+        // Same defect class as #2090's `stdout`/`stderr`/`stdin` fallthrough:
+        // this comment used to omit "unsupported", so it was invisible to
+        // the `UNSUPPORTED_MARKER` whole-body scan and left the caller
+        // expecting a value on the stack that was never pushed — a stack
+        // imbalance that fails `wasm-tools validate`, not a merely-missing
+        // feature. Matches the sibling branches above in this same match.
         out.push_str(&format!(
-            "    ;; unknown struct for field access: {struct_name}\n"
+            "    ;; unsupported: unknown struct for field access: {struct_name}\n"
         ));
         return;
     };
     let Some(slot) = layout.fields.iter().find(|s| s.name == field) else {
-        out.push_str(&format!("    ;; unknown field: {struct_name}.{field}\n"));
+        out.push_str(&format!(
+            "    ;; unsupported: unknown field: {struct_name}.{field}\n"
+        ));
         return;
     };
     emit_expr(out, recv, ctx); // leaves *struct on stack

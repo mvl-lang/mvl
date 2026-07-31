@@ -359,6 +359,28 @@ fn pull_in_missing_prelude_items(
                 continue;
             }
 
+            // `stdout`/`stderr`/`stdin`/`write` are checker builtins
+            // (`register_builtins`, `checker/context.rs`) usable without a
+            // `use std.io` import, so their `Decl::Fn` entries are stripped
+            // from `all_fn_decls` the same way `println`/`eprintln`'s are —
+            // the lookup below always misses for these names. Without this
+            // branch, `Fd`'s `TirTypeDecl` never gets seeded into
+            // `pull_in_types`, so `struct_layouts` never contains "Fd" and
+            // the emitter's `stdout`/`stderr`/`stdin`/`write` special cases
+            // (`emit_expr`'s `FnCall` arm, `emit_field_access`) silently miss
+            // regardless of binding shape or whether `std.io` was imported
+            // (#2090).
+            if matches!(name.as_str(), "stdout" | "stderr" | "stdin" | "write") {
+                pull_in_types(
+                    merged,
+                    &mut known_types,
+                    HashSet::from(["Fd".to_string()]),
+                    all_type_decls,
+                    expr_types,
+                );
+                continue;
+            }
+
             let Some(fd) = all_fn_decls.get(&name) else {
                 continue; // Not a plain fn decl — extern, or unresolved (checker already flagged it).
             };
@@ -1258,5 +1280,100 @@ mod stub_warning_tests {
     #[test]
     fn no_stubs_means_no_warning() {
         assert!(stub_warning_message(&[], "demo.mvl").is_none());
+    }
+}
+
+/// Regression tests for #2090: `stdout`/`stderr`/`stdin`/`write` never
+/// reliably reached `struct_layouts` through the real `compile_wat` CLI
+/// pipeline — unlike `src/mvl/backends/wasm_text.rs`'s own unit tests, which
+/// side-step the gap by locally redeclaring `Fd`/`stdout`/`write` in the test
+/// source, these drive `compile_wat` with genuine `use std.io` imports, the
+/// same path `mvl build --backend=wasm` uses.
+#[cfg(test)]
+mod io_fd_pull_in_tests {
+    use super::*;
+
+    /// Assemble and type-validate. Panics with the offending WAT on failure —
+    /// a `wat.contains(..)` substring check would not have caught #2090,
+    /// since the bug produced WAT that `wasm-tools parse` accepted and only
+    /// `wasm-tools validate`/`wasmparser` rejected.
+    fn validate(wat: &str) {
+        let bytes = match wat::parse_str(wat) {
+            Ok(b) => b,
+            Err(e) => panic!("failed to assemble emitted WAT: {e}\n--- WAT ---\n{wat}"),
+        };
+        if let Err(e) = wasmparser::Validator::new().validate_all(&bytes) {
+            panic!("emitted module failed validation: {e}\n--- WAT ---\n{wat}");
+        }
+    }
+
+    fn build_and_validate(src: &str) -> String {
+        let (mut p, errs) = Parser::new(src);
+        assert!(errs.is_empty(), "lex errors: {errs:?}");
+        let prog = p.parse_program();
+        assert!(p.errors().is_empty(), "parse errors: {:?}", p.errors());
+        let wat = compile_wat(&prog, "test", AssertMode::Always);
+        validate(&wat);
+        wat
+    }
+
+    #[test]
+    fn let_bound_stdout_fd_assembles_and_validates() {
+        build_and_validate(
+            "use std.io.{stdout, Fd, write}\n\
+             fn main() -> Unit ! Console {\n\
+                 let f: Fd = stdout();\n\
+                 let _: Result[Unit, IoError] = write(f, \"hi\\n\");\n\
+             }\n",
+        );
+    }
+
+    #[test]
+    fn let_bound_stderr_fd_assembles_and_validates() {
+        build_and_validate(
+            "use std.io.{stderr, Fd, write}\n\
+             fn main() -> Unit ! Console {\n\
+                 let f: Fd = stderr();\n\
+                 let _: Result[Unit, IoError] = write(f, \"err\\n\");\n\
+             }\n",
+        );
+    }
+
+    #[test]
+    fn let_bound_stdin_fd_assembles_and_validates() {
+        build_and_validate(
+            "use std.io.{stdin, Fd}\n\
+             fn main() -> Unit ! Console {\n\
+                 let f: Fd = stdin();\n\
+             }\n",
+        );
+    }
+
+    /// The issue's "works" premise — `write(stdout(), ...)` with the `Fd`
+    /// consumed inline as an argument, never bound to a `let` — actually
+    /// fails too under the real CLI pipeline (a stack-imbalance validation
+    /// error, not the "unknown func" from the `let`-bound case), since `Fd`
+    /// was missing from `struct_layouts` in both shapes alike.
+    #[test]
+    fn inline_write_stdout_assembles_and_validates() {
+        build_and_validate(
+            "use std.io.{stdout, write}\n\
+             fn main() -> Unit ! Console {\n\
+                 let _: Result[Unit, IoError] = write(stdout(), \"hi\\n\");\n\
+             }\n",
+        );
+    }
+
+    /// `stdout`/`stderr`/`write` are checker builtins usable without any
+    /// import (`register_builtins`, `checker/context.rs`) — the type-seeding
+    /// fix must not depend on the `use std.io` import being present.
+    #[test]
+    fn stdout_without_use_import_assembles_and_validates() {
+        build_and_validate(
+            "fn main() -> Unit ! Console {\n\
+                 let f: Fd = stdout();\n\
+                 let _: Result[Unit, IoError] = write(f, \"hi\\n\");\n\
+             }\n",
+        );
     }
 }

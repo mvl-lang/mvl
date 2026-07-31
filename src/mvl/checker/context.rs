@@ -401,6 +401,14 @@ impl TypeEnv {
             },
         );
         self.fns.insert(
+            "stdin".into(),
+            FnInfo {
+                params: vec![],
+                ret: fd_ty.clone(),
+                ..Default::default()
+            },
+        );
+        self.fns.insert(
             "write".into(),
             FnInfo {
                 params: vec![fd_ty.clone(), Ty::String],
