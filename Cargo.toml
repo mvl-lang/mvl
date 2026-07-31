@@ -32,6 +32,14 @@ libc = "0.2"
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }
+# Assemble + type-validate emitted WAT inside `cargo test`. The WASM emitter's
+# tests used to assert only on substrings of the generated text, which cannot
+# see a module that assembles but fails validation — the failure mode behind
+# several #2014 gaps (uninterned literal leaving the stack short, dangling
+# `call`, undeclared local). `wasm-tools parse` in the corpus runner did not
+# catch these either; `parse` is not `validate`.
+wat = "1"
+wasmparser = "0.221"
 
 [[bench]]
 name = "refinement_solver"

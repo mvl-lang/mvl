@@ -9,7 +9,7 @@
 //! `wasmtime`, compare stdout to the expected string.
 
 use mvl::mvl::backends::llvm_text::lli;
-use mvl::mvl::backends::wasm_text::WasmTextCompiler;
+use mvl::mvl::backends::wasm_text::{emitter_handles_method_natively, WasmTextCompiler};
 use mvl::mvl::backends::{AssertMode, Backend};
 use mvl::mvl::checker;
 use mvl::mvl::checker::types::Ty;
@@ -38,8 +38,15 @@ use std::process;
 struct RefCollector {
     fn_calls: HashSet<String>,
     variant_refs: HashSet<String>,
-    /// `(receiver_type, method)` — e.g. `("Logger", "info")` for `logger.info(...)`.
-    method_refs: HashSet<(String, String)>,
+    /// `(receiver_type, method, receiver_ty)` — e.g. `("Logger", "info", ..)`
+    /// for `logger.info(...)`. The full `Ty` rides along so the pull-in loop can
+    /// ask `emitter_handles_method_natively`, whose answer depends on the
+    /// receiver's shape (`String` vs `List`) and not just its name.
+    ///
+    /// A `Vec`, not a `HashSet`, because `Ty` implements neither `Hash` nor
+    /// `Eq`. Duplicates are harmless — the pull-in loop dedups on
+    /// `known_methods`.
+    method_refs: Vec<(String, String, Ty)>,
 }
 
 impl<'a> Visit<'a> for RefCollector {
@@ -55,7 +62,8 @@ impl<'a> Visit<'a> for RefCollector {
                 receiver, method, ..
             } => {
                 if let Some(type_name) = named_type_name(&receiver.ty) {
-                    self.method_refs.insert((type_name, method.clone()));
+                    self.method_refs
+                        .push((type_name, method.clone(), receiver.ty.clone()));
                 }
             }
             _ => {}
@@ -64,14 +72,27 @@ impl<'a> Visit<'a> for RefCollector {
     }
 }
 
-/// Strip `Ref`/`Labeled`/`Refined` wrappers and return the underlying
-/// `Ty::Named` name, if any. Local copy of the same peel used by the WASM
-/// backend's `is_struct_method_call` — needed here to resolve a
-/// `MethodCall` receiver to the extension-method lookup key.
+/// Strip `Ref`/`Labeled`/`Refined` wrappers and return the receiver-type name
+/// used as the extension-method lookup key.
+///
+/// Mirrors `wasm_text::receiver_type_name` in the backend, including the
+/// built-in constructors: `fn List[T]::flatten(self)` is stored by the parser
+/// with `receiver_type = Some("List")`, but a `List[Int]` receiver has type
+/// `Ty::List(..)` and never `Ty::Named("List", ..)`. Answering `None` for the
+/// built-ins — as this did while it only handled `Ty::Named` — meant
+/// `xs.flatten()` produced no entry in `RefCollector::method_refs` at all, so
+/// the pull-in loop below never even considered lowering `std/lists.mvl`'s
+/// body (#2014).
 fn named_type_name(ty: &Ty) -> Option<String> {
     match ty {
         Ty::Named(n, _) => Some(n.clone()),
         Ty::Ref(_, inner) | Ty::Labeled(_, inner) | Ty::Refined(inner, _) => named_type_name(inner),
+        Ty::List(_) | Ty::Array(_, _) => Some("List".to_string()),
+        Ty::Set(_) => Some("Set".to_string()),
+        Ty::Map(_, _) => Some("Map".to_string()),
+        Ty::Option(_) => Some("Option".to_string()),
+        Ty::Result(_, _) => Some("Result".to_string()),
+        Ty::String => Some("String".to_string()),
         _ => None,
     }
 }
@@ -382,12 +403,20 @@ fn pull_in_missing_prelude_items(
         // free functions never gets its method bodies lowered, and the
         // dot-call falls through the WASM backend's `is_struct_method_call`
         // guard to the generic "unsupported method call" stub (#2056).
-        for (recv, method) in collector.method_refs {
+        for (recv, method, recv_ty) in collector.method_refs {
             let key = (recv.clone(), method.clone());
             if known_methods.contains(&key) {
                 continue;
             }
             known_methods.insert(key.clone());
+
+            // The emitter lowers this one itself, so a lowered std body would
+            // never be called. Skipping keeps dead functions — some of which
+            // stub to `unreachable` and read as missing support — out of the
+            // module (#2014).
+            if emitter_handles_method_natively(&recv_ty, &method) {
+                continue;
+            }
 
             let Some(fd) = all_method_decls.get(&key) else {
                 continue; // Not a plain extension-method decl — builtin, or unresolved.
@@ -413,7 +442,15 @@ fn pull_in_missing_prelude_items(
                 expr_types,
             );
 
-            if !fd.type_params.is_empty() || fd.is_builtin {
+            // Generic extension methods ARE lowered (#2014), unlike generic
+            // plain fns at the `fn_calls` loop above. `emit_program`'s
+            // `generic_ext_methods` bucket monomorphizes them per call site, so
+            // the generic TirFn needs to reach `merged.fns` to be found — this
+            // is what makes `xs.flatten()` / `xs.map(f)` emit a real body
+            // instead of `unreachable`. Their own bodies then join the frontier,
+            // so a method calling another method (`first` → `self.get`) pulls
+            // its callee in transitively.
+            if fd.is_builtin {
                 continue;
             }
             newly_added.extend(syn_tir.fns);
@@ -576,7 +613,57 @@ fn compile_wat(prog: &Program, module_name: &str, assert_mode: AssertMode) -> St
 
     let mut compiler = WasmTextCompiler::new();
     compiler.assert_mode = assert_mode;
-    compiler.emit_program(&entry_tir, module_name)
+    let wat = compiler.emit_program(&entry_tir, module_name);
+    warn_about_stubs(&compiler, module_name);
+    wat
+}
+
+/// Warn about functions the emitter stubbed to `unreachable`.
+///
+/// Without this, an incomplete build is silent: the body is discarded, the
+/// module still assembles, `wasm-tools parse` is happy, and the CLI exits 0.
+/// The program then traps at runtime only if the stubbed function is actually
+/// reached — so a gap can sit unnoticed for as long as nobody exercises that
+/// path. `List[T]::push` had no dispatch arm at all and every file using it
+/// still "compiled" (#2014).
+///
+/// A warning rather than an error: stubbing sibling functions on purpose is how
+/// partial WASM support has been shipped incrementally (see the emitter's own
+/// header notes), so failing here would regress working workflows. Callers that
+/// want a hard gate can compare `stubbed_fns()` against an expected set —
+/// `make wasm-stub-report` does exactly that over the corpus.
+fn warn_about_stubs(compiler: &WasmTextCompiler, source_label: &str) {
+    if let Some(msg) = stub_warning_message(&compiler.stubbed_fns(), source_label) {
+        eprint!("{msg}");
+    }
+}
+
+/// The phrase `make wasm-stub-report` greps for in this warning.
+///
+/// The gate is a `grep` over stderr, so the wording is load-bearing: rewording
+/// it without updating the Makefile would turn the gate into a permanent
+/// "0 stubs" pass with every unit test still green. `stub_warning_names_each_fn`
+/// pins both halves.
+pub const STUB_WARNING_PHRASE: &str = "compiled to `unreachable`";
+
+/// Rendered warning for a stubbed module, or `None` when nothing stubbed.
+///
+/// Split out from `warn_about_stubs` so the exact text can be asserted without
+/// capturing stderr.
+fn stub_warning_message(stubbed: &[String], source_label: &str) -> Option<String> {
+    if stubbed.is_empty() {
+        return None;
+    }
+    let mut msg = format!(
+        "warning: {source_label}: {} function(s) {STUB_WARNING_PHRASE} \
+         because the WASM backend does not support something in their bodies. \
+         Calling any of them traps at runtime:\n",
+        stubbed.len()
+    );
+    for name in stubbed {
+        msg.push_str(&format!("  - {name}\n"));
+    }
+    Some(msg)
 }
 
 /// Merge sibling `TirProgram`s into one flat program.
@@ -729,7 +816,9 @@ fn compile_wat_multi(
 
     let mut compiler = WasmTextCompiler::new();
     compiler.assert_mode = assert_mode;
-    compiler.emit_program(&merged, module_name)
+    let wat = compiler.emit_program(&merged, module_name);
+    warn_about_stubs(&compiler, module_name);
+    wat
 }
 
 /// Resolve `path` to an entry `.mvl` file — `path` itself if it's a file, or
@@ -859,6 +948,47 @@ fn run_one_case(
         Ok(o) => {
             let stderr = String::from_utf8_lossy(&o.stderr);
             let mut out = format!("\n  FAIL (assemble): {file_str}\n");
+            if verbose {
+                out.push_str(&format!("    wasm-tools: {stderr}\n"));
+                out.push_str("    --- WAT ---\n");
+                for line in wat.lines().take(40) {
+                    out.push_str(&format!("    {line}\n"));
+                }
+            } else {
+                let first = stderr.lines().next().unwrap_or("");
+                out.push_str(&format!("    {first}\n"));
+            }
+            return CaseResult {
+                passed: false,
+                output: out,
+                err_output: String::new(),
+            };
+        }
+        Err(e) => {
+            return CaseResult {
+                passed: false,
+                output: String::new(),
+                err_output: format!("  FAIL (wasm-tools spawn): {file_str}: {e}\n"),
+            }
+        }
+    }
+
+    // `wasm-tools parse` only assembles — it accepts modules that are
+    // structurally well-formed but type-invalid (a body that declares
+    // `(result i32)` and pushes nothing assembles fine). Validation is a
+    // separate pass, and skipping it let three classes of silently-invalid
+    // module through: an uninterned literal leaving the stack short, a
+    // dangling `call $Foo__Int` nobody emitted, and an undeclared local in a
+    // monomorphized body. Each exited 0 with zero stubs reported (#2014).
+    let validate = process::Command::new(wasm_tools_bin)
+        .arg("validate")
+        .arg(wasm_tmp.path())
+        .output();
+    match validate {
+        Ok(o) if o.status.success() => {}
+        Ok(o) => {
+            let stderr = String::from_utf8_lossy(&o.stderr);
+            let mut out = format!("\n  FAIL (validate): {file_str}\n");
             if verbose {
                 out.push_str(&format!("    wasm-tools: {stderr}\n"));
                 out.push_str("    --- WAT ---\n");
@@ -1081,5 +1211,28 @@ fn which(name: &str) -> Option<PathBuf> {
         None
     } else {
         Some(PathBuf::from(path))
+    }
+}
+
+#[cfg(test)]
+mod stub_warning_tests {
+    use super::*;
+
+    #[test]
+    fn stub_warning_names_each_fn() {
+        let msg = stub_warning_message(&["List_take__Str".to_string()], "demo.mvl")
+            .expect("a stubbed fn must warn");
+        // The Makefile greps for this phrase and then for the `  - ` name lines.
+        assert!(msg.contains(STUB_WARNING_PHRASE), "{msg}");
+        assert!(msg.contains("\n  - List_take__Str\n"), "{msg}");
+        assert!(
+            msg.starts_with("warning: demo.mvl: 1 function(s) "),
+            "{msg}"
+        );
+    }
+
+    #[test]
+    fn no_stubs_means_no_warning() {
+        assert!(stub_warning_message(&[], "demo.mvl").is_none());
     }
 }

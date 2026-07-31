@@ -30,12 +30,16 @@
 //! - `_mvl_string_to_upper` / `_mvl_string_to_lower` — ASCII case fold
 //! - `_mvl_string_trim` — strip leading / trailing ASCII whitespace
 //! - `_mvl_string_replace` — non-overlapping byte-level replace-all
+//! - `_mvl_string_split` — split on a separator into a `List[String]`
+//!   (`*MvlArray` of `*MvlString`, so Group C's `elem_size == 4`)
 //!
 //! Drop emission on the emitter side is best-effort — at every function's
 //! implicit-return point, the emitter drops each `__ms_*` temp local it
-//! allocated. Explicit `return` statements are not yet drop-aware; those
-//! paths leak (fine for phase-2 corpus tests which all end via
-//! implicit return).
+//! allocated. Explicit `return` statements are drop-aware too: `emit_stmt`'s
+//! `Return` arm sweeps the same heap locals, excluding the one being returned
+//! so it survives for the caller. Function *parameters* are deliberately
+//! excluded from that sweep — they are borrowed, not owned, and dropping one
+//! freed the caller's array (#2014).
 //!
 //! ## Symbol convention
 //!
@@ -364,6 +368,36 @@ pub unsafe extern "C" fn _mvl_string_replace(
     alloc_mvl_string(&out)
 }
 
+/// `s.split(sep)` — split on every occurrence of `sep`, returning a
+/// `List[String]`: an `MvlArray` with `elem_size == 4` holding one
+/// `*MvlString` per part. Drop it with `_mvl_string_ptr_array_drop`, never
+/// `_mvl_array_drop` — the latter leaks every element string.
+///
+/// Deliberately routed through `str::split` on a UTF-8 view rather than the
+/// byte-level scan `_mvl_string_replace` above uses. `runtime/llvm/`'s
+/// `_mvl_str_split` is `as_str(s).split(as_str(sep))`, and `as_str` is
+/// `from_utf8(..).unwrap_or("")` — identical here, so both backends agree
+/// bit-for-bit on the cases a byte scan would have to special-case by hand:
+/// an empty separator (Rust yields a leading and trailing `""` plus one part
+/// per char), an empty subject (one `""` part), and a separator longer than
+/// the subject (one part, the whole subject). Corpus parity between
+/// `test-rust-wasm` and `test-rust-rust` depends on that agreement, so
+/// resist "simplifying" this into a hand-rolled loop.
+///
+/// # Safety
+/// Both `(ptr, len)` pairs must describe valid ranges or be `(0, 0)`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn _mvl_string_split(sp: i32, sl: i32, sepp: i32, sepl: i32) -> i32 {
+    let text = core::str::from_utf8(unsafe { slice_or_empty(sp, sl) }).unwrap_or("");
+    let sep = core::str::from_utf8(unsafe { slice_or_empty(sepp, sepl) }).unwrap_or("");
+    // elem_size 4 — `*MvlString` is an i32 address on wasm32.
+    let arr = _mvl_array_new(4, 0);
+    for part in text.split(sep) {
+        unsafe { _mvl_array_push_i32(arr, alloc_mvl_string(part.as_bytes())) };
+    }
+    arr
+}
+
 /// `s.trim()` — strip leading and trailing ASCII whitespace (space,
 /// `\t`, `\n`, `\r`, `\x0c`). Matches Rust's `u8::is_ascii_whitespace`
 /// (WhatWG Infra Standard). Note that vertical tab `\x0b` is *not*
@@ -684,6 +718,54 @@ pub unsafe extern "C" fn _mvl_array_drop(a: i32) {
     unsafe {
         let _ = Box::from_raw(a as usize as *mut MvlArray);
     }
+}
+
+/// `_mvl_array_slice(a, start, end)` — new array holding elements
+/// `[start, end)`, with both bounds clamped into `[0, len]` and a reversed
+/// range yielding an empty array (#2014).
+///
+/// Port of `runtime/llvm/`'s `_mvl_list_slice`. Backs `List[T]::take`
+/// (`self.slice(0, n)`) and `::skip` (`self.slice(n, self.len())`), which are
+/// pure-MVL wrappers over the `slice` builtin.
+///
+/// Elements are copied byte-wise at `elem_size` granularity, so this is correct
+/// for scalar arrays but does *not* refcount-bump `*MvlString` elements: a
+/// slice of a `List[String]` aliases the parent's strings, and dropping both
+/// with `_mvl_string_ptr_array_drop` would double-free. The corpus slices only
+/// scalar lists; `List[String]::take` would need an element-aware copy first.
+///
+/// # Safety
+/// `a` must be a valid `MvlArray` pointer or null.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn _mvl_array_slice(a: i32, start: i64, end: i64) -> i32 {
+    if a == 0 {
+        // Null in, null out. The earlier `_mvl_array_new(8, 0)` fabricated an
+        // 8-byte-stride array regardless of what the caller's elements actually
+        // are, so any later push/get/drop against the result would have used the
+        // wrong stride. Every other null guard in this file returns 0.
+        return 0;
+    }
+    let arr = unsafe { &*(a as usize as *const MvlArray) };
+    let es = arr.elem_size;
+    let len = arr.len as i64;
+    let lo = start.clamp(0, len);
+    let hi = end.clamp(0, len);
+    let count = (hi - lo).max(0);
+    let out = _mvl_array_new(es, count as i32);
+    if count == 0 {
+        return out;
+    }
+    let dst = unsafe { &mut *(out as usize as *mut MvlArray) };
+    let bytes = (count as usize) * (es as usize);
+    unsafe {
+        core::ptr::copy_nonoverlapping(
+            (arr.ptr as usize + (lo as usize) * (es as usize)) as *const u8,
+            dst.ptr as *mut u8,
+            bytes,
+        );
+    }
+    dst.len = count as i32;
+    out
 }
 
 /// `_mvl_string_ptr_array_drop(a)` — refcount decrement for a `List[String]`
@@ -2152,6 +2234,90 @@ mod tests {
         unsafe { _mvl_string_drop(ptr) };
     }
 
+    // ── split (#2014) ────
+    //
+    // Collect a split result into owned Strings so each assertion reads as a
+    // plain slice comparison. Consumes the array via
+    // `_mvl_string_ptr_array_drop`, which is also the drop path the emitter
+    // picks for a `List[String]` local — so every one of these tests
+    // exercises that pairing, not just the split itself.
+    unsafe fn split_parts(s: &'static [u8], sep: &'static [u8]) -> Vec<Vec<u8>> {
+        let sep_ptr = if sep.is_empty() { 0 } else { addr(sep) };
+        let arr = unsafe { _mvl_string_split(addr(s), s.len() as i32, sep_ptr, sep.len() as i32) };
+        let n = unsafe { _mvl_array_len(arr) };
+        let mut out = Vec::new();
+        for i in 0..n {
+            let slot = unsafe { _mvl_array_get(arr, i) };
+            let sp = unsafe { core::ptr::read(slot as *const i32) };
+            out.push(unsafe { concat_result(sp) }.to_vec());
+        }
+        unsafe { _mvl_string_ptr_array_drop(arr) };
+        out
+    }
+
+    #[test]
+    fn split_basic_comma_separated() {
+        assert_eq!(
+            unsafe { split_parts(b"a,b,c", b",") },
+            vec![b"a", b"b", b"c"]
+        );
+    }
+
+    #[test]
+    fn split_separator_absent_yields_whole_subject() {
+        assert_eq!(
+            unsafe { split_parts(b"hello", b",") },
+            vec![b"hello".to_vec()]
+        );
+    }
+
+    #[test]
+    fn split_multichar_separator() {
+        assert_eq!(
+            unsafe { split_parts(b"one::two::three", b"::") },
+            vec![b"one".to_vec(), b"two".to_vec(), b"three".to_vec()]
+        );
+    }
+
+    #[test]
+    fn split_adjacent_separators_yield_empty_parts() {
+        assert_eq!(
+            unsafe { split_parts(b"a,,b", b",") },
+            vec![b"a".to_vec(), b"".to_vec(), b"b".to_vec()]
+        );
+    }
+
+    #[test]
+    fn split_leading_and_trailing_separator_yield_empty_edges() {
+        assert_eq!(
+            unsafe { split_parts(b",a,", b",") },
+            vec![b"".to_vec(), b"a".to_vec(), b"".to_vec()]
+        );
+    }
+
+    // The three cases the doc comment promises match `runtime/llvm/`'s
+    // `str::split` rather than a hand-rolled byte scan. Pinned here because a
+    // future "simplify this loop" would silently break rust/wasm ↔ rust/rust
+    // corpus parity, not any test in this file.
+    #[test]
+    fn split_empty_subject_yields_one_empty_part() {
+        assert_eq!(unsafe { split_parts(b"", b",") }, vec![b"".to_vec()]);
+    }
+
+    #[test]
+    fn split_empty_separator_matches_rust_str_split() {
+        // Rust yields a leading and trailing "" around one part per char.
+        assert_eq!(
+            unsafe { split_parts(b"ab", b"") },
+            vec![b"".to_vec(), b"a".to_vec(), b"b".to_vec(), b"".to_vec()]
+        );
+    }
+
+    #[test]
+    fn split_separator_longer_than_subject_yields_whole_subject() {
+        assert_eq!(unsafe { split_parts(b"ab", b"abcd") }, vec![b"ab".to_vec()]);
+    }
+
     // ── find ────
     #[test]
     fn find_at_start() {
@@ -2309,6 +2475,150 @@ mod tests {
         assert_eq!(unsafe { _mvl_array_len(a) }, 3);
         assert_eq!(unsafe { get_i64(a, 0) }, 100);
         assert_eq!(unsafe { get_i64(a, 2) }, 300);
+        unsafe { _mvl_array_drop(a) };
+    }
+
+    // ── slice (#2014) ────
+    //
+    // Backs `List[T]::take` (`slice(0, n)`) and `::skip`
+    // (`slice(n, self.len())`), so the clamping cases below are the ones those
+    // wrappers actually hit at the ends of a list.
+    unsafe fn i64_array(vals: &[i64]) -> i32 {
+        let a = _mvl_array_new(8, vals.len() as i32);
+        for v in vals {
+            unsafe { _mvl_array_push_i64(a, *v) };
+        }
+        a
+    }
+
+    unsafe fn slice_vals(src: &[i64], start: i64, end: i64) -> Vec<i64> {
+        let a = unsafe { i64_array(src) };
+        let s = unsafe { _mvl_array_slice(a, start, end) };
+        let n = unsafe { _mvl_array_len(s) };
+        let out = (0..n).map(|i| unsafe { get_i64(s, i) }).collect();
+        unsafe { _mvl_array_drop(s) };
+        unsafe { _mvl_array_drop(a) };
+        out
+    }
+
+    #[test]
+    fn slice_middle_range() {
+        assert_eq!(unsafe { slice_vals(&[1, 2, 3, 4], 1, 3) }, vec![2, 3]);
+    }
+
+    #[test]
+    fn slice_take_prefix() {
+        // `take(3)`
+        assert_eq!(
+            unsafe { slice_vals(&[10, 20, 30, 40], 0, 3) },
+            vec![10, 20, 30]
+        );
+    }
+
+    #[test]
+    fn slice_skip_suffix() {
+        // `skip(2)` — end is the full length.
+        assert_eq!(unsafe { slice_vals(&[10, 20, 30, 40], 2, 4) }, vec![30, 40]);
+    }
+
+    #[test]
+    fn slice_clamps_end_past_len() {
+        // `take(99)` on a 2-element list yields the whole list, not garbage.
+        assert_eq!(unsafe { slice_vals(&[7, 8], 0, 99) }, vec![7, 8]);
+    }
+
+    #[test]
+    fn slice_clamps_negative_start() {
+        assert_eq!(unsafe { slice_vals(&[7, 8], -5, 1) }, vec![7]);
+    }
+
+    #[test]
+    fn slice_reversed_range_is_empty() {
+        assert_eq!(unsafe { slice_vals(&[1, 2, 3], 2, 1) }, Vec::<i64>::new());
+    }
+
+    #[test]
+    fn slice_start_past_len_is_empty() {
+        // `skip(n)` where n >= len — the empty tail.
+        assert_eq!(unsafe { slice_vals(&[1, 2], 5, 9) }, Vec::<i64>::new());
+    }
+
+    #[test]
+    fn slice_of_empty_is_empty() {
+        assert_eq!(unsafe { slice_vals(&[], 0, 3) }, Vec::<i64>::new());
+    }
+
+    #[test]
+    fn slice_null_array_yields_empty() {
+        let s = unsafe { _mvl_array_slice(0, 0, 3) };
+        // Null in, null out — not a fabricated array with a guessed elem_size.
+        assert_eq!(s, 0, "null receiver must not allocate");
+        assert_eq!(unsafe { _mvl_array_len(s) }, 0);
+        unsafe { _mvl_array_drop(s) };
+    }
+
+    /// Cross-backend parity guard, matching the three `_mvl_string_split` ones.
+    ///
+    /// `_mvl_array_slice` is a port of `runtime/llvm`'s `_mvl_list_slice`, whose
+    /// clamping is `start.max(0).min(len)` / `end.max(0).min(len)` with
+    /// `hi.saturating_sub(lo)`. A corpus file that slices under both backends
+    /// compares *results*, so a divergence here surfaces as a rust/wasm ↔
+    /// rust/rust parity failure rather than a unit-test failure — pin the
+    /// agreement directly instead.
+    #[test]
+    fn slice_clamping_matches_llvm_list_slice() {
+        // (start, end, expected) over [10, 20, 30, 40].
+        let cases: &[(i64, i64, &[i64])] = &[
+            (0, 4, &[10, 20, 30, 40]),
+            (1, 3, &[20, 30]),
+            (0, 99, &[10, 20, 30, 40]), // end past len clamps to len
+            (10, 20, &[]),              // start past len is empty
+            (3, 1, &[]),                // reversed range is empty
+            (-5, 2, &[10, 20]),         // negative start clamps to 0
+            (2, 2, &[]),                // zero-length window
+        ];
+        for (start, end, expect) in cases {
+            let a = unsafe { i64_array(&[10, 20, 30, 40]) };
+            let s = unsafe { _mvl_array_slice(a, *start, *end) };
+            let got: Vec<i64> = (0..unsafe { _mvl_array_len(s) })
+                .map(|i| unsafe { get_i64(s, i) })
+                .collect();
+            assert_eq!(
+                got, *expect,
+                "slice({start}, {end}) diverges from _mvl_list_slice"
+            );
+            unsafe { _mvl_array_drop(s) };
+            unsafe { _mvl_array_drop(a) };
+        }
+    }
+
+    /// The slice must be an independent buffer — mutating the source afterwards
+    /// must not change it.
+    #[test]
+    fn slice_does_not_alias_source_buffer() {
+        let a = unsafe { i64_array(&[1, 2, 3]) };
+        let s = unsafe { _mvl_array_slice(a, 0, 2) };
+        unsafe { _mvl_array_push_i64(a, 99) };
+        assert_eq!(unsafe { _mvl_array_len(s) }, 2);
+        assert_eq!(unsafe { get_i64(s, 0) }, 1);
+        assert_eq!(unsafe { get_i64(s, 1) }, 2);
+        unsafe { _mvl_array_drop(s) };
+        unsafe { _mvl_array_drop(a) };
+    }
+
+    #[test]
+    fn slice_preserves_i32_elem_size() {
+        let a = _mvl_array_new(4, 4);
+        unsafe {
+            _mvl_array_push_i32(a, 11);
+            _mvl_array_push_i32(a, 22);
+            _mvl_array_push_i32(a, 33);
+        }
+        let s = unsafe { _mvl_array_slice(a, 1, 3) };
+        assert_eq!(unsafe { _mvl_array_len(s) }, 2);
+        let p = unsafe { _mvl_array_get(s, 0) };
+        assert_eq!(unsafe { *(p as usize as *const i32) }, 22);
+        unsafe { _mvl_array_drop(s) };
         unsafe { _mvl_array_drop(a) };
     }
 

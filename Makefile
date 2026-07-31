@@ -2,7 +2,7 @@
 .ONESHELL:
 SHELL := /bin/bash
 
-.PHONY: help version build build-runtime-wasm test test-full test-unit test-rust-integration test-requirements test-error-messages test-fmt-roundtrip test-rust-rust test-rust-llvm test-mvl-llvm test-rust-wasm test-mvl-wasm test-rust-tokio test-runtime-rust test-runtime-llvm test-runtime-wasm test-checker-parity test-checker-parity-update test-solver test-stdlib check-compiler assure-compiler test-mvl test-bootstrap-e2e test-bdd test-grammar-coverage bump-vendor-pins test-examples test-examples-rust test-examples-llvm test-examples-wasm coverage traceability verification evidence validate-keywords lint mvl-lint format format-check format-mvl format-mvl-check assurance assurance-gate audit-backend-ast audit-cli-prelude check-adr docs docs-serve install install-runtime setup doctor clean fuzz-rust fuzz-llvm fuzz-diff fuzz-mvl test-fuzz-list mutants mutants-actors
+.PHONY: help version build build-runtime-wasm test test-full test-unit test-rust-integration test-requirements test-error-messages test-fmt-roundtrip test-rust-rust test-rust-llvm test-mvl-llvm test-rust-wasm test-mvl-wasm test-rust-tokio test-runtime-rust test-runtime-llvm test-runtime-wasm wasm-stub-report test-checker-parity test-checker-parity-update test-solver test-stdlib check-compiler assure-compiler test-mvl test-bootstrap-e2e test-bdd test-grammar-coverage bump-vendor-pins test-examples test-examples-rust test-examples-llvm test-examples-wasm coverage traceability verification evidence validate-keywords lint mvl-lint format format-check format-mvl format-mvl-check assurance assurance-gate audit-backend-ast audit-cli-prelude check-adr docs docs-serve install install-runtime setup doctor clean fuzz-rust fuzz-llvm fuzz-diff fuzz-mvl test-fuzz-list mutants mutants-actors
 
 .DEFAULT_GOAL := help
 
@@ -189,6 +189,7 @@ TEST_FULL_EXTRA_SUITES := \
 	"BDD               |test-bdd" \
 	"Backend rust/llvm |test-rust-llvm" \
 	"Backend rust/wasm |test-rust-wasm" \
+	"WASM stub gate     |wasm-stub-report" \
 	"Examples (Rust)   |test-examples-rust" \
 	"Examples (LLVM)   |test-examples-llvm" \
 	"Examples (WASM)   |test-examples-wasm" \
@@ -380,20 +381,27 @@ test-runtime-llvm: ## Unit-test runtime/llvm/ crate natively (peer of test-runti
 	cargo test -p mvl_runtime_llvm
 
 # WASM cases the backend actually handles — everything under tests/corpus/
-# *except* the closure/HOF- and split-heavy cases below (Phase 2 of epic
-# #1817). Coverage is now the norm rather than the exception, so this is an
-# exclude list: new corpus files are included automatically, and only need
-# adding here if the WASM backend can't handle them yet.
+# *except* the cases below. Coverage is now the norm rather than the exception,
+# so this is an exclude list: new corpus files are included automatically, and
+# only need adding here if the WASM backend can't handle them yet.
 #
 # 12_actors runs on the single-threaded run-to-completion scheduler emitted
 # into the module itself (#2012, ADR-0059) — semantics only, no parallelism.
+#
+# All of 13_stdlib now runs (#2014): generic extension methods monomorphize,
+# and non-capturing lambdas pass as funcref table indices called through
+# `call_indirect` (see the scope note in ADR-0059 §2 for why that does not
+# contradict the actor-dispatch decision).
+#
+# The two remaining exclusions need *capturing* closures, which is a distinct
+# piece of work — an environment representation, not just a function pointer.
+# `higher_order_test.mvl` returns closures from a factory
+# (`make_adder(k) -> fn(Int) -> Int`) and `lambda_capture_test.mvl` tests
+# capture-by-value directly. Both would need the `{fn_ptr, env_ptr}` pair the
+# LLVM backend builds in `emit_closures_tir.rs`.
 WASM_CORPUS_EXCLUDE := \
 	tests/corpus/03_functions/higher_order_test.mvl \
-	tests/corpus/07_ownership/lambda_capture_test.mvl \
-	tests/corpus/13_stdlib/list_hof_test.mvl \
-	tests/corpus/13_stdlib/list_method_fallback_test.mvl \
-	tests/corpus/13_stdlib/list_sort_by_test.mvl \
-	tests/corpus/13_stdlib/parse_test.mvl
+	tests/corpus/07_ownership/lambda_capture_test.mvl
 
 # Directories with nothing excluded pass through whole — mvlr prints a
 # per-test checkmark + pass/fail count for a directory arg, but runs a bare
@@ -411,12 +419,55 @@ WASM_CORPUS := $(WASM_CORPUS_WHOLE_DIRS) \
 		$(WASM_CORPUS_EXCLUDE) $(foreach d,$(WASM_CORPUS_WHOLE_DIRS),$(wildcard $(d)/*_test.mvl)), \
 		$(sort $(wildcard tests/corpus/*/*_test.mvl)))
 
+# The same set as WASM_CORPUS, flattened to individual files. `mvl build` takes
+# one file at a time, and the whole-dir entries above are directories.
+WASM_CORPUS_FILES := $(filter-out $(WASM_CORPUS_EXCLUDE), \
+	$(sort $(wildcard tests/corpus/*/*_test.mvl)))
+
 test-rust-wasm: build build-runtime-wasm ## rust/wasm — WASM-supported corpus subset (via runtime/wasm/ preload)
 	@command -v wasm-tools > /dev/null 2>&1 || { \
 	  printf "  \033[31m✗  wasm-tools not installed — 'cargo install wasm-tools'\033[0m\n"; exit 1; }
 	@command -v wasmtime > /dev/null 2>&1 || { \
 	  printf "  \033[31m✗  wasmtime not installed — see https://wasmtime.dev/\033[0m\n"; exit 1; }
 	MVL_RUNTIME_WASM=$(WASM_RUNTIME_PATH) $(MVLR) --mvl=$(MVL) --compiler=rust --backend=wasm $(WASM_CORPUS)
+
+# A stubbed body is a *silent* gap: `mvl build --backend=wasm` discards it,
+# emits `unreachable`, assembles fine and exits 0. The program only fails if
+# something calls the stub. That is how `List[T]::push` came to have no dispatch
+# arm at all while every file using it still "compiled" (#2014) — so gaps
+# accumulated invisibly and landed all at once on whoever opened the next ticket.
+#
+# This pins the set: every file in WASM_CORPUS must emit zero stubs. A new gap
+# fails here, in the commit that introduces it, instead of being discovered
+# later. Excluded files are allowed to stub — that is what excluding them means.
+#
+# Scope note: this target checks *stubbing only*. Module validity is checked by
+# `test-rust-wasm`, which is where the real module gets assembled — a `build` of
+# a `test fn`-only corpus file has no `main`, so it never emits the WASI blob and
+# legitimately references an undefined `$mvl_println`. Validating the `build`
+# artifact here would flag four corpus files that are fine under the test runner.
+wasm-stub-report: build ## Fail if any WASM_CORPUS file emits `unreachable` stubs (#2014)
+	@tmp=$$(mktemp -d) || exit 1; bad=0; \
+	for f in $(WASM_CORPUS_FILES); do \
+	  err=$$(cd $$tmp && MVL_NO_REEXEC=1 $(CURDIR)/$(MVL) build --backend=wasm $(CURDIR)/$$f 2>&1 >/dev/null); \
+	  rc=$$?; \
+	  if [ $$rc -ne 0 ]; then \
+	    bad=1; printf "  \033[31m✗  %s (build failed, exit %s)\033[0m\n" "$$f" "$$rc"; \
+	    echo "$$err" | sed -n '1,3s/^/       /p'; \
+	    continue; \
+	  fi; \
+	  warn=$$(echo "$$err" | grep -A99 'compiled to `unreachable`' || true); \
+	  if [ -n "$$warn" ]; then \
+	    bad=1; printf "  \033[31m✗  %s\033[0m\n" "$$f"; \
+	    echo "$$warn" | sed -n 's/^  - /       /p'; \
+	  fi; \
+	done; \
+	rm -rf $$tmp; \
+	if [ $$bad -eq 0 ]; then \
+	  printf "  \033[32m✓  no stubbed functions across %s WASM corpus files\033[0m\n" "$(words $(WASM_CORPUS_FILES))"; \
+	else \
+	  printf "  \033[31m✗  stubbed functions found — implement them, or add the file to WASM_CORPUS_EXCLUDE\033[0m\n"; exit 1; \
+	fi
 
 # runtime/wasm/ — Rust crate compiled to wasm32-wasip1 (#1819). Loaded by
 # wasmtime via --preload runtime=<path>. The emitter conditionally emits

@@ -338,6 +338,8 @@ cargo run -- build file.mvl    # compile via Rust backend
 make test-corpus               # parse+check all corpus files
 make test-rust-rust            # run corpus through Rust backend (matrix anchor)
 make test-rust-llvm            # run corpus through LLVM backend
+make test-rust-wasm            # run corpus through WASM backend (assembles + validates)
+make wasm-stub-report          # pin the WASM corpus at zero `unreachable` stubs
 make test-stdlib               # run stdlib tests (Rust backend)
 make test                      # all tests
 ```

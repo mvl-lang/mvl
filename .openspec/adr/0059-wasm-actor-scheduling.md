@@ -1,8 +1,8 @@
 # ADR-0059: WASM Actor Model — Run-to-Completion Scheduling on WASI Preview 1
 
-**Status:** Accepted
+**Status:** Accepted (§2 scope-amended 2026-07-30, see #2014)
 **Date:** 2026-07-27
-**Issues:** #2012, epic #1817
+**Issues:** #2012, epic #1817, #2014 (§2 scope note)
 
 ---
 
@@ -76,6 +76,30 @@ table contract, forces the emitter to grow table/elem/type emission, and buys
 nothing — the set of dispatch targets is statically known, so indirection is
 pure overhead.
 
+> **Scope note (amended 2026-07-30, #2014).** The sentence "No `(table …)`, no
+> `(elem …)`, no `call_indirect`" states what *actor dispatch* needs, not a
+> module-wide prohibition. Two independent reasons produced it, and neither
+> generalises:
+>
+> 1. Constraint 2 above — the preloaded `runtime/wasm` module cannot call back
+>    into the emitted module. This rules out any design where the **runtime**
+>    performs the indirect call. It says nothing about an indirect call whose
+>    table, `elem` segment, and target functions all live inside the single
+>    emitted module.
+> 2. For actors specifically, the target set is statically known, making
+>    indirection pure overhead. That is an argument about actors, not about
+>    constructs whose target is a runtime value.
+>
+> Higher-order `List[T]` methods (`map`, `filter`, `fold`, `sort_by`, …) are the
+> case where reason 2 does not hold: the callee *is* a runtime value, so static
+> dispatch cannot express it. Because the monomorphized method body and the
+> lambda it calls are both emitted into the same module, reason 1 does not apply
+> either. **An intra-module `(table funcref)` + `(elem …)` + `call_indirect` for
+> higher-order dispatch is therefore permitted** and is introduced by #2014.
+>
+> What remains decided and unchanged: actor dispatch stays static, and no table
+> is ever shared across the `--preload` module boundary in either direction.
+
 ### 3. Mailbox in linear memory, built from existing runtime primitives.
 
 Actor state is allocated with the existing `_mvl_struct_alloc`, laid out with the
@@ -134,8 +158,10 @@ bug, not backpressure.
 **Good**
 
 - No new runtime ABI surface; `runtime/wasm` is unchanged.
-- No tables or indirect calls — the emitted WAT stays within the constructs the
-  emitter already produces, and stays readable.
+- No cross-module tables or indirect calls — dispatch never crosses the
+  `--preload` boundary, and actor dispatch stays static. (An intra-module
+  `funcref` table now backs `List[T]` higher-order dispatch, per the §2 scope
+  note above — #2014.)
 - Sync reads are cheaper and simpler than on LLVM.
 - Translatable to self-hosted MVL later (#1815) with no host-specific machinery.
 
