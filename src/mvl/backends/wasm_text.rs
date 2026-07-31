@@ -75,7 +75,7 @@ use std::collections::HashMap;
 use super::{AssertMode, Backend};
 use crate::mvl::checker::types::Ty;
 use crate::mvl::ir::{
-    ArithOp, BinaryOp, CmpOp, GenericParam, LValue, Literal, LogicOp, Pattern, RefExpr,
+    ArithOp, BinaryOp, BitwiseOp, CmpOp, GenericParam, LValue, Literal, LogicOp, Pattern, RefExpr,
     TirActorDecl, TirActorMethod, TirBlock, TirElseBranch, TirExpr, TirExprKind, TirFn,
     TirMatchArm, TirMatchBody, TirParam, TirProgram, TirStmt, TirTypeBody, TirTypeDecl,
     TirVariantFields, UnaryOp,
@@ -848,12 +848,24 @@ fn is_runtime_checkable(pred: &RefExpr) -> bool {
         RefExpr::BoundedForall { .. }
         | RefExpr::BoundedExists { .. }
         | RefExpr::ArrayGet { .. } => false,
+        // Not yet implemented by this backend's runtime-check emitter
+        // (`emit_ref_val_wasm`/`emit_ref_expr_wasm`) — the static proof
+        // still applies; only the runtime assertion is skipped, same
+        // treatment as the quantifiers/ArrayGet above. Without this
+        // exclusion these fell through both emitters' `_` fallback arms,
+        // which call each other on the *same* unhandled node forever —
+        // infinite mutual recursion, a stack overflow at codegen time
+        // rather than a graceful skip or a stub (#2086).
+        RefExpr::FieldAccess { .. }
+        | RefExpr::Len { .. }
+        | RefExpr::StringOp { .. }
+        | RefExpr::RegexMatch { .. }
+        | RefExpr::Min { .. }
+        | RefExpr::Max { .. } => false,
         RefExpr::LogicOp { left, right, .. }
         | RefExpr::Compare { left, right, .. }
         | RefExpr::ArithOp { left, right, .. }
-        | RefExpr::BitwiseOp { left, right, .. }
-        | RefExpr::Min { left, right, .. }
-        | RefExpr::Max { left, right, .. } => {
+        | RefExpr::BitwiseOp { left, right, .. } => {
             is_runtime_checkable(left) && is_runtime_checkable(right)
         }
         RefExpr::Not { inner, .. }
@@ -861,14 +873,10 @@ fn is_runtime_checkable(pred: &RefExpr) -> bool {
         | RefExpr::Old { inner, .. }
         | RefExpr::BitwiseNot { inner, .. }
         | RefExpr::Abs { inner, .. } => is_runtime_checkable(inner),
-        RefExpr::FieldAccess { object, .. } => is_runtime_checkable(object),
-        RefExpr::StringOp { receiver, .. } => is_runtime_checkable(receiver),
-        RefExpr::RegexMatch { receiver, .. } => is_runtime_checkable(receiver),
         RefExpr::Ident { .. }
         | RefExpr::Integer { .. }
         | RefExpr::Float { .. }
-        | RefExpr::Bool { .. }
-        | RefExpr::Len { .. } => true,
+        | RefExpr::Bool { .. } => true,
     }
 }
 
@@ -902,6 +910,14 @@ fn ref_expr_wasm_ty(pred: &RefExpr, binding_ty: &str, params: &[TirParam]) -> &'
             }
         }
         RefExpr::ArithOp { left, .. } => ref_expr_wasm_ty(left, binding_ty, params),
+        // Bitwise ops (#1928) yield the same width as their operand — same
+        // convention as `ArithOp` above. Without this arm it fell to the `_
+        // => "i32"` default below, so `Compare`'s `self.bit_and(15) == self`
+        // picked `i32.eq` for two i64 values on the stack (#2086): `wasm-tools
+        // validate` rejects the type mismatch.
+        RefExpr::BitwiseOp { left, .. } => ref_expr_wasm_ty(left, binding_ty, params),
+        RefExpr::BitwiseNot { inner, .. } => ref_expr_wasm_ty(inner, binding_ty, params),
+        RefExpr::Old { inner, .. } => ref_expr_wasm_ty(inner, binding_ty, params),
         RefExpr::Len { .. } => "i64",
         // Compare / LogicOp / Not always yield i32 (boolean)
         _ => "i32",
@@ -961,6 +977,39 @@ fn emit_ref_val_wasm(
         RefExpr::Abs { inner, .. } => {
             emit_ref_val_wasm(out, inner, binding, binding_ty, params);
             out.push_str("    i64.abs\n");
+        }
+        // `old(e)` in `ensures`: for runtime assertion purposes, treat as the
+        // current value — matches the Rust backend's `emit_ref_expr`. Full
+        // entry-time capture is a future enhancement.
+        RefExpr::Old { inner, .. } => {
+            emit_ref_val_wasm(out, inner, binding, binding_ty, params);
+        }
+        // Bitwise binary op in a predicate (#1928, #2086): `self.bit_and(15)`
+        // etc. An `Int`/`UInt` operand is i64 here (see `wasm_ty`), so these
+        // are plain i64 bitwise instructions — no runtime call, mirroring the
+        // Rust backend's `&`/`|`/`^`/`<<`/`>>`. `Shr` is arithmetic
+        // (`shr_s`): `Int` is signed two's complement, matching Rust's `>>`
+        // on `i64`.
+        RefExpr::BitwiseOp {
+            op, left, right, ..
+        } => {
+            emit_ref_val_wasm(out, left, binding, binding_ty, params);
+            emit_ref_val_wasm(out, right, binding, binding_ty, params);
+            let instr = match op {
+                BitwiseOp::And => "i64.and",
+                BitwiseOp::Or => "i64.or",
+                BitwiseOp::Xor => "i64.xor",
+                BitwiseOp::Shl => "i64.shl",
+                BitwiseOp::Shr => "i64.shr_s",
+            };
+            out.push_str(&format!("    {instr}\n"));
+        }
+        // `self.bit_not()` (#1928, #2086) — no dedicated WASM instruction;
+        // `x ^ -1` flips every bit, same as LLVM's lowering.
+        RefExpr::BitwiseNot { inner, .. } => {
+            emit_ref_val_wasm(out, inner, binding, binding_ty, params);
+            out.push_str("    i64.const -1\n");
+            out.push_str("    i64.xor\n");
         }
         // Fallback: try to emit as boolean i32 (shouldn't be used as a value operand)
         _ => {
@@ -9156,6 +9205,56 @@ mod validated_module_tests {
         validate(&wat);
         assert!(stubbed.is_empty(), "unexpected stubs: {stubbed:?}");
         assert!(wat.contains("call $_mvl_array_slice"));
+    }
+
+    /// An `ensures`/`requires` predicate using a bitwise op (#1928) — e.g.
+    /// `ensures result.bit_and(15) == result` — fell through both
+    /// `emit_ref_val_wasm` and `emit_ref_expr_wasm`'s `_` fallback arm, which
+    /// call each other on the *same unhandled node* forever: a stack overflow
+    /// at codegen time, not a validation failure or a stub. Found via
+    /// `examples/data_integrity/verify.mvl`, whose FIPS 140-3 contracts are
+    /// built entirely on `bit_and` (#2086).
+    #[test]
+    fn ensures_with_bitwise_op_lowers_without_infinite_recursion() {
+        let (wat, stubbed) = emit(
+            "total fn small_value() -> Int\n\
+                 ensures result.bit_and(15) == result\n\
+             {\n\
+                 5\n\
+             }\n\
+             test fn t() -> Unit {\n\
+                 assert_eq(small_value(), 5);\n\
+             }\n",
+        );
+        validate(&wat);
+        assert!(stubbed.is_empty(), "unexpected stubs: {stubbed:?}");
+        assert!(wat.contains("i64.and"), "{wat}");
+    }
+
+    /// Same bug class, the `Compare` typing half: `ref_expr_wasm_ty` fell to
+    /// its `_ => "i32"` default for a `BitwiseOp`/`BitwiseNot` operand, so
+    /// `self.bit_and(15) == self` picked `i32.eq` for two i64 values on the
+    /// stack — a `wasm-tools validate` type mismatch even after the
+    /// recursion was fixed (#2086).
+    #[test]
+    fn ensures_with_bitwise_not_lowers_and_types_correctly() {
+        let (wat, stubbed) = emit(
+            "total fn flip_low_bits() -> Int\n\
+                 ensures result.bit_not() == -1\n\
+             {\n\
+                 0\n\
+             }\n\
+             test fn t() -> Unit {\n\
+                 assert_eq(flip_low_bits(), 0);\n\
+             }\n",
+        );
+        validate(&wat);
+        assert!(stubbed.is_empty(), "unexpected stubs: {stubbed:?}");
+        assert!(wat.contains("i64.xor"), "{wat}");
+        assert!(
+            wat.contains("i64.eq"),
+            "Compare over a bitwise operand must use i64.eq, not i32.eq: {wat}"
+        );
     }
 
     /// `from_int(n)` narrows an i64 Int to an i32 Byte slot. Emitting
