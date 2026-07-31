@@ -2618,13 +2618,17 @@ fn emit_expr(out: &mut String, expr: &TirExpr, ctx: &Ctx) {
                 return;
             }
             // `get` is a plausible user-defined name, so match std.env's exact
-            // shape — one String argument *and* an `Option` result — rather
-            // than the bare name, or a user's own `fn get(s: String) -> …`
-            // would be silently hijacked.
+            // shape — one String argument *and* an `Option[String]` result —
+            // rather than the bare name, or a user's own `fn get(s: String)
+            // -> Option[T]` for any other `T` would be silently hijacked:
+            // `option_inner_ty(&expr.ty).is_some()` alone accepts any Option
+            // payload, not just String, so `fn get(s: String) -> Option[Int]`
+            // matched the old guard and would have been routed to the env
+            // shim instead of the user's own function.
             if name == "get"
                 && args.len() == 1
                 && peels_to_string(&args[0].ty)
-                && option_inner_ty(&expr.ty).is_some()
+                && option_inner_ty(&expr.ty).is_some_and(peels_to_string)
             {
                 ctx.needs_runtime.set(true);
                 emit_expr(out, &args[0], ctx);
@@ -2642,6 +2646,8 @@ fn emit_expr(out: &mut String, expr: &TirExpr, ctx: &Ctx) {
             if name == "Box::new" && args.len() == 1 {
                 let inner = resolve_ty_param(&args[0].ty, ctx.type_subst);
                 let is32 = wasm_ty(&inner, ctx) == "i32";
+                let is_float = matches!(inner, Ty::Float);
+                let is_string = peels_to_string(&inner);
                 let size = if is32 { 4 } else { 8 };
                 ctx.needs_runtime.set(true);
                 out.push_str(&format!("    i32.const {size}\n"));
@@ -2650,11 +2656,21 @@ fn emit_expr(out: &mut String, expr: &TirExpr, ctx: &Ctx) {
                 let slot = box_temp_name(&args[0]);
                 out.push_str(&format!("    local.tee ${slot}\n"));
                 emit_expr(out, &args[0], ctx);
-                out.push_str(if is32 {
-                    "    i32.store\n"
+                if is_float {
+                    // Float pushes an f64 value — i32/i64.store both reject it.
+                    out.push_str("    f64.store\n");
+                } else if is_string {
+                    // A String rvalue pushes (ptr, len), not a single value —
+                    // collapse to one *MvlString pointer and widen, same as
+                    // `emit_payload_store` does for the same reason.
+                    out.push_str("    call $_mvl_string_new\n");
+                    out.push_str("    i64.extend_i32_u\n");
+                    out.push_str("    i64.store\n");
+                } else if is32 {
+                    out.push_str("    i32.store\n");
                 } else {
-                    "    i64.store\n"
-                });
+                    out.push_str("    i64.store\n");
+                }
                 out.push_str(&format!("    local.get ${slot}\n"));
                 return;
             }
@@ -9191,6 +9207,61 @@ mod validated_module_tests {
         assert!(wat.contains("call $_mvl_box_new"), "{wat}");
     }
 
+    /// `Box::new`'s old is32-vs-not store branching hardcoded `i64.store` for
+    /// every non-i32 payload, including `Float` — but a Float pushes an `f64`
+    /// value, so `i64.store` is a stack type mismatch. `Box[Float]` never
+    /// appeared in the corpus, so this was untested and would have failed
+    /// `wasm-tools validate` the first time someone boxed a float.
+    #[test]
+    fn box_new_stores_float_payload_with_f64_store() {
+        let (wat, stubbed) = emit(
+            "type FBox = enum {\n\
+                 Leaf(Int),\n\
+                 Wrap(Box[Float]),\n\
+             }\n\
+             test fn t() -> Unit {\n\
+                 let w: FBox = FBox::Wrap(Box::new(3.5));\n\
+                 match w {\n\
+                     FBox::Wrap(_) => assert_eq(true, true),\n\
+                     FBox::Leaf(v) => assert_eq(v, 0),\n\
+                 }\n\
+             }\n",
+        );
+        validate(&wat);
+        assert!(stubbed.is_empty(), "unexpected stubs: {stubbed:?}");
+        assert!(
+            wat.contains("f64.store"),
+            "Box[Float] must store via f64.store, not i64.store: {wat}"
+        );
+    }
+
+    /// Same bug, the String case: a String rvalue pushes `(ptr, len)`, not a
+    /// single value, so the old code's bare `i64.store` after `emit_expr`
+    /// left a mismatched stack shape. `Box[String]` must collapse through
+    /// `_mvl_string_new` first, same as `emit_payload_store` does.
+    #[test]
+    fn box_new_stores_string_payload_via_mvl_string_new() {
+        let (wat, stubbed) = emit(
+            "type SBox = enum {\n\
+                 Leaf(Int),\n\
+                 Wrap(Box[String]),\n\
+             }\n\
+             test fn t() -> Unit {\n\
+                 let w: SBox = SBox::Wrap(Box::new(\"hi\"));\n\
+                 match w {\n\
+                     SBox::Wrap(_) => assert_eq(true, true),\n\
+                     SBox::Leaf(v) => assert_eq(v, 0),\n\
+                 }\n\
+             }\n",
+        );
+        validate(&wat);
+        assert!(stubbed.is_empty(), "unexpected stubs: {stubbed:?}");
+        assert!(
+            wat.contains("call $_mvl_string_new"),
+            "Box[String] must collapse (ptr, len) via _mvl_string_new: {wat}"
+        );
+    }
+
     /// `std.env`'s `args()` is a `builtin fn` the other backends implement;
     /// WASM emitted a bare `call $args`. Blocked three examples.
     #[test]
@@ -9224,6 +9295,37 @@ mod validated_module_tests {
         assert!(
             !wat.contains("call $_mvl_env_get"),
             "user-defined `get` was hijacked by the env shim: {wat}"
+        );
+        assert!(
+            wat.contains("call $get"),
+            "user `get` must still be called: {wat}"
+        );
+    }
+
+    /// The old shape guard checked "one String argument and *some* Option
+    /// result" — `option_inner_ty(&expr.ty).is_some()` accepts any `Option[T]`,
+    /// not just `Option[String]`. `std.env.get`'s actual signature is
+    /// `(String) -> Option[Tainted[String]]`, so a user's
+    /// `fn get(s: String) -> Option[Int]` matched the old guard just as well
+    /// and would have been silently routed to `_mvl_env_get` — a worse bug
+    /// than the non-Option case above, since it's silent wrong behavior
+    /// rather than a build failure.
+    #[test]
+    fn user_defined_get_returning_option_int_is_not_hijacked() {
+        let (wat, stubbed) = emit(
+            "fn get(s: String) -> Option[Int] { Some(s.len()) }\n\
+             test fn t() -> Unit {\n\
+                 match get(\"ab\") {\n\
+                     Some(v) => assert_eq(v, 2),\n\
+                     None => assert_eq(true, false),\n\
+                 }\n\
+             }\n",
+        );
+        validate(&wat);
+        assert!(stubbed.is_empty(), "unexpected stubs: {stubbed:?}");
+        assert!(
+            !wat.contains("call $_mvl_env_get"),
+            "user-defined `get` returning Option[Int] was hijacked by the env shim: {wat}"
         );
         assert!(
             wat.contains("call $get"),
