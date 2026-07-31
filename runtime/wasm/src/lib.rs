@@ -398,6 +398,48 @@ pub unsafe extern "C" fn _mvl_string_split(sp: i32, sl: i32, sepp: i32, sepl: i3
     arr
 }
 
+/// `_mvl_env_args()` — process argv as a `List[String]`.
+///
+/// Backs `std.env`'s `pub builtin fn args() -> List[Tainted[String]] ! Env`
+/// (the `Tainted` wrapper is erased before codegen). The Rust backend uses
+/// `std::env::args()` and LLVM has `_mvl_env_args`; WASM had neither a runtime
+/// function nor an import, so `args()` emitted a bare `call $args` and the
+/// module could not load — the same gap #2076 closed for `read_file`.
+///
+/// `runtime/wasm` targets `wasm32-wasip1` with `std`, so this is the same
+/// `std::env::args()` the Rust backend uses; wasmtime populates it from the
+/// host command line. Returns an `*MvlArray` of `*MvlString` with `elem_size`
+/// 4, matching `_mvl_string_split` — so `local_drop_fn` already maps the
+/// result to `_mvl_string_ptr_array_drop`.
+#[unsafe(no_mangle)]
+pub extern "C" fn _mvl_env_args() -> i32 {
+    let arr = _mvl_array_new(4, 0);
+    for a in std::env::args() {
+        unsafe { _mvl_array_push_i32(arr, alloc_mvl_string(a.as_bytes())) };
+    }
+    arr
+}
+
+/// `_mvl_env_get(ptr, len)` — environment variable as `Option[String]`.
+///
+/// Backs `std.env`'s `pub builtin fn get(name: String) -> Option[Tainted[String]] ! Env`.
+/// A missing variable, or one whose value is not valid UTF-8, is `None` —
+/// matching `std::env::var`, which the Rust backend uses.
+///
+/// # Safety
+/// `(ptr, len)` must describe a valid range or be `(0, 0)`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn _mvl_env_get(ptr: i32, len: i32) -> i32 {
+    let name = match core::str::from_utf8(unsafe { slice_or_empty(ptr, len) }) {
+        Ok(s) if !s.is_empty() => s,
+        _ => return _mvl_option_none(),
+    };
+    match std::env::var(name) {
+        Ok(v) => _mvl_option_some_i32(alloc_mvl_string(v.as_bytes())),
+        Err(_) => _mvl_option_none(),
+    }
+}
+
 /// `s.trim()` — strip leading and trailing ASCII whitespace (space,
 /// `\t`, `\n`, `\r`, `\x0c`). Matches Rust's `u8::is_ascii_whitespace`
 /// (WhatWG Infra Standard). Note that vertical tab `\x0b` is *not*

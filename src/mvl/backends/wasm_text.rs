@@ -406,6 +406,8 @@ const RUNTIME_IMPORTS: &[(&str, &str)] = &[
     // `i32.load` / `i64.load` / `f64.load` on the pointer returned by
     // `_mvl_array_get`. Typed push variants exist so the emitter can pass
     // the value directly on the WASM stack (no scratch alloc needed).
+    ("_mvl_env_args", "(result i32)"),
+    ("_mvl_env_get", "(param i32 i32) (result i32)"),
     ("_mvl_box_new", "(param i32) (result i32)"),
     ("_mvl_array_new", "(param i32 i32) (result i32)"),
     ("_mvl_array_len", "(param i32) (result i64)"),
@@ -2603,6 +2605,30 @@ fn emit_expr(out: &mut String, expr: &TirExpr, ctx: &Ctx) {
                 out.push_str("    i32.wrap_i64\n");
                 out.push_str("    i32.const 255\n");
                 out.push_str("    i32.and\n");
+                return;
+            }
+            // `std.env`'s `args()` / `get(name)` — both `builtin fn`s that the
+            // Rust and LLVM backends implement and this one did not, so they
+            // emitted bare `call $args` / `call $get` and the module could not
+            // load. Same gap #2076 closed for `read_file`; `args` alone blocked
+            // three examples.
+            if name == "args" && args.is_empty() {
+                ctx.needs_runtime.set(true);
+                out.push_str("    call $_mvl_env_args\n");
+                return;
+            }
+            // `get` is a plausible user-defined name, so match std.env's exact
+            // shape — one String argument *and* an `Option` result — rather
+            // than the bare name, or a user's own `fn get(s: String) -> …`
+            // would be silently hijacked.
+            if name == "get"
+                && args.len() == 1
+                && peels_to_string(&args[0].ty)
+                && option_inner_ty(&expr.ty).is_some()
+            {
+                ctx.needs_runtime.set(true);
+                emit_expr(out, &args[0], ctx);
+                out.push_str("    call $_mvl_env_get\n");
                 return;
             }
             // `Box::new(x)` — heap slot holding `x`, so a recursive enum can
@@ -9163,6 +9189,46 @@ mod validated_module_tests {
             "Box::new must route to the runtime shim: {wat}"
         );
         assert!(wat.contains("call $_mvl_box_new"), "{wat}");
+    }
+
+    /// `std.env`'s `args()` is a `builtin fn` the other backends implement;
+    /// WASM emitted a bare `call $args`. Blocked three examples.
+    #[test]
+    fn env_args_routes_to_the_runtime_shim() {
+        let (wat, stubbed) = emit(
+            "use std.env.{args}\n\
+             test fn t() -> Unit {\n\
+                 let a: List[String] = args();\n\
+                 assert_eq(a.len() >= 0, true);\n\
+             }\n",
+        );
+        validate(&wat);
+        assert!(stubbed.is_empty(), "unexpected stubs: {stubbed:?}");
+        assert!(!wat.contains("call $args"), "bare `call $args`: {wat}");
+        assert!(wat.contains("call $_mvl_env_args"), "{wat}");
+    }
+
+    /// The env `get` shim matches std.env's *shape* — one String argument and
+    /// an `Option` result — not the bare name, so a user-defined `get` is left
+    /// alone. Only that half is unit-testable: this harness loads an empty
+    /// prelude, so a real `std.env.get` call has no resolved `Option` type
+    /// here. The positive case is covered end-to-end by `examples/log_to_file`.
+    #[test]
+    fn user_defined_get_is_not_hijacked_by_the_env_shim() {
+        let (wat, stubbed) = emit(
+            "fn get(s: String) -> Int { s.len() }\n\
+             test fn t() -> Unit { assert_eq(get(\"ab\"), 2); }\n",
+        );
+        validate(&wat);
+        assert!(stubbed.is_empty(), "unexpected stubs: {stubbed:?}");
+        assert!(
+            !wat.contains("call $_mvl_env_get"),
+            "user-defined `get` was hijacked by the env shim: {wat}"
+        );
+        assert!(
+            wat.contains("call $get"),
+            "user `get` must still be called: {wat}"
+        );
     }
 
     /// The marker is the stub trigger; the five scan sites and every producer
