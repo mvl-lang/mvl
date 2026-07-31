@@ -2154,24 +2154,6 @@ pub extern "C" fn _mvl_time_now() -> i32 {
     Box::into_raw(boxed) as usize as i32
 }
 
-/// `time.now_systemtime()` — current time as epoch seconds (i64), direct return.
-#[unsafe(no_mangle)]
-pub extern "C" fn _mvl_time_now_systemtime() -> i64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs() as i64
-}
-
-/// `time.now_instant()` — current time as epoch nanoseconds (i64).
-#[unsafe(no_mangle)]
-pub extern "C" fn _mvl_time_now_instant() -> i64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_nanos() as i64
-}
-
 /// `_instant_epoch_seconds(handle)` — read epoch seconds from an Instant handle.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn _mvl_time_instant_epoch_seconds(handle: i32) -> i64 {
@@ -2186,15 +2168,6 @@ pub unsafe extern "C" fn _mvl_time_instant_epoch_seconds(handle: i32) -> i64 {
 pub extern "C" fn _mvl_time_thread_sleep(secs: i64, nanos: i64) {
     let duration = std::time::Duration::new(secs.max(0) as u64, nanos.max(0) as u32);
     std::thread::sleep(duration);
-}
-
-/// `time.iso8601_format(secs)` — format epoch seconds as ISO 8601 string.
-/// Returns a `*MvlString`.
-#[unsafe(no_mangle)]
-pub extern "C" fn _mvl_time_iso8601_format(secs: i64) -> i32 {
-    let (y, mo, d, h, mi, s) = epoch_to_ymd_hms(secs.max(0) as u64);
-    let formatted = format!("{y:04}-{mo:02}-{d:02}T{h:02}:{mi:02}:{s:02}Z");
-    alloc_mvl_string(formatted.as_bytes())
 }
 
 // ── std.random — pseudo-random number generation ─────────────────────────
@@ -3457,41 +3430,11 @@ mod tests {
     // ── std.time tests ───────────────────────────────────────────────────────
 
     #[test]
-    fn time_now_systemtime_is_positive() {
-        let secs = _mvl_time_now_systemtime();
-        // Should be well past Unix epoch (July 2026 > 1.7 billion seconds)
-        assert!(secs > 1_700_000_000);
-    }
-
-    #[test]
-    fn time_now_instant_is_positive() {
-        let nanos = _mvl_time_now_instant();
-        // Should be well past Unix epoch in nanoseconds
-        assert!(nanos > 1_700_000_000_000_000_000);
-    }
-
-    #[test]
     fn time_now_returns_valid_handle() {
         let handle = _mvl_time_now();
         assert!(handle != 0);
         let secs = unsafe { _mvl_time_instant_epoch_seconds(handle) };
         assert!(secs > 1_700_000_000);
-    }
-
-    #[test]
-    fn time_iso8601_format_produces_valid_string() {
-        // 2026-07-31T12:00:00Z in epoch seconds (approximately)
-        let secs: i64 = 1785412800;
-        let ms = _mvl_time_iso8601_format(secs);
-        assert!(ms != 0);
-        let s = unsafe { &*(ms as usize as *const MvlString) };
-        let bytes = unsafe { slice_or_empty(s.ptr, s.len) };
-        let text = core::str::from_utf8(bytes).unwrap();
-        // Should be ISO 8601 format: YYYY-MM-DDTHH:MM:SSZ
-        assert!(text.len() == 20);
-        assert!(text.ends_with('Z'));
-        assert!(text.contains('T'));
-        unsafe { _mvl_string_drop(ms) };
     }
 
     // ── std.random tests ─────────────────────────────────────────────────────
