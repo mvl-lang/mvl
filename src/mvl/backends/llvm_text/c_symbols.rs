@@ -45,6 +45,11 @@ pub fn derive_builtin_c_symbol(
 pub fn derive_c_abi_symbol(module: &str, fn_name: &str) -> String {
     match (module, fn_name) {
         ("time", "sleep") => "_mvl_time_thread_sleep".to_string(),
+        // `path_exists` reuses `_mvl_io_exists` (#2100) — same runtime fn
+        // the WASM backend's emitter special-case (`path_exists` →
+        // `$_mvl_io_exists`) already calls; the plain `_mvl_io_path_exists`
+        // derivation the default arm below would produce doesn't exist.
+        ("io", "path_exists") => "_mvl_io_exists".to_string(),
         ("log", _) => format!("_mvl_{fn_name}"),
         ("crypto", _) if fn_name.starts_with("crypto_") => format!("_mvl_{fn_name}"),
         ("crypto", _) if fn_name.starts_with('_') => {

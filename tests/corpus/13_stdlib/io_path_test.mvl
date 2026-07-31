@@ -1,0 +1,89 @@
+// 13_stdlib/io_path_test.mvl — std.io `Path` construction and Path-taking
+// builtins on the WASM backend (#2100).
+//
+// `path`/`join` are plain (non-builtin) MVL functions; every other function
+// here is a `builtin fn` that unwraps `Path.inner` before calling into the
+// runtime (`.inner` itself is a Rust-runtime-private field — read it back
+// through the public `to_string` accessor, not directly). The WASM test
+// harness (`tools/mvlr`) runs `wasmtime` with no `--dir` preopen, so every
+// real filesystem call below deterministically fails — that's fine, since
+// the point of this file is pinning that the module still *assembles and
+// runs* (no undefined `$path`/`$join` call, no dropped `.inner` unwrap
+// causing a wasm-tools validation failure) rather than exercising real disk
+// I/O.
+
+use std.io.{path, join, to_string, write_file, append, path_exists, is_file, is_dir, create_dir_all, remove, Path, IoError}
+
+// The `let s: String = to_string(...)` step below is load-bearing, not
+// style: `path`/`join`/`to_string` are invisible to `check_with_prelude`'s
+// separate, backend-local checker pass (a known, pre-existing gap — see the
+// "[REQ1] undefined function" warnings this file triggers), so an inlined
+// `assert_eq(to_string(p), ...)` infers the wrong static type for the LLVM
+// backend's `assert_eq` dispatch and miscompiles. Binding through an
+// explicitly-typed `let` first gives the reference the correct type.
+
+test fn path_wraps_a_string() -> Unit {
+    let p: Path = path("/tmp/mvl-2100.txt");
+    let s: String = to_string(p);
+    assert_eq(s, "/tmp/mvl-2100.txt");
+}
+
+test fn join_appends_a_segment_with_a_slash() -> Unit {
+    let base: Path = path("/tmp");
+    let full: Path = join(base, "mvl-2100.txt");
+    let s: String = to_string(full);
+    assert_eq(s, "/tmp/mvl-2100.txt");
+}
+
+test fn join_chains_across_multiple_segments() -> Unit {
+    let full: Path = join(join(path("/tmp"), "a"), "b.txt");
+    let s: String = to_string(full);
+    assert_eq(s, "/tmp/a/b.txt");
+}
+
+test fn write_file_does_not_trap() -> Unit ! FileWrite {
+    let r: Result[Unit, IoError] = write_file(path("/tmp/mvl-2100-write.txt"), "hi");
+    match r {
+        Ok(_) => assert(true),
+        Err(_) => assert(true),
+    }
+}
+
+test fn append_does_not_trap() -> Unit ! FileWrite {
+    let r: Result[Unit, IoError] = append(path("/tmp/mvl-2100-append.txt"), "hi");
+    match r {
+        Ok(_) => assert(true),
+        Err(_) => assert(true),
+    }
+}
+
+test fn path_exists_does_not_trap() -> Unit ! FileRead {
+    let _e: Bool = path_exists(path("/tmp/mvl-2100-missing.txt"));
+    assert(true);
+}
+
+test fn is_file_does_not_trap() -> Unit ! FileRead {
+    let _e: Bool = is_file(path("/tmp/mvl-2100-missing.txt"));
+    assert(true);
+}
+
+test fn is_dir_does_not_trap() -> Unit ! FileRead {
+    let _e: Bool = is_dir(path("/tmp/mvl-2100-missing.txt"));
+    assert(true);
+}
+
+test fn create_dir_all_does_not_trap() -> Unit ! FileWrite {
+    let r: Result[Unit, IoError] = create_dir_all(join(path("/tmp"), "mvl-2100-dir"));
+    match r {
+        Ok(_) => assert(true),
+        Err(_) => assert(true),
+    }
+}
+
+test fn remove_does_not_trap() -> Unit ! FileDelete {
+    let r: Result[Unit, IoError] = remove(path("/tmp/mvl-2100-missing.txt"));
+    match r {
+        Ok(_) => assert(true),
+        Err(_) => assert(true),
+    }
+}

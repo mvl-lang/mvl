@@ -461,6 +461,15 @@ fn pull_in_missing_prelude_items(
     }
 }
 
+/// Types the WASM backend cannot construct/destructure in transpiled MVL,
+/// for [`loader::load_rust_backed_stdlib_fns`]. Unlike
+/// [`loader::LLVM_OPAQUE_PTR_TYPES`], this excludes `Path` — the WASM
+/// backend represents `Path` as a plain `{ inner: String }` struct (see the
+/// `write_file`/`path_exists`/etc. call sites in `wasm_text.rs`, which
+/// unwrap `.inner` the same way they unwrap `Fd.inner`), so `path`/`join`'s
+/// real MVL bodies can and must be pulled in normally (#2100).
+const WASM_OPAQUE_PTR_TYPES: &[&str] = &["TcpListener", "TcpStream", "Stdout", "Stderr"];
+
 /// `Fd`/`IoError` (and `stdout`/`stderr`/`write`, etc.) are registered
 /// directly in the checker (`register_builtins`, `checker/context.rs`) as
 /// always-visible without a `use std.io` import — the same tier as
@@ -538,7 +547,7 @@ fn ensure_transitive_rust_backed_stdlib(prog: &Program, prelude: &mut Vec<Progra
     for _ in 0..4 {
         let mut scan: Vec<Program> = vec![prog.clone()];
         scan.extend(prelude.iter().cloned());
-        let found = loader::load_rust_backed_stdlib_fns(&scan);
+        let found = loader::load_rust_backed_stdlib_fns(&scan, WASM_OPAQUE_PTR_TYPES);
 
         let existing_names: HashSet<String> = prelude
             .iter()
@@ -571,9 +580,10 @@ fn compile_wat(prog: &Program, module_name: &str, assert_mode: AssertMode) -> St
         std::iter::once(prog),
         PreludeMode::Transpile,
     ));
-    prelude.extend(loader::load_rust_backed_stdlib_fns(std::slice::from_ref(
-        prog,
-    )));
+    prelude.extend(loader::load_rust_backed_stdlib_fns(
+        std::slice::from_ref(prog),
+        WASM_OPAQUE_PTR_TYPES,
+    ));
     ensure_io_types_prelude(&mut prelude);
     ensure_transitive_rust_backed_stdlib(prog, &mut prelude);
 
@@ -741,9 +751,10 @@ fn compile_wat_multi(
         std::iter::once(prog).chain(sibling_progs.iter().copied()),
         PreludeMode::Transpile,
     ));
-    prelude.extend(loader::load_rust_backed_stdlib_fns(std::slice::from_ref(
-        prog,
-    )));
+    prelude.extend(loader::load_rust_backed_stdlib_fns(
+        std::slice::from_ref(prog),
+        WASM_OPAQUE_PTR_TYPES,
+    ));
     ensure_io_types_prelude(&mut prelude);
     ensure_transitive_rust_backed_stdlib(prog, &mut prelude);
 

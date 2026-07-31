@@ -317,6 +317,28 @@ impl TextEmitter {
         // registered (opaque types).
         match name {
             "path" if args.len() == 1 => return self.emit_path_builtin_tir(&args[0]),
+            // No `args[0].ty` guard, unlike an earlier version of these two
+            // arms: the only free (non-method) `join`/`to_string` in the
+            // stdlib are these `std.io` ones, but `check_with_prelude`'s
+            // separate, intentionally-incomplete checker pass (see its call
+            // site in `cli::llvm_text::compile_llvm_text`) doesn't reliably
+            // resolve `expr.ty` for RUST_BACKED_STDLIB items — including a
+            // nested `path(...)` used as `join`'s own first argument — so a
+            // type-based guard here silently defeats itself (#2100, same
+            // class of bug as the `remove` fix in the WASM backend).
+            "join" if args.len() == 2 => {
+                return self.emit_join_builtin_tir(&args[0], &args[1]);
+            }
+            // `to_string(p: Path) -> String { p.inner }` (#2100) — like
+            // `path` above, `Path`'s pure-MVL body can't be transpiled
+            // (`Path` is opaque per `LLVM_OPAQUE_PTR_TYPES`, so the field
+            // access in its real body never lands in the prelude), but at
+            // the LLVM IR level `Path` and `String` are both `*mut
+            // MvlString` — no runtime call needed, just pass the pointer
+            // through unchanged.
+            "to_string" if args.len() == 1 => {
+                return self.emit_expr_tir(&args[0]);
+            }
             "now" if args.is_empty() => {
                 self.ensure_extern("declare ptr @_mvl_time_now()");
                 let r = self.next_reg();
@@ -2423,6 +2445,43 @@ impl TextEmitter {
         self.push_instr(&format!("{r} = call ptr @_mvl_io_path(ptr {s})"));
         self.fn_ctx.reg_types.insert(r.clone(), "ptr".into());
         Ok(Some(r))
+    }
+
+    /// TIR variant of [`Self::emit_fn_call`] `"join"` arm (#2100).
+    ///
+    /// `join(base: Path, segment: String) -> Path { Path { inner:
+    /// base.inner.concat("/").concat(segment) } }` in `std/io.mvl` — but
+    /// `Path` is opaque per `LLVM_OPAQUE_PTR_TYPES` (its own pure-MVL body,
+    /// like `path`'s, is stripped from the transpile prelude and never
+    /// pulled in), so it's hand-emitted here as two `_mvl_string_concat`
+    /// calls instead. `base.inner` needs no unwrap: `Path` and `String` are
+    /// both `*mut MvlString` at the LLVM IR level.
+    fn emit_join_builtin_tir(
+        &mut self,
+        base: &TirExpr,
+        segment: &TirExpr,
+    ) -> Result<Option<String>, String> {
+        let b = match self.emit_expr_tir(base)? {
+            Some(v) => v,
+            None => return Ok(None),
+        };
+        let sep = self.emit_string_literal("/");
+        self.ensure_extern("declare ptr @_mvl_string_concat(ptr, ptr)");
+        let r0 = self.next_reg();
+        self.push_instr(&format!(
+            "{r0} = call ptr @_mvl_string_concat(ptr {b}, ptr {sep})"
+        ));
+        self.fn_ctx.reg_types.insert(r0.clone(), "ptr".into());
+        let seg = match self.emit_expr_tir(segment)? {
+            Some(v) => v,
+            None => return Ok(None),
+        };
+        let r1 = self.next_reg();
+        self.push_instr(&format!(
+            "{r1} = call ptr @_mvl_string_concat(ptr {r0}, ptr {seg})"
+        ));
+        self.fn_ctx.reg_types.insert(r1.clone(), "ptr".into());
+        Ok(Some(r1))
     }
 
     /// TIR variant of [`Self::emit_fn_call`] `"format_datetime"` arm.
