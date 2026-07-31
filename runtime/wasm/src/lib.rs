@@ -71,13 +71,13 @@ unsafe fn slice_or_empty<'a>(ptr: i32, len: i32) -> &'a [u8] {
 
 // ── Query ops ────────────────────────────────────────────────────────────
 
-/// `s.len()` — length in bytes as i64. The receiver `len` is already on
-/// the stack; this fn exists so the emitter dispatches uniformly through
-/// `runtime.wasm` rather than open-coding stack juggling to convert the
-/// receiver's `(ptr, len)` pair back to just `len as i64`.
+/// `s.len()` — number of Unicode scalar values (chars), not bytes.
+/// Matches `runtime/rust/src/stdlib/primitives.rs::str_len`.
 #[unsafe(no_mangle)]
-pub extern "C" fn _mvl_string_len(_ptr: i32, len: i32) -> i64 {
-    len as i64
+pub unsafe extern "C" fn _mvl_string_len(ptr: i32, len: i32) -> i64 {
+    let s = unsafe { slice_or_empty(ptr, len) };
+    let text = core::str::from_utf8(s).unwrap_or("");
+    text.chars().count() as i64
 }
 
 /// `s.is_empty()` — 1 when `len == 0`, else 0. Same rationale as `len`.
@@ -132,15 +132,20 @@ pub unsafe extern "C" fn _mvl_string_ends_with(sp: i32, sl: i32, pp: i32, pl: i3
     }
 }
 
-/// `s.find(needle)` — byte position of the first occurrence of `needle`
-/// in `s`, or `-1` when not found. Matches MVL's `Int` return convention
-/// for `find` — no `Option[Int]` ABI needed here. Empty needle returns 0.
+/// `s.find(needle)` — character index of the first occurrence of `needle`
+/// in `s`, or `-1` when not found. Returns character index, not byte index,
+/// matching `runtime/rust/src/stdlib/primitives.rs::str_find`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn _mvl_string_find(sp: i32, sl: i32, np: i32, nl: i32) -> i64 {
     let s = unsafe { slice_or_empty(sp, sl) };
     let n = unsafe { slice_or_empty(np, nl) };
-    match find_bytes(s, n) {
-        Some(i) => i as i64,
+    let text = core::str::from_utf8(s).unwrap_or("");
+    let needle = core::str::from_utf8(n).unwrap_or("");
+    match text.find(needle) {
+        Some(byte_idx) => {
+            // Convert byte index to char index
+            text[..byte_idx].chars().count() as i64
+        }
         None => -1,
     }
 }
@@ -287,49 +292,40 @@ pub unsafe extern "C" fn _mvl_string_concat(p1: i32, l1: i32, p2: i32, l2: i32) 
     Box::into_raw(ms) as i32
 }
 
-/// Byte-slice substring. `start` / `end` are MVL `Int`s (i64) — clamped
-/// to `0..=len` and normalised so `end >= start`. Bytes are copied into a
-/// fresh `MvlString` (owns its buffer, `rc = 1`).
-///
-/// **Byte-based, not codepoint-based.** `runtime/llvm/`'s equivalent
-/// uses `char_indices` for Unicode; we skip that here — corpus tests use
-/// ASCII, and codepoint indexing without a Unicode table adds ~50 KB to
-/// the runtime WASM. Revisit if a non-ASCII substring test appears.
+/// Unicode-aware substring. `start` / `end` are character indices (not byte
+/// indices), clamped to `0..=char_count`. Matches
+/// `runtime/rust/src/stdlib/primitives.rs::str_substring`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn _mvl_string_substring(ptr: i32, len: i32, start: i64, end: i64) -> i32 {
     let s = unsafe { slice_or_empty(ptr, len) };
-    let n = s.len() as i64;
+    let text = core::str::from_utf8(s).unwrap_or("");
+    let chars: Vec<char> = text.chars().collect();
+    let n = chars.len() as i64;
     let lo = start.max(0).min(n) as usize;
     let hi = end.max(0).min(n) as usize;
     let hi = hi.max(lo);
-    alloc_mvl_string(&s[lo..hi])
+    let result: String = chars[lo..hi].iter().collect();
+    alloc_mvl_string(result.as_bytes())
 }
 
-/// `s.to_upper()` — ASCII-only case conversion. Non-ASCII bytes pass
-/// through unchanged. Full Unicode `to_uppercase` would drag in Rust
-/// std's case-folding table (~50 KB in the WASM). Byte-level suffices
-/// for the current corpus; upgrade path is a `#[cfg(feature =
-/// "unicode")]` flag when a real test needs it.
+/// `s.to_upper()` — full Unicode case conversion.
+/// Matches `runtime/rust/src/stdlib/primitives.rs::str_to_upper`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn _mvl_string_to_upper(ptr: i32, len: i32) -> i32 {
     let s = unsafe { slice_or_empty(ptr, len) };
-    let mut out = Vec::with_capacity(s.len());
-    for &b in s {
-        out.push(b.to_ascii_uppercase());
-    }
-    alloc_mvl_string(&out)
+    let text = core::str::from_utf8(s).unwrap_or("");
+    let upper = text.to_uppercase();
+    alloc_mvl_string(upper.as_bytes())
 }
 
-/// `s.to_lower()` — ASCII-only case conversion, same rationale as
-/// `to_upper` above.
+/// `s.to_lower()` — full Unicode case conversion.
+/// Matches `runtime/rust/src/stdlib/primitives.rs::str_to_lower`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn _mvl_string_to_lower(ptr: i32, len: i32) -> i32 {
     let s = unsafe { slice_or_empty(ptr, len) };
-    let mut out = Vec::with_capacity(s.len());
-    for &b in s {
-        out.push(b.to_ascii_lowercase());
-    }
-    alloc_mvl_string(&out)
+    let text = core::str::from_utf8(s).unwrap_or("");
+    let lower = text.to_lowercase();
+    alloc_mvl_string(lower.as_bytes())
 }
 
 /// `s.replace(from, to)` — replace every non-overlapping occurrence of
@@ -440,30 +436,14 @@ pub unsafe extern "C" fn _mvl_env_get(ptr: i32, len: i32) -> i32 {
     }
 }
 
-/// `s.trim()` — strip leading and trailing ASCII whitespace (space,
-/// `\t`, `\n`, `\r`, `\x0c`). Matches Rust's `u8::is_ascii_whitespace`
-/// (WhatWG Infra Standard). Note that vertical tab `\x0b` is *not*
-/// whitespace under that definition. Unicode whitespace (U+00A0,
-/// U+2028, etc.) would need a `char_indices` traversal — punted
-/// alongside the other case-fold ops above.
+/// `s.trim()` — strip leading and trailing Unicode whitespace.
+/// Matches `runtime/rust/src/stdlib/primitives.rs::str_trim`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn _mvl_string_trim(ptr: i32, len: i32) -> i32 {
     let s = unsafe { slice_or_empty(ptr, len) };
-    let start = s
-        .iter()
-        .position(|b| !b.is_ascii_whitespace())
-        .unwrap_or(s.len());
-    let end = s
-        .iter()
-        .rposition(|b| !b.is_ascii_whitespace())
-        .map(|i| i + 1)
-        .unwrap_or(0);
-    let trimmed = if start >= end {
-        &[][..]
-    } else {
-        &s[start..end]
-    };
-    alloc_mvl_string(trimmed)
+    let text = core::str::from_utf8(s).unwrap_or("");
+    let trimmed = text.trim();
+    alloc_mvl_string(trimmed.as_bytes())
 }
 
 // ── Equality ─────────────────────────────────────────────────────────────
@@ -1238,6 +1218,142 @@ pub unsafe extern "C" fn _mvl_string_parse_int(ptr: i32, len: i32) -> i32 {
     }
 }
 
+/// `s.parse_float()` — parse a `(ptr, len)` byte slice as a 64-bit float.
+/// Returns a heap-allocated `MvlResult` (tag=0 → Ok(f64), tag=1 → Err(*MvlString)).
+/// Matches `runtime/rust/src/stdlib/primitives.rs::str_parse_float`.
+///
+/// # Safety
+/// `ptr..ptr+len` must be valid readable memory (or `len == 0`).
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn _mvl_string_parse_float(ptr: i32, len: i32) -> i32 {
+    let bytes = unsafe { slice_or_empty(ptr, len) };
+    let text = core::str::from_utf8(bytes).unwrap_or("").trim();
+    match text.parse::<f64>() {
+        Ok(v) => {
+            // Store f64 as i64 bits in the result, caller reinterprets
+            _mvl_result_ok_i64(v.to_bits() as i64)
+        }
+        Err(e) => {
+            let msg = e.to_string();
+            unsafe { _mvl_result_err_str(msg.as_ptr() as i32, msg.len() as i32) }
+        }
+    }
+}
+
+// ── Additional string primitives (Unicode-aware) ─────────────────────────
+
+/// `s.chars()` — decompose string into a list of single-character strings.
+/// Returns a `*MvlArray` of `*MvlString` with `elem_size == 4`.
+/// Matches `runtime/rust/src/stdlib/primitives.rs::str_chars`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn _mvl_string_chars(ptr: i32, len: i32) -> i32 {
+    let s = unsafe { slice_or_empty(ptr, len) };
+    let text = core::str::from_utf8(s).unwrap_or("");
+    let arr = _mvl_array_new(4, 0);
+    for c in text.chars() {
+        let mut buf = [0u8; 4];
+        let char_str = c.encode_utf8(&mut buf);
+        unsafe { _mvl_array_push_i32(arr, alloc_mvl_string(char_str.as_bytes())) };
+    }
+    arr
+}
+
+/// `s.char_at(i)` — return the character at index `i` (0-based).
+/// Returns a `*MvlOption` wrapping a `*MvlString`, or None if out of range.
+/// Matches `runtime/rust/src/stdlib/primitives.rs::str_char_at`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn _mvl_string_char_at(ptr: i32, len: i32, idx: i64) -> i32 {
+    if idx < 0 {
+        return _mvl_option_none();
+    }
+    let s = unsafe { slice_or_empty(ptr, len) };
+    let text = core::str::from_utf8(s).unwrap_or("");
+    match text.chars().nth(idx as usize) {
+        Some(c) => {
+            let mut buf = [0u8; 4];
+            let char_str = c.encode_utf8(&mut buf);
+            let ms = alloc_mvl_string(char_str.as_bytes());
+            _mvl_option_some_i32(ms)
+        }
+        None => _mvl_option_none(),
+    }
+}
+
+/// `s.byte_at(i)` — return the byte value at character position `i` (0-based).
+/// Returns a `*MvlOption` wrapping a `u8` (as i32), or None if out of range
+/// or if the character's codepoint > 255.
+/// Matches `runtime/rust/src/stdlib/primitives.rs::str_byte_at`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn _mvl_string_byte_at(ptr: i32, len: i32, idx: i64) -> i32 {
+    if idx < 0 {
+        return _mvl_option_none();
+    }
+    let s = unsafe { slice_or_empty(ptr, len) };
+    let text = core::str::from_utf8(s).unwrap_or("");
+    match text.chars().nth(idx as usize) {
+        Some(c) => {
+            let cp = c as u32;
+            if cp <= 255 {
+                _mvl_option_some_i32(cp as i32)
+            } else {
+                _mvl_option_none()
+            }
+        }
+        None => _mvl_option_none(),
+    }
+}
+
+/// Reconstruct a `String` from a raw byte sequence (Latin-1 / ISO-8859-1).
+/// Each byte 0..=255 maps to the Unicode codepoint of the same numeric value.
+/// Matches `runtime/rust/src/stdlib/primitives.rs::str_from_bytes`.
+///
+/// `bytes` is a `*MvlArray` of `u8` values (elem_size == 1 or stored as i32).
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn _mvl_string_from_bytes(arr: i32) -> i32 {
+    if arr == 0 {
+        return alloc_mvl_string(&[]);
+    }
+    let array = unsafe { &*(arr as usize as *const MvlArray) };
+    let mut result = String::with_capacity(array.len as usize);
+    // Bytes are stored as i32 values in the array (elem_size typically 4 for Byte)
+    for i in 0..array.len {
+        let slot = (array.ptr as usize) + (i as usize) * (array.elem_size as usize);
+        let byte_val = if array.elem_size == 1 {
+            unsafe { *(slot as *const u8) }
+        } else {
+            // Byte stored as i32
+            unsafe { *(slot as *const i32) as u8 }
+        };
+        result.push(byte_val as char);
+    }
+    alloc_mvl_string(result.as_bytes())
+}
+
+/// Reconstruct a `String` from a list of single-character strings.
+/// Matches `runtime/rust/src/stdlib/primitives.rs::str_from_chars`.
+///
+/// `chars` is a `*MvlArray` of `*MvlString` (elem_size == 4).
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn _mvl_string_from_chars(arr: i32) -> i32 {
+    if arr == 0 {
+        return alloc_mvl_string(&[]);
+    }
+    let array = unsafe { &*(arr as usize as *const MvlArray) };
+    let mut result = String::new();
+    for i in 0..array.len {
+        let slot = (array.ptr as usize) + (i as usize) * 4; // elem_size == 4 for *MvlString
+        let ms_ptr = unsafe { *(slot as *const i32) };
+        if ms_ptr != 0 {
+            let ms = unsafe { &*(ms_ptr as usize as *const MvlString) };
+            let bytes = unsafe { slice_or_empty(ms.ptr, ms.len) };
+            if let Ok(s) = core::str::from_utf8(bytes) {
+                result.push_str(s);
+            }
+        }
+    }
+    alloc_mvl_string(result.as_bytes())
+}
+
 // ── IFC audit events (#2013) ─────────────────────────────────────────────
 //
 // `relabel name(expr, "tag") audit` emits a JSONL audit line via this call.
@@ -1843,12 +1959,19 @@ mod tests {
     #[test]
     fn len_regular() {
         let a = b"hello";
-        assert_eq!(_mvl_string_len(addr(a), a.len() as i32), 5);
+        assert_eq!(unsafe { _mvl_string_len(addr(a), a.len() as i32) }, 5);
     }
 
     #[test]
     fn len_empty() {
-        assert_eq!(_mvl_string_len(0, 0), 0);
+        assert_eq!(unsafe { _mvl_string_len(0, 0) }, 0);
+    }
+
+    #[test]
+    fn len_unicode() {
+        // "héllo" — 5 chars but 6 bytes (é is 2 bytes in UTF-8)
+        let a = "héllo".as_bytes();
+        assert_eq!(unsafe { _mvl_string_len(a.as_ptr() as i32, a.len() as i32) }, 5);
     }
 
     // ── is_empty ────
@@ -2151,12 +2274,12 @@ mod tests {
     }
 
     #[test]
-    fn to_upper_non_ascii_passthrough() {
-        // `é` in UTF-8 is 0xc3 0xa9 — both above 0x7f, so `to_ascii_uppercase`
-        // leaves them unchanged. Sanity check the byte-level guarantee.
-        let s = b"caf\xc3\xa9";
-        let ptr = unsafe { _mvl_string_to_upper(addr(s), s.len() as i32) };
-        assert_eq!(unsafe { concat_result(ptr) }, b"CAF\xc3\xa9");
+    fn to_upper_unicode() {
+        // `é` (U+00E9) uppercases to `É` (U+00C9) — full Unicode case conversion.
+        // "café" → "CAFÉ"
+        let s = "café".as_bytes();
+        let ptr = unsafe { _mvl_string_to_upper(s.as_ptr() as i32, s.len() as i32) };
+        assert_eq!(unsafe { concat_result(ptr) }, "CAFÉ".as_bytes());
         unsafe { _mvl_string_drop(ptr) };
     }
 
