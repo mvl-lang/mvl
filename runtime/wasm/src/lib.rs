@@ -1907,7 +1907,12 @@ pub unsafe extern "C" fn _mvl_io_read_file(path_ptr: i32, path_len: i32) -> i32 
 /// `env.set(name, value)` — set an environment variable.
 /// Returns a `*MvlResult`: Ok(()) on success, Err(String) on failure.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn _mvl_env_set(name_ptr: i32, name_len: i32, val_ptr: i32, val_len: i32) -> i32 {
+pub unsafe extern "C" fn _mvl_env_set(
+    name_ptr: i32,
+    name_len: i32,
+    val_ptr: i32,
+    val_len: i32,
+) -> i32 {
     let name = match core::str::from_utf8(unsafe { slice_or_empty(name_ptr, name_len) }) {
         Ok(s) => s,
         Err(_) => return _mvl_result_err_i32(alloc_mvl_string(b"name is not valid UTF-8")),
@@ -1948,7 +1953,12 @@ pub extern "C" fn _mvl_env_current_dir() -> i32 {
 pub unsafe extern "C" fn _mvl_env_chdir(path_ptr: i32, path_len: i32) -> i32 {
     let path = match core::str::from_utf8(unsafe { slice_or_empty(path_ptr, path_len) }) {
         Ok(s) => s,
-        Err(_) => return _mvl_result_err_i32(alloc_io_error(IO_ERR_OTHER, Some(b"path is not valid UTF-8"))),
+        Err(_) => {
+            return _mvl_result_err_i32(alloc_io_error(
+                IO_ERR_OTHER,
+                Some(b"path is not valid UTF-8"),
+            ))
+        }
     };
     match std::env::set_current_dir(path) {
         Ok(()) => _mvl_result_ok_i64(0),
@@ -2000,10 +2010,20 @@ pub extern "C" fn _mvl_env_all() -> i32 {
 
 /// `io.write_file(path, content)` — write content to a file, creating or truncating.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn _mvl_io_write_file(path_ptr: i32, path_len: i32, content_ptr: i32, content_len: i32) -> i32 {
+pub unsafe extern "C" fn _mvl_io_write_file(
+    path_ptr: i32,
+    path_len: i32,
+    content_ptr: i32,
+    content_len: i32,
+) -> i32 {
     let path = match core::str::from_utf8(unsafe { slice_or_empty(path_ptr, path_len) }) {
         Ok(s) => s,
-        Err(_) => return _mvl_result_err_i32(alloc_io_error(IO_ERR_OTHER, Some(b"path is not valid UTF-8"))),
+        Err(_) => {
+            return _mvl_result_err_i32(alloc_io_error(
+                IO_ERR_OTHER,
+                Some(b"path is not valid UTF-8"),
+            ))
+        }
     };
     let content = unsafe { slice_or_empty(content_ptr, content_len) };
     match std::fs::write(path, content) {
@@ -2014,13 +2034,26 @@ pub unsafe extern "C" fn _mvl_io_write_file(path_ptr: i32, path_len: i32, conten
 
 /// `io.append(path, content)` — append content to a file.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn _mvl_io_append(path_ptr: i32, path_len: i32, content_ptr: i32, content_len: i32) -> i32 {
+pub unsafe extern "C" fn _mvl_io_append(
+    path_ptr: i32,
+    path_len: i32,
+    content_ptr: i32,
+    content_len: i32,
+) -> i32 {
     let path = match core::str::from_utf8(unsafe { slice_or_empty(path_ptr, path_len) }) {
         Ok(s) => s,
-        Err(_) => return _mvl_result_err_i32(alloc_io_error(IO_ERR_OTHER, Some(b"path is not valid UTF-8"))),
+        Err(_) => {
+            return _mvl_result_err_i32(alloc_io_error(
+                IO_ERR_OTHER,
+                Some(b"path is not valid UTF-8"),
+            ))
+        }
     };
     let content = unsafe { slice_or_empty(content_ptr, content_len) };
-    let file = std::fs::OpenOptions::new().create(true).append(true).open(path);
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path);
     match file {
         Ok(mut f) => {
             use std::io::Write;
@@ -2068,7 +2101,12 @@ pub unsafe extern "C" fn _mvl_io_is_dir(path_ptr: i32, path_len: i32) -> i32 {
 pub unsafe extern "C" fn _mvl_io_create_dir_all(path_ptr: i32, path_len: i32) -> i32 {
     let path = match core::str::from_utf8(unsafe { slice_or_empty(path_ptr, path_len) }) {
         Ok(s) => s,
-        Err(_) => return _mvl_result_err_i32(alloc_io_error(IO_ERR_OTHER, Some(b"path is not valid UTF-8"))),
+        Err(_) => {
+            return _mvl_result_err_i32(alloc_io_error(
+                IO_ERR_OTHER,
+                Some(b"path is not valid UTF-8"),
+            ))
+        }
     };
     match std::fs::create_dir_all(path) {
         Ok(()) => _mvl_result_ok_i64(0),
@@ -2081,7 +2119,12 @@ pub unsafe extern "C" fn _mvl_io_create_dir_all(path_ptr: i32, path_len: i32) ->
 pub unsafe extern "C" fn _mvl_io_remove(path_ptr: i32, path_len: i32) -> i32 {
     let path = match core::str::from_utf8(unsafe { slice_or_empty(path_ptr, path_len) }) {
         Ok(s) => s,
-        Err(_) => return _mvl_result_err_i32(alloc_io_error(IO_ERR_OTHER, Some(b"path is not valid UTF-8"))),
+        Err(_) => {
+            return _mvl_result_err_i32(alloc_io_error(
+                IO_ERR_OTHER,
+                Some(b"path is not valid UTF-8"),
+            ))
+        }
     };
     let p = std::path::Path::new(path);
     let result = if p.is_dir() {
@@ -2344,7 +2387,10 @@ mod tests {
     fn len_unicode() {
         // "héllo" — 5 chars but 6 bytes (é is 2 bytes in UTF-8)
         let a = "héllo".as_bytes();
-        assert_eq!(unsafe { _mvl_string_len(a.as_ptr() as i32, a.len() as i32) }, 5);
+        assert_eq!(
+            unsafe { _mvl_string_len(a.as_ptr() as i32, a.len() as i32) },
+            5
+        );
     }
 
     // ── is_empty ────
