@@ -502,6 +502,8 @@ const RUNTIME_IMPORTS: &[(&str, &str)] = &[
     ("_mvl_io_is_dir", "(param i32 i32) (result i32)"),
     ("_mvl_io_create_dir_all", "(param i32 i32) (result i32)"),
     ("_mvl_io_remove", "(param i32 i32) (result i32)"),
+    ("_mvl_io_open", "(param i32 i32) (result i32)"),
+    ("_mvl_io_close", "(param i32)"),
     // ── std.time — wall clock and sleep ───────────────────────────────────
     ("_mvl_time_now", "(result i32)"),
     (
@@ -2051,11 +2053,12 @@ fn collect_locals_ctx_expr(expr: &TirExpr, locals: &mut Vec<(String, Ty)>, ctx: 
                 locals.push((struct_temp_name(expr), Ty::Bool)); // i32 placeholder
             }
             // `write_file`/`append`/`path_exists`/`is_file`/`is_dir`/
-            // `create_dir_all`/`remove` (std.io) unwrap `Path.inner` via
-            // `emit_field_access` (#2100) — same `__sf_<off>_<len>` tee temp
-            // as an explicit `p.inner` `FieldAccess` node, but there is no
-            // such node in the TIR here (the field access is synthesized by
-            // the emitter, not the source), so it needs registering by hand.
+            // `create_dir_all`/`remove`/`open` (std.io) unwrap `Path.inner`
+            // via `emit_field_access` (#2100, #2110) — same
+            // `__sf_<off>_<len>` tee temp as an explicit `p.inner`
+            // `FieldAccess` node, but there is no such node in the TIR here
+            // (the field access is synthesized by the emitter, not the
+            // source), so it needs registering by hand.
             const PATH_ARG_FNS: &[&str] = &[
                 "write_file",
                 "append",
@@ -2064,6 +2067,7 @@ fn collect_locals_ctx_expr(expr: &TirExpr, locals: &mut Vec<(String, Ty)>, ctx: 
                 "is_dir",
                 "create_dir_all",
                 "remove",
+                "open",
             ];
             if PATH_ARG_FNS.contains(&name.as_str()) {
                 if let Some(path_arg) = args.first() {
@@ -2977,6 +2981,26 @@ fn emit_expr(out: &mut String, expr: &TirExpr, ctx: &Ctx) {
                 ctx.needs_runtime.set(true);
                 emit_field_access(out, &args[0], "inner", ctx);
                 out.push_str("    call $_mvl_io_remove\n");
+                return;
+            }
+            // `open(path)` (std.io, #2110) — open a file, returning
+            // `Result[Fd, IoError]`. The runtime shim heap-allocates the
+            // `Fd` struct itself (mirroring `stdout()`/`stderr()`'s layout)
+            // and wraps it in the standard MvlResult convention, so the
+            // emitter just unwraps `Path.inner` and forwards the call —
+            // same shape as `write_file`/`path_exists` above.
+            if name == "open" && args.len() == 1 {
+                ctx.needs_runtime.set(true);
+                emit_field_access(out, &args[0], "inner", ctx);
+                out.push_str("    call $_mvl_io_open\n");
+                return;
+            }
+            // `close(fd)` (std.io, #2110) — release the OS file descriptor.
+            if name == "close" && args.len() == 1 {
+                ctx.needs_runtime.set(true);
+                emit_field_access(out, &args[0], "inner", ctx); // i64 fd number
+                out.push_str("    i32.wrap_i64\n");
+                out.push_str("    call $_mvl_io_close\n");
                 return;
             }
             // `now()` (std.time) — returns Instant handle via runtime.

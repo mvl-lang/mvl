@@ -2138,6 +2138,56 @@ pub unsafe extern "C" fn _mvl_io_remove(path_ptr: i32, path_len: i32) -> i32 {
     }
 }
 
+/// `io.open(path)` — open a file for reading/writing, creating it if it
+/// does not exist. Mirrors `runtime/rust/src/stdlib/io.rs::open`: the
+/// returned `Fd.inner` is a raw WASI file descriptor obtained via
+/// `IntoRawFd`, heap-allocated into an `Fd { inner: Int }` struct the same
+/// way `stdout()`/`stderr()` do in the emitter (`wasm_text.rs`) — 8 bytes,
+/// the fd stored as i64 at offset 0. Returns a `*MvlResult`: Ok(*Fd) on
+/// success, Err(*IoError) on failure (#2110).
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn _mvl_io_open(path_ptr: i32, path_len: i32) -> i32 {
+    use std::os::wasi::io::IntoRawFd as _;
+    let path = match core::str::from_utf8(unsafe { slice_or_empty(path_ptr, path_len) }) {
+        Ok(s) => s,
+        Err(_) => {
+            return _mvl_result_err_i32(alloc_io_error(
+                IO_ERR_OTHER,
+                Some(b"path is not valid UTF-8"),
+            ))
+        }
+    };
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .open(path);
+    match file {
+        Ok(f) => {
+            let raw_fd = f.into_raw_fd() as i64;
+            let fd_struct = _mvl_struct_alloc(8);
+            unsafe {
+                *(fd_struct as usize as *mut i64) = raw_fd;
+            }
+            _mvl_result_ok_i32(fd_struct)
+        }
+        Err(e) => _mvl_result_err_i32(io_error_from_std(&e)),
+    }
+}
+
+/// `io.close(fd)` — close a file descriptor and release the OS resource.
+/// Reconstructs the `File` via `FromRawFd` and drops it, mirroring
+/// `runtime/rust/src/stdlib/io.rs::close` (#2110).
+///
+/// # Safety
+/// `fd` must be a raw WASI file descriptor previously returned by
+/// `_mvl_io_open` and not already closed.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn _mvl_io_close(fd: i32) {
+    use std::os::wasi::io::FromRawFd as _;
+    drop(unsafe { std::fs::File::from_raw_fd(fd) });
+}
+
 // ── std.time — time and duration ─────────────────────────────────────────
 //
 // WASI provides wall-clock time via `std::time::SystemTime`.

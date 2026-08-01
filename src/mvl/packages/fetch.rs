@@ -1012,8 +1012,17 @@ mod tests {
 
     // --- mvl_data_home / pkg_cache_root ---
 
+    // `MVL_HOME`/`XDG_DATA_HOME` are process-global, but `cargo test` runs
+    // tests in parallel threads within the same process — without this lock
+    // one test's `remove_var` can fire between another's `set_var` and its
+    // `pkg_cache_root()` read, so it silently observes the *other* test's
+    // env var instead of its own (flaky failure: "expected /custom/mvl/pkg,
+    // got /xdg/data/mvl/pkg").
+    static ENV_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     #[test]
     fn mvl_data_home_respects_mvl_home_env() {
+        let _guard = ENV_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // Use a unique var key to avoid cross-test interference
         // Note: env vars are process-global; this test sets and immediately checks.
         // We clear it at the end to be polite.
@@ -1030,6 +1039,7 @@ mod tests {
 
     #[test]
     fn mvl_data_home_respects_xdg_data_home_env() {
+        let _guard = ENV_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // Only meaningful when MVL_HOME is unset
         std::env::remove_var("MVL_HOME");
         std::env::set_var("XDG_DATA_HOME", "/xdg/data");
