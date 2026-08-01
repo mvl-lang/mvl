@@ -186,6 +186,64 @@ pub unsafe extern "C" fn _mvl_io_write(fd: *const MvlFd, content: *const MvlStri
     }
 }
 
+/// `open(p: Path) → Result[Fd, IoError]` (#2110's LLVM counterpart)
+///
+/// Opens a file for reading/writing, creating it if it does not exist.
+/// `Fd.inner` holds the raw Unix file descriptor obtained via `IntoRawFd`.
+/// Unlike `stdout`/`stderr`/`stdin`'s static `MvlFd` instances, each open()
+/// call needs a distinct fd value, so the `MvlFd` is heap-allocated and
+/// returned as the `Ok` payload — leaked like `LlvmResult::ok_str`'s
+/// `MvlString` (acceptable for MVP error/success paths, see module docs).
+///
+/// # Safety
+/// `p` must be a valid `*const MvlString`.
+#[no_mangle]
+#[allow(unsafe_code)]
+pub unsafe extern "C" fn _mvl_io_open(p: *const MvlString) -> LlvmResult {
+    use std::os::unix::io::IntoRawFd as _;
+    let path = read_mvl_string(p);
+    match std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .open(&path)
+    {
+        Ok(f) => {
+            let fd = Box::new(MvlFd {
+                inner: f.into_raw_fd() as i64,
+            });
+            LlvmResult {
+                tag: 0,
+                payload: Box::into_raw(fd) as *mut c_void,
+            }
+        }
+        Err(e) => LlvmResult::err(&e),
+    }
+}
+
+/// `close(fd: Fd) → Unit` (#2110's LLVM counterpart)
+///
+/// Closes the raw Unix file descriptor `fd.inner` by reconstructing a
+/// `File` via `FromRawFd` and dropping it, mirroring `_mvl_io_write`'s
+/// range check and raw-fd handling above.
+///
+/// # Safety
+/// `fd` must be a valid `*const MvlFd` previously returned by `open()`/
+/// `stdout()`/`stderr()`/`stdin()`, and not already closed.
+#[no_mangle]
+#[allow(unsafe_code)]
+pub unsafe extern "C" fn _mvl_io_close(fd: *const MvlFd) {
+    use std::os::unix::io::FromRawFd as _;
+    if fd.is_null() {
+        return;
+    }
+    let raw = (*fd).inner;
+    if raw < 0 || raw > i32::MAX as i64 {
+        return;
+    }
+    drop(std::fs::File::from_raw_fd(raw as i32));
+}
+
 /// `write_file(p: Path, content: String) → Result[Unit, IoError]`
 ///
 /// # Safety
