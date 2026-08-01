@@ -1,0 +1,48 @@
+// 13_stdlib/io_open_close_test.mvl — std.io `open`/`close` (File descriptors)
+// on the WASM backend (#2110).
+//
+// `open`/`close` are `builtin fn`s with no MVL body; before #2110 the WASM
+// backend had no dispatch arm or runtime shim for either, so a caller
+// produced a `.wasm` module with an undefined-func call (`wasm-tools
+// validate` rejected it outright — same failure class #2100 fixed for
+// `path`/`join`).
+//
+// The WASM test harness (`tools/mvlr`) runs `wasmtime` with no `--dir`
+// preopen, so `open` on a real path deterministically fails with a
+// permission/not-found `IoError` — that's fine, since the point here is
+// pinning that the module still *assembles and runs* (no undefined `$open`/
+// `$close` call, no dropped `.inner` unwrap causing a validation failure)
+// rather than exercising real disk I/O.
+//
+// `open_fd` is a small test-fn helper, not a shadow of any production
+// symbol: matching a *builtin* fn's `Result` payload by name (`Ok(fd)`)
+// directly at the call site hits a separate, pre-existing gap in the WASM
+// backend's local checker pass (`check_with_prelude`, same one documented
+// in io_path_test.mvl) that doesn't resolve a builtin's return type,
+// mistyping the bound local for a struct-shaped (i32) payload like `Fd`.
+// Routing through a plain (non-builtin) wrapper fn with an explicit
+// signature — exactly how `examples/log_to_file/main.mvl::open_log` does
+// it — gives the checker a resolvable return type instead.
+
+use std.io.{path, open, close, Fd, IoError}
+
+fn open_fd(p: String) -> Result[Fd, IoError] {
+    open(path(p))
+}
+
+test fn open_then_close_does_not_trap() -> Unit ! FileRead + FileWrite {
+    match open_fd("/tmp/mvl-2110-open.txt") {
+        Err(_) => assert(true),
+        Ok(fd) => {
+            close(fd);
+            assert(true)
+        },
+    }
+}
+
+test fn open_missing_directory_does_not_trap() -> Unit ! FileRead {
+    match open_fd("/mvl-2110-nonexistent-dir/x.txt") {
+        Ok(_) => assert(true),
+        Err(_) => assert(true),
+    }
+}

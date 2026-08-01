@@ -17,7 +17,7 @@
 //   MVL_LOG_FILE=/var/log/app.log mvl run examples/log_to_file/main.mvl
 
 use std.log.{Logger, LogFormat, LogLevel, file_logger}
-use std.io.{path, open, close, Fd}
+use std.io.{path, open, close, Fd, IoError}
 use std.env.{get}
 use std.runtime.{manifest, Manifest, log_manifest}
 use paths.{LogPath, LogSetupError, validate_log_path, resolve_path}
@@ -40,7 +40,13 @@ total fn get_log_path() -> Result[String, LogSetupError] ! Env {
 /// Returns Err(OpenFailed) on any I/O error. The caller is responsible for
 /// calling close() on the returned Fd when done.
 total fn open_log(p: String) -> Result[Fd, LogSetupError] {
-    match open(path(p)) {
+    // Bind through an explicitly-typed `let` before matching — the WASM
+    // backend's local (backend-only) checker pass doesn't resolve a direct
+    // builtin-call scrutinee's Result payload type, which mistypes the
+    // `Ok(fd)` binding's local (#2110; same class of gap documented in
+    // tests/corpus/13_stdlib/io_path_test.mvl for #2100).
+    let r: Result[Fd, IoError] = open(path(p));
+    match r {
         Err(_) => Err(LogSetupError::OpenFailed),
         Ok(fd) => Ok(fd),
     }
