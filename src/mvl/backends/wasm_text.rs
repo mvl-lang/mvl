@@ -70,7 +70,7 @@
 //! `link`/`monitor`/`select`/`on_exit` supervision yet.
 
 use std::cell::Cell;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use super::{AssertMode, Backend};
 use crate::mvl::checker::types::Ty;
@@ -1777,6 +1777,32 @@ fn emit_fn(out: &mut String, f: &TirFn, ctx: &Ctx) {
     if has_checkable_ensures {
         locals.push(("__result_CONTRACT".to_string(), f.ret_ty.clone()));
     }
+
+    // Exclude any collected "local" whose WASM identifier is already a
+    // function *parameter* — WAT's param/local namespace is flat, so
+    // `(param $body_ptr i32) ... (local $body_ptr i32)` is a duplicate-
+    // identifier error even though nothing is wrong at the MVL level: a
+    // `match`/`if let` arm binding a String value to a name that shadows an
+    // outer String-typed parameter (`fn f(body: Tainted[String]) -> ... {
+    // match r { Ok(body) => ... } }`, #2049 follow-up — found while running
+    // `examples/config_server/handler_test.mvl`'s `handle_put` for the
+    // first time, via the new WASM test-fn harness) is valid MVL shadowing;
+    // the *inner* binding's own store/load instructions already correctly
+    // reuse the outer parameter's WASM slot (harmless here since the outer
+    // value's last MVL-level use precedes the shadowing point), so dropping
+    // the redundant redeclaration is enough — no renaming needed.
+    let param_wasm_names: HashSet<String> = f
+        .params
+        .iter()
+        .flat_map(|p| {
+            if is_string_ty(&p.ty, ctx) {
+                vec![format!("{}_ptr", p.name), format!("{}_len", p.name)]
+            } else {
+                vec![p.name.clone()]
+            }
+        })
+        .collect();
+    locals.retain(|(name, _)| !param_wasm_names.contains(name));
 
     // Deduplicate (collect passes may register the same name from nested
     // expressions or speculative String locals; WAT rejects duplicates).
@@ -7318,10 +7344,7 @@ fn collect_enums(
 /// Found while building the WASM `extern "rust"` FFI host glue, which needs
 /// byte-accurate struct layouts to marshal fields correctly; unrelated to
 /// FFI itself, so fixed here rather than worked around in the new code.
-fn resolve_field_ty<'a>(
-    ty: &'a Ty,
-    aliases: &'a HashMap<String, Ty>,
-) -> std::borrow::Cow<'a, Ty> {
+fn resolve_field_ty<'a>(ty: &'a Ty, aliases: &'a HashMap<String, Ty>) -> std::borrow::Cow<'a, Ty> {
     match ty {
         Ty::Ref(_, inner) | Ty::Labeled(_, inner) | Ty::Refined(inner, _) => {
             match resolve_field_ty(inner, aliases) {
