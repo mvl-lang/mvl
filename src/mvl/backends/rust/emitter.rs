@@ -832,7 +832,7 @@ impl RustEmitter {
         // types, so a free function `fail` and `AuditEvent::fail` are treated as distinct
         // symbols and don't shadow each other during prelude dedup.
         //
-        // Extension methods on builtin types (String, List, Map, …) are emitted as UFCS-style
+        // Extension methods on builtin types (String, List, Map, …) are emitted as
         // free Rust functions (not impl methods), so they still use a bare name key — allowing
         // the existing dedup to prevent multiple definitions of the same Rust free function.
         const BUILTIN_RECEIVER_TYPES: &[&str] = &[

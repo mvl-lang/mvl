@@ -205,18 +205,18 @@ pub fn is_stdlib_fn(name: &str) -> bool {
 // Rust backend.  Centralised here to eliminate duplication between
 // `emit_exprs.rs` and `emit_exprs_ast.rs`.
 
-/// Pure MVL stdlib methods — transpiled as free functions, dispatched via UFCS
-/// as `method(receiver.clone().into(), args)`.
+/// Pure MVL stdlib methods (type-attached methods, ADR-0031 amendment) —
+/// transpiled as free functions: `method(receiver.clone().into(), args)`.
 ///
 /// When the transpiler sees `receiver.method(args)` for one of these names it
-/// emits a UFCS free-function call instead: `method(receiver.clone().into(), args)`.
+/// emits a free-function call instead: `method(receiver.clone().into(), args)`.
 /// The `.into()` coercion allows IFC-label wrapper types (`Clean<String>`, etc.) to
 /// flow into functions that take the plain inner type — `From<Label<T>> for T` is
 /// implemented in `mvl_runtime::ifc`.
 ///
 /// Each entry is `(method_name, receiver_type)`.  The receiver type matches the
 /// dispatch keys in `checker/method_types.rs` ("String", "List") and is used by
-/// `stdlib_ufcs_methods_have_return_types` to enforce alignment between this
+/// `stdlib_dispatch_methods_have_return_types` to enforce alignment between this
 /// table and the return-type lookup.
 ///
 /// # 4-way sync (#992)
@@ -224,10 +224,10 @@ pub fn is_stdlib_fn(name: &str) -> bool {
 /// This list is one of **four** places that must stay in sync when adding a new
 /// builtin method.  See `checker/method_types.rs` for the full explanation.
 /// The planned fix (method desugaring) is tracked in issue #992.  The
-/// `stdlib_ufcs_methods_have_return_types` test in `checker::method_types`
+/// `stdlib_dispatch_methods_have_return_types` test in `checker::method_types`
 /// closes one direction of the divergence gap by verifying every entry here
 /// has a non-`Unknown` return-type arm.
-pub(crate) const STDLIB_UFCS_METHODS: &[(&str, &str)] = &[
+pub(crate) const STDLIB_METHOD_DISPATCH: &[(&str, &str)] = &[
     // std/strings.mvl (pure MVL, have bodies)
     ("trim", "String"),
     // to_upper/to_lower: now `builtin fn`, dispatched via BUILTINS rust_emit hints
@@ -250,25 +250,25 @@ pub(crate) const STDLIB_UFCS_METHODS: &[(&str, &str)] = &[
     ("find_all_spans", "String"),
 ];
 
-/// True if `name` is a UFCS-dispatched stdlib method on any receiver type.
-pub fn is_stdlib_ufcs_method(name: &str) -> bool {
-    STDLIB_UFCS_METHODS.iter().any(|(m, _)| *m == name)
+/// True if `name` is a free-function-dispatched stdlib method on any receiver type.
+pub fn is_stdlib_dispatch_method(name: &str) -> bool {
+    STDLIB_METHOD_DISPATCH.iter().any(|(m, _)| *m == name)
 }
 
-/// True if `(name, ty)` is a UFCS-dispatched stdlib method for that specific
+/// True if `(name, ty)` is a free-function-dispatched stdlib method for that specific
 /// receiver type — e.g. `("find", "List")` matches but `("find", "String")`
 /// does not (String's `find` is a `BUILTINS` entry with a `rust_emit` hint).
-/// Used by the Rust backend's method-call dispatch to keep the UFCS branch
+/// Used by the Rust backend's method-call dispatch to keep this branch
 /// from swallowing calls that a builtin should handle (#1707).
-pub fn is_stdlib_ufcs_method_for(name: &str, ty: &str) -> bool {
-    STDLIB_UFCS_METHODS
+pub fn is_stdlib_dispatch_method_for(name: &str, ty: &str) -> bool {
+    STDLIB_METHOD_DISPATCH
         .iter()
         .any(|(m, t)| *m == name && *t == ty)
 }
 
 /// String methods that return a `String` with the same IFC label as their receiver.
 /// When the receiver is `Label<String>`, the call result must be re-wrapped in `Label::new(…)`
-/// because the UFCS trampoline (`method(receiver.clone().into(), …)`) strips the label via
+/// because the free-function trampoline (`method(receiver.clone().into(), …)`) strips the label via
 /// `.into()` before passing to the stdlib function (which returns plain `String`).
 pub(crate) const STRING_LABEL_PRESERVING_METHODS: &[&str] = &[
     "trim",
@@ -282,7 +282,7 @@ pub(crate) const STRING_LABEL_PRESERVING_METHODS: &[&str] = &[
 /// Shared registry of all MVL builtin methods and stdlib free functions.
 ///
 /// **Scope:** methods that require explicit backend emission logic (kernel
-/// builtins and compiler intrinsics).  Pure-MVL UFCS methods (e.g. `trim`,
+/// builtins and compiler intrinsics).  Pure-MVL type-attached methods (e.g. `trim`,
 /// `starts_with`, `flatten`) have MVL bodies and are compiled transparently —
 /// they are intentionally absent.
 ///

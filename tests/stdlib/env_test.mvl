@@ -14,9 +14,9 @@
 //   sigint/sigterm/sighup/sigusr1/sigusr2 — pure signal constructors
 //   signal_on/signal_reset/signal_ignore  — no-ops (signal callbacks not yet implemented)
 //
-// Not tested here (UFCS name collisions — covered by Rust unit tests):
-//   get  — conflicts with MVL's built-in list_get(xs, i) UFCS dispatch
-//   all  — conflicts with MVL's built-in List.all(predicate) UFCS method
+// Not tested here (stdlib method-dispatch name collisions — covered by Rust unit tests):
+//   get  — conflicts with MVL's built-in list_get(xs, i) dispatch
+//   all  — conflicts with MVL's built-in List.all(predicate) method
 //
 // Not tested here (process-global side-effects, tested in Rust unit tests):
 //   chdir  — changes global cwd; restoration not possible within MVL tests

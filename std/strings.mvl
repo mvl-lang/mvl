@@ -12,7 +12,7 @@
 //!
 //! Pure MVL extension methods (`pub fn String::foo(self)` with a body) no longer
 //! require backend registration. The checker falls back to the method_table, and
-//! the Rust backend auto-detects builtin-receiver UFCS dispatch.
+//! the Rust backend auto-detects builtin-receiver free-function dispatch.
 //!
 //! Kernel builtins (`pub builtin fn`) still require 4-way sync:
 //!   1. `checker/method_types.rs` — return type mapping

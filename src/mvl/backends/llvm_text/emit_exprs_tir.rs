@@ -4489,9 +4489,9 @@ impl TextEmitter {
             //
             // If `pub fn Recv[..]::method(self, ...)` is declared for the
             // receiver's base type AND is generic (has type parameters),
-            // treat the method call as UFCS sugar: call the free-fn form
+            // treat the method call as free-function dispatch: call the free-fn form
             // of the body with the receiver prepended.  Restores parity
-            // with the Rust backend's STDLIB_UFCS_METHODS path for the
+            // with the Rust backend's STDLIB_METHOD_DISPATCH path for the
             // methods #1763 targets (List HOFs: flatten, map, filter,
             // fold, sort_by, ...).
             //
