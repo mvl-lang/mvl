@@ -715,6 +715,37 @@ pub unsafe extern "C" fn _mvl_array_contains(a: *const MvlArray, needle_ptr: *co
     false
 }
 
+/// Remove the first element equal to `*needle_ptr` by shifting subsequent
+/// elements left one slot. No-op if the element is absent. Used for
+/// `Set[T].remove(val)` (#2124) — Set elements are unique by construction,
+/// so "first" and "only" coincide. Same needle-encoding contract as
+/// [`_mvl_array_contains`] (a pointer to `element_size` readable bytes).
+///
+/// # Safety
+/// `a` must be a valid non-null `MvlArray` pointer. `needle_ptr` must point
+/// to at least `(*a).elem_size` readable bytes.
+#[no_mangle]
+pub unsafe extern "C" fn _mvl_array_remove_value(a: *mut MvlArray, needle_ptr: *const u8) {
+    if a.is_null() || needle_ptr.is_null() {
+        return;
+    }
+    let len = (*a).len as usize;
+    let es = (*a).elem_size as usize;
+    let data = (*a).ptr;
+    let needle = std::slice::from_raw_parts(needle_ptr, es);
+    for i in 0..len {
+        let slot = data.add(i * es);
+        if std::slice::from_raw_parts(slot, es) == needle {
+            let rest_bytes = (len - i - 1) * es;
+            if rest_bytes > 0 {
+                ptr::copy(data.add((i + 1) * es), slot, rest_bytes);
+            }
+            (*a).len -= 1;
+            return;
+        }
+    }
+}
+
 /// Return a new `MvlArray` containing elements `[start, end)` from `arr` (safe clamping).
 ///
 /// # Safety
