@@ -486,6 +486,9 @@ const RUNTIME_IMPORTS: &[(&str, &str)] = &[
     ("_mvl_array_contains_i32", "(param i32 i32) (result i32)"),
     ("_mvl_array_insert_i64", "(param i32 i64)"),
     ("_mvl_array_insert_i32", "(param i32 i32)"),
+    // `Set[T].remove(val)` — linear-scan remove-by-value (#2124).
+    ("_mvl_array_remove_value_i64", "(param i32 i64)"),
+    ("_mvl_array_remove_value_i32", "(param i32 i32)"),
     // Group F — Map[String, Int] ops (#1820). Linear-scan map backed by
     // `MvlMap` on the Rust heap. `si64` suffix = String key, i64 value.
     ("_mvl_map_new_si64", "(result i32)"),
@@ -1321,6 +1324,39 @@ fn concat_is_supported(ty: &Ty, ctx: &Ctx) -> bool {
                 || result_ok_ty(&elem).is_some())
         }
     }
+}
+
+/// Whether `Set[T]::map(f: fn(T) -> U) -> Set[U]` can be lowered natively
+/// (#2124). `Set[T]::map` cannot be expressed as a pure MVL body like the
+/// rest of `std/collections.mvl`'s HOFs (`filter`/`fold`/`any`/`all`): those
+/// mutate a clone of `self` in place, but `map` produces a *different*
+/// element type, and `Set[U]::new()` does not exist as a callable symbol in
+/// any backend. This native arm allocates the output array directly and
+/// dedup-inserts each mapped element — same refcounted-box exclusion as
+/// [`concat_is_supported`], applied to both the input and output element
+/// type, since a dedup-checking `_mvl_array_insert_*` on a String/nested
+/// collection element would alias the pointee without bumping its refcount.
+///
+/// `receiver_ty` is the receiver's full `Set[T]` (or `ref`-wrapped) type;
+/// `arg_fn_ty` is the mapper argument's full `fn(T) -> U` type — both are
+/// unpacked to their element/return type here rather than by the caller, so
+/// a guard site can't accidentally pass the wrong shape.
+fn set_map_is_supported(receiver_ty: &Ty, arg_fn_ty: &Ty, ctx: &Ctx) -> bool {
+    let not_boxed = |t: &Ty| {
+        let t = resolve_ty_param(t, ctx.type_subst);
+        !(peels_to_string(&t)
+            || collection_elem_ty(&t).is_some()
+            || map_key_val_ty(&t).is_some()
+            || option_inner_ty(&t).is_some()
+            || result_ok_ty(&t).is_some())
+    };
+    let Some(elem_ty) = collection_elem_ty(receiver_ty) else {
+        return false;
+    };
+    let Ty::Fn(_, ret_ty, ..) = arg_fn_ty else {
+        return false;
+    };
+    not_boxed(elem_ty) && not_boxed(ret_ty)
 }
 
 fn clone_is_supported(ty: &Ty, ctx: &Ctx) -> bool {
@@ -2503,6 +2539,18 @@ fn collect_locals_expr(expr: &TirExpr, locals: &mut Vec<(String, Ty)>) {
             // `_mvl_float_to_string`, #2039) and gets the same unpack treatment.
             if matches!(receiver.ty, Ty::Float) && method == "to_string" {
                 locals.push((mvl_string_temp_name(expr), Ty::Bool));
+            }
+            // `Set[T].map(f)` — native-arm loop temps (#2124). Declared
+            // whenever the shape matches, even if `set_map_is_supported`
+            // will end up gating the arm off at emission time (this fn has
+            // no `ctx` to check that here) — an unused local is harmless.
+            if peels_to_set(&receiver.ty) && method == "map" && args.len() == 1 {
+                let off = expr.span.offset;
+                locals.push((format!("__set_map_out_{off}"), Ty::Bool));
+                locals.push((format!("__set_map_arr_{off}"), Ty::Bool));
+                locals.push((format!("__set_map_idx_{off}"), Ty::Int));
+                locals.push((format!("__set_map_len_{off}"), Ty::Int));
+                locals.push((format!("__set_map_f_{off}"), Ty::Bool));
             }
             // `.unwrap_or(default)` on Option stashes the option pointer
             // in a temp so it can be dropped after the if-else selects
@@ -3700,6 +3748,107 @@ fn emit_expr(out: &mut String, expr: &TirExpr, ctx: &Ctx) {
             emit_expr(out, receiver, ctx);
             emit_expr(out, &args[0], ctx);
             out.push_str(&format!("    call ${fn_name}\n"));
+        }
+        // `Set[T].remove(val)` — linear-scan remove-by-value, no-op if absent
+        // (#2124). Neither `List` nor `Set` had a by-value removal primitive
+        // before this; mirrors `insert`'s element-type dispatch exactly.
+        TirExprKind::MethodCall {
+            receiver,
+            method,
+            args,
+        } if collection_elem_ty(&receiver.ty).is_some()
+            && matches!(&receiver.ty, Ty::Set(_) | Ty::Ref(_, _))
+            && method == "remove"
+            && args.len() == 1 =>
+        {
+            ctx.needs_runtime.set(true);
+            let elem_ty = collection_elem_ty(&receiver.ty).cloned().unwrap_or(Ty::Int);
+            let fn_name = if is_i32(&elem_ty, ctx) {
+                "_mvl_array_remove_value_i32"
+            } else {
+                "_mvl_array_remove_value_i64"
+            };
+            emit_expr(out, receiver, ctx);
+            emit_expr(out, &args[0], ctx);
+            out.push_str(&format!("    call ${fn_name}\n"));
+        }
+        // `Set[T].map(f: fn(T) -> U) -> Set[U]` — native arm (#2124). See
+        // `set_map_is_supported` for why this can't be a pure MVL body like
+        // `filter`/`fold`/`any`/`all`. Allocates a fresh output array, loops
+        // over `self` via the same shape `emit_for_list` uses, calls `f`
+        // through `call_indirect`, and dedup-inserts each result.
+        TirExprKind::MethodCall {
+            receiver,
+            method,
+            args,
+        } if peels_to_set(&receiver.ty)
+            && method == "map"
+            && args.len() == 1
+            && set_map_is_supported(&receiver.ty, &effective_arg_ty(&args[0]), ctx) =>
+        {
+            ctx.needs_runtime.set(true);
+            let elem_ty = collection_elem_ty(&receiver.ty).cloned().unwrap_or(Ty::Int);
+            let ret_ty = match effective_arg_ty(&args[0]) {
+                Ty::Fn(_, ret, ..) => *ret,
+                other => other,
+            };
+            let off = expr.span.offset;
+            let out_local = format!("__set_map_out_{off}");
+            let arr_local = format!("__set_map_arr_{off}");
+            let idx_local = format!("__set_map_idx_{off}");
+            let len_local = format!("__set_map_len_{off}");
+            let f_local = format!("__set_map_f_{off}");
+            let brk = ctx.fresh_label("set_map_end");
+            let cnt = ctx.fresh_label("set_map_cont");
+
+            let out_elem_size = elem_size_bytes(&ret_ty, ctx);
+            out.push_str(&format!("    i32.const {out_elem_size}\n"));
+            out.push_str("    i32.const 4\n");
+            out.push_str("    call $_mvl_array_new\n");
+            out.push_str(&format!("    local.set ${out_local}\n"));
+
+            emit_expr(out, &args[0], ctx);
+            out.push_str(&format!("    local.set ${f_local}\n"));
+
+            emit_expr(out, receiver, ctx);
+            out.push_str(&format!("    local.set ${arr_local}\n"));
+            out.push_str(&format!("    local.get ${arr_local}\n"));
+            out.push_str("    call $_mvl_array_len\n");
+            out.push_str(&format!("    local.set ${len_local}\n"));
+            out.push_str("    i64.const 0\n");
+            out.push_str(&format!("    local.set ${idx_local}\n"));
+
+            out.push_str(&format!("    block ${brk}\n"));
+            out.push_str(&format!("    loop ${cnt}\n"));
+            out.push_str(&format!("    local.get ${idx_local}\n"));
+            out.push_str(&format!("    local.get ${len_local}\n"));
+            out.push_str("    i64.ge_s\n");
+            out.push_str(&format!("    br_if ${brk}\n"));
+
+            out.push_str(&format!("    local.get ${out_local}\n"));
+            out.push_str(&format!("    local.get ${arr_local}\n"));
+            out.push_str(&format!("    local.get ${idx_local}\n"));
+            out.push_str("    call $_mvl_array_get\n");
+            let (load_op, _) = list_elem_load_op(&elem_ty, ctx);
+            out.push_str(&format!("    {load_op}\n"));
+            out.push_str(&format!("    local.get ${f_local}\n"));
+            let sig = register_indirect_sig(std::slice::from_ref(&elem_ty), &ret_ty, ctx);
+            out.push_str(&format!("    call_indirect (type {sig})\n"));
+            let insert_fn = if is_i32(&ret_ty, ctx) {
+                "_mvl_array_insert_i32"
+            } else {
+                "_mvl_array_insert_i64"
+            };
+            out.push_str(&format!("    call ${insert_fn}\n"));
+
+            out.push_str(&format!("    local.get ${idx_local}\n"));
+            out.push_str("    i64.const 1\n");
+            out.push_str("    i64.add\n");
+            out.push_str(&format!("    local.set ${idx_local}\n"));
+            out.push_str(&format!("    br ${cnt}\n"));
+            out.push_str("    end\n");
+            out.push_str("    end\n");
+            out.push_str(&format!("    local.get ${out_local}\n"));
         }
         // List query methods — `.len()` / `.is_empty()` on any collection
         // that lowers to `*MvlArray` (List / Array / Set).
@@ -5676,6 +5825,23 @@ fn collection_elem_ty(ty: &Ty) -> Option<&Ty> {
     }
 }
 
+/// True when `ty` is a `Set<T>`, possibly wrapped in `Ref`/`Labeled`/`Refined`
+/// (e.g. `let s: ref Set[Int] = …`). Unlike matching `Ty::Set(_) | Ty::Ref(_,
+/// _)` directly, this does not also admit a `ref List[T]`/`ref Array[T, N]`
+/// receiver — needed for `Set[T]::map`, which (unlike `insert`/`remove`,
+/// which have no `List` namesake to collide with) must not steal `.map()`
+/// away from `List[T]::map`'s generic-dispatch path (#2124).
+fn peels_to_set(ty: &Ty) -> bool {
+    let mut cur = ty;
+    loop {
+        match cur {
+            Ty::Ref(_, inner) | Ty::Labeled(_, inner) | Ty::Refined(inner, _) => cur = inner,
+            Ty::Set(_) => return true,
+            _ => return false,
+        }
+    }
+}
+
 /// The payload type of a `Ty::Option`, or `None` if `ty` is not an
 /// Option. Peels wrappers the same way as [`collection_elem_ty`].
 fn option_inner_ty(ty: &Ty) -> Option<&Ty> {
@@ -6616,6 +6782,15 @@ pub fn emitter_handles_method_natively(receiver_ty: &Ty, method: &str) -> bool {
             "len" | "is_empty" | "get" | "insert" | "contains_key"
         );
     }
+    // `Set[T]::map` gets a dedicated native arm (#2124) — unlike
+    // `List[T]::map`, which stays on the generic-dispatch path below to
+    // monomorphize the real `std/lists.mvl` body. Checked ahead of the
+    // shared `collection_elem_ty` branch so it doesn't also claim
+    // `List`/`Array` receivers, which share that branch's shape check but
+    // must keep routing `map` through `std/lists.mvl`.
+    if peels_to_set(receiver_ty) && method == "map" {
+        return true;
+    }
     if collection_elem_ty(receiver_ty).is_some() {
         // `clone`, `slice`, and `concat` have native arms too. All three are
         // conditional — `clone_is_supported` / `slice_is_supported` /
@@ -6634,6 +6809,7 @@ pub fn emitter_handles_method_natively(receiver_ty: &Ty, method: &str) -> bool {
                 | "push"
                 | "contains"
                 | "insert"
+                | "remove"
                 | "clone"
                 | "slice"
                 | "concat"
@@ -10390,5 +10566,84 @@ mod validated_module_tests {
         assert!(stubbed.is_empty(), "unexpected stubs: {stubbed:?}");
         assert!(wat.contains("call $List_take"), "{wat}");
         assert!(wat.contains("call $List_skip"), "{wat}");
+    }
+
+    /// `Set[T].remove(val)` never had a by-value removal primitive before
+    /// #2124 (neither `List` nor `Set`); this pins the new
+    /// `_mvl_array_remove_value_i64` native arm, including the no-op case.
+    #[test]
+    fn set_remove_by_value_lowers() {
+        let stubbed = emit_and_validate(
+            "test fn t() -> Unit {\n\
+                 let s: ref Set[Int] = {1, 2, 3};\n\
+                 s.remove(2);\n\
+                 assert_eq(s.len(), 2);\n\
+                 assert_eq(s.contains(2), false);\n\
+                 assert_eq(s.contains(1), true);\n\
+                 s.remove(99);\n\
+                 assert_eq(s.len(), 2);\n\
+             }\n",
+        );
+        assert!(stubbed.is_empty(), "unexpected stubs: {stubbed:?}");
+    }
+
+    /// `Set[T].map(f: fn(T) -> U) -> Set[U]` (#2124) is a native arm, not a
+    /// pure MVL body — `Set[U]::new()` isn't a callable symbol in any
+    /// backend, so the accumulator can't be built in MVL source the way
+    /// `filter`/`fold`/`any`/`all` clone `self` in place.
+    #[test]
+    fn set_map_lowers_and_dedups() {
+        let stubbed = emit_and_validate(
+            "test fn t() -> Unit {\n\
+                 let s: Set[Int] = {1, 2, 3};\n\
+                 let doubled: Set[Int] = s.map(|x: Int| x * 2);\n\
+                 assert_eq(doubled.len(), 3);\n\
+                 assert_eq(doubled.contains(2), true);\n\
+                 assert_eq(doubled.contains(4), true);\n\
+                 assert_eq(doubled.contains(6), true);\n\
+                 assert_eq(s.len(), 3);\n\
+             }\n",
+        );
+        assert!(stubbed.is_empty(), "unexpected stubs: {stubbed:?}");
+    }
+
+    /// `Set[T].map` must still stub for a String-returning mapper — the
+    /// output element is a `*MvlString`, and a dedup-checking
+    /// `_mvl_array_insert_i32` compares pointers, not string content, so a
+    /// native arm here would silently produce wrong dedup semantics AND
+    /// alias the pointee without bumping its refcount (same reasoning as
+    /// `concat_on_string_list_stubs_instead_of_double_freeing`).
+    #[test]
+    fn set_map_to_string_stubs_instead_of_wrong_dedup() {
+        let (wat, stubbed) = emit(
+            "test fn t() -> Unit {\n\
+                 let s: Set[Int] = {1, 2, 3};\n\
+                 let strs: Set[String] = s.map(|x: Int| x.to_string());\n\
+                 assert_eq(strs.len(), 3);\n\
+             }\n",
+        );
+        assert_eq!(stubbed, vec!["t"], "{wat}");
+    }
+
+    /// `Set[T]::map` claiming `emitter_handles_method_natively` must not also
+    /// claim `List[T]::map` — they share the `collection_elem_ty` shape
+    /// guard, but `List::map` still has to route through generic dispatch
+    /// to monomorphize its real `std/lists.mvl` body (#2124).
+    #[test]
+    fn list_map_still_routes_through_generic_dispatch() {
+        const LIST_MAP: &str = "pub fn List[T]::map[U](self, f: fn(T) -> U) -> List[U] {\n\
+                                     let result: ref List[U] = [];\n\
+                                     for x in self { result.push(f(x)) };\n\
+                                     result\n\
+                                 }\n";
+        let stubbed = emit_and_validate(&format!(
+            "{LIST_MAP}\
+             test fn t() -> Unit {{\n\
+                 let xs: List[Int] = [1, 2, 3];\n\
+                 let ys: List[Int] = xs.map(|x: Int| x * 2);\n\
+                 assert_eq(ys.len(), 3);\n\
+             }}\n"
+        ));
+        assert!(stubbed.is_empty(), "unexpected stubs: {stubbed:?}");
     }
 }

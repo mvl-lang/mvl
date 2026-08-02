@@ -134,6 +134,9 @@ pub fn Set[T]::insert(self, x: T) -> Unit {
 }
 
 /// Remove `x`. No-op if absent.
+///
+/// WASM: native arm backed by `_mvl_array_remove_value_i32`/`_i64` (#2124) —
+/// this body is never executed as written.
 pub fn Set[T]::remove(self, x: T) -> Unit {
     self.remove(x)
 }
@@ -176,6 +179,10 @@ pub fn Set[T]::union(self, other: Set[T]) -> Set[T] {
 /// Apply `f` to each element, collecting results into a new set.
 ///
 /// Transpiler-handled: emits `set.into_iter().map(|x| f(x)).collect::<HashSet<_>>()`.
+/// WASM: native arm (`set_map_is_supported`, #2124) — it produces a
+/// *different* element type, and `Set[U]::new()` isn't a callable symbol in
+/// any backend, so there is no way to build a fresh `Set[U]` accumulator in
+/// MVL source; this body is never executed as written.
 pub fn Set[T]::map[U](self, f: fn(T) -> U) -> Set[U] {
     self.map(f)
 }

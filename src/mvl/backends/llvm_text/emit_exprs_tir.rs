@@ -3424,6 +3424,29 @@ impl TextEmitter {
                 Ok(Some(val))
             }
 
+            // `Set[T].remove(val)` (#2124) — same needle-in-an-alloca'd-slot
+            // shape as `insert` above, routed through `_mvl_array_remove_value`
+            // instead of `_mvl_array_push`. No prior contains-guard needed:
+            // the runtime primitive itself no-ops when the element is absent.
+            ("remove", "ptr") if matches!(unwrap_labels(&receiver.ty), Ty::Set(_)) => {
+                if args.is_empty() {
+                    return Ok(None);
+                }
+                let needle = match self.emit_expr_tir(&args[0])? {
+                    Some(v) => v,
+                    None => return Ok(None),
+                };
+                let elem_ty = self.ty_to_llvm_ctx(&args[0].ty);
+                let slot = self.next_reg();
+                self.push_instr(&format!("{slot} = alloca {elem_ty}"));
+                self.push_instr(&format!("store {elem_ty} {needle}, ptr {slot}"));
+                self.ensure_extern("declare void @_mvl_array_remove_value(ptr, ptr)");
+                self.push_instr(&format!(
+                    "call void @_mvl_array_remove_value(ptr {val}, ptr {slot})"
+                ));
+                Ok(Some(val))
+            }
+
             // ── Map methods ───────────────────────────────────────────────
             ("insert", "ptr") if matches!(unwrap_labels(&receiver.ty), Ty::Map(_, _)) => {
                 if args.len() < 2 {
