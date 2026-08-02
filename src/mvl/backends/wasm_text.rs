@@ -3999,7 +3999,7 @@ fn emit_expr(out: &mut String, expr: &TirExpr, ctx: &Ctx) {
             method,
             args,
         } if is_struct_method_call(receiver, method, ctx) => {
-            let receiver_type = named_type_name(&receiver.ty).expect("guarded above");
+            let receiver_type = receiver_type_name(&receiver.ty).expect("guarded above");
             emit_expr(out, receiver, ctx);
             for a in args {
                 emit_expr(out, a, ctx);
@@ -7028,7 +7028,28 @@ fn resolve_ty_param(ty: &Ty, subst: &HashMap<String, Ty>) -> Ty {
                 ty.clone()
             }
         }
-        Ty::Named(name, args) => Ty::Named(name.clone(), args.iter().map(|a| *rec(a)).collect()),
+        Ty::Named(name, args) => {
+            let resolved_args: Vec<Ty> = args.iter().map(|a| *rec(a)).collect();
+            // A builtin wrapper type spelled `Ty::Named("Option", [T])`
+            // instead of the structural `Ty::Option(Box::new(T))` — how a
+            // generic extension method's own `self: Option[T]` parameter
+            // resolves (#2125). After substituting `T`, normalize back to
+            // the structural variant: every consumer downstream of generic
+            // instantiation (`wasm_ty`, `is_i32`, `is_string_ty`, ...)
+            // pattern-matches the structural shape, not this named
+            // spelling, and silently fell to a wrong default (`wasm_ty`'s
+            // `_ => "i64"`) for a receiver that's actually an i32 pointer —
+            // the emitted function's own signature disagreed with what
+            // every call site already pushed.
+            match (name.as_str(), resolved_args.as_slice()) {
+                ("List", [e]) => Ty::List(Box::new(e.clone())),
+                ("Set", [e]) => Ty::Set(Box::new(e.clone())),
+                ("Option", [e]) => Ty::Option(Box::new(e.clone())),
+                ("Map", [k, v]) => Ty::Map(Box::new(k.clone()), Box::new(v.clone())),
+                ("Result", [ok, err]) => Ty::Result(Box::new(ok.clone()), Box::new(err.clone())),
+                _ => Ty::Named(name.clone(), resolved_args),
+            }
+        }
         Ty::Ref(m, inner) => Ty::Ref(*m, rec(inner)),
         Ty::Refined(inner, pred) => Ty::Refined(rec(inner), pred.clone()),
         Ty::Labeled(label, inner) => Ty::Labeled(label.clone(), rec(inner)),
@@ -7077,6 +7098,38 @@ fn unify_ty_params(
             }
         }
     }
+    // A builtin-wrapper type spelled `Ty::Named("Option", [T])` instead of
+    // the structural `Ty::Option(Box::new(T))` (#2125) — this is how a
+    // *self*-parameter's declared type resolves for a non-generic extension
+    // method on a builtin wrapper (`pub fn Option[T]::is_some(self) -> Bool
+    // { ... }`; `std/core.mvl`'s own declaration hits this too, not just
+    // user code). The call site's actual receiver type is always the proper
+    // structural variant, so `declared`/`actual` disagreed on shape and
+    // fell through every arm below without binding anything — `subst`
+    // stayed empty, the caller's `subst.len() != gm.type_params.len()`
+    // check failed, and the whole call was rejected as unresolvable,
+    // stubbing `is_some`/`is_none`/`is_ok`/`is_err` (and any other
+    // Option/Result/List/Set/Map extension method that binds a receiver
+    // type param and has no own type params of its own to force the
+    // `generic_ext_methods` bucket some other way).
+    fn normalize_named_wrapper(t: &Ty) -> Option<Ty> {
+        let Ty::Named(name, args) = t else {
+            return None;
+        };
+        match (name.as_str(), args.as_slice()) {
+            ("List", [e]) => Some(Ty::List(Box::new(e.clone()))),
+            ("Set", [e]) => Some(Ty::Set(Box::new(e.clone()))),
+            ("Option", [e]) => Some(Ty::Option(Box::new(e.clone()))),
+            ("Map", [k, v]) => Some(Ty::Map(Box::new(k.clone()), Box::new(v.clone()))),
+            ("Result", [ok, err]) => Some(Ty::Result(Box::new(ok.clone()), Box::new(err.clone()))),
+            _ => None,
+        }
+    }
+    let declared_owned = normalize_named_wrapper(declared);
+    let declared = declared_owned.as_ref().unwrap_or(declared);
+    let actual_owned = normalize_named_wrapper(actual);
+    let actual = actual_owned.as_ref().unwrap_or(actual);
+
     let (declared, actual) = (peel(declared), peel(actual));
 
     if let Ty::Named(name, args) = declared {
@@ -7509,14 +7562,34 @@ fn named_type_name(ty: &Ty) -> Option<String> {
     }
 }
 
-/// True if `method` is a user-defined extension method registered on
-/// `receiver`'s named type (#2054, #2058 follow-up). Consulted by any
-/// dispatch arm that would otherwise match purely on method name (e.g.
-/// `to_string`, checked below) so a struct's own `to_string`/etc. extension
-/// method isn't shadowed by a builtin-type special case that never
-/// considered the receiver's type.
+/// True if `method` is a non-generic pure-MVL extension method registered
+/// on `receiver`'s type (#2054, #2058 follow-up; widened for #2125). Despite
+/// the name, this isn't struct-only: any method declared with no type
+/// params of its own — `pub fn Option[T]::is_some(self) -> Bool { ... }`,
+/// say — lands in the same `ext_methods` bucket as a user struct's own
+/// extension methods (`collect_program`'s `(has receiver?, is generic?)`
+/// partition only looks at the *method's* type params, not the receiver's),
+/// and is emitted the same way (`emit_extension_method`, named
+/// `${receiver_type}_${method}`).
+///
+/// Originally `named_type_name`, which only resolves `Ty::Named` — so any
+/// non-generic pure-MVL method on `List`/`Set`/`Map`/`Option`/`Result`
+/// (built-in wrapper types, never `Ty::Named`) had a real emitted body that
+/// no call site could ever reach: this always returned `false` for them,
+/// every earlier native-method arm had already missed them (that's *why*
+/// they ended up here, last resort), and the call fell to `;; unsupported
+/// expr`. `receiver_type_name` resolves both named and built-in-constructor
+/// receivers uniformly (`Ty::List(_) => "List"`, `Ty::Option(_) =>
+/// "Option"`, etc.) — the same mapping `emit_extension_method` and
+/// `struct_methods` already key on, so this now actually agrees with what
+/// got emitted.
+///
+/// Consulted by any dispatch arm that would otherwise match purely on
+/// method name (e.g. `to_string`, checked below) so a type's own
+/// `to_string`/etc. extension method isn't shadowed by a builtin-type
+/// special case that never considered the receiver's type.
 fn is_struct_method_call(receiver: &TirExpr, method: &str, ctx: &Ctx) -> bool {
-    named_type_name(&receiver.ty)
+    receiver_type_name(&receiver.ty)
         .is_some_and(|t| ctx.struct_methods.contains(&(t, method.to_string())))
 }
 
@@ -10029,5 +10102,96 @@ mod validated_module_tests {
         assert!(wat.contains("local.set $out_ptr"), "{wat}");
         assert!(wat.contains("local.set $out_len"), "{wat}");
         assert!(!wat.contains("local.set $out\n"), "{wat}");
+    }
+
+    /// #2125: `Option[T]::is_some`/`::is_none` and `Result[T, E]::is_ok`/
+    /// `::is_err` stubbed despite each having a trivial, correct `match
+    /// self { ... }` body. Root cause was `is_struct_method_call`'s use of
+    /// `named_type_name` (`Ty::Named` only) instead of `receiver_type_name`
+    /// (which also resolves `List`/`Set`/`Map`/`Option`/`Result`): every
+    /// non-generic pure-MVL method on a builtin wrapper type — not just
+    /// structs, despite the name — is emitted via `emit_extension_method`
+    /// (`${receiver_type}_${method}`, e.g. `$Option_is_some`), but no call
+    /// site could ever find it, so the emitted body was dead and every call
+    /// fell to the final `;; unsupported expr` catch-all.
+    ///
+    /// This harness's `emit()` doesn't load the real `std/core.mvl` prelude,
+    /// so the method bodies are declared inline — verbatim copies of
+    /// `std/core.mvl`'s own `Option[T]::is_some`/`::is_none`, exercising the
+    /// exact same dispatch path a real program hits.
+    #[test]
+    fn option_is_some_and_is_none_lower_via_extension_method_dispatch() {
+        let (wat, stubbed) = emit(
+            "pub fn Option[T]::is_some(self) -> Bool {\n\
+                 match self { Some(_) => true, None => false }\n\
+             }\n\
+             pub fn Option[T]::is_none(self) -> Bool {\n\
+                 match self { Some(_) => false, None => true }\n\
+             }\n\
+             test fn t() -> Unit {\n\
+                 let x: Option[Int] = Some(5);\n\
+                 let y: Option[Int] = None;\n\
+                 assert_eq(x.is_some(), true);\n\
+                 assert_eq(y.is_none(), true);\n\
+             }\n",
+        );
+        validate(&wat);
+        assert!(stubbed.is_empty(), "unexpected stubs: {stubbed:?}");
+        assert!(wat.contains("call $Option_is_some"), "{wat}");
+        assert!(wat.contains("call $Option_is_none"), "{wat}");
+    }
+
+    #[test]
+    fn result_is_ok_and_is_err_lower_via_extension_method_dispatch() {
+        let (wat, stubbed) = emit(
+            "pub fn Result[T, E]::is_ok(self) -> Bool {\n\
+                 match self { Ok(_) => true, Err(_) => false }\n\
+             }\n\
+             pub fn Result[T, E]::is_err(self) -> Bool {\n\
+                 match self { Ok(_) => false, Err(_) => true }\n\
+             }\n\
+             fn div(a: Int, b: Int) -> Result[Int, String] {\n\
+                 if b == 0 { Err(\"div by zero\") } else { Ok(a / b) }\n\
+             }\n\
+             test fn t() -> Unit {\n\
+                 assert_eq(div(4, 2).is_ok(), true);\n\
+                 assert_eq(div(4, 0).is_err(), true);\n\
+             }\n",
+        );
+        validate(&wat);
+        assert!(stubbed.is_empty(), "unexpected stubs: {stubbed:?}");
+        assert!(wat.contains("call $Result_is_ok"), "{wat}");
+        assert!(wat.contains("call $Result_is_err"), "{wat}");
+    }
+
+    /// Same *bug class* (dead extension-method body, unreachable call site)
+    /// via the `is_struct_method_call` fix specifically, not the
+    /// `unify_ty_params`/`resolve_ty_param` one above: `List[T]::take`/
+    /// `::skip` declare no type params of their own, so — unlike
+    /// `Option[T]::is_some` — they land in the `ext_methods` bucket, not
+    /// `generic_ext_methods`, and were unreachable for a narrower reason
+    /// (`named_type_name` not resolving `Ty::List`) despite having nothing
+    /// to do with #2125's `Option`/`Result` framing. Bodies are verbatim
+    /// copies of `std/lists.mvl`'s own `take`/`skip`, which just call the
+    /// native `slice` builtin.
+    #[test]
+    fn list_take_and_skip_lower_via_extension_method_dispatch() {
+        let (wat, stubbed) = emit(
+            "pub fn List[T]::take(self, n: Int) -> List[T] {\n\
+                 self.slice(0, n)\n\
+             }\n\
+             pub fn List[T]::skip(self, n: Int) -> List[T] {\n\
+                 self.slice(n, self.len())\n\
+             }\n\
+             test fn t() -> Unit {\n\
+                 let xs: List[Int] = [1, 2, 3, 4];\n\
+                 assert_eq(xs.take(2).len(), 2);\n\
+                 assert_eq(xs.skip(2).len(), 2);\n\
+             }\n",
+        );
+        validate(&wat);
+        assert!(stubbed.is_empty(), "unexpected stubs: {stubbed:?}");
+        assert!(wat.contains("call $List_take"), "{wat}");
+        assert!(wat.contains("call $List_skip"), "{wat}");
     }
 }
