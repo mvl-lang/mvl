@@ -345,6 +345,14 @@ impl TypeChecker {
             "insert" | "remove_entry" => Ty::Unit,
             // remove returns old value if present
             "remove" => Ty::Option(Box::new(v_ty.clone())),
+            // put/without mutate in place and return self (value semantics) —
+            // Map<K, V> using the receiver's own K/V, not the method's
+            // declared generic params. Missing here previously routed both
+            // through the #992 fallback (unsubstituted `fn(K, V) -> Map<K,
+            // V>` declared signature), producing a spurious `expected K,
+            // found String`-style mismatch against any already-concrete
+            // receiver.
+            "put" | "without" => Ty::Map(Box::new(k_ty.clone()), Box::new(v_ty.clone())),
             // Iteration views
             "keys" => Ty::List(Box::new(k_ty.clone())),
             "values" => Ty::List(Box::new(v_ty.clone())),
