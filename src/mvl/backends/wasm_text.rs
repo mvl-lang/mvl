@@ -2505,7 +2505,20 @@ fn emit_stmt(out: &mut String, stmt: &TirStmt, ctx: &Ctx) {
         TirStmt::Assign { target, value, .. } => match target {
             LValue::Ident(name, _) => {
                 emit_expr(out, value, ctx);
-                out.push_str(&format!("    local.set ${name}\n"));
+                if is_string_ty(&value.ty, ctx) {
+                    // `ref String` reassignment (`out = out.concat(...)`) —
+                    // `value` leaves (ptr, len) on the stack, not one value.
+                    // `name` itself was never declared as a local — the
+                    // binding's original `let` split it into `{name}_ptr`/
+                    // `{name}_len` — so a bare `local.set $name` here doesn't
+                    // just store the wrong shape, it references a name that
+                    // doesn't exist at all, and wasm-tools rejects the whole
+                    // module with "unknown local".
+                    out.push_str(&format!("    local.set ${name}_len\n"));
+                    out.push_str(&format!("    local.set ${name}_ptr\n"));
+                } else {
+                    out.push_str(&format!("    local.set ${name}\n"));
+                }
             }
             LValue::Field { base, field, .. } => {
                 emit_field_assign(out, base, field, value, ctx);
@@ -9950,5 +9963,29 @@ mod validated_module_tests {
             !wat.contains("call $_mvl_array_concat"),
             "a String-element concat must not be lowered: {wat}"
         );
+    }
+
+    /// Reassigning a `ref String` local (`out = out.concat(x)`) used to emit
+    /// a bare `local.set $out` regardless of type. `out` itself was never
+    /// declared — its originating `let` split it into `out_ptr`/`out_len` —
+    /// so this didn't just store the wrong shape, it referenced a name
+    /// wasm-tools can't find at all, invalidating the whole module (found
+    /// chasing why `examples/csv_transactions` couldn't build under
+    /// `--backend=wasm`: `escape_quotes` in `std/csv.mvl` does exactly this).
+    #[test]
+    fn ref_string_reassignment_uses_split_locals() {
+        let (wat, stubbed) = emit(
+            "test fn t() -> Unit {\n\
+                 let out: ref String = \"\";\n\
+                 out = out.concat(\"a\");\n\
+                 out = out.concat(\"b\");\n\
+                 assert_eq(out, \"ab\");\n\
+             }\n",
+        );
+        validate(&wat);
+        assert!(stubbed.is_empty(), "unexpected stubs: {stubbed:?}");
+        assert!(wat.contains("local.set $out_ptr"), "{wat}");
+        assert!(wat.contains("local.set $out_len"), "{wat}");
+        assert!(!wat.contains("local.set $out\n"), "{wat}");
     }
 }
