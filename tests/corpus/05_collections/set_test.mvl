@@ -51,12 +51,6 @@ test fn set_remove_missing_element_noop() -> Unit {
     assert_eq(s.len(), 3);
 }
 
-// Collision-free mapper only: `Set[T]::map`'s dedup-on-collision behavior
-// (e.g. mapping several elements to the same value) is covered by the
-// WASM-specific unit test `set_map_lowers_and_dedups` in `wasm_text.rs` —
-// the LLVM backend's `map` currently shares a receiver-agnostic runtime
-// call with `List::map` and does not dedupe results for a `Set` receiver
-// (tracked separately, filed as a follow-up issue).
 test fn set_map_transforms_and_dedups() -> Unit {
     let s: Set[Int] = {1, 2, 3};
     let doubled: Set[Int] = s.map(|x: Int| x * 2);
@@ -66,6 +60,14 @@ test fn set_map_transforms_and_dedups() -> Unit {
     assert_eq(doubled.contains(6), true);
     // Original untouched.
     assert_eq(s.len(), 3);
+}
+
+test fn set_map_collapses_collisions() -> Unit {
+    let s: Set[Int] = {1, 2, 3, 4};
+    let parity: Set[Int] = s.map(|x: Int| x % 2);
+    assert_eq(parity.len(), 2);
+    assert_eq(parity.contains(0), true);
+    assert_eq(parity.contains(1), true);
 }
 
 // TODO: `Set[String].contains(literal)` fails in the Rust transpiler with an
