@@ -1,0 +1,19 @@
+// Regression test for #2131: `collections.mvl` joining the implicit
+// prelude means `Map[K,V]::remove`/`Set[T]::remove` emit a prelude free
+// function `fn remove(...)` that would otherwise shadow the runtime's
+// `io::remove(Path) -> Result[Unit, IoError]` (fixed via STDLIB_CONFLICTS
+// in emitter.rs, #2136).
+use std.io.{remove, path}
+
+test fn io_remove_not_shadowed_by_map_remove() -> Unit ! FileDelete {
+    let r: Result[Unit, IoError] = remove(path("/tmp/mvl-2131-regression-nonexistent.txt"));
+    assert_eq(r.is_err(), true);
+}
+
+test fn io_remove_not_shadowed_by_set_remove() -> Unit ! FileDelete {
+    let s: ref Set[Int] = {1, 2, 3};
+    s.remove(2);
+    assert_eq(s.len(), 2);
+    let r: Result[Unit, IoError] = remove(path("/tmp/mvl-2131-regression-nonexistent-2.txt"));
+    assert_eq(r.is_err(), true);
+}
