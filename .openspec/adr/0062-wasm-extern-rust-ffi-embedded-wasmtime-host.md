@@ -8,6 +8,17 @@
 
 ## Context
 
+ADR-0006 established `extern "rust"` + a sibling `bridge.rs` as MVL's FFI
+trust boundary, specifically justified as *Rust-to-Rust* FFI — the
+generated code and the bridge share one Rust ABI, one binary, one compiler
+pass. That justification is exactly why `--backend=wasm` (and, before it,
+LLVM) couldn't just reuse the mechanism as-is: neither backend puts a Rust
+compiler in the loop at emission time, so "same Rust ABI" isn't available
+to lean on. This ADR is about extending ADR-0006's contract — same
+`bridge.rs`, same signatures, same fail-fast-if-missing discovery — to a
+backend that has no Rust compiler of its own, by giving it one at run time
+instead of at emission time.
+
 `--backend=wasm` never read `TirProgram::externs` at all: a call to an
 `extern "rust"` function emitted a bare `call $foo` with no `(import ...)`
 declaration, so `wasm-tools parse` rejected the module with "unknown func"
