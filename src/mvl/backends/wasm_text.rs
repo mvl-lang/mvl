@@ -433,6 +433,11 @@ const RUNTIME_IMPORTS: &[(&str, &str)] = &[
     // `.slice(start, end)` — MVL `Int` bounds are i64 (#2014). Backs
     // `List[T]::take`/`::skip`, which are pure-MVL wrappers over `slice`.
     ("_mvl_array_slice", "(param i32 i64 i64) (result i32)"),
+    // `.concat(other)` (#2114) — new array holding `self`'s elements
+    // followed by `other`'s. Byte-wise copy at `elem_size` granularity,
+    // same caveat as `slice`: correct for scalar/pointer arrays, not
+    // refcount-aware for `List[String]` elements.
+    ("_mvl_array_concat", "(param i32 i32) (result i32)"),
     ("_mvl_array_drop", "(param i32)"),
     ("_mvl_string_ptr_array_drop", "(param i32)"),
     ("_mvl_string_ptr_array_dedup", "(param i32)"),
@@ -1208,6 +1213,37 @@ fn slice_is_supported(ty: &Ty, ctx: &Ctx) -> bool {
                 }
                 None => true,
             }
+        }
+    }
+}
+
+/// Whether `.concat(other)` can be lowered for this receiver (#2114).
+///
+/// Same underlying mechanism as [`slice_is_supported`] — `_mvl_array_concat`
+/// copies both arrays' elements byte-wise at `elem_size` granularity into a
+/// fresh array — so it excludes the same refcounted-box element types for
+/// the same reason (String, nested collections, Map, Option, Result: a
+/// byte-wise copy aliases the pointee without bumping its refcount, and
+/// `local_drop_fn` would then double-drop it).
+///
+/// Unlike `slice_is_supported`, this does *not* exclude structs and
+/// payload enums. Those are boxed pointers too, but `_mvl_struct_alloc`
+/// never frees its allocations (#1821 — intentionally leaked, corpus
+/// allocations are short-lived) and `local_drop_fn` already maps every
+/// non-String collection — struct-element lists included — to the
+/// shallow `_mvl_array_drop` (frees the buffer, not the elements). So
+/// aliasing struct/payload-enum pointers via `concat` carries no double-free
+/// risk today: nothing ever frees the pointee to begin with.
+fn concat_is_supported(ty: &Ty, ctx: &Ctx) -> bool {
+    match collection_elem_ty(ty) {
+        None => false,
+        Some(elem) => {
+            let elem = resolve_ty_param(elem, ctx.type_subst);
+            !(peels_to_string(&elem)
+                || collection_elem_ty(&elem).is_some()
+                || map_key_val_ty(&elem).is_some()
+                || option_inner_ty(&elem).is_some()
+                || result_ok_ty(&elem).is_some())
         }
     }
 }
@@ -3611,6 +3647,25 @@ fn emit_expr(out: &mut String, expr: &TirExpr, ctx: &Ctx) {
             emit_expr(out, &args[0], ctx);
             emit_expr(out, &args[1], ctx);
             out.push_str("    call $_mvl_array_slice\n");
+        }
+        // `.concat(other)` on List / Array — new array holding `self`'s
+        // elements followed by `other`'s (#2114). A `builtin fn` in
+        // std/lists.mvl with no WASM runtime function at all until now —
+        // there was no native arm here for *any* element type, scalar or
+        // struct, so any `List[T]::concat` call fell to the `;; unsupported
+        // expr` catch-all and stubbed the whole calling function.
+        TirExprKind::MethodCall {
+            receiver,
+            method,
+            args,
+        } if method == "concat"
+            && args.len() == 1
+            && concat_is_supported(&resolve_ty_param(&receiver.ty, ctx.type_subst), ctx) =>
+        {
+            ctx.needs_runtime.set(true);
+            emit_expr(out, receiver, ctx);
+            emit_expr(out, &args[0], ctx);
+            out.push_str("    call $_mvl_array_concat\n");
         }
         // `.get(i)` on List / Array — returns `Option[T]` (heap-allocated
         // MvlOption). Element type comes from the receiver's collection
@@ -6380,16 +6435,26 @@ pub fn emitter_handles_method_natively(receiver_ty: &Ty, method: &str) -> bool {
         );
     }
     if collection_elem_ty(receiver_ty).is_some() {
-        // `clone` and `slice` have native arms too. Both are conditional —
-        // `clone_is_supported` / `slice_is_supported` gate them on the element
-        // type — so this answers for the shape and the emitter's own guard has
-        // the final say. Listing them keeps this function honest about which
-        // methods have arms at all; omitting them was harmless only because
-        // `slice` is `builtin` in std/lists.mvl (no body to instantiate) and
-        // `clone` has no std declaration, i.e. by luck rather than by design.
+        // `clone`, `slice`, and `concat` have native arms too. All three are
+        // conditional — `clone_is_supported` / `slice_is_supported` /
+        // `concat_is_supported` gate them on the element type — so this
+        // answers for the shape and the emitter's own guard has the final
+        // say. Listing them keeps this function honest about which methods
+        // have arms at all; omitting them was harmless only because
+        // `slice`/`concat` are `builtin` in std/lists.mvl (no body to
+        // instantiate) and `clone` has no std declaration, i.e. by luck
+        // rather than by design.
         return matches!(
             method,
-            "len" | "is_empty" | "get" | "push" | "contains" | "insert" | "clone" | "slice"
+            "len"
+                | "is_empty"
+                | "get"
+                | "push"
+                | "contains"
+                | "insert"
+                | "clone"
+                | "slice"
+                | "concat"
         );
     }
     false
@@ -8780,10 +8845,12 @@ mod generic_ext_method_tests {
 
     #[test]
     fn emitter_handles_method_natively_is_receiver_shaped() {
-        // `concat` is a runtime call on String but a pure-MVL body on List —
-        // a name-only check would wrongly claim both.
+        // `concat` has native arms on both receivers (#2114 added the List
+        // one), but each dispatches to a completely different runtime call
+        // (`_mvl_string_concat` vs `_mvl_array_concat`) — a name-only check
+        // would collapse that distinction.
         assert!(emitter_handles_method_natively(&Ty::String, "concat"));
-        assert!(!emitter_handles_method_natively(
+        assert!(emitter_handles_method_natively(
             &Ty::List(Box::new(Ty::Int)),
             "concat"
         ));
@@ -9820,5 +9887,68 @@ mod validated_module_tests {
         validate(&wat);
         assert!(stubbed.is_empty(), "unexpected stubs: {stubbed:?}");
         assert!(wat.contains("call $_mvl_string_eq"), "{wat}");
+    }
+
+    /// #2114: `List[T]::concat` had no native emission arm at all — it's a
+    /// `builtin fn` in `std/lists.mvl` with no body to monomorphize, so
+    /// every call fell straight to the `;; unsupported expr` catch-all and
+    /// stubbed the whole calling function, regardless of element type.
+    #[test]
+    fn concat_on_int_list_lowers() {
+        let (wat, stubbed) = emit(
+            "test fn t() -> Unit {\n\
+                 let xs: List[Int] = [1, 2];\n\
+                 let ys: List[Int] = xs.concat([3, 4]);\n\
+                 assert_eq(ys.len(), 4);\n\
+             }\n",
+        );
+        validate(&wat);
+        assert!(stubbed.is_empty(), "unexpected stubs: {stubbed:?}");
+        assert!(wat.contains("call $_mvl_array_concat"), "{wat}");
+    }
+
+    /// Struct-element lists are the case that actually motivated #2114
+    /// (`task_pipeline`'s `enrich_high_value`/`parser.mvl` both concat
+    /// `List[Record]`). Unlike `slice`/`clone`, struct/payload-enum pointers
+    /// are not excluded here — `_mvl_struct_alloc` never frees its
+    /// allocations (#1821), so aliasing them via a byte-wise copy carries
+    /// no double-free risk, and `local_drop_fn` already treats every
+    /// non-String collection (struct-element lists included) as a shallow
+    /// `_mvl_array_drop`.
+    #[test]
+    fn concat_on_struct_list_lowers() {
+        let (wat, stubbed) = emit(
+            "type Point = struct { x: Int, y: Int }\n\
+             test fn t() -> Unit {\n\
+                 let ps: List[Point] = [Point { x: 1, y: 2 }];\n\
+                 let qs: List[Point] = ps.concat([Point { x: 3, y: 4 }]);\n\
+                 assert_eq(qs.len(), 2);\n\
+             }\n",
+        );
+        validate(&wat);
+        assert!(stubbed.is_empty(), "unexpected stubs: {stubbed:?}");
+        assert!(wat.contains("call $_mvl_array_concat"), "{wat}");
+    }
+
+    /// `List[String]::concat` must still stub — `_mvl_array_concat` copies
+    /// `*MvlString` pointers byte-wise without bumping their refcount, and
+    /// both the original and the concatenated list would then double-drop
+    /// each shared string, same reasoning as `slice_on_string_list_stubs_
+    /// instead_of_double_freeing`.
+    #[test]
+    fn concat_on_string_list_stubs_instead_of_double_freeing() {
+        let (wat, stubbed) = emit(
+            "test fn t() -> Unit {\n\
+                 let xs: List[String] = [\"a\", \"b\"];\n\
+                 let ys: List[String] = xs.concat([\"c\"]);\n\
+                 assert_eq(ys.len(), 3);\n\
+             }\n",
+        );
+        validate(&wat);
+        assert_eq!(stubbed, vec!["t".to_string()], "the caller must stub");
+        assert!(
+            !wat.contains("call $_mvl_array_concat"),
+            "a String-element concat must not be lowered: {wat}"
+        );
     }
 }
