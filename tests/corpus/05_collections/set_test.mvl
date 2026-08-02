@@ -37,6 +37,39 @@ test fn set_insert_existing_element_noop() -> Unit {
     assert_eq(s.len(), 3);
 }
 
+test fn set_remove_existing_element() -> Unit {
+    let s: ref Set[Int] = {1, 2, 3};
+    s.remove(2);
+    assert_eq(s.len(), 2);
+    assert_eq(s.contains(2), false);
+    assert_eq(s.contains(1), true);
+}
+
+test fn set_remove_missing_element_noop() -> Unit {
+    let s: ref Set[Int] = {1, 2, 3};
+    s.remove(99);
+    assert_eq(s.len(), 3);
+}
+
+test fn set_map_transforms_and_dedups() -> Unit {
+    let s: Set[Int] = {1, 2, 3};
+    let doubled: Set[Int] = s.map(|x: Int| x * 2);
+    assert_eq(doubled.len(), 3);
+    assert_eq(doubled.contains(2), true);
+    assert_eq(doubled.contains(4), true);
+    assert_eq(doubled.contains(6), true);
+    // Original untouched.
+    assert_eq(s.len(), 3);
+}
+
+test fn set_map_collapses_collisions() -> Unit {
+    let s: Set[Int] = {1, 2, 3, 4};
+    let parity: Set[Int] = s.map(|x: Int| x % 2);
+    assert_eq(parity.len(), 2);
+    assert_eq(parity.contains(0), true);
+    assert_eq(parity.contains(1), true);
+}
+
 // TODO: `Set[String].contains(literal)` fails in the Rust transpiler with an
 // ambiguous `.into()` target — pending a separate ticket. Set[Int] covers the
 // key-lookup path meanwhile.

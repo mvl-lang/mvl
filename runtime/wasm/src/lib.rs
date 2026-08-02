@@ -1651,6 +1651,47 @@ pub unsafe extern "C" fn _mvl_array_insert_i32(a: i32, val: i32) {
     }
 }
 
+/// `_mvl_array_remove_value_i64(a, val)` — linear scan, remove the first
+/// element equal to `val` by shifting subsequent elements left one slot.
+/// No-op if `val` is absent. Used for `Set[Int].remove(val)` (#2124) — Set
+/// elements are unique by construction, so "first" and "only" coincide.
+///
+/// # Safety
+/// `a` must be `0` or a valid `*MvlArray` with an i64-wide element buffer.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn _mvl_array_remove_value_i64(a: i32, val: i64) {
+    if a == 0 {
+        return;
+    }
+    let arr = &mut *(a as usize as *mut MvlArray);
+    let len = arr.len as usize;
+    let slice = std::slice::from_raw_parts_mut(arr.ptr as *mut i64, len);
+    if let Some(idx) = slice.iter().position(|&e| e == val) {
+        slice.copy_within(idx + 1..len, idx);
+        arr.len -= 1;
+    }
+}
+
+/// `_mvl_array_remove_value_i32(a, val)` — same as
+/// [`_mvl_array_remove_value_i64`] for 32-bit elements. Used for
+/// `Set[Bool].remove(val)` (#2124).
+///
+/// # Safety
+/// `a` must be `0` or a valid `*MvlArray` with an i32-wide element buffer.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn _mvl_array_remove_value_i32(a: i32, val: i32) {
+    if a == 0 {
+        return;
+    }
+    let arr = &mut *(a as usize as *mut MvlArray);
+    let len = arr.len as usize;
+    let slice = std::slice::from_raw_parts_mut(arr.ptr as *mut i32, len);
+    if let Some(idx) = slice.iter().position(|&e| e == val) {
+        slice.copy_within(idx + 1..len, idx);
+        arr.len -= 1;
+    }
+}
+
 // ── Map[String, Int] ops (#1820, #1993) ──────────────────────────────────
 //
 // `MvlMap` is a simple linear-scan map from `String` keys to `i64` values.
