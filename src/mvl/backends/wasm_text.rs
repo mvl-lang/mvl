@@ -6948,11 +6948,27 @@ fn resolve_generic_method_call<'a>(
     let recv_name = receiver_type_name(&recv_ty)?;
     let gm = *methods.get(&(recv_name.clone(), method.to_string()))?;
 
-    let param_names: std::collections::HashSet<String> = gm
+    // `gm.type_params` only names generics the method itself introduces
+    // (`U` in `Result[T, E]::map[U]`) — not the receiver's own `T`/`E`.
+    // Methods that never reconstruct a payload-carrying value from a
+    // receiver-only param (`is_ok`, `unwrap_or`) don't need those bound, so
+    // this went unnoticed. `Result::map`/`Result::and_then`'s `Err(e) =>
+    // Err(e)` arm does — it needs `E`'s concrete runtime shape to pick the
+    // right constructor — and silently picked the i64 variant for any
+    // enum/scalar `E` that never got bound, corrupting the payload (#2149).
+    // Extending the bindable name set with every bare `Ty::Named` leaf in
+    // the *declared* self type (always genuine placeholders there — a
+    // stdlib/user generic method never hard-codes a concrete type in place
+    // of its own declared receiver type param) covers `T`/`E` the same way
+    // for any two-type-param receiver (`Map[K, V]` included).
+    let mut param_names: std::collections::HashSet<String> = gm
         .type_params
         .iter()
         .map(|gp| gp.name().to_string())
         .collect();
+    if let Some(self_param) = gm.params.first() {
+        collect_named_leaves(&self_param.ty, &mut param_names);
+    }
     let mut subst = HashMap::new();
 
     // `self` is params[0] (the parser synthesises it); the remaining formals
@@ -6967,7 +6983,11 @@ fn resolve_generic_method_call<'a>(
         unify_ty_params(&formal.ty, &actual, &param_names, &mut subst);
     }
 
-    if subst.len() != gm.type_params.len() {
+    if !gm
+        .type_params
+        .iter()
+        .all(|gp| subst.contains_key(gp.name()))
+    {
         return None;
     }
     let mangled = mangle_generic_method_name(&recv_name, &gm.name, &gm.type_params, &subst);
@@ -7541,6 +7561,48 @@ fn unify_ty_params(
             for (d, a) in da.iter().zip(aa.iter()) {
                 unify_ty_params(d, a, param_names, subst);
             }
+        }
+        _ => {}
+    }
+}
+
+/// Collect every bare `Ty::Named(name, [])` leaf appearing in `ty` — used to
+/// find a declared self-parameter type's own generic placeholders (`T`, `E`
+/// in `Result[T, E]`) so `resolve_generic_method_call` can bind them even
+/// when the method introduces no type params of its own beyond them (#2149).
+/// Safe by construction: `Ty::Int`/`Ty::String`/etc. are dedicated variants,
+/// never `Ty::Named` — so every leaf found here in a *declared* signature is
+/// genuinely a placeholder, not a concrete type name.
+fn collect_named_leaves(ty: &Ty, out: &mut std::collections::HashSet<String>) {
+    match ty {
+        Ty::Named(name, args) if args.is_empty() => {
+            out.insert(name.clone());
+        }
+        Ty::Named(_, args) => {
+            for a in args {
+                collect_named_leaves(a, out);
+            }
+        }
+        Ty::List(inner) | Ty::Set(inner) | Ty::Option(inner) | Ty::Ptr(inner) => {
+            collect_named_leaves(inner, out)
+        }
+        Ty::Array(inner, _) => collect_named_leaves(inner, out),
+        Ty::Map(k, v) => {
+            collect_named_leaves(k, out);
+            collect_named_leaves(v, out);
+        }
+        Ty::Result(ok, err) => {
+            collect_named_leaves(ok, out);
+            collect_named_leaves(err, out);
+        }
+        Ty::Ref(_, inner) | Ty::Labeled(_, inner) | Ty::Refined(inner, _) => {
+            collect_named_leaves(inner, out)
+        }
+        Ty::Fn(params, ret, ..) => {
+            for p in params {
+                collect_named_leaves(p, out);
+            }
+            collect_named_leaves(ret, out);
         }
         _ => {}
     }
@@ -10806,6 +10868,55 @@ mod validated_module_tests {
              }\n\
              test fn t() -> Unit {\n\
                  assert_eq(first_char(), 'x');\n\
+             }\n",
+        );
+        assert!(stubbed.is_empty(), "unexpected stubs: {stubbed:?}");
+    }
+
+    /// #2149: `Option[T]::map`/`Result[T,E]::map`/`Result[T,E]::and_then`
+    /// had no native arm and no `std/core.mvl` body — every call stubbed
+    /// the enclosing function. Adding the bodies alone wasn't enough:
+    /// `Result::map`/`::and_then`'s `Err(e) => Err(e)` passthrough arm hit
+    /// a separate checker bug (`bind_match_pattern` not recognizing a
+    /// generic method's named-wrapper `self` type), binding `e` as
+    /// `Ty::Unknown` and picking the wrong runtime constructor for any
+    /// non-`Int` `E` — an enum here, confirmed to matter (a plain `Int` E
+    /// would have masked it, since `Ty::Unknown` happens to default to the
+    /// same i64 shape `Int` needs).
+    #[test]
+    fn option_map_and_result_map_and_then_lower_and_run_correctly() {
+        let stubbed = emit_and_validate(
+            "type MyError = enum { NonPositive, WasErr }\n\
+             pub fn Option[T]::map[U](self, f: fn(T) -> U) -> Option[U] {\n\
+                 match self { Some(x) => Some(f(x)), None => None }\n\
+             }\n\
+             pub fn Result[T, E]::map[U](self, f: fn(T) -> U) -> Result[U, E] {\n\
+                 match self { Ok(x) => Ok(f(x)), Err(e) => Err(e) }\n\
+             }\n\
+             pub fn Result[T, E]::and_then[U](self, f: fn(T) -> Result[U, E]) -> Result[U, E] {\n\
+                 match self { Ok(x) => f(x), Err(e) => Err(e) }\n\
+             }\n\
+             test fn t() -> Unit {\n\
+                 let o: Option[Int] = Some(5);\n\
+                 let d: Option[Int] = o.map(|x: Int| x * 2);\n\
+                 match d { Some(v) => assert_eq(v, 10), None => assert_eq(1, 0) }\n\
+                 let n: Option[Int] = None;\n\
+                 let dn: Option[Int] = n.map(|x: Int| x * 2);\n\
+                 match dn { Some(_) => assert_eq(1, 0), None => assert_eq(1, 1) }\n\
+                 let ok: Result[Int, MyError] = Ok(21);\n\
+                 let mapped: Result[Int, MyError] = ok.map(|x: Int| x * 2);\n\
+                 match mapped { Ok(v) => assert_eq(v, 42), Err(_) => assert_eq(1, 0) }\n\
+                 let err: Result[Int, MyError] = Err(MyError::WasErr);\n\
+                 let mapped_err: Result[Int, MyError] = err.map(|x: Int| x * 2);\n\
+                 match mapped_err {\n\
+                     Ok(_) => assert_eq(1, 0),\n\
+                     Err(MyError::WasErr) => assert_eq(1, 1),\n\
+                     Err(MyError::NonPositive) => assert_eq(1, 0),\n\
+                 }\n\
+                 let chained: Result[Int, MyError] = ok.and_then(|x: Int| \n\
+                     if x > 0 { Ok(x * 2) } else { Err(MyError::NonPositive) }\n\
+                 );\n\
+                 match chained { Ok(v) => assert_eq(v, 42), Err(_) => assert_eq(1, 0) }\n\
              }\n",
         );
         assert!(stubbed.is_empty(), "unexpected stubs: {stubbed:?}");
