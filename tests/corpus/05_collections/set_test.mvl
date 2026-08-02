@@ -145,3 +145,18 @@ test fn set_all_false_when_one_fails() -> Unit {
     let s: Set[Int] = {1, 2, 3};
     assert_eq(s.all(|x: Int| x > 1), false);
 }
+
+// #2124: `let alias: ref Set[Int] = original;` used to lower to a bare
+// `local.set` — a pointer alias, not a value copy. Mutating through `alias`
+// silently corrupted `original` too. `std/config.mvl`'s `merge` and
+// `std/pbt.mvl`'s shrink loop both rely on this exact shape (`let out: ref
+// T = base;`) expecting `base` to stay untouched.
+test fn ref_let_binding_from_existing_set_does_not_alias_source() -> Unit {
+    let original: Set[Int] = {1, 2, 3};
+    let alias: ref Set[Int] = original;
+    alias.insert(99);
+    assert_eq(original.len(), 3);
+    assert_eq(original.contains(99), false);
+    assert_eq(alias.len(), 4);
+    assert_eq(alias.contains(99), true);
+}
