@@ -642,7 +642,23 @@ impl TypeChecker {
                 }
                 self.env.pop_scope();
                 self.lambda_scope_starts.pop();
-                Ty::Fn(param_tys, Box::new(ret_ty), deduped, None)
+                // No explicit return-type annotation: fall back to the body's
+                // own inferred type instead of leaving the lambda's `Ty::Fn`
+                // permanently `Unknown`. Downstream consumers extract this
+                // return type directly (e.g. `option_method_ty`'s `and_then`
+                // arm: `if let Some(Ty::Fn(_, ret, ..)) = arg_tys.first() {
+                // *ret.clone() }`) — an `Unknown` here doesn't just skip a
+                // check, it routes the whole method call through the #992
+                // fallback path, which compares the argument against the
+                // method's *unsubstituted* declared signature (`fn(T) ->
+                // Option<U>`) and reports a spurious mismatch, even though
+                // the lambda's real body type was known all along.
+                let effective_ret_ty = if matches!(ret_ty, Ty::Unknown) {
+                    body_ty
+                } else {
+                    ret_ty
+                };
+                Ty::Fn(param_tys, Box::new(effective_ret_ty), deduped, None)
             }
 
             // `expr as Type` — checked cast to a refined type alias (#1324).

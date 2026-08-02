@@ -362,6 +362,51 @@ fn option_result_corpus_parses_and_checks() {
 }
 
 #[test]
+fn and_then_infers_option_return_type_from_unannotated_lambda_body() {
+    // GIVEN: `.and_then(f)` where `f` is a single-expression lambda with no
+    // explicit return-type annotation (`|v: Int| Some(v * 2)`, not
+    // `|v: Int| -> Option[Int] { Some(v * 2) }`).
+    //
+    // A lambda literal's inferred `Ty::Fn` used to report `Unknown` for its
+    // return type whenever there was no explicit annotation, even though
+    // the body's own type (here `Option[Int]`, from constructing `Some(...)`)
+    // was already computed and available. `option_method_ty`'s `and_then`
+    // arm extracts that return type directly
+    // (`if let Some(Ty::Fn(_, ret, ..)) = arg_tys.first() { *ret.clone() }`),
+    // so an `Unknown` there routed the whole call through the #992 fallback
+    // path — which compares the argument against `and_then`'s *unsubstituted*
+    // declared signature (`fn(T) -> Option<U>`) — producing a spurious
+    // `expected fn(T) -> Option<U>, found fn(Int) -> <unknown>` mismatch.
+    // THEN: no type errors.
+    let errors = errors_for(
+        "fn f(x: Option[Int]) -> Option[Int] {\n\
+             x.and_then(|v: Int| Some(v * 2))\n\
+         }\n",
+    );
+    assert!(errors.is_empty(), "unexpected errors: {errors:?}");
+}
+
+#[test]
+fn map_put_and_without_use_receivers_concrete_key_value_types() {
+    // GIVEN: `.put`/`.without` called on an already-concrete
+    // `Map[String, Int]` receiver. Both were missing from `map_method_ty`'s
+    // dispatch table entirely, so they fell through to the #992 fallback —
+    // comparing the call against `Map[K, V]::put`/`::without`'s literal
+    // declared signature (generic `K`/`V`, never substituted with the
+    // receiver's actual types) and reporting `expected K, found String`.
+    // THEN: no type errors, and both return `Map[String, Int]`.
+    let errors = errors_for(
+        "fn f(m: Map[String, Int]) -> Map[String, Int] {\n\
+             m.put(\"a\", 1)\n\
+         }\n\
+         fn g(m: Map[String, Int]) -> Map[String, Int] {\n\
+             m.without(\"a\")\n\
+         }\n",
+    );
+    assert!(errors.is_empty(), "unexpected errors: {errors:?}");
+}
+
+#[test]
 fn option_field_access_rejected() {
     // GIVEN: direct `.field` on Option[T]
     // THEN: OptionDirectAccess reported
