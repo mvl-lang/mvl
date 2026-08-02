@@ -618,7 +618,18 @@ impl RustEmitter {
                 self.push(" {");
                 self.nl();
                 self.push_indent();
-                self.emit_block_as_value(&then.stmts);
+                // `if` without `else` is always `Unit`-typed in MVL — its branch's
+                // value is never used, so emit it as statements (tail expression
+                // discarded via `;`), not as a value block. Without this, a tail
+                // call whose *native* Rust return type isn't `()` (e.g.
+                // `HashSet::remove` returns `bool` for MVL's `Unit`-typed
+                // `Set::remove`) fails E0308: "if expressions without else arms
+                // expect their inner expression to be `()`".
+                if else_.is_none() {
+                    self.emit_block_stmts(&then.stmts);
+                } else {
+                    self.emit_block_as_value(&then.stmts);
+                }
                 self.pop_indent();
                 self.indent();
                 self.push("}");
