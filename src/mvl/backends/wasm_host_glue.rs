@@ -1,0 +1,428 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Schuberg Philis
+
+//! Generates the wasmtime-embedding native host that makes `extern "rust"`
+//! calls actually runnable under `--backend=wasm` (#2049).
+//!
+//! `wasm_text.rs` declares `(import "extern" "<name>" ...)` for every
+//! `extern "rust"` fn (the direct #2049 fix), but something has to satisfy
+//! those imports at run time. This module generates a small Rust `main.rs`
+//! that:
+//!
+//! 1. Embeds `wasmtime`, loads `mvl_runtime_wasm.wasm` (the same runtime
+//!    module `wasmtime run --preload runtime=...` already uses) and the
+//!    compiled guest `.wasm`.
+//! 2. Registers one `Linker::func_wrap("extern", "<name>", ...)` per extern
+//!    fn. Each closure marshals its WASM-shaped arguments (the same
+//!    convention `wasm_text.rs::extern_fn_signature` declares — String
+//!    splits into `(ptr, len)` i32 pairs, everything else is a single
+//!    scalar) into native Rust values, calls the *unmodified*
+//!    `bridge::<name>` (the exact function `examples/*/bridge.rs` already
+//!    implements for the Rust backend — `mod bridge;` links it straight
+//!    into this generated crate, mirroring `cli/build.rs`'s existing
+//!    Rust-backend bridge injection), and marshals the result back.
+//! 3. Instantiates the guest module and runs `_start`.
+//!
+//! `bridge.rs` never changes between backends: only this glue (compiler-
+//! generated, never hand-written) knows about the WASM linear-memory
+//! boundary.
+//!
+//! Scope (this pass): `Int`, `Bool`, `String`, and `Unit` return. Structs,
+//! payload enums, `Option`, and `Result` are added in a follow-up
+//! (tracked alongside #2049) that reuses `wasm_text.rs`'s own
+//! `StructLayout`/payload-enum layout computation — an extern fn whose
+//! signature needs one of those today is reported as unsupported rather
+//! than silently mis-marshalled.
+
+use crate::mvl::checker::types::Ty;
+use crate::mvl::ir::{TirExternFn, TirProgram};
+
+/// One parameter or return value's shape at the WASM import boundary.
+/// Mirrors `wasm_text.rs::wasm_ty`/`extern_fn_signature` exactly — this is
+/// the native-Rust-host side of the same convention.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Shape {
+    Int,
+    Bool,
+    String,
+}
+
+/// Peel `Ref`/`Labeled`/`Refined` wrappers (labels are compile-time only,
+/// zero runtime representation — same peeling `wasm_text.rs` does
+/// everywhere) and classify the remaining type. `None` means this type
+/// isn't supported at the extern boundary yet (struct/enum/Option/Result/
+/// List/Map/Set/Fn) — the caller turns that into a clear diagnostic rather
+/// than generating glue that would silently mis-marshal.
+fn classify(ty: &Ty) -> Option<Shape> {
+    match ty {
+        Ty::Ref(_, inner) | Ty::Labeled(_, inner) | Ty::Refined(inner, _) => classify(inner),
+        Ty::Int | Ty::UInt => Some(Shape::Int),
+        Ty::Bool => Some(Shape::Bool),
+        Ty::String => Some(Shape::String),
+        _ => None,
+    }
+}
+
+/// `true` for `Ty::Unit` after peeling the same transparent wrappers.
+fn is_unit(ty: &Ty) -> bool {
+    match ty {
+        Ty::Ref(_, inner) | Ty::Labeled(_, inner) | Ty::Refined(inner, _) => is_unit(inner),
+        Ty::Unit => true,
+        _ => false,
+    }
+}
+
+/// Reason an extern fn can't be marshalled yet, with enough context to
+/// point at the offending signature.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnsupportedExternFn {
+    pub fn_name: String,
+    pub detail: String,
+}
+
+impl std::fmt::Display for UnsupportedExternFn {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "extern \"rust\" fn `{}` is not yet supported under --backend=wasm: {}",
+            self.fn_name, self.detail
+        )
+    }
+}
+
+/// Generate the host `main.rs` source for every `extern "rust"` fn in
+/// `tir.externs`. Returns `Ok(None)` when there are none (callers skip
+/// building the host crate entirely and keep the plain
+/// `wasmtime run --preload runtime=...` path). Returns `Err` listing every
+/// fn whose signature isn't marshallable yet, so a partial/wrong build
+/// never silently ships.
+pub fn generate_host_main(tir: &TirProgram) -> Result<Option<String>, Vec<UnsupportedExternFn>> {
+    let externs: Vec<&TirExternFn> = tir
+        .externs
+        .iter()
+        .filter(|ed| ed.abi == "rust")
+        .flat_map(|ed| ed.fns.iter())
+        .collect();
+    if externs.is_empty() {
+        return Ok(None);
+    }
+
+    let mut unsupported = Vec::new();
+    let mut closures = String::new();
+    for ef in &externs {
+        match emit_closure(ef) {
+            Ok(src) => closures.push_str(&src),
+            Err(detail) => unsupported.push(UnsupportedExternFn {
+                fn_name: ef.name.clone(),
+                detail,
+            }),
+        }
+    }
+    if !unsupported.is_empty() {
+        return Err(unsupported);
+    }
+
+    Ok(Some(format!(
+        r#"// Auto-generated by `mvl build/test --backend=wasm` (#2049) --
+// the extern "rust" FFI host. Do not edit by hand; re-run the build.
+//
+// Loads the compiled guest module and the MVL WASM runtime, and implements
+// every `extern "rust"` import by marshalling arguments/results across the
+// linear-memory boundary and calling straight into `bridge::<name>` --
+// linked into this binary unmodified, exactly as the Rust backend already
+// does.
+
+mod bridge;
+
+use wasmtime::{{Caller, Engine, Linker, Module, Store}};
+use wasmtime_wasi::preview1::{{self, WasiP1Ctx}};
+use wasmtime_wasi::WasiCtxBuilder;
+
+struct HostState {{
+    wasi: WasiP1Ctx,
+}}
+
+/// Read a `(ptr, len)` MVL string argument out of the guest's shared memory.
+fn read_mvl_string(caller: &mut Caller<'_, HostState>, ptr: i32, len: i32) -> String {{
+    let memory = caller
+        .get_export("memory")
+        .and_then(|e| e.into_memory())
+        .expect("guest module exports memory");
+    let bytes = memory.data(&caller)[ptr as usize..(ptr + len) as usize].to_vec();
+    String::from_utf8(bytes).expect("MVL string is valid UTF-8")
+}}
+
+/// Write a native `String` result into the guest's shared memory and return
+/// its `(ptr, len)` -- the same flat representation an ordinary MVL
+/// function returns, no `*MvlString` box involved at this boundary.
+fn write_mvl_string(
+    caller: &mut Caller<'_, HostState>,
+    runtime: &wasmtime::Instance,
+    s: &str,
+) -> (i32, i32) {{
+    let bytes = s.as_bytes();
+    let alloc = runtime
+        .get_typed_func::<i32, i32>(&mut *caller, "_mvl_struct_alloc")
+        .expect("runtime module exports _mvl_struct_alloc");
+    let ptr = alloc
+        .call(&mut *caller, bytes.len() as i32)
+        .expect("_mvl_struct_alloc call succeeds");
+    let memory = caller
+        .get_export("memory")
+        .and_then(|e| e.into_memory())
+        .expect("guest module exports memory");
+    memory
+        .write(&mut *caller, ptr as usize, bytes)
+        .expect("write string bytes into guest memory");
+    (ptr, bytes.len() as i32)
+}}
+
+fn main() -> anyhow::Result<()> {{
+    let mut args = std::env::args().skip(1);
+    let runtime_path = args
+        .next()
+        .expect("usage: <host> <runtime.wasm> <guest.wasm>");
+    let guest_path = args
+        .next()
+        .expect("usage: <host> <runtime.wasm> <guest.wasm>");
+
+    let engine = Engine::default();
+    let runtime_module = Module::from_file(&engine, &runtime_path)?;
+    let guest_module = Module::from_file(&engine, &guest_path)?;
+
+    let wasi = WasiCtxBuilder::new()
+        .inherit_stdio()
+        .inherit_env()
+        .inherit_args()
+        .build_p1();
+    let mut store = Store::new(&engine, HostState {{ wasi }});
+
+    let mut linker: Linker<HostState> = Linker::new(&engine);
+    preview1::add_to_linker_sync(&mut linker, |s: &mut HostState| &mut s.wasi)?;
+
+    let runtime_instance = linker.instantiate(&mut store, &runtime_module)?;
+    linker.instance(&mut store, "runtime", runtime_instance)?;
+
+{closures}
+    let guest_instance = linker.instantiate(&mut store, &guest_module)?;
+    let start = guest_instance.get_typed_func::<(), ()>(&mut store, "_start")?;
+    start.call(&mut store, ())?;
+    Ok(())
+}}
+"#
+    )))
+}
+
+/// Generate one `linker.func_wrap("extern", "<name>", ...)` registration.
+/// `Err(detail)` when a param or the return type isn't classifiable yet.
+fn emit_closure(ef: &TirExternFn) -> Result<String, String> {
+    let mut param_shapes = Vec::with_capacity(ef.params.len());
+    for p in &ef.params {
+        match classify(&p.ty) {
+            Some(s) => param_shapes.push(s),
+            None => {
+                return Err(format!(
+                    "param `{}` has an unsupported type for the extern-wasm host glue \
+                     (only Int, Bool, and String are supported so far)",
+                    p.name
+                ))
+            }
+        }
+    }
+    let ret_shape = if is_unit(&ef.ret_ty) {
+        None
+    } else {
+        match classify(&ef.ret_ty) {
+            Some(s) => Some(s),
+            None => {
+                return Err(
+                    "return type has an unsupported type for the extern-wasm host glue \
+                     (only Int, Bool, String, and Unit are supported so far)"
+                        .to_string(),
+                )
+            }
+        }
+    };
+
+    // WASM-side closure parameter list: String is two i32 locals, everything
+    // else is one wasm-typed local -- matches
+    // `wasm_text.rs::extern_fn_signature` exactly.
+    let mut wasm_params = String::new();
+    let mut native_arg_binds = String::new();
+    let mut native_arg_names = Vec::with_capacity(param_shapes.len());
+    for (i, shape) in param_shapes.iter().enumerate() {
+        let native_name = format!("arg{i}");
+        match shape {
+            Shape::Int => {
+                wasm_params.push_str(&format!(", {native_name}: i64"));
+            }
+            Shape::Bool => {
+                let wasm_name = format!("{native_name}_wasm");
+                wasm_params.push_str(&format!(", {wasm_name}: i32"));
+                native_arg_binds
+                    .push_str(&format!("            let {native_name} = {wasm_name} != 0;\n"));
+            }
+            Shape::String => {
+                wasm_params.push_str(&format!(
+                    ", {native_name}_ptr: i32, {native_name}_len: i32"
+                ));
+                native_arg_binds.push_str(&format!(
+                    "            let {native_name} = read_mvl_string(&mut caller, {native_name}_ptr, {native_name}_len);\n"
+                ));
+            }
+        }
+        native_arg_names.push(native_name);
+    }
+
+    let wasm_result = match ret_shape {
+        None => String::new(),
+        Some(Shape::Int) => " -> i64".to_string(),
+        Some(Shape::Bool) => " -> i32".to_string(),
+        Some(Shape::String) => " -> (i32, i32)".to_string(),
+    };
+
+    let call_args = native_arg_names.join(", ");
+    let call_and_return = match ret_shape {
+        None => format!("bridge::{}({call_args});", ef.name),
+        Some(Shape::Int) => format!("bridge::{}({call_args})", ef.name),
+        Some(Shape::Bool) => format!(
+            "if bridge::{}({call_args}) {{ 1 }} else {{ 0 }}",
+            ef.name
+        ),
+        Some(Shape::String) => format!(
+            "{{\n                let __result: String = bridge::{}({call_args});\n                write_mvl_string(&mut caller, &runtime_instance, &__result)\n            }}",
+            ef.name
+        ),
+    };
+
+    // `caller` is only touched (and so only needs a mutable binding) when a
+    // String crosses the boundary in either direction; `runtime_instance` is
+    // only referenced when constructing a String return (`_mvl_struct_alloc`
+    // via `write_mvl_string`). `wasmtime::Instance` is `Copy`, so each `move`
+    // closure below captures its own copy directly -- no manual rebind
+    // needed. Conditioning both on actual use keeps the generated code
+    // warning-free instead of relying on the caller to silence `unused_mut`/
+    // `unused_variables` on compiler-generated output.
+    let touches_string = param_shapes.contains(&Shape::String) || ret_shape == Some(Shape::String);
+    let caller_binding = if touches_string {
+        "mut caller"
+    } else {
+        "_caller"
+    };
+    Ok(format!(
+        r#"    linker.func_wrap(
+        "extern",
+        "{name}",
+        move |{caller_binding}: Caller<'_, HostState>{wasm_params}|{wasm_result} {{
+{native_arg_binds}        {call_and_return}
+        }},
+    )?;
+"#,
+        name = ef.name,
+    ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::mvl::ir::{TirExternDecl, TirParam};
+    use crate::mvl::parser::lexer::Span;
+
+    fn dummy_span() -> Span {
+        Span {
+            offset: 0,
+            len: 0,
+            line: 1,
+            col: 1,
+        }
+    }
+
+    fn param(name: &str, ty: Ty) -> TirParam {
+        TirParam {
+            name: name.to_string(),
+            ty,
+            capability: None,
+            span: dummy_span(),
+        }
+    }
+
+    fn extern_fn(name: &str, params: Vec<TirParam>, ret_ty: Ty) -> TirExternFn {
+        TirExternFn {
+            name: name.to_string(),
+            params,
+            ret_ty,
+            effects: Vec::new(),
+            totality: None,
+            span: dummy_span(),
+        }
+    }
+
+    fn program_with(fns: Vec<TirExternFn>) -> TirProgram {
+        TirProgram {
+            externs: vec![TirExternDecl {
+                abi: "rust".to_string(),
+                link_libs: Vec::new(),
+                fns,
+                span: dummy_span(),
+            }],
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn no_externs_returns_none() {
+        assert_eq!(generate_host_main(&TirProgram::default()).unwrap(), None);
+    }
+
+    #[test]
+    fn int_bool_string_signature_generates_glue() {
+        let tir = program_with(vec![
+            extern_fn("greet", vec![param("name", Ty::String)], Ty::String),
+            extern_fn("double", vec![param("n", Ty::Int)], Ty::Int),
+            extern_fn("is_even", vec![param("n", Ty::Int)], Ty::Bool),
+            extern_fn("log", vec![param("msg", Ty::String)], Ty::Unit),
+        ]);
+        let src = generate_host_main(&tir).unwrap().unwrap();
+        assert!(src.contains(r#""greet""#));
+        assert!(src.contains("arg0_ptr: i32, arg0_len: i32"));
+        assert!(src.contains("-> (i32, i32)"));
+        assert!(src.contains(r#""double""#));
+        assert!(src.contains("arg0: i64"));
+        assert!(src.contains("-> i64"));
+        assert!(src.contains(r#""is_even""#));
+        assert!(src.contains("if bridge::is_even(arg0) { 1 } else { 0 }"));
+        assert!(src.contains(r#""log""#));
+        assert!(src.contains("bridge::log(arg0);"));
+        assert!(src.contains("mod bridge;"));
+    }
+
+    #[test]
+    fn labeled_string_param_marshals_like_plain_string() {
+        // Secret[String] / Tainted[String] -- labels are compile-time only,
+        // zero runtime representation, so they marshal exactly like String.
+        let tir = program_with(vec![extern_fn(
+            "init_auth_store",
+            vec![param(
+                "api_key",
+                Ty::Labeled("Secret".to_string(), Box::new(Ty::String)),
+            )],
+            Ty::Unit,
+        )]);
+        let src = generate_host_main(&tir).unwrap().unwrap();
+        assert!(src.contains("arg0_ptr: i32, arg0_len: i32"));
+        assert!(src.contains("bridge::init_auth_store(arg0);"));
+    }
+
+    #[test]
+    fn unsupported_param_type_is_reported_not_miscompiled() {
+        let tir = program_with(vec![extern_fn(
+            "load_config",
+            vec![param("path", Ty::String)],
+            Ty::Named("Config".to_string(), Vec::new()),
+        )]);
+        let err = generate_host_main(&tir).unwrap_err();
+        assert_eq!(err.len(), 1);
+        assert_eq!(err[0].fn_name, "load_config");
+        assert!(err[0].detail.contains("unsupported"));
+    }
+}
