@@ -818,6 +818,38 @@ mod tests {
         );
     }
 
+    /// Field receivers (`b.items.push(x)`) reuse the existing field-mutability
+    /// rule instead of `MutatingMethodOnImmutableReceiver` — a plain struct
+    /// field is only mutable when declared `field: ref T`.
+    #[test]
+    fn mutating_method_on_immutable_struct_field_rejected() {
+        let src = "type Bag = struct { items: List[Int] }\n\
+                    fn add(b: Bag, n: Int) -> Unit { b.items.push(n); }";
+        let errors = errors_for(src);
+        assert!(
+            errors.iter().any(|e| matches!(
+                e,
+                CheckError::MutateImmutableField { field, .. } if field == "items"
+            )),
+            "expected MutateImmutableField(items), got: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn mutating_method_on_ref_struct_field_allowed() {
+        let src = "type Bag = struct { items: ref List[Int] }\n\
+                    fn add(b: Bag, n: Int) -> Unit { b.items.push(n); }";
+        let errors = errors_for(src);
+        let violations: Vec<_> = errors
+            .iter()
+            .filter(|e| matches!(e, CheckError::MutateImmutableField { .. }))
+            .collect();
+        assert!(
+            violations.is_empty(),
+            "ref field should be allowed, got: {violations:?}"
+        );
+    }
+
     // ── Requirement 2 / Scenario: Ownership / use-after-consume (#15) ────────
 
     #[test]

@@ -317,16 +317,29 @@ impl TypeChecker {
                         | (Ty::Map(_, _), "insert" | "remove")
                 );
                 if mutates_receiver && !self_receiver {
-                    if let Expr::Ident(name, _) = receiver.as_ref() {
-                        if let Some(info) = self.env.lookup(name) {
-                            if !info.mutable {
-                                self.emit(CheckError::MutatingMethodOnImmutableReceiver {
-                                    name: name.clone(),
-                                    method: method.clone(),
-                                    span: *span,
-                                });
+                    match receiver.as_ref() {
+                        Expr::Ident(name, _) => {
+                            if let Some(info) = self.env.lookup(name) {
+                                if !info.mutable {
+                                    self.emit(CheckError::MutatingMethodOnImmutableReceiver {
+                                        name: name.clone(),
+                                        method: method.clone(),
+                                        span: *span,
+                                    });
+                                }
                             }
                         }
+                        // `self.items.push(x)` / `actor_or_struct.field.insert(x)` —
+                        // reuses the exact field-mutability rule `self.field = x`
+                        // assignment already enforces: actor state fields are
+                        // always mutable (Spec 015); plain struct fields are
+                        // mutable only when declared `field: ref T`.
+                        Expr::FieldAccess { expr, field, .. } => {
+                            if let Some(base_ty) = self.expr_types.get(&expr.span()).cloned() {
+                                self.check_field_mutation(&base_ty, field, *span);
+                            }
+                        }
+                        _ => {}
                     }
                 }
                 self.infer_method_call(&recv_ty, method, &arg_tys, *span, self_receiver)
