@@ -2828,27 +2828,15 @@ fn emit_stmt(out: &mut String, stmt: &TirStmt, ctx: &Ctx) {
 
 fn emit_expr(out: &mut String, expr: &TirExpr, ctx: &Ctx) {
     match &expr.kind {
-        TirExprKind::Literal(Literal::Integer(n)) => {
-            out.push_str(&format!("    i64.const {n}\n"));
-        }
-        TirExprKind::Literal(Literal::Float(f)) => {
-            // {:?} preserves the `.0` on whole-number floats so WAT parses
-            // the literal as f64 rather than integer.
-            out.push_str(&format!("    f64.const {f:?}\n"));
-        }
-        TirExprKind::Literal(Literal::Bool(b)) => {
-            out.push_str(&format!("    i32.const {}\n", if *b { 1 } else { 0 }));
-        }
-        TirExprKind::Literal(Literal::Str(s)) => {
-            // Placed in the module data section during collect_literals; here
-            // we just push (offset, len) as i32s.
-            if let Some(&(offset, len)) = ctx.literals.get(s) {
-                out.push_str(&format!("    i32.const {offset}\n"));
-                out.push_str(&format!("    i32.const {len}\n"));
-            } else {
-                out.push_str(&format!("    ;; missing literal: {s:?}\n"));
-            }
-        }
+        // Delegates to the same `emit_literal` used by match-pattern lowering
+        // rather than duplicating per-variant logic here — this match used to
+        // spell out Integer/Float/Bool/Str inline and had silently drifted out
+        // of sync with `emit_literal`, missing `Char` and `Unit` entirely.
+        // `Ok(())`/`Err(())` — a Unit-payload Result — is real, working MVL
+        // (`Result[Unit, E]` return types, `.map(|u: Unit| ...)`), but its
+        // literal argument fell through to the catch-all `;; unsupported expr`
+        // arm and stubbed the whole enclosing function to `unreachable` (#2144).
+        TirExprKind::Literal(lit) => emit_literal(out, lit, ctx),
         TirExprKind::Var(name) => {
             // `None` — bare identifier of type `Option[_]`. Dispatch to the
             // runtime constructor before falling through to local.get.
@@ -3389,6 +3377,13 @@ fn emit_expr(out: &mut String, expr: &TirExpr, ctx: &Ctx) {
                 ctx.needs_runtime.set(true);
                 let inner = option_inner_ty(&expr.ty).cloned().unwrap_or(Ty::Int);
                 emit_expr(out, &args[0], ctx);
+                if matches!(inner, Ty::Unit) {
+                    // Any Unit-typed expression pushes nothing (Unit has no
+                    // runtime representation), but the Option constructor is
+                    // always exactly one i64/i32 param — push a placeholder
+                    // so `Option[Unit]` still has a slot to construct (#2144).
+                    out.push_str("    i64.const 0\n");
+                }
                 if is_string_ty(&inner, ctx) {
                     // String payload arrives as (ptr, len); box it into a
                     // `*MvlString` before handing it to the i32-payload
@@ -3429,6 +3424,10 @@ fn emit_expr(out: &mut String, expr: &TirExpr, ctx: &Ctx) {
                 ctx.needs_runtime.set(true);
                 let ok_ty = result_ok_ty(&expr.ty).cloned().unwrap_or(Ty::Int);
                 emit_expr(out, &args[0], ctx);
+                if matches!(ok_ty, Ty::Unit) {
+                    // See the matching comment on `Some(x)` above (#2144).
+                    out.push_str("    i64.const 0\n");
+                }
                 if is_string_ty(&ok_ty, ctx) {
                     // Same String blind spot as `Some(x)` above (#2024).
                     out.push_str("    call $_mvl_string_new\n");
@@ -3453,6 +3452,10 @@ fn emit_expr(out: &mut String, expr: &TirExpr, ctx: &Ctx) {
                 ctx.needs_runtime.set(true);
                 let err_ty = result_err_ty(&expr.ty).cloned().unwrap_or(Ty::String);
                 emit_expr(out, &args[0], ctx);
+                if matches!(err_ty, Ty::Unit) {
+                    // See the matching comment on `Some(x)` above (#2144).
+                    out.push_str("    i64.const 0\n");
+                }
                 if peels_to_string(&err_ty) {
                     out.push_str("    call $_mvl_result_err_str\n");
                 } else {
@@ -6172,7 +6175,13 @@ fn wasm_ty(ty: &Ty, ctx: &Ctx) -> &'static str {
     match ty {
         Ty::Int | Ty::UInt => "i64",
         Ty::Float => "f64",
-        Ty::Bool | Ty::Byte => "i32",
+        // `Char` is a Unicode scalar value, small enough for i32 — same
+        // treatment as Bool/Byte. Previously fell to the `_ => "i64"`
+        // default below while `emit_literal`'s `Literal::Char` arm always
+        // pushed `i32.const`, a width mismatch invisible until #2144 fixed
+        // the *other* bug (a missing dispatch arm) that had made every char
+        // literal unreachable code up to that point.
+        Ty::Bool | Ty::Byte | Ty::Char => "i32",
         Ty::Named(name, args) if args.is_empty() => {
             // Generic type parameter substitution (e.g. T → Int in identity[T]).
             if let Some(concrete) = ctx.type_subst.get(name.as_str()) {
@@ -6275,7 +6284,7 @@ fn is_string_ty(ty: &Ty, ctx: &Ctx) -> bool {
 /// enums, heap pointers for structs/payload-enums/collections/Option/Result).
 fn is_i32(ty: &Ty, ctx: &Ctx) -> bool {
     match ty {
-        Ty::Bool | Ty::Byte => true,
+        Ty::Bool | Ty::Byte | Ty::Char => true,
         // `Box[T]` — heap pointer, i32 on wasm32. Must agree with `wasm_ty`.
         Ty::Named(name, _) if name == "Box" => true,
         Ty::Named(name, _)
@@ -10745,6 +10754,58 @@ mod validated_module_tests {
                  let s: ref Set[Int] = {1, 2, 3};\n\
                  s.insert(4);\n\
                  assert_eq(s.len(), 4);\n\
+             }\n",
+        );
+        assert!(stubbed.is_empty(), "unexpected stubs: {stubbed:?}");
+    }
+
+    /// `Ok(())` — a Unit-payload `Result` — used to stub the whole enclosing
+    /// function: `emit_expr`'s literal-dispatch match had its own duplicated,
+    /// out-of-sync copy of `emit_literal`'s per-variant logic, missing the
+    /// `Literal::Unit` (and `Literal::Char`) arms entirely, so the inner `()`
+    /// fell through to the catch-all `;; unsupported expr` (#2144).
+    #[test]
+    fn ok_unit_construction_lowers_instead_of_stubbing() {
+        let stubbed = emit_and_validate(
+            "fn produce() -> Result[Unit, String] {\n\
+                 Ok(())\n\
+             }\n\
+             test fn t() -> Unit {\n\
+                 let r: Result[Unit, String] = produce();\n\
+                 let ok: Bool = match r { Ok(_) => true, Err(_) => false };\n\
+                 assert_eq(ok, true);\n\
+             }\n",
+        );
+        assert!(stubbed.is_empty(), "unexpected stubs: {stubbed:?}");
+    }
+
+    /// Same gap on the `Option` side — `Some(())`.
+    #[test]
+    fn some_unit_construction_lowers_instead_of_stubbing() {
+        let stubbed = emit_and_validate(
+            "fn produce_opt() -> Option[Unit] {\n\
+                 Some(())\n\
+             }\n\
+             test fn t() -> Unit {\n\
+                 let o: Option[Unit] = produce_opt();\n\
+                 let some: Bool = match o { Some(_) => true, None => false };\n\
+                 assert_eq(some, true);\n\
+             }\n",
+        );
+        assert!(stubbed.is_empty(), "unexpected stubs: {stubbed:?}");
+    }
+
+    /// The other variant `emit_expr`'s duplicated literal match was missing
+    /// entirely — a `char` literal (`'x'`) — same root cause as the two
+    /// tests above (#2144).
+    #[test]
+    fn char_literal_lowers_instead_of_stubbing() {
+        let stubbed = emit_and_validate(
+            "fn first_char() -> Char {\n\
+                 'x'\n\
+             }\n\
+             test fn t() -> Unit {\n\
+                 assert_eq(first_char(), 'x');\n\
              }\n",
         );
         assert!(stubbed.is_empty(), "unexpected stubs: {stubbed:?}");
