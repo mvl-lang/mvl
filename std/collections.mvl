@@ -143,7 +143,9 @@ pub fn Set[T]::remove(self, x: T) -> Unit {
 
 /// Return all elements as a list (order unspecified).
 pub fn Set[T]::to_list(self) -> List[T] {
-    self.to_list()
+    let result: ref List[T] = [];
+    for x in self { result.push(x) };
+    result
 }
 
 /// Number of elements.  Always non-negative — inherited from the underlying
@@ -161,17 +163,25 @@ pub fn Set[T]::is_empty(self) -> Bool {
 
 /// Elements present in both sets.
 pub fn Set[T]::intersection(self, other: Set[T]) -> Set[T] {
-    self.intersection(other)
+    let result: ref Set[T] = self;
+    for x in self {
+        if !other.contains(x.clone()) { result.remove(x) }
+    };
+    result
 }
 
 /// Elements present in self but not other.
 pub fn Set[T]::difference(self, other: Set[T]) -> Set[T] {
-    self.difference(other)
+    let result: ref Set[T] = self;
+    for x in other { result.remove(x) };
+    result
 }
 
 /// Elements present in either set.
 pub fn Set[T]::union(self, other: Set[T]) -> Set[T] {
-    self.union(other)
+    let result: ref Set[T] = self;
+    for x in other { result.insert(x) };
+    result
 }
 
 // ── Set HOFs (transpiler-handled) ────────────────────────────────────────
@@ -191,26 +201,34 @@ pub fn Set[T]::map[U](self, f: fn(T) -> U) -> Set[U] {
 ///
 /// Transpiler-handled: emits `set.into_iter().filter(|x| f(x)).collect::<HashSet<_>>()`.
 pub fn Set[T]::filter(self, f: fn(T) -> Bool) -> Set[T] {
-    self.filter(f)
+    let result: ref Set[T] = self;
+    for x in self {
+        if !f(x.clone()) { result.remove(x) }
+    };
+    result
 }
 
 /// Left fold: reduce to a single value using `f` and accumulator `init`.
 ///
 /// Transpiler-handled: emits `set.into_iter().fold(init, |acc, x| f(acc, x))`.
 pub fn Set[T]::fold[U](self, init: U, f: fn(U, T) -> U) -> U {
-    self.fold(init, f)
+    let acc: ref U = init;
+    for x in self { acc = f(acc, x) };
+    acc
 }
 
 /// True if at least one element satisfies `f`.
 ///
 /// Transpiler-handled: emits `set.into_iter().any(|x| f(x))`.
 pub fn Set[T]::any(self, f: fn(T) -> Bool) -> Bool {
-    self.any(f)
+    for x in self { if f(x) { return true; } }
+    false
 }
 
 /// True if every element satisfies `f`.
 ///
 /// Transpiler-handled: emits `set.into_iter().all(|x| f(x))`.
 pub fn Set[T]::all(self, f: fn(T) -> Bool) -> Bool {
-    self.all(f)
+    for x in self { if !f(x) { return false; } }
+    true
 }

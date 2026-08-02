@@ -17,6 +17,21 @@ use std::path::{Path, PathBuf};
 // `Set::new()` resolve at first use without an explicit `use std.collections.{Map}`.
 // #1842 was the "why does Map::new() emit a raw @Map::new symbol" report — the
 // answer was that the loader never visited collections.mvl without the `use`.
+//
+// Single source of truth for what `load_implicit_prelude` actually loads —
+// shared with `load_stdlib_prelude` so an explicit `use std.collections.{Map}`
+// (a documented, common pattern for `Map::new()`/`Set::new()`, #2131) doesn't
+// load the same module's declarations a second time and produce spurious
+// "duplicate method" errors. Do not add `io` here: unlike these five, `io` is
+// never loaded by `load_implicit_prelude` — it relies on `RUST_BACKED_STDLIB`
+// hybrid handling instead, and still needs its AST loaded via the `use
+// std.io.{…}` path for the checker to see `Path`/`IoError`, etc.
+const IMPLICIT_PRELUDE_MODULES: &[&str] = &["core", "strings", "lists", "collections", "effects"];
+
+// Extends `IMPLICIT_PRELUDE_MODULES` with modules the transitive-dependency
+// resolver treats as already covered for a different reason: `io` is
+// `RUST_BACKED_STDLIB`, so the resolver doesn't need to walk it as a
+// transitive dependency, even though `load_implicit_prelude` never loads it.
 const IMPLICIT_PRELUDE_STEMS: &[&str] =
     &["core", "strings", "lists", "collections", "effects", "io"];
 
@@ -549,10 +564,10 @@ pub fn find_module_file(entry_dir: &Path, mod_name: &str) -> Option<PathBuf> {
 /// hid real syntax problems in `std/*.mvl` for months (#2000).  Surface them
 /// with the same formatting as `parse_file` and abort.
 pub fn load_implicit_prelude() -> Vec<Program> {
-    const IMPLICIT: &[&str] = &["core.mvl", "strings.mvl", "lists.mvl", "effects.mvl"];
     let mut progs = Vec::new();
-    for name in IMPLICIT {
-        let content = stdlib::stdlib_content(name).unwrap_or_else(|| {
+    for stem in IMPLICIT_PRELUDE_MODULES {
+        let name = format!("{stem}.mvl");
+        let content = stdlib::stdlib_content(&name).unwrap_or_else(|| {
             panic!(
                 "stdlib file `{name}` not found — run `make install` or `mvl self install` to install the stdlib"
             )
@@ -1831,6 +1846,13 @@ mod tests {
 
 /// Load stdlib prelude files for all `use std.X` declarations found in `progs`.
 /// Prefers on-disk files; falls back to embedded copies for read-only environments.
+///
+/// Skips modules already covered by [`load_implicit_prelude`] (`core`,
+/// `strings`, `lists`, `collections`, `effects`) — every caller of this
+/// function loads the implicit prelude first, so re-loading one of those
+/// modules here because a program also has an explicit `use std.collections.{…}`
+/// (a documented, common pattern for `Map::new()`/`Set::new()`) would declare
+/// every method on it twice, producing spurious "duplicate method" errors (#2131).
 pub fn load_stdlib_prelude<'a>(
     progs: impl Iterator<Item = &'a Program>,
     stdlib_dir: &Path,
@@ -1843,6 +1865,9 @@ pub fn load_stdlib_prelude<'a>(
             if let Decl::Use(ud) = decl {
                 if ud.path.first().map(|s| s == "std").unwrap_or(false) {
                     if let Some(module) = ud.path.get(1) {
+                        if IMPLICIT_PRELUDE_MODULES.contains(&module.as_str()) {
+                            continue;
+                        }
                         if loaded.insert(module.clone()) {
                             let filename = format!("{module}.mvl");
                             let stdlib_file = stdlib_dir.join(&filename);

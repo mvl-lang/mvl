@@ -73,3 +73,75 @@ test fn set_map_collapses_collisions() -> Unit {
 // TODO: `Set[String].contains(literal)` fails in the Rust transpiler with an
 // ambiguous `.into()` target — pending a separate ticket. Set[Int] covers the
 // key-lookup path meanwhile.
+
+// #2131: `to_list`/`intersection`/`difference`/`union`/`filter`/`fold`/`any`/
+// `all` were blocked by `std/collections.mvl` not being loaded into the
+// implicit prelude for codegen (backends never saw these methods' real MVL
+// bodies, only their self-referential stubs). Covers all three backends.
+
+test fn set_to_list_returns_all_elements() -> Unit {
+    let s: Set[Int] = {1, 2, 3};
+    let l: List[Int] = s.to_list();
+    assert_eq(l.len(), 3);
+}
+
+test fn set_intersection_keeps_shared_elements() -> Unit {
+    let a: Set[Int] = {1, 2, 3};
+    let b: Set[Int] = {2, 3, 4};
+    let i: Set[Int] = a.intersection(b);
+    assert_eq(i.len(), 2);
+    assert_eq(i.contains(2), true);
+    assert_eq(i.contains(3), true);
+    assert_eq(i.contains(1), false);
+}
+
+test fn set_difference_keeps_elements_not_in_other() -> Unit {
+    let a: Set[Int] = {1, 2, 3};
+    let b: Set[Int] = {2, 3};
+    let d: Set[Int] = a.difference(b);
+    assert_eq(d.len(), 1);
+    assert_eq(d.contains(1), true);
+}
+
+test fn set_union_combines_both_sets() -> Unit {
+    let a: Set[Int] = {1, 2};
+    let b: Set[Int] = {2, 3};
+    let u: Set[Int] = a.union(b);
+    assert_eq(u.len(), 3);
+    assert_eq(u.contains(1), true);
+    assert_eq(u.contains(3), true);
+}
+
+test fn set_filter_retains_matching_elements() -> Unit {
+    let s: Set[Int] = {1, 2, 3, 4};
+    let evens: Set[Int] = s.filter(|x: Int| x % 2 == 0);
+    assert_eq(evens.len(), 2);
+    assert_eq(evens.contains(2), true);
+    assert_eq(evens.contains(1), false);
+}
+
+test fn set_fold_sums_elements() -> Unit {
+    let s: Set[Int] = {1, 2, 3};
+    let sum: Int = s.fold(0, |acc: Int, x: Int| acc + x);
+    assert_eq(sum, 6);
+}
+
+test fn set_any_true_when_one_matches() -> Unit {
+    let s: Set[Int] = {1, 2, 3};
+    assert_eq(s.any(|x: Int| x > 2), true);
+}
+
+test fn set_any_false_when_none_match() -> Unit {
+    let s: Set[Int] = {1, 2, 3};
+    assert_eq(s.any(|x: Int| x > 5), false);
+}
+
+test fn set_all_true_when_all_match() -> Unit {
+    let s: Set[Int] = {1, 2, 3};
+    assert_eq(s.all(|x: Int| x > 0), true);
+}
+
+test fn set_all_false_when_one_fails() -> Unit {
+    let s: Set[Int] = {1, 2, 3};
+    assert_eq(s.all(|x: Int| x > 1), false);
+}
