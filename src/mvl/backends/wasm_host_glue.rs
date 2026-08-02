@@ -1015,33 +1015,32 @@ mod tests {
         }
     }
 
-    /// A trivial `self >= 0` predicate -- semantically irrelevant here,
-    /// just needs to be a valid `RefExpr` so `emit_tir_alias`'s validating
-    /// `::new()` constructor codegen has something to render.
-    fn trivial_predicate() -> crate::mvl::parser::ast::RefExpr {
-        use crate::mvl::parser::ast::{CmpOp, RefExpr};
-        RefExpr::Compare {
-            op: CmpOp::Ge,
-            left: Box::new(RefExpr::Ident {
-                name: "self".to_string(),
-                span: dummy_span(),
-            }),
-            right: Box::new(RefExpr::Integer {
-                value: 0,
-                span: dummy_span(),
-            }),
-            span: dummy_span(),
-        }
-    }
-
-    fn refined_alias_decl(name: &str, inner: Ty) -> TirTypeDecl {
-        TirTypeDecl {
-            visible: true,
-            name: name.to_string(),
-            params: Vec::new(),
-            body: TirTypeBody::Alias(Ty::Refined(Box::new(inner), Box::new(trivial_predicate()))),
-            span: dummy_span(),
-        }
+    /// Parses `src` through the real parse/check/lower pipeline and returns
+    /// the `TirTypeDecl` named `name` -- ADR-0050 forbids referencing
+    /// `parser::ast` types (like `RefExpr`) anywhere under `src/mvl/
+    /// backends/`, including test code (zero-tolerance budget in
+    /// `tools/audit_backend_ast.py`), so a refinement predicate for `type
+    /// Port = Int where ...` can't be hand-constructed here the way the
+    /// rest of this module's test fixtures are -- it has to come from a
+    /// real parse, same as `wasm_text.rs`'s own `compile()` test helper.
+    fn parse_type_decl(src: &str, name: &str) -> TirTypeDecl {
+        let (mut parser, lex_errs) = crate::mvl::parser::Parser::new(src);
+        assert!(lex_errs.is_empty(), "lex errors: {lex_errs:?}");
+        let prog = parser.parse_program();
+        assert!(
+            parser.errors().is_empty(),
+            "parse errors: {:?}",
+            parser.errors()
+        );
+        let mut expr_types = crate::mvl::checker::collect_prelude_expr_types(&[]);
+        expr_types.extend(crate::mvl::checker::check(&prog).expr_types);
+        let all_fns = crate::mvl::passes::mono::collect_fns([&prog]);
+        let mono = crate::mvl::passes::mono::monomorphize(&prog, &all_fns, &expr_types);
+        let tir = crate::mvl::ir::lower::lower(&prog, &mono, &expr_types);
+        tir.types
+            .into_iter()
+            .find(|td| td.name == name)
+            .unwrap_or_else(|| panic!("type `{name}` not found in parsed TIR for: {src}"))
     }
 
     #[test]
@@ -1116,7 +1115,7 @@ mod tests {
     #[test]
     fn struct_with_refined_alias_and_unit_enum_field_generates_helpers() {
         let types = vec![
-            refined_alias_decl("Port", Ty::Int),
+            parse_type_decl("type Port = Int where self > 0\n", "Port"),
             unit_enum_decl("Method", &["Get", "Put"]),
             struct_decl(
                 "Config",
