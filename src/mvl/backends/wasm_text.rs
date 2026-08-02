@@ -50,6 +50,19 @@
 //! what backs `List[T]::map`/`filter`/`fold`/`sort_by`/`min_by`/`max_by`
 //! (#2014).
 //!
+//! `extern "rust"` FFI (#2049, ADR-0062): supported for `Int`/`Bool`/
+//! `String`/user structs/unit-enums/refinement-newtype-aliases/labels
+//! (`Secret`/`Tainted`/`Clean`/`Public`)/`Option`/`Result` nested over the
+//! above. `(import "extern" "<name>" ...)` is declared here for every
+//! `extern "rust"` fn (this file's own responsibility); satisfying those
+//! imports at run time is `wasm_host_glue.rs`'s job — a generated,
+//! wasmtime-embedding native host that links the directory's real
+//! `bridge.rs` unmodified. Payload-carrying enums, `List`/`Map`/`Set`, and
+//! `Fn` values crossing the extern boundary are not supported yet (reported
+//! via `UnsupportedExternFn`, not silently mis-marshalled) — this is *not*
+//! a new `extern "wasm"` ABI keyword, `extern "rust"` is unchanged; the
+//! whole surface is compiler-internal codegen, see ADR-0062 for why.
+//!
 //! Deliberately not supported (later phases of #1817):
 //! - *Capturing* closures — these need an environment representation, not just
 //!   a function pointer. See `03_functions/higher_order_test.mvl` and
@@ -58,8 +71,7 @@
 //!   than emitted, so the failure stays inside the one function.
 //! - `Map` beyond `Map[String, Int]`
 //! - String concat (`_mvl_string_concat` wiring is incomplete)
-//! - Arbitrary-fd `write`/`read`/`open` (real files, WASI preopens),
-//!   `extern "wasm"` ABI — separate ticket
+//! - Arbitrary-fd `write`/`read`/`open` (real files, WASI preopens)
 //!
 //! Actors (#2012, ADR-0059): supported for spawn, behaviour sends, and
 //! `pub test fn` synchronous reads. Single-threaded run-to-completion — the
@@ -70,7 +82,7 @@
 //! `link`/`monitor`/`select`/`on_exit` supervision yet.
 
 use std::cell::Cell;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use super::{AssertMode, Backend};
 use crate::mvl::checker::types::Ty;
@@ -128,17 +140,23 @@ impl Default for WasmTextCompiler {
 /// allocated block, and resolved MVL type (used to choose the WASM load/store
 /// opcode and to unpack `*MvlString` fields into `(ptr, len)` on reads).
 #[derive(Debug, Clone)]
-struct FieldSlot {
-    name: String,
-    offset: u32,
-    ty: Ty,
+pub(crate) struct FieldSlot {
+    pub(crate) name: String,
+    pub(crate) offset: u32,
+    pub(crate) ty: Ty,
 }
 
 /// Pre-computed memory layout for a single struct type.
+///
+/// `pub(crate)`: reused as-is by `wasm_host_glue` (#2049) so the extern
+/// "rust" FFI host glue marshals struct fields at the exact same byte
+/// offsets this emitter itself uses — recomputing an independent copy would
+/// only need to drift once to silently corrupt every struct crossing the
+/// FFI boundary.
 #[derive(Debug, Clone)]
-struct StructLayout {
-    total_size: u32,
-    fields: Vec<FieldSlot>,
+pub(crate) struct StructLayout {
+    pub(crate) total_size: u32,
+    pub(crate) fields: Vec<FieldSlot>,
 }
 
 /// One variant within a payload-carrying enum.
@@ -638,13 +656,20 @@ impl Backend for WasmTextCompiler {
         let (literals, heap_start) =
             collect_literals(&literal_scan_fns, &tir.actors, needs_wasi, &audit_relabels);
         let (enum_types, enum_variants) = collect_enums(&tir.types);
-        let mut struct_layouts = collect_structs(&tir.types);
+        // Collected before `collect_structs` (moved ahead of its previous
+        // position below `collect_structs`/`collect_actors`) — struct field
+        // layout needs to peel alias references (`type Port = Int where
+        // ...` used as a field type is `Ty::Named("Port", [])` in TIR, not
+        // `Ty::Int`) to size fields correctly; see `field_byte_size` (#2049
+        // follow-up: found while building the WASM extern-FFI host glue,
+        // which needs byte-accurate struct layouts to marshal fields).
+        let type_aliases = collect_type_aliases(&tir.types);
+        let mut struct_layouts = collect_structs(&tir.types, &type_aliases);
         // Actor state layouts land in `struct_layouts` so the handle behaves
         // like a struct pointer everywhere (#2012).
-        let actors = collect_actors(&tir.actors, &mut struct_layouts);
+        let actors = collect_actors(&tir.actors, &mut struct_layouts, &type_aliases);
         let struct_layouts = struct_layouts;
         let payload_enums = collect_payload_enums(&tir.types);
-        let type_aliases = collect_type_aliases(&tir.types);
         let empty_subst: HashMap<String, Ty> = HashMap::new();
         let generic_fn_map: HashMap<String, (Vec<GenericParam>, Vec<TirParam>)> = all_fns
             .iter()
@@ -698,6 +723,26 @@ impl Backend for WasmTextCompiler {
             indirect_sigs: &indirect_sigs,
         };
 
+        // `extern "rust"` FFI (#2049): a native host embedding wasmtime and
+        // linking the same `bridge.rs` the Rust backend already uses
+        // supplies these at runtime. Any non-scalar arg/return (String,
+        // struct, enum, Option, Result) is marshalled through the runtime
+        // module's own boxed-value constructors, which only produce valid
+        // pointers if the guest imports the *same* memory the runtime module
+        // owns — so force the `(import "runtime" "memory" ...)` path on
+        // whenever a rust-abi extern exists, even if the body never happens
+        // to call an `_mvl_*` helper itself. Forcing this unconditionally
+        // (rather than only for non-scalar signatures) keeps the rule simple
+        // and avoids a two-separate-memories bug that would otherwise only
+        // show up once an extern signature grows a String/struct param.
+        if tir
+            .externs
+            .iter()
+            .any(|ed| ed.abi == "rust" && !ed.fns.is_empty())
+        {
+            ctx.needs_runtime.set(true);
+        }
+
         // Collect unique generic-function instantiations needed by the corpus fns.
         let instantiations = collect_generic_instantiations(
             &fns,
@@ -740,6 +785,36 @@ impl Backend for WasmTextCompiler {
         emit_lambda_fns(&mut fns_out, &ctx);
 
         let mut out = String::from("(module\n");
+
+        // `extern "rust"` FFI imports (#2049). Declared under a separate
+        // "extern" namespace so they read as distinct from the compiler's
+        // own "runtime" module — a native host (embedding wasmtime, linking
+        // the same `bridge.rs` the Rust backend already builds against)
+        // supplies these. The signature mirrors `emit_fn`'s own param/return
+        // lowering exactly, so a call site (already emitting a plain
+        // `call $name` after pushing its args — this is what was silently
+        // broken before) produces the exact stack shape declared here.
+        //
+        // Emitted before the runtime/WASI imports below (rather than after,
+        // where it read more naturally) because WAT requires every import to
+        // precede any function/global/etc. definition, and
+        // `emit_wasi_runtime`/`emit_wasi_runtime_shared_memory` below emit
+        // real function bodies (the WASI shim, `_start`) — `wasm-tools
+        // parse` rejects an import appearing after those with "import after
+        // function".
+        for ed in &tir.externs {
+            if ed.abi != "rust" {
+                continue;
+            }
+            for ef in &ed.fns {
+                let sig = extern_fn_signature(&ef.params, &ef.ret_ty, &ctx);
+                out.push_str(&format!(
+                    "  (import \"extern\" \"{}\"\n    (func ${}{sig}))\n",
+                    ef.name, ef.name
+                ));
+            }
+        }
+
         if ctx.needs_runtime.get() {
             // runtime.wasm exports its memory and the `_mvl_string_*` ops;
             // the user module imports both. Runtime data lives at 1 MB+,
@@ -1714,6 +1789,32 @@ fn emit_fn(out: &mut String, f: &TirFn, ctx: &Ctx) {
     if has_checkable_ensures {
         locals.push(("__result_CONTRACT".to_string(), f.ret_ty.clone()));
     }
+
+    // Exclude any collected "local" whose WASM identifier is already a
+    // function *parameter* — WAT's param/local namespace is flat, so
+    // `(param $body_ptr i32) ... (local $body_ptr i32)` is a duplicate-
+    // identifier error even though nothing is wrong at the MVL level: a
+    // `match`/`if let` arm binding a String value to a name that shadows an
+    // outer String-typed parameter (`fn f(body: Tainted[String]) -> ... {
+    // match r { Ok(body) => ... } }`, #2049 follow-up — found while running
+    // `examples/config_server/handler_test.mvl`'s `handle_put` for the
+    // first time, via the new WASM test-fn harness) is valid MVL shadowing;
+    // the *inner* binding's own store/load instructions already correctly
+    // reuse the outer parameter's WASM slot (harmless here since the outer
+    // value's last MVL-level use precedes the shadowing point), so dropping
+    // the redundant redeclaration is enough — no renaming needed.
+    let param_wasm_names: HashSet<String> = f
+        .params
+        .iter()
+        .flat_map(|p| {
+            if is_string_ty(&p.ty, ctx) {
+                vec![format!("{}_ptr", p.name), format!("{}_len", p.name)]
+            } else {
+                vec![p.name.clone()]
+            }
+        })
+        .collect();
+    locals.retain(|(name, _)| !param_wasm_names.contains(name));
 
     // Deduplicate (collect passes may register the same name from nested
     // expressions or speculative String locals; WAT rejects duplicates).
@@ -5815,6 +5916,32 @@ fn emit_binary(out: &mut String, op: BinaryOp, left: &TirExpr, right: &TirExpr, 
     out.push_str(&format!("    {opcode}\n"));
 }
 
+/// WASM `(param ...) (result ...)` text for an `extern "rust"` fn
+/// declaration. Mirrors `emit_fn`'s own param/return-type lowering exactly —
+/// String (and `Secret[String]`/`Tainted[String]`, labels are compile-time
+/// only) splits into two `i32` params and, on return, WASM multi-value
+/// `(result i32 i32)`; everything else is `wasm_ty`'s single value. Kept in
+/// lockstep with `emit_fn` deliberately duplicated rather than shared: the
+/// two call sites differ (a `(func $name ...)` body vs. a bare `(import ...)`
+/// declaration) enough that threading one through the other would obscure
+/// both.
+fn extern_fn_signature(params: &[TirParam], ret_ty: &Ty, ctx: &Ctx) -> String {
+    let mut sig = String::new();
+    for p in params {
+        if is_string_ty(&p.ty, ctx) {
+            sig.push_str(" (param i32 i32)");
+        } else {
+            sig.push_str(&format!(" (param {})", wasm_ty(&p.ty, ctx)));
+        }
+    }
+    if is_string_ty(ret_ty, ctx) {
+        sig.push_str(" (result i32 i32)");
+    } else if !matches!(ret_ty, Ty::Unit) {
+        sig.push_str(&format!(" (result {})", wasm_ty(ret_ty, ctx)));
+    }
+    sig
+}
+
 fn wasm_ty(ty: &Ty, ctx: &Ctx) -> &'static str {
     match ty {
         Ty::Int | Ty::UInt => "i64",
@@ -5983,7 +6110,7 @@ fn underlying_named_ty(ty: &Ty, ctx: &Ctx) -> Option<String> {
 // `wasm_ty` looks them up to resolve the underlying WASM primitive type so
 // that e.g. a refined Float alias emits `f64` locals, not `i64`.
 
-fn collect_type_aliases(types: &[TirTypeDecl]) -> HashMap<String, Ty> {
+pub(crate) fn collect_type_aliases(types: &[TirTypeDecl]) -> HashMap<String, Ty> {
     let mut aliases = HashMap::new();
     for td in types {
         if let TirTypeBody::Alias(target) = &td.body {
@@ -7214,27 +7341,61 @@ fn collect_enums(
 // Fields are packed at their natural alignment (4 or 8 bytes). Total size is
 // rounded up to 8-byte alignment so adjacent allocations don't share a word.
 
-fn field_byte_size(ty: &Ty) -> u32 {
+/// Peel a field's declared type down to the representation
+/// `field_byte_size`/`field_alignment` actually size against — `Ty::Ref`/
+/// `Ty::Labeled`/`Ty::Refined` wrappers, and `type X = <target>` alias
+/// references (`type Port = Int where ...` used as a field type lowers to
+/// `Ty::Named("Port", [])` in TIR, not `Ty::Int` — see `typeexpr_to_ty` in
+/// `ir/lower.rs`, a "shallow conversion").
+///
+/// Without this, a struct field typed as an alias to `Int`/`UInt`/`Float`
+/// fell into `field_byte_size`'s 4-byte default (real data corruption: the
+/// struct was under-allocated and a following field's offset landed inside
+/// the 8 bytes `emit_struct_store`/`emit_field_access` — which DO resolve
+/// aliases via `Ctx::type_aliases` — actually read and wrote for that field).
+/// Found while building the WASM `extern "rust"` FFI host glue, which needs
+/// byte-accurate struct layouts to marshal fields correctly; unrelated to
+/// FFI itself, so fixed here rather than worked around in the new code.
+fn resolve_field_ty<'a>(ty: &'a Ty, aliases: &'a HashMap<String, Ty>) -> std::borrow::Cow<'a, Ty> {
     match ty {
+        Ty::Ref(_, inner) | Ty::Labeled(_, inner) | Ty::Refined(inner, _) => {
+            match resolve_field_ty(inner, aliases) {
+                std::borrow::Cow::Borrowed(t) => std::borrow::Cow::Owned(t.clone()),
+                owned => owned,
+            }
+        }
+        Ty::Named(name, args) if args.is_empty() => match aliases.get(name.as_str()) {
+            Some(target) => std::borrow::Cow::Owned(resolve_field_ty(target, aliases).into_owned()),
+            None => std::borrow::Cow::Borrowed(ty),
+        },
+        _ => std::borrow::Cow::Borrowed(ty),
+    }
+}
+
+fn field_byte_size(ty: &Ty, aliases: &HashMap<String, Ty>) -> u32 {
+    match resolve_field_ty(ty, aliases).as_ref() {
         Ty::Int | Ty::UInt | Ty::Float => 8,
         // Everything else is an i32-width value in the struct slot.
         _ => 4,
     }
 }
 
-fn field_alignment(ty: &Ty) -> u32 {
-    field_byte_size(ty)
+fn field_alignment(ty: &Ty, aliases: &HashMap<String, Ty>) -> u32 {
+    field_byte_size(ty, aliases)
 }
 
-fn collect_structs(types: &[TirTypeDecl]) -> HashMap<String, StructLayout> {
+pub(crate) fn collect_structs(
+    types: &[TirTypeDecl],
+    type_aliases: &HashMap<String, Ty>,
+) -> HashMap<String, StructLayout> {
     let mut map = HashMap::new();
     for td in types {
         if let TirTypeBody::Struct { fields, .. } = &td.body {
             let mut offset = 0u32;
             let mut slots = Vec::new();
             for f in fields {
-                let size = field_byte_size(&f.ty);
-                let align = field_alignment(&f.ty);
+                let size = field_byte_size(&f.ty, type_aliases);
+                let align = field_alignment(&f.ty, type_aliases);
                 // Align up.
                 offset = (offset + align - 1) & !(align - 1);
                 slots.push(FieldSlot {
@@ -7270,14 +7431,15 @@ fn collect_structs(types: &[TirTypeDecl]) -> HashMap<String, StructLayout> {
 fn collect_actors(
     actors: &[TirActorDecl],
     layouts: &mut HashMap<String, StructLayout>,
+    type_aliases: &HashMap<String, Ty>,
 ) -> HashMap<String, ActorInfo> {
     let mut map = HashMap::new();
     for (idx, ad) in actors.iter().enumerate() {
         let mut offset = 0u32;
         let mut slots = Vec::new();
         for f in &ad.fields {
-            let size = field_byte_size(&f.ty);
-            let align = field_alignment(&f.ty);
+            let size = field_byte_size(&f.ty, type_aliases);
+            let align = field_alignment(&f.ty, type_aliases);
             offset = (offset + align - 1) & !(align - 1);
             slots.push(FieldSlot {
                 name: f.name.clone(),
@@ -8345,6 +8507,41 @@ mod tests {
         let mono = crate::mvl::passes::mono::monomorphize(&prog, &all_fns, &expr_types);
         let tir = crate::mvl::ir::lower::lower(&prog, &mono, &expr_types);
         WasmTextCompiler::new().emit_program(&tir, "test")
+    }
+
+    /// Regression for a data-corruption bug found while building the WASM
+    /// `extern "rust"` FFI host glue (#2049 follow-up): `type Port = Int
+    /// where ...` used as a struct field lowers to `Ty::Named("Port", [])`
+    /// in TIR (a "shallow conversion", see `typeexpr_to_ty` in
+    /// `ir/lower.rs`), not `Ty::Int`. `field_byte_size` had no alias
+    /// resolution and fell into its 4-byte default for that field, while
+    /// `emit_struct_store`/`emit_field_access` (which DO resolve aliases via
+    /// `Ctx::type_aliases`) correctly treated it as an 8-byte `i64` slot —
+    /// under-allocating the struct so a following field's offset landed
+    /// inside those 8 bytes. Fixed by threading `type_aliases` into
+    /// `field_byte_size`/`field_alignment` via `resolve_field_ty`.
+    #[test]
+    fn refined_alias_struct_field_does_not_overlap_following_field() {
+        let wat = compile(
+            "type Port = Int where self > 0 && self <= 65535\n\
+             type Config = struct { port: Port, name: String }\n\
+             fn main() -> Unit ! Console {\n\
+                 let c: Config = Config { port: 8080, name: \"hi\" };\n\
+                 println(c.name)\n\
+             }\n",
+        );
+        // 8 bytes for `port` (i64) + 4 for `name`'s pointer, rounded to 16 —
+        // NOT 8 (which is what the 4-byte-default bug produced).
+        assert!(
+            wat.contains("i32.const 16\n    call $_mvl_struct_alloc"),
+            "{wat}"
+        );
+        assert!(wat.contains("i64.store offset=0"), "{wat}");
+        assert!(
+            wat.contains("i32.store offset=8"),
+            "`name` must be stored at offset=8, past the full 8-byte `port` \
+             slot, not overlapping it at offset=4\n{wat}"
+        );
     }
 
     const COUNTER: &str = "actor Counter {\n\

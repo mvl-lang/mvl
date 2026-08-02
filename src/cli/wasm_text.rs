@@ -9,6 +9,7 @@
 //! `wasmtime`, compare stdout to the expected string.
 
 use mvl::mvl::backends::llvm_text::lli;
+use mvl::mvl::backends::wasm_host_glue;
 use mvl::mvl::backends::wasm_text::{emitter_handles_method_natively, WasmTextCompiler};
 use mvl::mvl::backends::{AssertMode, Backend};
 use mvl::mvl::checker;
@@ -596,7 +597,7 @@ fn ensure_transitive_rust_backed_stdlib(prog: &Program, prelude: &mut Vec<Progra
 }
 
 /// Lower `prog` (with prelude) to TIR and emit a WAT string.
-fn compile_wat(prog: &Program, module_name: &str, assert_mode: AssertMode) -> String {
+fn compile_wat(prog: &Program, module_name: &str, assert_mode: AssertMode) -> (String, TirProgram) {
     let mut prelude = loader::load_implicit_prelude();
     prelude.extend(load_full_prelude(
         std::iter::once(prog),
@@ -647,7 +648,7 @@ fn compile_wat(prog: &Program, module_name: &str, assert_mode: AssertMode) -> St
     compiler.assert_mode = assert_mode;
     let wat = compiler.emit_program(&entry_tir, module_name);
     warn_about_stubs(&compiler, module_name);
-    wat
+    (wat, entry_tir)
 }
 
 /// Warn about functions the emitter stubbed to `unreachable`.
@@ -730,12 +731,17 @@ fn merge_tir_programs(programs: &[TirProgram]) -> TirProgram {
 /// same-dir files share declarations without explicit `use` imports), then
 /// each is lowered with its own `expr_types`. Falls back to the single-file
 /// path when there are no sibling modules.
+/// Compiles `prog` (plus any sibling `.mvl` modules in its directory) to WAT,
+/// returning the merged `TirProgram` alongside it — callers that only need
+/// the WAT (`build_project_wasm`) ignore the second element; `run_one_case`
+/// uses it to detect `extern "rust"` fns for the wasmtime-embedding host
+/// glue path (#2049).
 fn compile_wat_multi(
     prog: &Program,
     path: &str,
     module_name: &str,
     assert_mode: AssertMode,
-) -> String {
+) -> (String, TirProgram) {
     let entry_dir = Path::new(path).parent().unwrap_or_else(|| Path::new("."));
     let sibling_modules = loader::load_sibling_modules_transitive(prog, entry_dir);
 
@@ -851,7 +857,7 @@ fn compile_wat_multi(
     compiler.assert_mode = assert_mode;
     let wat = compiler.emit_program(&merged, module_name);
     warn_about_stubs(&compiler, module_name);
-    wat
+    (wat, merged)
 }
 
 /// Resolve `path` to an entry `.mvl` file — `path` itself if it's a file, or
@@ -879,7 +885,7 @@ pub(super) fn build_project_wasm(path: &str, assert_mode: AssertMode, target: &s
     let file_path = resolve_entry_path(path);
     let (prog, _src) = super::parse_or_exit(&file_path);
     let module_name = loader::stem(&file_path);
-    let wat = compile_wat_multi(&prog, &file_path, &module_name, assert_mode);
+    let (wat, _tir) = compile_wat_multi(&prog, &file_path, &module_name, assert_mode);
     let out_path = format!("{module_name}.wat");
     fs::write(&out_path, &wat).unwrap_or_else(|e| {
         eprintln!("error: cannot write {out_path}: {e}");
@@ -899,77 +905,48 @@ struct CaseResult {
 }
 
 /// Run one case: parse, lower, emit WAT, assemble, run under wasmtime, compare.
-#[allow(clippy::too_many_arguments)]
-fn run_one_case(
+/// Parse, lower (with sibling merge), emit WAT, assemble, and validate one
+/// file — shared by both test styles (`run_one_case`'s expect-annotation
+/// comparison and `run_one_testfn_case`'s per-`test fn` invocation), which
+/// differ only in how they *run* the resulting module. Returns the
+/// assembled `.wasm` tempfile (kept alive by the caller for as long as it
+/// needs to run the module), the merged `TirProgram` (for extern-host
+/// detection), and the WAT text (for verbose failure dumps). `Err` is a
+/// ready-made failure `CaseResult`.
+fn build_and_assemble(
     file: &Path,
-    expected: &str,
-    is_pattern: bool,
     wasm_tools_bin: &Path,
-    wasmtime_bin: &Path,
-    runtime_wasm: Option<&Path>,
-    quiet: bool,
     verbose: bool,
-) -> CaseResult {
+) -> Result<(tempfile::NamedTempFile, TirProgram, String), CaseResult> {
     let file_str = file.display().to_string();
     let module_name = loader::stem(&file_str);
 
-    let src = match fs::read_to_string(file) {
-        Ok(s) => s,
-        Err(e) => {
-            return CaseResult {
-                passed: false,
-                output: String::new(),
-                err_output: format!("  FAIL (read): {file_str}: {e}\n"),
-            }
-        }
+    let fail = |detail: String| CaseResult {
+        passed: false,
+        output: String::new(),
+        err_output: detail,
     };
+
+    let src =
+        fs::read_to_string(file).map_err(|e| fail(format!("  FAIL (read): {file_str}: {e}\n")))?;
     let (mut parser, lex_errs) = Parser::new(&src);
     if !lex_errs.is_empty() {
-        return CaseResult {
-            passed: false,
-            output: String::new(),
-            err_output: format!("  FAIL (lex): {file_str}\n"),
-        };
+        return Err(fail(format!("  FAIL (lex): {file_str}\n")));
     }
     let prog = parser.parse_program();
     if !parser.errors().is_empty() {
-        return CaseResult {
-            passed: false,
-            output: String::new(),
-            err_output: format!("  FAIL (parse): {file_str}\n"),
-        };
+        return Err(fail(format!("  FAIL (parse): {file_str}\n")));
     }
 
-    let wat = compile_wat_multi(&prog, &file_str, &module_name, AssertMode::Always);
+    let (wat, tir) = compile_wat_multi(&prog, &file_str, &module_name, AssertMode::Always);
 
-    let wat_tmp = match tempfile::NamedTempFile::with_suffix(".wat") {
-        Ok(t) => t,
-        Err(e) => {
-            return CaseResult {
-                passed: false,
-                output: String::new(),
-                err_output: format!("  FAIL (tempfile): {file_str}: {e}\n"),
-            }
-        }
-    };
-    if let Err(e) = fs::write(wat_tmp.path(), &wat) {
-        return CaseResult {
-            passed: false,
-            output: String::new(),
-            err_output: format!("  FAIL (write WAT): {file_str}: {e}\n"),
-        };
-    }
+    let wat_tmp = tempfile::NamedTempFile::with_suffix(".wat")
+        .map_err(|e| fail(format!("  FAIL (tempfile): {file_str}: {e}\n")))?;
+    fs::write(wat_tmp.path(), &wat)
+        .map_err(|e| fail(format!("  FAIL (write WAT): {file_str}: {e}\n")))?;
 
-    let wasm_tmp = match tempfile::NamedTempFile::with_suffix(".wasm") {
-        Ok(t) => t,
-        Err(e) => {
-            return CaseResult {
-                passed: false,
-                output: String::new(),
-                err_output: format!("  FAIL (tempfile wasm): {file_str}: {e}\n"),
-            }
-        }
-    };
+    let wasm_tmp = tempfile::NamedTempFile::with_suffix(".wasm")
+        .map_err(|e| fail(format!("  FAIL (tempfile wasm): {file_str}: {e}\n")))?;
 
     let assemble = process::Command::new(wasm_tools_bin)
         .arg("parse")
@@ -992,18 +969,16 @@ fn run_one_case(
                 let first = stderr.lines().next().unwrap_or("");
                 out.push_str(&format!("    {first}\n"));
             }
-            return CaseResult {
+            return Err(CaseResult {
                 passed: false,
                 output: out,
                 err_output: String::new(),
-            };
+            });
         }
         Err(e) => {
-            return CaseResult {
-                passed: false,
-                output: String::new(),
-                err_output: format!("  FAIL (wasm-tools spawn): {file_str}: {e}\n"),
-            }
+            return Err(fail(format!(
+                "  FAIL (wasm-tools spawn): {file_str}: {e}\n"
+            )))
         }
     }
 
@@ -1033,37 +1008,89 @@ fn run_one_case(
                 let first = stderr.lines().next().unwrap_or("");
                 out.push_str(&format!("    {first}\n"));
             }
-            return CaseResult {
+            return Err(CaseResult {
                 passed: false,
                 output: out,
                 err_output: String::new(),
-            };
+            });
         }
         Err(e) => {
-            return CaseResult {
-                passed: false,
-                output: String::new(),
-                err_output: format!("  FAIL (wasm-tools spawn): {file_str}: {e}\n"),
-            }
+            return Err(fail(format!(
+                "  FAIL (wasm-tools spawn): {file_str}: {e}\n"
+            )))
         }
     }
 
-    let mut wasmtime_cmd = process::Command::new(wasmtime_bin);
-    wasmtime_cmd.arg("run");
-    if let Some(runtime) = runtime_wasm {
-        wasmtime_cmd
-            .arg("--preload")
-            .arg(format!("runtime={}", runtime.display()));
-    }
-    let run = wasmtime_cmd.arg(wasm_tmp.path()).output();
-    let output = match run {
-        Ok(o) => o,
-        Err(e) => {
+    Ok((wasm_tmp, tir, wat))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_one_case(
+    file: &Path,
+    expected: &str,
+    is_pattern: bool,
+    wasm_tools_bin: &Path,
+    wasmtime_bin: &Path,
+    runtime_wasm: Option<&Path>,
+    quiet: bool,
+    verbose: bool,
+) -> CaseResult {
+    let file_str = file.display().to_string();
+
+    let (wasm_tmp, tir, wat) = match build_and_assemble(file, wasm_tools_bin, verbose) {
+        Ok(built) => built,
+        Err(cr) => return cr,
+    };
+
+    // `extern "rust"` FFI (#2049): when the program declares any, a plain
+    // `wasmtime run --preload runtime=...` can't satisfy the `(import
+    // "extern" ...)` declarations `wasm_text.rs` emits for them — nothing
+    // supplies that namespace. Build and run the wasmtime-embedding host
+    // glue (linking the directory's real `bridge.rs` unmodified) instead;
+    // extern-free programs keep the plain subprocess path unchanged.
+    let extra_types = directory_type_decls_if_rust_externs(&tir, file);
+    let output = match wasm_host_glue::generate_host_main(&tir, &extra_types) {
+        Ok(None) => {
+            let mut wasmtime_cmd = process::Command::new(wasmtime_bin);
+            wasmtime_cmd.arg("run");
+            if let Some(runtime) = runtime_wasm {
+                wasmtime_cmd
+                    .arg("--preload")
+                    .arg(format!("runtime={}", runtime.display()));
+            }
+            match wasmtime_cmd.arg(wasm_tmp.path()).output() {
+                Ok(o) => o,
+                Err(e) => {
+                    return CaseResult {
+                        passed: false,
+                        output: String::new(),
+                        err_output: format!("  FAIL (wasmtime spawn): {file_str}: {e}\n"),
+                    }
+                }
+            }
+        }
+        Ok(Some(host_src)) => {
+            match run_extern_host(file, &host_src, runtime_wasm, wasm_tmp.path(), None) {
+                Ok(o) => o,
+                Err(e) => {
+                    return CaseResult {
+                        passed: false,
+                        output: String::new(),
+                        err_output: format!("  FAIL (extern-wasm host): {file_str}: {e}\n"),
+                    }
+                }
+            }
+        }
+        Err(unsupported) => {
+            let mut msg = format!("  FAIL (extern-wasm unsupported): {file_str}\n");
+            for u in &unsupported {
+                msg.push_str(&format!("    {u}\n"));
+            }
             return CaseResult {
                 passed: false,
                 output: String::new(),
-                err_output: format!("  FAIL (wasmtime spawn): {file_str}: {e}\n"),
-            }
+                err_output: msg,
+            };
         }
     };
 
@@ -1122,6 +1149,295 @@ fn run_one_case(
     }
 }
 
+/// Gathers type declarations from every sibling `.mvl` file in `file`'s
+/// directory, for `wasm_host_glue::generate_host_main`'s `extra_types`
+/// (#2049 follow-up). `bridge.rs` is a single file implementing an entire
+/// example's extern surface — its own `use crate::{...}` references every
+/// type the *whole* example declares, not just the ones reachable from
+/// whichever specific file happens to be under test right now (found
+/// running `handler_test.mvl`: it merges only `handler.mvl`/`storage.mvl`
+/// as transitive siblings, never `config.mvl`, so `Config`/`Port`/etc. are
+/// simply absent from *its* own merged TIR even though bridge.rs needs them
+/// declared).
+///
+/// Returns `&[]`-equivalent (empty) when `tir` has no rust-abi externs at
+/// all — the common case, where this scan (parsing and independently
+/// compiling every sibling file) would be pure waste. Each sibling is
+/// compiled via the same `compile_wat_multi` used everywhere else in this
+/// file (not new lowering logic); lex/parse failures on a sibling are
+/// skipped rather than propagated, since this is a best-effort supplement,
+/// not the file actually under test.
+fn directory_type_decls_if_rust_externs(tir: &TirProgram, file: &Path) -> Vec<TirTypeDecl> {
+    let has_rust_externs = tir
+        .externs
+        .iter()
+        .any(|ed| ed.abi == "rust" && !ed.fns.is_empty());
+    if !has_rust_externs {
+        return Vec::new();
+    }
+    let entry_dir = file.parent().unwrap_or_else(|| Path::new("."));
+    let Ok(read_dir) = fs::read_dir(entry_dir) else {
+        return Vec::new();
+    };
+
+    let mut by_name: HashMap<String, TirTypeDecl> = HashMap::new();
+    for entry in read_dir.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("mvl") {
+            continue;
+        }
+        let file_str = path.display().to_string();
+        let Ok(src) = fs::read_to_string(&path) else {
+            continue;
+        };
+        let (mut parser, lex_errs) = Parser::new(&src);
+        if !lex_errs.is_empty() {
+            continue;
+        }
+        let prog = parser.parse_program();
+        if !parser.errors().is_empty() {
+            continue;
+        }
+        let module_name = loader::stem(&file_str);
+        let (_wat, sibling_tir) =
+            compile_wat_multi(&prog, &file_str, &module_name, AssertMode::Always);
+        for td in sibling_tir.types {
+            by_name.entry(td.name.clone()).or_insert(td);
+        }
+    }
+    by_name.into_values().collect()
+}
+
+/// Builds and runs the wasmtime-embedding host glue for a program with
+/// `extern "rust"` fns (#2049): assembles a temp crate combining the
+/// generated `host_src` (`main.rs`) with the directory's real `bridge.rs`
+/// (unmodified — the exact same file the Rust backend links in), builds it,
+/// and runs it against `guest_wasm` + the MVL WASM runtime. Returns a
+/// `process::Output` shaped exactly like the plain `wasmtime run` subprocess
+/// would, so `run_one_case`'s stdout/expected comparison doesn't need to
+/// know which path produced it.
+///
+/// Mirrors `cli/build.rs`'s existing bridge.rs detection (canonicalize +
+/// symlink-escape guard) rather than sharing code with it — that logic is a
+/// few lines, and the two callers differ enough (this one returns `Result`
+/// for a per-test-case failure; `build.rs` hard-exits the whole process)
+/// that threading one through the other would obscure both.
+fn run_extern_host(
+    file: &Path,
+    host_src: &str,
+    runtime_wasm: Option<&Path>,
+    guest_wasm: &Path,
+    invoke: Option<&str>,
+) -> Result<process::Output, String> {
+    let entry_dir = file.parent().unwrap_or_else(|| Path::new("."));
+    let bridge_candidate = entry_dir.join("bridge.rs");
+    let bridge_path = match fs::canonicalize(&bridge_candidate) {
+        Ok(canon_bridge) => {
+            let canon_dir = fs::canonicalize(entry_dir)
+                .map_err(|e| format!("cannot canonicalize {}: {e}", entry_dir.display()))?;
+            if !canon_bridge.starts_with(&canon_dir) {
+                return Err("bridge.rs is outside source directory — refusing to copy".to_string());
+            }
+            canon_bridge
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return Err(format!(
+                "extern \"rust\" fn(s) declared but no bridge.rs found at {} (needed to run \
+                 extern \"rust\" calls under --backend=wasm)",
+                bridge_candidate.display()
+            ));
+        }
+        Err(e) => {
+            return Err(format!(
+                "cannot resolve bridge.rs at {}: {e}",
+                bridge_candidate.display()
+            ))
+        }
+    };
+
+    let runtime_wasm = runtime_wasm.ok_or_else(|| {
+        "extern \"rust\" FFI requires the MVL WASM runtime (mvl_runtime_wasm.wasm) — \
+         run `make build-runtime-wasm` or set MVL_RUNTIME_WASM"
+            .to_string()
+    })?;
+
+    let compiler_version = env!("CARGO_PKG_VERSION");
+    let file_str = file.display().to_string();
+    let module_name = loader::stem(&file_str);
+    let path_hash = loader::scratch_dir_disambiguator(&file_str);
+    let tmp_dir = std::env::temp_dir().join(format!(
+        "mvl_wasm_extern_host_{compiler_version}_{module_name}_{path_hash}"
+    ));
+    let src_dir = tmp_dir.join("src");
+    fs::create_dir_all(&src_dir)
+        .map_err(|e| format!("cannot create {}: {e}", src_dir.display()))?;
+
+    fs::write(src_dir.join("main.rs"), host_src)
+        .map_err(|e| format!("cannot write generated host main.rs: {e}"))?;
+    fs::copy(&bridge_path, src_dir.join("bridge.rs"))
+        .map_err(|e| format!("cannot copy bridge.rs: {e}"))?;
+
+    // Absolute path dep, same pattern the Rust backend uses for
+    // --target=tokio (ADR-0027) — `mvl_runtime`'s own Cargo.toml resolves
+    // its "../core" dependency relative to wherever this path points, so no
+    // copying is needed (unlike the default Rust-backend build, which
+    // copies for concurrent-build isolation; read-only source deps don't
+    // need that here).
+    let mvl_runtime_path = mvl::mvl::runtime_xdg::ensure_runtime_rust();
+    let cargo_toml = format!(
+        r#"[package]
+name = "mvl_wasm_extern_host"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[[bin]]
+name = "host"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1"
+wasmtime = "27"
+wasmtime-wasi = "27"
+mvl_runtime = {{ path = {mvl_runtime_path:?}, package = "mvl_runtime_rust" }}
+"#
+    );
+    fs::write(tmp_dir.join("Cargo.toml"), cargo_toml)
+        .map_err(|e| format!("cannot write Cargo.toml: {e}"))?;
+
+    let build = process::Command::new("cargo")
+        .arg("build")
+        .arg("--quiet")
+        .current_dir(&tmp_dir)
+        .output()
+        .map_err(|e| format!("cargo build spawn failed: {e}"))?;
+    if !build.status.success() {
+        return Err(format!(
+            "cargo build failed:\n{}",
+            String::from_utf8_lossy(&build.stderr)
+        ));
+    }
+
+    let host_bin = tmp_dir.join("target/debug/host");
+    let mut cmd = process::Command::new(&host_bin);
+    cmd.arg(runtime_wasm).arg(guest_wasm);
+    if let Some(name) = invoke {
+        cmd.arg(name);
+    }
+    cmd.output()
+        .map_err(|e| format!("host binary spawn failed: {e}"))
+}
+
+/// Run one `test fn` by name, mirroring `cmd_test_llvm_text`'s
+/// `run_one_testfn` (`lli <ir> <test_name>`, exit 0 = pass) but for wasm:
+/// `wasmtime run --invoke <test_name>` for the plain path, or the extern
+/// host binary passed the same name as its 3rd arg when the file declares
+/// `extern "rust"` fns. A `test fn` takes no args and returns `Unit`,
+/// exported under its own name like any other fn (`emit_program`'s export
+/// loop makes no test/non-test distinction) — no wasm_text.rs emitter
+/// changes were needed for this, only this CLI-side discovery+invocation.
+#[allow(clippy::too_many_arguments)]
+fn run_one_testfn_case(
+    file_str: &str,
+    test_name: &str,
+    wasm_path: &Path,
+    tir: &TirProgram,
+    file: &Path,
+    wasmtime_bin: &Path,
+    runtime_wasm: Option<&Path>,
+    quiet: bool,
+    verbose: bool,
+) -> CaseResult {
+    let label = format!("{file_str}::{test_name}");
+
+    let extra_types = directory_type_decls_if_rust_externs(tir, file);
+    let output = match wasm_host_glue::generate_host_main(tir, &extra_types) {
+        Ok(None) => {
+            let mut cmd = process::Command::new(wasmtime_bin);
+            cmd.arg("run");
+            if let Some(runtime) = runtime_wasm {
+                cmd.arg("--preload")
+                    .arg(format!("runtime={}", runtime.display()));
+            }
+            cmd.arg("--invoke").arg(test_name).arg(wasm_path);
+            match cmd.output() {
+                Ok(o) => o,
+                Err(e) => {
+                    return CaseResult {
+                        passed: false,
+                        output: String::new(),
+                        err_output: format!("  FAIL (wasmtime spawn): {label}: {e}\n"),
+                    }
+                }
+            }
+        }
+        Ok(Some(host_src)) => {
+            match run_extern_host(file, &host_src, runtime_wasm, wasm_path, Some(test_name)) {
+                Ok(o) => o,
+                Err(e) => {
+                    return CaseResult {
+                        passed: false,
+                        output: String::new(),
+                        err_output: format!("  FAIL (extern-wasm host): {label}: {e}\n"),
+                    }
+                }
+            }
+        }
+        Err(unsupported) => {
+            let mut msg = format!("  FAIL (extern-wasm unsupported): {label}\n");
+            for u in &unsupported {
+                msg.push_str(&format!("    {u}\n"));
+            }
+            return CaseResult {
+                passed: false,
+                output: String::new(),
+                err_output: msg,
+            };
+        }
+    };
+
+    if output.status.success() {
+        CaseResult {
+            passed: true,
+            output: if verbose {
+                format!("  PASS: {label}\n")
+            } else if !quiet {
+                ".".to_string()
+            } else {
+                String::new()
+            },
+            err_output: String::new(),
+        }
+    } else {
+        let mut out = format!("\n  FAIL: {label}\n");
+        if !quiet {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            let first = stderr.lines().next().unwrap_or("");
+            if !first.is_empty() {
+                out.push_str(&format!("    trap:     {first}\n"));
+            }
+        }
+        CaseResult {
+            passed: false,
+            output: out,
+            err_output: String::new(),
+        }
+    }
+}
+
+/// Names of every `test fn`/`test partial fn`/`test total fn` declared
+/// directly in `prog` (not siblings — mirrors `cmd_test_llvm_text`, which
+/// only exports test fns from the file being tested).
+fn test_fn_names(prog: &Program) -> Vec<String> {
+    prog.declarations
+        .iter()
+        .filter_map(|d| match d {
+            Decl::Fn(fd) if fd.is_test => Some(fd.name.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
 /// Bail out with a clear message until the `wasm-browser` target's JS-host
 /// runtime and emitter path exist (tracked in #2093). `wasi` is a no-op here.
 fn exit_if_wasm_browser_unimplemented(target: &str) {
@@ -1148,76 +1464,148 @@ pub(super) fn cmd_test_wasm(path: &str, quiet: bool, verbose: bool, target: &str
     let runtime_wasm = lli::find_mvl_runtime_wasm_lib();
 
     let all_mvl = loader::mvl_files_all(path);
-    let mut test_cases: Vec<(PathBuf, String, bool)> = Vec::new();
+    let mut expect_cases: Vec<(PathBuf, String, bool)> = Vec::new();
+    // Files with `test fn` declarations (no `fn main` + `// expect:`
+    // annotation) — mirrors `cmd_test_llvm_text`'s dual discovery. `Program`
+    // is kept alongside the file so test names don't need re-parsing later.
+    let mut testfn_cases: Vec<(PathBuf, Vec<String>)> = Vec::new();
 
     for file in &all_mvl {
         let src = match fs::read_to_string(file) {
             Ok(s) => s,
             Err(_) => continue,
         };
-        if !src.contains("fn main(") {
-            continue;
+
+        if src.contains("fn main(") {
+            if let Some(pat) = lli::parse_expect_pattern_annotation(&src) {
+                expect_cases.push((file.clone(), pat, true));
+                continue;
+            } else if let Some(expected) = lli::parse_expect_annotation(&src) {
+                expect_cases.push((file.clone(), expected, false));
+                continue;
+            }
         }
-        if let Some(pat) = lli::parse_expect_pattern_annotation(&src) {
-            test_cases.push((file.clone(), pat, true));
-        } else if let Some(expected) = lli::parse_expect_annotation(&src) {
-            test_cases.push((file.clone(), expected, false));
+
+        let has_test_fns = src.contains("test fn ")
+            || src.contains("test partial fn ")
+            || src.contains("test total fn ");
+        if has_test_fns {
+            let (mut parser, lex_errs) = Parser::new(&src);
+            if !lex_errs.is_empty() {
+                eprintln!("  FAIL (lex): {}", file.display());
+                continue;
+            }
+            let prog = parser.parse_program();
+            if !parser.errors().is_empty() {
+                eprintln!("  FAIL (parse): {}", file.display());
+                continue;
+            }
+            let names = test_fn_names(&prog);
+            if !names.is_empty() {
+                testfn_cases.push((file.clone(), names));
+            }
         }
     }
 
-    if test_cases.is_empty() {
+    let total_cases =
+        expect_cases.len() + testfn_cases.iter().map(|(_, ns)| ns.len()).sum::<usize>();
+    if total_cases == 0 {
         if !quiet {
-            println!("No WASM test cases found (files with `fn main` + `// expect:` annotations).");
+            println!(
+                "No WASM test cases found (files with `fn main` + `// expect:` annotations, or `test fn` declarations)."
+            );
         }
         return;
-    }
-
-    let parallelism = std::thread::available_parallelism()
-        .map(|n| n.get())
-        .unwrap_or(4)
-        .min(test_cases.len());
-    let chunk_size = test_cases.len().div_ceil(parallelism).max(1);
-
-    if !quiet {
-        println!(
-            "WASM backend: {} test file(s) across {} worker(s)",
-            test_cases.len(),
-            parallelism
-        );
     }
 
     let wasm_tools_ref: &Path = &wasm_tools_bin;
     let wasmtime_ref: &Path = &wasmtime_bin;
     let runtime_wasm_ref: Option<&Path> = runtime_wasm.as_deref();
 
-    let results: Vec<CaseResult> = std::thread::scope(|scope| {
-        let handles: Vec<_> = test_cases
-            .chunks(chunk_size)
-            .map(|chunk| {
-                scope.spawn(move || {
-                    chunk
-                        .iter()
-                        .map(|(f, e, p)| {
-                            run_one_case(
-                                f,
-                                e,
-                                *p,
-                                wasm_tools_ref,
-                                wasmtime_ref,
-                                runtime_wasm_ref,
-                                quiet,
-                                verbose,
-                            )
-                        })
-                        .collect::<Vec<_>>()
+    let mut results: Vec<CaseResult> = Vec::new();
+
+    // ── expect-annotation cases (parallel, unchanged) ─────────────────────
+    if !expect_cases.is_empty() {
+        let parallelism = std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(4)
+            .min(expect_cases.len());
+        let chunk_size = expect_cases.len().div_ceil(parallelism).max(1);
+
+        if !quiet {
+            println!(
+                "WASM backend: {} expect-annotation file(s) across {} worker(s)",
+                expect_cases.len(),
+                parallelism
+            );
+        }
+
+        let mut expect_results: Vec<CaseResult> = std::thread::scope(|scope| {
+            let handles: Vec<_> = expect_cases
+                .chunks(chunk_size)
+                .map(|chunk| {
+                    scope.spawn(move || {
+                        chunk
+                            .iter()
+                            .map(|(f, e, p)| {
+                                run_one_case(
+                                    f,
+                                    e,
+                                    *p,
+                                    wasm_tools_ref,
+                                    wasmtime_ref,
+                                    runtime_wasm_ref,
+                                    quiet,
+                                    verbose,
+                                )
+                            })
+                            .collect::<Vec<_>>()
+                    })
                 })
-            })
-            .collect();
-        handles
-            .into_iter()
-            .flat_map(|h| h.join().expect("wasm test worker panicked"))
-            .collect()
-    });
+                .collect();
+            handles
+                .into_iter()
+                .flat_map(|h| h.join().expect("wasm test worker panicked"))
+                .collect()
+        });
+        results.append(&mut expect_results);
+    }
+
+    // ── test fn cases: one module build per file, one invocation per test ──
+    if !testfn_cases.is_empty() {
+        let total_testfns: usize = testfn_cases.iter().map(|(_, ns)| ns.len()).sum();
+        if !quiet {
+            println!(
+                "WASM backend: {} test fn(s) across {} file(s)",
+                total_testfns,
+                testfn_cases.len(),
+            );
+        }
+
+        for (file, test_names) in &testfn_cases {
+            let file_str = file.display().to_string();
+            let (wasm_tmp, tir, _wat) = match build_and_assemble(file, wasm_tools_ref, verbose) {
+                Ok(built) => built,
+                Err(cr) => {
+                    results.push(cr);
+                    continue;
+                }
+            };
+            for test_name in test_names {
+                results.push(run_one_testfn_case(
+                    &file_str,
+                    test_name,
+                    wasm_tmp.path(),
+                    &tir,
+                    file,
+                    wasmtime_ref,
+                    runtime_wasm_ref,
+                    quiet,
+                    verbose,
+                ));
+            }
+        }
+    }
 
     let mut passed = 0usize;
     let mut failed = 0usize;

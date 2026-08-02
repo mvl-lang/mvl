@@ -7,7 +7,7 @@ use super::emitter::RustEmitter;
 use crate::mvl::backends::rust::emit_exprs::Prec;
 use crate::mvl::backends::rust::emit_types::emit_label;
 use crate::mvl::backends::{
-    is_stdlib_method, is_stdlib_dispatch_method, is_stdlib_dispatch_method_for, rust_emit_for,
+    is_stdlib_dispatch_method, is_stdlib_dispatch_method_for, is_stdlib_method, rust_emit_for,
     STRING_LABEL_PRESERVING_METHODS,
 };
 use crate::mvl::ir::{CmpOp, LogicOp, RefExpr, TirExpr, TirExprKind, Ty};
@@ -797,7 +797,8 @@ impl RustEmitter {
             // `s.find(sub)` on String and route it through the free-fn `find`
             // instead of the runtime's `str_find` — silently breaking every
             // String::find call (#1707 phase 12).
-            m if ty_builtin_key(&receiver.ty).is_some_and(|k| is_stdlib_dispatch_method_for(m, k))
+            m if ty_builtin_key(&receiver.ty)
+                .is_some_and(|k| is_stdlib_dispatch_method_for(m, k))
                 || (is_stdlib_dispatch_method(m) && ty_builtin_key(&receiver.ty).is_none()) =>
             {
                 // Check whether we must re-wrap the result in a label newtype.
