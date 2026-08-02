@@ -1,0 +1,19 @@
+=== Verified Trading Engine ===
+
+--- scenario 1: resting ask crossed by aggressive bid ---
+
+--- scenario 2: resting bid crossed by aggressive ask ---
+OrderBook: ask 0 price=100 qty=10
+OrderBook: bid 1 price=102 qty=10
+Matcher: executing bid 1 vs ask 0 @ 100 x 10
+  FILL accepted  bid=1 ask=0 price=100 qty=10
+
+--- scenario 3: no cross (bid below ask) ---
+OrderBook: bid 0 price=99 qty=5
+OrderBook: ask 1 price=97 qty=5
+Matcher: executing bid 0 vs ask 1 @ 97 x 5
+  FILL accepted  bid=0 ask=1 price=97 qty=5
+
+Done.
+OrderBook: bid 0 price=95 qty=3
+OrderBook: ask 1 price=98 qty=3

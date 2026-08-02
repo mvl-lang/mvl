@@ -1,0 +1,3 @@
+# node_modules/, package-lock.json already covered by repo-root .gitignore.
+test-cases/*/*.wat
+test-cases/*/*.wasm

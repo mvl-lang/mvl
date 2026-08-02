@@ -1,0 +1,29 @@
+// option_probe/main.mvl — minimal regression test for a real bug found while
+// building experiment 010 (mastermind_web): the ported runtime's Option/
+// Result tag polarity was inverted (0=None/1=Some instead of the compiler's
+// actual 0=Some/1=None), which silently returned WRONG values for every
+// .get(i).unwrap_or(...) call instead of crashing. This test exists so that
+// regression is caught by run-tests.sh going forward instead of needing to
+// be rediscovered by hand.
+//
+// Deliberately avoids Int.to_string() — under --backend=wasm that call
+// compiles to an undefined `$mvl_int_to_string` and fails to assemble at
+// all (a separate, also-real, already-documented gap). Comparing against
+// fixed constants sidesteps it without weakening the Option-tag coverage.
+fn main() -> Unit ! Console {
+    let xs: List[Int] = [10, 20, 30];
+    let in_bounds: Int = xs.get(1).unwrap_or(-1);
+    let out_of_bounds: Int = xs.get(9).unwrap_or(-1);
+
+    if in_bounds == 20 {
+        println("in_bounds: correct (found 20)")
+    } else {
+        println("in_bounds: WRONG (Option tag polarity bug)")
+    };
+
+    if out_of_bounds == -1 {
+        println("out_of_bounds: correct (default -1)")
+    } else {
+        println("out_of_bounds: WRONG (Option tag polarity bug)")
+    }
+}

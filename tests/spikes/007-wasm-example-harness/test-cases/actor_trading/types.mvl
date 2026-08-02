@@ -1,0 +1,70 @@
+// actor_trading/types.mvl — Domain types for the verified trading engine.
+//
+// Demonstrates Req 10 (refinement types) + the MVL layered solver:
+//   - Price, Quantity, OrderId are type aliases documenting the domain constraints
+//   - Enforcement happens via inline `where` predicates on function parameters
+//     (see OrderGateway.new_bid / new_ask in main.mvl)
+//   - Struct fields use plain Int; values are valid once the gateway admits them
+//
+// Note: MVL type alias methods are resolved for arithmetic but not yet for
+// method dispatch (e.g. Price.to_string() resolves to Unknown). Use inline
+// `where` predicates on function parameters for enforcement (#954 for context).
+//
+// No extern, no effects — pure type declarations.
+
+// ── Refined scalar type aliases (documentation + function-param enforcement) ──
+//
+// These aliases name the domain constraints clearly.  They are used in
+// function signatures (as inline `where` predicates) to prove the predicates
+// statically at every call site.
+
+/// Positive integer price in ticks.
+pub type Price = Int where self > 0
+
+/// Positive integer quantity in lots.
+pub type Quantity = Int where self > 0
+
+/// Non-negative order identifier.
+pub type OrderId = Int where self >= 0
+
+// ── Enumerations ─────────────────────────────────────────────────────────
+
+/// Side of the market.
+pub type Side = enum {
+    Bid,    // buy order — willing to pay up to `price`
+    Ask,    // sell order — willing to sell down to `price`
+}
+
+/// Lifecycle state of an order.
+pub type OrderStatus = enum {
+    Open,       // resting in the order book
+    Filled,     // fully executed — no quantity remaining
+    Cancelled,  // withdrawn before full execution
+}
+
+// ── Aggregate types ───────────────────────────────────────────────────────
+
+/// An order submitted to the gateway.
+///
+/// Fields use plain Int — values are already validated at the gateway's
+/// new_bid/new_ask call sites (inline `where` predicates enforced there).
+pub type Order = struct {
+    id:       Int,
+    side:     Side,
+    price:    Int,
+    quantity: Int,
+    status:   OrderStatus,
+}
+
+/// A single execution: bid order matched against ask order at `price`
+/// for `quantity` lots.
+///
+/// Cross-field invariants (proved by Z3 in verify.py):
+///   fill.price >= ask.price  AND  fill.price <= bid.price
+///   fill.quantity <= bid.quantity  AND  fill.quantity <= ask.quantity
+pub type Fill = struct {
+    bid_order: Int,
+    ask_order: Int,
+    price:     Int,
+    quantity:  Int,
+}
