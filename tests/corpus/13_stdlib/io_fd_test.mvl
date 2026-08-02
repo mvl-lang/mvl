@@ -1,0 +1,46 @@
+// 13_stdlib/io_fd_test.mvl — `Fd` bound to a `let`, not just consumed inline.
+//
+// `stdout()`/`stderr()`/`stdin()` return a pure `Fd` value; `write` takes one
+// dynamically. Every prior corpus file that touches Console goes through the
+// hardcoded `println`/`eprintln` shims, never these builtins directly, which
+// let a real backend bug ship unnoticed (#2090): binding the `Fd` to a `let`
+// before using it produced a module that could not assemble at all, and even
+// the inline `write(stdout(), ...)` shape failed validation once `println`
+// was out of the picture.
+
+test fn stdout_fd_bound_to_let() -> Unit ! Console {
+    let f: Fd = stdout();
+    let ok: Bool = match write(f, "") {
+        Ok(_) => true,
+        Err(_) => false,
+    };
+    assert_eq(ok, true);
+}
+
+test fn stderr_fd_bound_to_let() -> Unit ! Console {
+    let f: Fd = stderr();
+    let ok: Bool = match write(f, "") {
+        Ok(_) => true,
+        Err(_) => false,
+    };
+    assert_eq(ok, true);
+}
+
+test fn stdin_fd_bound_to_let() -> Unit ! Console {
+    // `read_line`/`read` remain #2088 — this only exercises the `Fd`
+    // constructor + `let` binding shape from #2090, not reading stdin.
+    let f: Fd = stdin();
+    let ok: Bool = match write(stdout(), "") {
+        Ok(_) => true,
+        Err(_) => false,
+    };
+    assert_eq(ok, true);
+}
+
+test fn write_stdout_inline() -> Unit ! Console {
+    let ok: Bool = match write(stdout(), "") {
+        Ok(_) => true,
+        Err(_) => false,
+    };
+    assert_eq(ok, true);
+}
