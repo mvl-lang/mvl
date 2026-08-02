@@ -1,11 +1,13 @@
 # mastermind — console Mastermind game demonstrating the pure logic / I/O shell split.
 # Run from this directory or from the repo root.
-.PHONY: help guard-mvl check test-solver test assurance smoke run clean
+.PHONY: help guard-mvl check test-solver test test-wasm assurance smoke run clean
 
 .DEFAULT_GOAL := help
 
-MVL  := ../../target/debug/mvl
-DIR  := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
+MVL          := ../../target/debug/mvl
+DIR          := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
+MVLR         := ../../tools/mvlr
+WASM_RUNTIME := ../../target/wasm32-wasip1/debug/mvl_runtime_wasm.wasm
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z0-9_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-12s\033[0m %s\n", $$1, $$2}'
@@ -43,6 +45,9 @@ test-solver: guard-mvl ## Check each source file individually
 
 test: guard-mvl ## Run game logic tests
 	$(MVL) test $(DIR)code_test.mvl
+
+test-wasm: guard-mvl ## Run game logic tests via WASM backend (code_test.mvl only — main.mvl needs stdin, out of scope)
+	MVL_RUNTIME_WASM=$(WASM_RUNTIME) $(MVLR) --mvl=$(MVL) --compiler=rust --backend=wasm $(DIR)code_test.mvl
 
 assurance: guard-mvl ## Run MVL assurance report for the pure game logic
 	$(MVL) assurance $(DIR)code.mvl
