@@ -752,6 +752,72 @@ mod tests {
         );
     }
 
+    /// #2138 follow-up: `s.insert(x)` on a non-`ref` local was previously
+    /// unchecked entirely — silently accepted, then corrupted callers across
+    /// a function boundary in backends without a Rust-style borrow checker.
+    #[test]
+    fn mutating_method_on_immutable_local_rejected() {
+        let src = "fn f() -> Unit { let s: Set[Int] = {1, 2, 3}; s.insert(4); }";
+        let errors = errors_for(src);
+        assert!(
+            errors.iter().any(|e| matches!(
+                e,
+                CheckError::MutatingMethodOnImmutableReceiver { name, method, .. }
+                    if name == "s" && method == "insert"
+            )),
+            "expected MutatingMethodOnImmutableReceiver(s, insert), got: {errors:?}"
+        );
+    }
+
+    /// Same rule for a non-`ref` function *parameter* — this was the shape
+    /// that actually crossed a function boundary and corrupted the caller.
+    #[test]
+    fn mutating_method_on_immutable_param_rejected() {
+        let src = "fn mutate(x: Set[Int]) -> Unit { x.insert(99); }";
+        let errors = errors_for(src);
+        assert!(
+            errors.iter().any(|e| matches!(
+                e,
+                CheckError::MutatingMethodOnImmutableReceiver { name, method, .. }
+                    if name == "x" && method == "insert"
+            )),
+            "expected MutatingMethodOnImmutableReceiver(x, insert), got: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn mutating_method_on_ref_local_and_param_allowed() {
+        let src = "fn mutate(x: ref Set[Int]) -> Unit { x.insert(99); }\n\
+                    fn f() -> Unit { let s: ref List[Int] = [1, 2, 3]; s.push(4); }";
+        let errors = errors_for(src);
+        let violations: Vec<_> = errors
+            .iter()
+            .filter(|e| matches!(e, CheckError::MutatingMethodOnImmutableReceiver { .. }))
+            .collect();
+        assert!(
+            violations.is_empty(),
+            "ref receiver should be allowed, got: {violations:?}"
+        );
+    }
+
+    /// Stdlib's own self-referential dispatch bodies (e.g. `Set[T]::insert(self, x)
+    /// { self.insert(x) }`) call a mutating method on `self`, which has no `ref
+    /// self` syntax to satisfy. These bodies are transpiler-handled dead code
+    /// (never executed as written), so `self` receivers are exempt.
+    #[test]
+    fn mutating_method_on_self_receiver_allowed() {
+        let src = "pub fn Set[T]::my_insert(self, x: T) -> Unit { self.insert(x) }";
+        let errors = errors_for(src);
+        let violations: Vec<_> = errors
+            .iter()
+            .filter(|e| matches!(e, CheckError::MutatingMethodOnImmutableReceiver { .. }))
+            .collect();
+        assert!(
+            violations.is_empty(),
+            "self receiver should be exempt, got: {violations:?}"
+        );
+    }
+
     // ── Requirement 2 / Scenario: Ownership / use-after-consume (#15) ────────
 
     #[test]

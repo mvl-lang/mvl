@@ -124,6 +124,16 @@ pub enum CheckError {
         field: String,
         span: Span,
     },
+    /// `s.insert(x)` / `.remove`/`.push`/`.set` on a non-`ref` binding —
+    /// these methods mutate the receiver in place, same as `s = ...` would.
+    /// Backends without a Rust-style borrow checker (WASM, LLVM) silently
+    /// aliased and corrupted the caller once this crossed a function
+    /// boundary, since nothing rejected it at check time (#2138 follow-up).
+    MutatingMethodOnImmutableReceiver {
+        name: String,
+        method: String,
+        span: Span,
+    },
 
     // ── Ownership (#15) ──────────────────────────────────────────────────
     UseAfterMove {
@@ -583,6 +593,7 @@ impl CheckError {
             // Req 6: Ownership (immutability / linearity)
             CheckError::AssignToImmutable { .. }
             | CheckError::MutateImmutableField { .. }
+            | CheckError::MutatingMethodOnImmutableReceiver { .. }
             | CheckError::CaptureMutabilityViolation { .. }
             | CheckError::LinearShadowDrop { .. } => 6,
             // Req 7: Effect Tracking (includes invalid names)
@@ -669,6 +680,7 @@ impl CheckError {
             | CheckError::PropagateNotResult { span, .. }
             | CheckError::AssignToImmutable { span, .. }
             | CheckError::MutateImmutableField { span, .. }
+            | CheckError::MutatingMethodOnImmutableReceiver { span, .. }
             | CheckError::CaptureMutabilityViolation { span, .. }
             | CheckError::UseAfterMove { span, .. }
             | CheckError::ReferenceEscapesScope { span, .. }
@@ -802,6 +814,9 @@ impl CheckError {
             CheckError::MutateImmutableField { ty, field, .. } => {
                 format!("cannot assign to immutable field `{field}` on `{ty}`")
             }
+            CheckError::MutatingMethodOnImmutableReceiver { name, method, .. } => format!(
+                "cannot call mutating method `{method}` on immutable binding `{name}` — declare it `ref` to allow mutation"
+            ),
             CheckError::UseAfterMove { name, .. } => format!("use of moved value `{name}`"),
             CheckError::ReferenceEscapesScope { name, .. } => format!(
                 "reference to `{name}` escapes its scope — the referenced value would be deallocated before the reference is used"

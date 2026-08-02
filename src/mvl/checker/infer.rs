@@ -300,6 +300,35 @@ impl TypeChecker {
                 // Stdlib method resolution (#43): dispatch on receiver type.
                 // IFC labels propagate through method results via the receiver label.
                 let self_receiver = matches!(receiver.as_ref(), Expr::Ident(n, _) if n == "self");
+                // Req 6: mutating methods require a `ref` receiver, mirroring
+                // the `s = ...` immutability rule (`check_assignment`) —
+                // previously unchecked entirely, so `s.insert(x)` on a
+                // non-`ref` local or parameter passed silently, then
+                // corrupted the caller in backends without a Rust-style
+                // borrow checker once the call crossed a function boundary
+                // (#2138 follow-up). Skipped for `self` — these stdlib
+                // bodies (e.g. `Set[T]::insert(self, x) { self.insert(x) }`)
+                // are transpiler-handled dead code, never executed as
+                // written, and `self` has no `ref self` syntax to satisfy.
+                let mutates_receiver = matches!(
+                    (recv_base, method.as_str()),
+                    (Ty::Set(_), "insert" | "remove" | "set")
+                        | (Ty::List(_) | Ty::Array(_, _), "push" | "set")
+                        | (Ty::Map(_, _), "insert" | "remove")
+                );
+                if mutates_receiver && !self_receiver {
+                    if let Expr::Ident(name, _) = receiver.as_ref() {
+                        if let Some(info) = self.env.lookup(name) {
+                            if !info.mutable {
+                                self.emit(CheckError::MutatingMethodOnImmutableReceiver {
+                                    name: name.clone(),
+                                    method: method.clone(),
+                                    span: *span,
+                                });
+                            }
+                        }
+                    }
+                }
                 self.infer_method_call(&recv_ty, method, &arg_tys, *span, self_receiver)
             }
 
