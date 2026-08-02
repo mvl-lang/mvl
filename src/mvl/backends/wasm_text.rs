@@ -1609,18 +1609,21 @@ fn emit_fn(out: &mut String, f: &TirFn, ctx: &Ctx) {
     *ctx.string_params.borrow_mut() = f
         .params
         .iter()
-        .filter(|p| peels_to_string(&p.ty))
+        .filter(|p| is_string_ty(&p.ty, ctx))
         .map(|p| p.name.clone())
         .collect();
 
     let (wasm_name, _) = effective_name(f, ctx.needs_wasi);
     // Populate the per-function String-param set so the Var emitter knows
     // which String locals are split (ptr, len) params vs unsupported locals.
+    // `is_string_ty` (not `peels_to_string`) so a named alias to `String`
+    // (e.g. `type BoundedInput = String where ...`, #2112) is recognized
+    // too — matches the param-splitting decision just below.
     {
         let mut sp = ctx.string_params.borrow_mut();
         sp.clear();
         for p in &f.params {
-            if peels_to_string(&p.ty) {
+            if is_string_ty(&p.ty, ctx) {
                 sp.insert(p.name.clone());
             }
         }
@@ -1628,7 +1631,7 @@ fn emit_fn(out: &mut String, f: &TirFn, ctx: &Ctx) {
 
     out.push_str(&format!("  (func ${wasm_name}"));
     for p in &f.params {
-        if peels_to_string(&p.ty) {
+        if is_string_ty(&p.ty, ctx) {
             // String (or Secret[String]/Tainted[String] — #2013, labels are
             // compile-time only) params split into two i32 WASM params: (ptr, len).
             out.push_str(&format!(
@@ -1639,7 +1642,7 @@ fn emit_fn(out: &mut String, f: &TirFn, ctx: &Ctx) {
             out.push_str(&format!(" (param ${} {})", p.name, wasm_ty(&p.ty, ctx)));
         }
     }
-    if peels_to_string(&f.ret_ty) {
+    if is_string_ty(&f.ret_ty, ctx) {
         // String returns as two i32s (ptr, len) — WASM multi-value return.
         out.push_str(" (result i32 i32)");
     } else if !matches!(f.ret_ty, Ty::Unit) {
@@ -1667,7 +1670,7 @@ fn emit_fn(out: &mut String, f: &TirFn, ctx: &Ctx) {
     // multi-value i32×2 — deferred) and when AssertMode is Assume.
     let has_checkable_ensures = ctx.assert_mode != AssertMode::Assume
         && !matches!(f.ret_ty, Ty::Unit)
-        && !peels_to_string(&f.ret_ty)
+        && !is_string_ty(&f.ret_ty, ctx)
         && (f.ensures.iter().any(is_runtime_checkable)
             || f.return_refinement
                 .as_ref()
@@ -1869,7 +1872,29 @@ fn collect_locals_ctx(block: &TirBlock, locals: &mut Vec<(String, Ty)>, ctx: &Ct
 
 fn collect_locals_ctx_stmt(stmt: &TirStmt, locals: &mut Vec<(String, Ty)>, ctx: &Ctx) {
     match stmt {
-        TirStmt::Let { init, .. } => collect_locals_ctx_expr(init, locals, ctx),
+        TirStmt::Let {
+            pattern, ty, init, ..
+        } => {
+            // The ctx-free first pass (`collect_locals_stmt`) already
+            // split `{name}_ptr`/`{name}_len` locals for a bare `String`
+            // (or `Ref`/`Labeled`/`Refined`-wrapped `String`) binding via
+            // `peels_to_string`, which can't see through a named type
+            // alias (e.g. `type BoundedInput = String where ...`) without
+            // a `ctx.type_aliases` lookup. When `ty` is such an alias, it
+            // instead declared a single scalar local — wrong shape, since
+            // `emit_stmt`'s `is_string_ty` (ctx-aware, #2112) correctly
+            // treats the init as a String and pushes two i32s. Speculatively
+            // add the split locals here too; harmless if `peels_to_string`
+            // already caught it (same names, deduped), and leaves the wrong
+            // scalar local as dead-but-harmless when it didn't.
+            if let Pattern::Ident(name, _) = pattern {
+                if is_string_ty(ty, ctx) {
+                    locals.push((format!("{name}_ptr"), Ty::Bool)); // i32
+                    locals.push((format!("{name}_len"), Ty::Bool)); // i32
+                }
+            }
+            collect_locals_ctx_expr(init, locals, ctx)
+        }
         TirStmt::Assign { target, value, .. } => {
             // `base.field = …` on a String field needs a scratch local to hold
             // the new handle while the old one is dropped (see
@@ -2231,7 +2256,7 @@ fn collect_locals_stmt(stmt: &TirStmt, locals: &mut Vec<(String, Ty)>) {
             span,
         } => {
             // Stmt-form match needs the same scrutinee temp as expr-form.
-            locals.push((format!("__match_{}", span.offset), scrutinee.ty.clone()));
+            push_match_scrutinee_locals(locals, &format!("__match_{}", span.offset), &scrutinee.ty);
             collect_locals_expr(scrutinee, locals);
             let inner_ty = option_inner_ty(&scrutinee.ty).cloned();
             for arm in arms {
@@ -2265,7 +2290,7 @@ fn collect_locals_expr(expr: &TirExpr, locals: &mut Vec<(String, Ty)>) {
         TirExprKind::Match { scrutinee, arms } => {
             // Fresh temp for the scrutinee value — `emit_match` stashes
             // the scrutinee here so it doesn't re-evaluate per arm.
-            locals.push((match_temp_name(expr), scrutinee.ty.clone()));
+            push_match_scrutinee_locals(locals, &match_temp_name(expr), &scrutinee.ty);
             collect_locals_expr(scrutinee, locals);
             let inner_ty = option_inner_ty(&scrutinee.ty).cloned();
             let span_off = expr.span.offset;
@@ -4138,9 +4163,18 @@ fn emit_match_impl(
         })
         .unwrap_or_else(|| "    if\n".to_string());
 
-    // Store scrutinee once — arms compare against it repeatedly.
+    // Store scrutinee once — arms compare against it repeatedly. A String
+    // scrutinee leaves two values (ptr, len) on the stack, so it needs the
+    // split locals `push_match_scrutinee_locals` declared, not the single
+    // `$temp` every other scrutinee type uses (#2113).
+    let scrutinee_is_string = peels_to_string(&scrutinee.ty);
     emit_expr(out, scrutinee, ctx);
-    out.push_str(&format!("    local.set ${temp}\n"));
+    if scrutinee_is_string {
+        out.push_str(&format!("    local.set ${temp}_len\n"));
+        out.push_str(&format!("    local.set ${temp}_ptr\n"));
+    } else {
+        out.push_str(&format!("    local.set ${temp}\n"));
+    }
 
     // Split arms into checked (literal-pattern) and default (wildcard /
     // ident at any position — first one wins). Guards fall through to
@@ -4156,9 +4190,17 @@ fn emit_match_impl(
         match &arm.pattern {
             Pattern::Literal(lit, _) => {
                 // scrutinee == literal ?
-                out.push_str(&format!("    local.get ${temp}\n"));
-                emit_literal(out, lit, ctx);
-                out.push_str(&format!("    {}\n", eq_op_for(&scrutinee.ty, ctx)));
+                if scrutinee_is_string {
+                    ctx.needs_runtime.set(true);
+                    out.push_str(&format!("    local.get ${temp}_ptr\n"));
+                    out.push_str(&format!("    local.get ${temp}_len\n"));
+                    emit_literal(out, lit, ctx);
+                    out.push_str("    call $_mvl_string_eq\n");
+                } else {
+                    out.push_str(&format!("    local.get ${temp}\n"));
+                    emit_literal(out, lit, ctx);
+                    out.push_str(&format!("    {}\n", eq_op_for(&scrutinee.ty, ctx)));
+                }
                 out.push_str(&if_open);
                 emit_match_body(out, &arm.body, ctx);
                 out.push_str("    else\n");
@@ -4794,7 +4836,7 @@ fn emit_enum_variant_construct(
 /// the field type to choose the correct WASM store opcode.
 fn emit_struct_store(out: &mut String, val: &TirExpr, field_ty: &Ty, byte_off: u32, ctx: &Ctx) {
     match field_ty {
-        _ if peels_to_string(field_ty) => {
+        _ if is_string_ty(field_ty, ctx) => {
             // String fields are stored as *MvlString (i32 pointer).
             // val pushes (ptr, len); call _mvl_string_new to heap-allocate.
             ctx.needs_runtime.set(true);
@@ -5180,6 +5222,22 @@ fn eq_op_for(ty: &Ty, ctx: &Ctx) -> &'static str {
 /// emit paths agree.
 fn match_temp_name(expr: &TirExpr) -> String {
     format!("__match_{}", expr.span.offset)
+}
+
+/// Declare the scrutinee-cache local(s) for a `match` (expr- or stmt-form).
+/// A String scrutinee needs split `(_ptr, _len)` i32 locals — `emit_expr`
+/// leaves two values on the stack for it, not one (#2113: `emit_match_impl`
+/// used to unconditionally `local.set` a single temp, which silently
+/// dropped one of the two and declared the wrong local shape for any
+/// String-typed match scrutinee that wasn't already a bare, pre-split
+/// `Var`). Everything else keeps a single scalar local of its own type.
+fn push_match_scrutinee_locals(locals: &mut Vec<(String, Ty)>, temp: &str, scrutinee_ty: &Ty) {
+    if peels_to_string(scrutinee_ty) {
+        locals.push((format!("{temp}_ptr"), Ty::Bool));
+        locals.push((format!("{temp}_len"), Ty::Bool));
+    } else {
+        locals.push((temp.to_string(), scrutinee_ty.clone()));
+    }
 }
 
 /// Compute the WASM block-type a statement-form `match` should carry.
@@ -5725,17 +5783,24 @@ fn is_float_ctx(ty: &Ty, ctx: &Ctx) -> bool {
 }
 
 /// True if this MVL type is a String (possibly via generic type param
-/// resolution). Layers `ctx.type_subst` resolution on top of the ctx-free
-/// [`peels_to_string`] peel so the two helpers share one definition of
-/// "String, possibly wrapped in Ref/Labeled/Refined" instead of duplicating
-/// it — `peels_to_string` stays the ctx-free version for call sites (like
+/// resolution or a named type alias, e.g. `type BoundedInput = String
+/// where ...`). Layers `ctx.type_subst`/`ctx.type_aliases` resolution
+/// (mirroring `is_float_ctx`) on top of the ctx-free [`peels_to_string`]
+/// peel so the two helpers share one definition of "String, possibly
+/// wrapped in Ref/Labeled/Refined" instead of duplicating it —
+/// `peels_to_string` stays the ctx-free version for call sites (like
 /// `collect_locals_stmt`) that run without a `Ctx` in scope.
 fn is_string_ty(ty: &Ty, ctx: &Ctx) -> bool {
     match ty {
-        Ty::Named(name, args) if args.is_empty() => ctx
-            .type_subst
-            .get(name.as_str())
-            .is_some_and(|concrete| is_string_ty(concrete, ctx)),
+        Ty::Named(name, args) if args.is_empty() => {
+            if let Some(concrete) = ctx.type_subst.get(name.as_str()) {
+                return is_string_ty(concrete, ctx);
+            }
+            if let Some(aliased) = ctx.type_aliases.get(name.as_str()) {
+                return is_string_ty(&aliased.clone(), ctx);
+            }
+            false
+        }
         Ty::Ref(_, inner) | Ty::Labeled(_, inner) | Ty::Refined(inner, _) => {
             is_string_ty(inner, ctx)
         }
@@ -9692,5 +9757,68 @@ mod validated_module_tests {
     #[test]
     fn unsupported_marker_spelling_is_pinned() {
         assert_eq!(UNSUPPORTED_MARKER, ";; unsupported");
+    }
+
+    /// #2112: a `let` binding, fn param, or struct field typed as a named
+    /// alias to `String` (`type BoundedInput = String where ...`) used to
+    /// declare a single scalar `i64` local/param/store instead of split
+    /// `(_ptr, _len)` i32s — `peels_to_string` is ctx-free and can't see
+    /// through `Ty::Named` without a `ctx.type_aliases` lookup, while the
+    /// emit side (`is_string_ty`) already resolved it correctly, so the two
+    /// sides disagreed on shape and the module failed to validate.
+    #[test]
+    fn string_type_alias_let_binding_param_and_field_use_split_locals() {
+        let (wat, stubbed) = emit(
+            "pub type BoundedInput = String where len(self) <= 4096\n\
+             pub type SqlQuery = struct {\n\
+                 template: BoundedInput,\n\
+                 param_count: Int,\n\
+             }\n\
+             pub total fn build_sql_query(template: BoundedInput, param_count: Int) -> SqlQuery {\n\
+                 SqlQuery { template: template, param_count: param_count }\n\
+             }\n\
+             test fn t() -> Unit {\n\
+                 let tmpl: BoundedInput = \"SELECT COUNT(*) FROM users\";\n\
+                 let q: SqlQuery = build_sql_query(tmpl, 0);\n\
+                 assert_eq(q.param_count, 0);\n\
+             }\n",
+        );
+        validate(&wat);
+        assert!(stubbed.is_empty(), "unexpected stubs: {stubbed:?}");
+        assert!(wat.contains("(local $tmpl_ptr i32)"), "{wat}");
+        assert!(wat.contains("(local $tmpl_len i32)"), "{wat}");
+        assert!(
+            wat.contains("(param $template_ptr i32) (param $template_len i32)"),
+            "{wat}"
+        );
+    }
+
+    /// #2113: `emit_match_impl` unconditionally cached the scrutinee in a
+    /// single `$temp` local via one `local.set`. For a String scrutinee
+    /// that isn't already a bare, pre-split `Var`, `emit_expr` leaves two
+    /// i32s (ptr, len) on the stack — the single `local.set` only consumed
+    /// one, and the declared local was the wrong shape besides (a scalar,
+    /// not a split ptr/len pair). Nested `match` on a String bound from an
+    /// outer arm (not a `let`) is exactly this shape: `r.category` is
+    /// `Option[String]`, so the inner match's scrutinee `c` is a fresh
+    /// value each time, not a variable already carrying split locals.
+    #[test]
+    fn nested_match_on_string_bound_from_outer_arm_uses_split_scrutinee_locals() {
+        let (wat, stubbed) = emit(
+            "fn classify(x: Option[String]) -> Int {\n\
+                 match x {\n\
+                     Some(c) => match c { \"high-value\" => 1, _ => 0 },\n\
+                     None => 0,\n\
+                 }\n\
+             }\n\
+             test fn t() -> Unit {\n\
+                 assert_eq(classify(Some(\"high-value\")), 1);\n\
+                 assert_eq(classify(Some(\"other\")), 0);\n\
+                 assert_eq(classify(None), 0);\n\
+             }\n",
+        );
+        validate(&wat);
+        assert!(stubbed.is_empty(), "unexpected stubs: {stubbed:?}");
+        assert!(wat.contains("call $_mvl_string_eq"), "{wat}");
     }
 }
