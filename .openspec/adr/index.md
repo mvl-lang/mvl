@@ -32,7 +32,7 @@
 | [0028](0028-c4-len-field-access-refexpr.md) | C4 Context: Field-access support in len() RefExpr for decreases clauses | Accepted |
 | [0029](0029-pony-reference-capability-adaptation.md) | Pony reference capability adaptation — iso/val/ref/tag for MVL actors | Accepted |
 | [0030](0030-rust-coding-conventions.md) | Rust coding conventions — edition 2021, module layout, fmt, clippy, error handling | Accepted |
-| [0031](0031-no-ufcs.md) | No Uniform Function Call Syntax (UFCS) — explicit `f(x)` over implicit `x.f()` | Accepted |
+| [0031](0031-no-ufcs.md) | No Uniform Function Call Syntax (UFCS) — explicit `f(x)` over implicit `x.f()`; amended to accept type-attached methods `fn Type::method(self, ...)` | Amended |
 | [0032](0032-stdlib-structured-error-enums.md) | Stdlib structured error enums — domain-specific Result[T, XxxError] replacing Result[T, String] | Accepted |
 | [0033](0033-rust-2018-sibling-file-module-style.md) | Rust 2018 sibling-file module style — `foo.mvl` preferred over `foo/mod.mvl` | Superseded by ADR-0030 |
 | [0034](0034-monomorphization-pass.md) | Monomorphization as an explicit pre-analysis pass — `MonoProgram` between TypeCheck and analysis | Accepted |

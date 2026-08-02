@@ -151,9 +151,9 @@ impl_label!(Clean);
 impl_label!(Public);
 impl_label!(Secret);
 
-// ── UFCS coercions ─────────────────────────────────────────────────────────
+// ── Stdlib method-dispatch coercions ─────────────────────────────────────────
 //
-// The MVL transpiler's UFCS dispatch emits `method(receiver.clone().into(), …)`
+// The MVL transpiler's free-function dispatch emits `method(receiver.clone().into(), …)`
 // for stdlib method calls.  These impls allow IFC-labelled strings and lists to
 // coerce into their plain inner types so that stdlib functions typed as
 // `fn(String)` or `fn(Vec<T>)` accept labelled values transparently.

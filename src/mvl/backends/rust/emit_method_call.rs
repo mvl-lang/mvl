@@ -7,7 +7,7 @@ use super::emitter::RustEmitter;
 use crate::mvl::backends::rust::emit_exprs::Prec;
 use crate::mvl::backends::rust::emit_types::emit_label;
 use crate::mvl::backends::{
-    is_stdlib_method, is_stdlib_ufcs_method, is_stdlib_ufcs_method_for, rust_emit_for,
+    is_stdlib_method, is_stdlib_dispatch_method, is_stdlib_dispatch_method_for, rust_emit_for,
     STRING_LABEL_PRESERVING_METHODS,
 };
 use crate::mvl::ir::{CmpOp, LogicOp, RefExpr, TirExpr, TirExprKind, Ty};
@@ -96,8 +96,8 @@ impl RustEmitter {
         // Methods that don't map directly to a Rust method of the same name.
         //
         // Phase 4 note: string and list methods that have pure MVL implementations
-        // in std/strings.mvl and std/lists.mvl are dispatched via UFCS in the `_`
-        // fallback below: `s.trim()` → `trim(s)`, `xs.take(n)` → `take(xs, n)`.
+        // in std/strings.mvl and std/lists.mvl are dispatched as free-function calls
+        // in the `_` fallback below: `s.trim()` → `trim(s)`, `xs.take(n)` → `take(xs, n)`.
         // The actual Rust implementation is the transpiled MVL stdlib function.
         match method {
             // ── Higher-order collection methods ──────────────────────────────
@@ -146,7 +146,7 @@ impl RustEmitter {
 
             // ── Pure MVL higher-order list methods ────────────────────────────
             //
-            // Emitted as Rust native iterator chains rather than UFCS calls to
+            // Emitted as Rust native iterator chains rather than free-function calls to
             // std/lists.mvl free functions.  This allows the predicate/mapper
             // argument to be ANY callable (fn pointer or capturing closure),
             // because Rust's .filter() / .fold() etc. accept FnMut, not just
@@ -774,7 +774,7 @@ impl RustEmitter {
 
             // into_inner() / as_inner() on IFC label wrapper types.
             // These are generated as methods on the label newtype struct by emit_types.rs.
-            // Without this case, labeled receivers hit the `is_builtin_receiver` UFCS branch
+            // Without this case, labeled receivers hit the `is_builtin_receiver` dispatch branch
             // (since e.g. `Tainted<String>.unlabeled()` is String) and are incorrectly
             // emitted as free function calls: `into_inner(v)` instead of `v.into_inner()`.
             //
@@ -790,15 +790,15 @@ impl RustEmitter {
                 self.push("()");
             }
 
-            // ── UFCS dispatch for pure MVL stdlib methods ─────────────────────
-            // Type-aware: `is_stdlib_ufcs_method_for(m, ty)` only matches when
-            // this specific (method, receiver-type) pair is in the UFCS table.
+            // ── Free-function dispatch for pure MVL stdlib methods ────────────
+            // Type-aware: `is_stdlib_dispatch_method_for(m, ty)` only matches when
+            // this specific (method, receiver-type) pair is in the dispatch table.
             // Without the type check, adding `("find", "List")` would poach
             // `s.find(sub)` on String and route it through the free-fn `find`
             // instead of the runtime's `str_find` — silently breaking every
             // String::find call (#1707 phase 12).
-            m if ty_builtin_key(&receiver.ty).is_some_and(|k| is_stdlib_ufcs_method_for(m, k))
-                || (is_stdlib_ufcs_method(m) && ty_builtin_key(&receiver.ty).is_none()) =>
+            m if ty_builtin_key(&receiver.ty).is_some_and(|k| is_stdlib_dispatch_method_for(m, k))
+                || (is_stdlib_dispatch_method(m) && ty_builtin_key(&receiver.ty).is_none()) =>
             {
                 // Check whether we must re-wrap the result in a label newtype.
                 let wrap_label: Option<String> = if STRING_LABEL_PRESERVING_METHODS.contains(&m) {
@@ -909,7 +909,7 @@ impl RustEmitter {
                 }
 
                 // #992 / #1433: Pure MVL extension methods on builtin types are
-                // transpiled as top-level free functions and must be called via UFCS
+                // transpiled as top-level free functions and must be called as such
                 // (`method(receiver.clone().into(), args)`), not as native Rust
                 // methods. Detect this case by checking the receiver type is a
                 // builtin AND the method is not a registered kernel builtin.

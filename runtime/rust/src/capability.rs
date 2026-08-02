@@ -91,7 +91,7 @@ impl_capability_label!(ConfigPath);
 impl_capability_label!(ApiEndpoint);
 impl_capability_label!(AuditTarget);
 
-// ── UFCS coercions for labeled strings and lists ─────────────────────────
+// ── Stdlib method-dispatch coercions for labeled strings and lists ───────────
 
 macro_rules! impl_capability_label_into {
     ($Label:ident) => {

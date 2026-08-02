@@ -19,7 +19,7 @@
 //   - read_dir returns List[DirEntry]; entry paths are Public (not Tainted)
 //   - read_to_string returns Tainted[String]; file content is untrusted
 //   - relabel trust(, "VALIDATED") converts Tainted → String for safe string processing
-//   - UFCS method calls on String propagate the label transparently
+//   - Type-attached method calls on String propagate the label transparently
 //   - Int results (token counts) are Public — safe to accumulate and print
 //
 // Note: read_dir is flat (no recursion).  Point --dir at a leaf directory
@@ -42,7 +42,7 @@ use std.args.{get_arg}
 // IFC flow:
 //   raw: Tainted[String]  →  sanitize → src: String
 //   src.split("\n") propagates the Clean label in the type checker, but
-//   the transpiler strips labels via .into() in the UFCS trampoline, so the
+//   the transpiler strips labels via .into() in the free-function trampoline, so the
 //   fold result is Option<Int> in the generated Rust (not Clean<Option<Int>>).
 //   Matching directly (no annotated let) avoids the checker/transpiler mismatch.
 //
@@ -70,7 +70,7 @@ fn count_tokens(raw: Tainted[String]) -> Int {
     // Type checker: scrutinee is Clean<Option<Int>>; Some(n) strips the label
     // via scrutinee_ty.unlabeled() = Option<Int> → n: Int (Public).
     // Transpiler: fold on Vec<String> returns Option<i64> (label stripped by
-    // .into() in UFCS); match on Option<i64> works directly.
+    // .into() in the dispatch trampoline); match on Option<i64> works directly.
     match src.split("\n").fold(Some(0), |acc: Option[Int], line: String|
         match acc {
             None    => None,

@@ -17,12 +17,12 @@
 //!    `rust_emit` hint to `BUILTINS` in `backends.rs` for table-driven dispatch
 //! 4. **`backends/llvm_text/emit_method_call.rs`** — add the LLVM emission arm
 //!
-//! **Shared constants** (`STDLIB_UFCS_METHODS`, `STRING_LABEL_PRESERVING_METHODS`)
+//! **Shared constants** (`STDLIB_METHOD_DISPATCH`, `STRING_LABEL_PRESERVING_METHODS`)
 //! now live in `backends.rs` as the single source of truth — both TIR and AST
 //! emitters import from there.  Runtime function mappings (previously
 //! `STDLIB_BUILTIN_METHODS`) are encoded as `BuiltinDesc.rust_emit` hints in
-//! the `BUILTINS` registry.  `STDLIB_UFCS_METHODS` now carries
-//! `(method, receiver_type)` pairs, and the `ufcs_sync_tests` module at the
+//! the `BUILTINS` registry.  `STDLIB_METHOD_DISPATCH` now carries
+//! `(method, receiver_type)` pairs, and the `dispatch_sync_tests` module at the
 //! bottom of this file asserts every entry has a non-`Unknown` return-type arm
 //! here — closing one direction of the divergence gap (#1390).
 //!
@@ -423,33 +423,33 @@ impl TypeChecker {
 }
 
 #[cfg(test)]
-mod ufcs_sync_tests {
+mod dispatch_sync_tests {
     //! Closes one direction of the 4-way sync (#992): every method listed in
-    //! `STDLIB_UFCS_METHODS` (backends.rs) must have a non-`Unknown` return
-    //! type arm in this file.  Without this test, a UFCS entry could be added
+    //! `STDLIB_METHOD_DISPATCH` (backends.rs) must have a non-`Unknown` return
+    //! type arm in this file.  Without this test, a dispatch entry could be added
     //! to the transpiler without a matching type-inference arm, causing
     //! silent `Unknown`-typed expressions downstream.
 
     use super::*;
-    use crate::mvl::backends::STDLIB_UFCS_METHODS;
+    use crate::mvl::backends::STDLIB_METHOD_DISPATCH;
     use crate::mvl::checker::TypeChecker;
 
     #[test]
-    fn stdlib_ufcs_methods_have_return_types() {
+    fn stdlib_dispatch_methods_have_return_types() {
         let placeholder = Ty::Int;
-        for (method, receiver) in STDLIB_UFCS_METHODS {
+        for (method, receiver) in STDLIB_METHOD_DISPATCH {
             let ty = match *receiver {
                 "String" => TypeChecker::string_method_ty(method, &[]),
                 "List" => TypeChecker::list_method_ty(&placeholder, method, &[]),
                 other => panic!(
-                    "STDLIB_UFCS_METHODS entry ({method}, {other}) — receiver type \
-                     not handled by ufcs_sync_tests; add an arm for '{other}'"
+                    "STDLIB_METHOD_DISPATCH entry ({method}, {other}) — receiver type \
+                     not handled by dispatch_sync_tests; add an arm for '{other}'"
                 ),
             };
             assert_ne!(
                 ty,
                 Ty::Unknown,
-                "{receiver}::{method} is in STDLIB_UFCS_METHODS but \
+                "{receiver}::{method} is in STDLIB_METHOD_DISPATCH but \
                  {}_method_ty returns Ty::Unknown — divergence between \
                  backends.rs and checker/method_types.rs",
                 receiver.to_lowercase()

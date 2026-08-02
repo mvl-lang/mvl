@@ -1350,7 +1350,7 @@ fn main() -> Unit { }
 fn string_concat_method_emits_clone_plus_borrow() {
     // GIVEN: s.concat(other) in MVL
     // WHEN: transpiled
-    // THEN: emits UFCS free-function call `concat(a.clone().into(), ...)`
+    // THEN: emits free-function call `concat(a.clone().into(), ...)`
     let src = r#"fn f(a: String, b: String) -> String { a.concat(b) }"#;
     let rust = transpile_src(src);
     assert_contains(&rust, "concat(");
@@ -1609,14 +1609,14 @@ fn method_fold_emits_iterator_fold() {
 }
 
 #[test]
-fn method_any_emits_ufcs_call() {
+fn method_any_emits_iterator_call() {
     let src = "fn f(xs: List[Int], p: fn(Int) -> Bool) -> Bool { xs.any(p) }";
     let rust = transpile_src(src);
     assert_contains(&rust, ".into_iter().any(|__x| (p)(__x.clone()))");
 }
 
 #[test]
-fn method_all_emits_ufcs_call() {
+fn method_all_emits_iterator_call() {
     let src = "fn f(xs: List[Int], p: fn(Int) -> Bool) -> Bool { xs.all(p) }";
     let rust = transpile_src(src);
     assert_contains(&rust, ".into_iter().all(|__x| (p)(__x.clone()))");

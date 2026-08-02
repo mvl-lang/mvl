@@ -3,7 +3,8 @@
 // Covers the portable subset of `std/strings.mvl` that both backends lower
 // via runtime shims: `.len`, `.concat`, `.substring`, `.to_upper`,
 // `.to_lower`, `.starts_with`, `.ends_with`, `.contains`, `.is_empty`, and
-// `.trim`. The methods are dispatched via dot syntax — MVL has no UFCS.
+// `.trim`. The methods are dispatched via dot syntax as type-attached methods
+// (ADR-0031 amendment), not general UFCS.
 
 test fn string_len() -> Unit {
     assert_eq("hello".len(), 5);
