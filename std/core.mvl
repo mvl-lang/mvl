@@ -90,6 +90,14 @@ pub fn Option[T]::and_then[U](self, f: fn(T) -> Option[U]) -> Option[U] {
     }
 }
 
+/// Apply `f` to the contained value, wrapping the result in `Some`; propagate `None` unchanged.
+pub fn Option[T]::map[U](self, f: fn(T) -> U) -> Option[U] {
+    match self {
+        Some(x) => Some(f(x)),
+        None => None
+    }
+}
+
 // ── Result methods ──────────────────────────────────────────────────────────
 
 /// True if the result is Ok.
@@ -105,5 +113,21 @@ pub fn Result[T, E]::is_err(self) -> Bool {
     match self {
         Ok(_) => false,
         Err(_) => true
+    }
+}
+
+/// Apply `f` to the Ok value, wrapping the result in `Ok`; propagate `Err` unchanged.
+pub fn Result[T, E]::map[U](self, f: fn(T) -> U) -> Result[U, E] {
+    match self {
+        Ok(x) => Ok(f(x)),
+        Err(e) => Err(e)
+    }
+}
+
+/// Apply `f` (itself Result-returning) to the Ok value; propagate `Err` unchanged.
+pub fn Result[T, E]::and_then[U](self, f: fn(T) -> Result[U, E]) -> Result[U, E] {
+    match self {
+        Ok(x) => f(x),
+        Err(e) => Err(e)
     }
 }

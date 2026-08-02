@@ -310,3 +310,81 @@ test fn struct_payload_variant_result_err_bound_field() -> Unit {
         Err(AccessError::AccountLocked { attempts: attempts }) => assert_eq(attempts, 5),
     }
 }
+
+// #2149: Option[T]::map / Result[T,E]::map / Result[T,E]::and_then had no
+// native WASM arm and no std/core.mvl body at all — every call stubbed the
+// enclosing function. Uses an enum error type deliberately: an Int error
+// would mask the accompanying checker bug (a generic method's `self` type
+// wasn't recognized in match-pattern binding, so `Err(e) => Err(e)` bound
+// `e` as Ty::Unknown, which happens to default to the same runtime shape
+// Int needs — only a non-Int E, like this enum, exposes the corruption).
+type MapAndThenError = enum { NonPositive, WasErr }
+
+test fn option_map_transforms_some_value() -> Unit {
+    let o: Option[Int] = Some(5);
+    let d: Option[Int] = o.map(|x: Int| x * 2);
+    match d {
+        Some(v) => assert_eq(v, 10),
+        None => assert_eq(1, 0),
+    }
+}
+
+test fn option_map_propagates_none() -> Unit {
+    let o: Option[Int] = None;
+    let d: Option[Int] = o.map(|x: Int| x * 2);
+    match d {
+        Some(_) => assert_eq(1, 0),
+        None => assert_eq(1, 1),
+    }
+}
+
+test fn result_map_transforms_ok_value() -> Unit {
+    let r: Result[Int, MapAndThenError] = Ok(21);
+    let s: Result[Int, MapAndThenError] = r.map(|x: Int| x * 2);
+    match s {
+        Ok(v) => assert_eq(v, 42),
+        Err(_) => assert_eq(1, 0),
+    }
+}
+
+test fn result_map_propagates_err_enum_unchanged() -> Unit {
+    let r: Result[Int, MapAndThenError] = Err(MapAndThenError::WasErr);
+    let s: Result[Int, MapAndThenError] = r.map(|x: Int| x * 2);
+    match s {
+        Ok(_) => assert_eq(1, 0),
+        Err(MapAndThenError::WasErr) => assert_eq(1, 1),
+        Err(MapAndThenError::NonPositive) => assert_eq(1, 0),
+    }
+}
+
+test fn result_and_then_chains_into_ok() -> Unit {
+    let r: Result[Int, MapAndThenError] = Ok(3);
+    let c: Result[Int, MapAndThenError] =
+        r.and_then(|x: Int| if x > 0 { Ok(x * 2) } else { Err(MapAndThenError::NonPositive) });
+    match c {
+        Ok(v) => assert_eq(v, 6),
+        Err(_) => assert_eq(1, 0),
+    }
+}
+
+test fn result_and_then_short_circuits_on_existing_err() -> Unit {
+    let r: Result[Int, MapAndThenError] = Err(MapAndThenError::WasErr);
+    let c: Result[Int, MapAndThenError] =
+        r.and_then(|x: Int| if x > 0 { Ok(x * 2) } else { Err(MapAndThenError::NonPositive) });
+    match c {
+        Ok(_) => assert_eq(1, 0),
+        Err(MapAndThenError::WasErr) => assert_eq(1, 1),
+        Err(MapAndThenError::NonPositive) => assert_eq(1, 0),
+    }
+}
+
+test fn result_and_then_propagates_err_from_lambda() -> Unit {
+    let r: Result[Int, MapAndThenError] = Ok(-1);
+    let c: Result[Int, MapAndThenError] =
+        r.and_then(|x: Int| if x > 0 { Ok(x * 2) } else { Err(MapAndThenError::NonPositive) });
+    match c {
+        Ok(_) => assert_eq(1, 0),
+        Err(MapAndThenError::NonPositive) => assert_eq(1, 1),
+        Err(MapAndThenError::WasErr) => assert_eq(1, 0),
+    }
+}

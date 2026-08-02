@@ -11,6 +11,31 @@ use crate::mvl::parser::lexer::Span;
 
 use super::TypeChecker;
 
+/// Normalize `Ty::Named("Option"/"Result", [...])` to the structural
+/// `Ty::Option`/`Ty::Result` variant. A generic method's own `self` parameter
+/// (e.g. `Result[T, E]::map`) is stored in this named-wrapper shape rather
+/// than the structural one a concrete call site produces — the same
+/// declared/actual shape mismatch already fixed once in the WASM backend's
+/// `unify_ty_params` (#2125), just never fixed here in the checker's own
+/// match-pattern binding. Without this, `bind_match_pattern`'s `Some`/`Ok`/
+/// `Err` arms couldn't recognize the scrutinee as an Option/Result at all,
+/// fell through to `Ty::Unknown`, and any variable bound from the payload
+/// (`Err(e) => ...e...`) carried no usable type downstream — invisible for
+/// methods that only match against `_`/literals (`is_ok`, `is_err`) but
+/// silently wrong for anything reconstructing a new value from the binding,
+/// e.g. `Result[T, E]::map`'s `Err(e) => Err(e)` passthrough (#2149).
+fn normalize_option_result(ty: &Ty) -> Ty {
+    match ty {
+        Ty::Named(name, args) if name == "Option" && args.len() == 1 => {
+            Ty::Option(Box::new(args[0].clone()))
+        }
+        Ty::Named(name, args) if name == "Result" && args.len() == 2 => {
+            Ty::Result(Box::new(args[0].clone()), Box::new(args[1].clone()))
+        }
+        other => other.clone(),
+    }
+}
+
 impl TypeChecker {
     // ── Match exhaustiveness (#13) ────────────────────────────────────────
 
@@ -214,22 +239,22 @@ impl TypeChecker {
             }
             Pattern::Wildcard(_) | Pattern::Literal(_, _) | Pattern::None(_) => {}
             Pattern::Some { inner, .. } => {
-                let inner_ty = match scrutinee_ty.unlabeled() {
-                    Ty::Option(t) => *t.clone(),
+                let inner_ty = match normalize_option_result(scrutinee_ty.unlabeled()) {
+                    Ty::Option(t) => *t,
                     _ => Ty::Unknown,
                 };
                 self.bind_match_pattern(inner, &inner_ty);
             }
             Pattern::Ok { inner, .. } => {
-                let inner_ty = match scrutinee_ty.unlabeled() {
-                    Ty::Result(ok, _) => *ok.clone(),
+                let inner_ty = match normalize_option_result(scrutinee_ty.unlabeled()) {
+                    Ty::Result(ok, _) => *ok,
                     _ => Ty::Unknown,
                 };
                 self.bind_match_pattern(inner, &inner_ty);
             }
             Pattern::Err { inner, .. } => {
-                let inner_ty = match scrutinee_ty.unlabeled() {
-                    Ty::Result(_, err) => *err.clone(),
+                let inner_ty = match normalize_option_result(scrutinee_ty.unlabeled()) {
+                    Ty::Result(_, err) => *err,
                     _ => Ty::Unknown,
                 };
                 self.bind_match_pattern(inner, &inner_ty);

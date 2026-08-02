@@ -698,6 +698,39 @@ mod tests {
         );
     }
 
+    /// #2149: a generic method's own `self` parameter is stored as
+    /// `Ty::Named("Result", [T, E])` (the same named-wrapper shape #2125
+    /// already had to normalize once, in the WASM backend's
+    /// `unify_ty_params`) — `bind_match_pattern`'s `Ok`/`Err` arms matched
+    /// only the structural `Ty::Result` variant, so `Err(e) => Err(e)`
+    /// bound `e` to `Ty::Unknown` instead of `E`. Invisible for methods that
+    /// only match against `_`/literals (`is_ok`); silently wrong for any
+    /// method reconstructing a value from the binding — `Ty::Unknown`
+    /// defaults to the i64 runtime shape downstream, corrupting any
+    /// non-i64-shaped `E` (an enum, `String`, a struct).
+    #[test]
+    fn err_binding_in_generic_method_resolves_from_named_wrapper_self() {
+        let src = "type MyError = enum { A, B }\n\
+                    pub fn Result[T, E]::my_and_then[U](self, f: fn(T) -> Result[U, E]) -> Result[U, E] {\n\
+                        match self {\n\
+                            Ok(x) => f(x),\n\
+                            Err(e) => Err(e)\n\
+                        }\n\
+                    }\n";
+        let result = check_src(src);
+        assert!(
+            result.errors.is_empty(),
+            "unexpected errors: {:?}",
+            result.errors
+        );
+        assert!(
+            !result.expr_types.values().any(|t| matches!(t, Ty::Unknown)),
+            "expected every expression in a fully-typed generic method body to \
+             resolve to a real type, got Ty::Unknown somewhere: {:?}",
+            result.expr_types
+        );
+    }
+
     // ── Requirement 4/5 / Scenario: Option/Result enforcement (#14) ───────
 
     #[test]
