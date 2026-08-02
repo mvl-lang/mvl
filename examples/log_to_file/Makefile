@@ -1,12 +1,14 @@
 # log_to_file example — structured logging with IFC and refinement types.
 # Run from this directory: make check, make test, etc.
-.PHONY: help guard-mvl lint check prove test-solver test test-llvm assurance smoke run clean
+.PHONY: help guard-mvl lint check prove test-solver test test-llvm test-wasm assurance smoke run clean
 
 .DEFAULT_GOAL := help
 
-MVL       := ../../target/debug/mvl
-DIR       := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
-REPO_ROOT := $(abspath $(DIR)../..)
+MVL          := ../../target/debug/mvl
+DIR          := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
+REPO_ROOT    := $(abspath $(DIR)../..)
+MVLR         := ../../tools/mvlr
+WASM_RUNTIME := ../../target/wasm32-wasip1/debug/mvl_runtime_wasm.wasm
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z0-9_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-12s\033[0m %s\n", $$1, $$2}'
@@ -53,6 +55,9 @@ test: guard-mvl ## Run all unit tests in main_test.mvl (4 tests)
 
 test-llvm: guard-mvl ## Run unit tests via LLVM backend
 	cd $(REPO_ROOT) && $(abspath $(MVL)) test $(DIR) --backend=llvm
+
+test-wasm: guard-mvl ## Run tests via WASM backend
+	cd $(REPO_ROOT) && MVL_RUNTIME_WASM=$(abspath $(WASM_RUNTIME)) $(abspath $(MVLR)) --mvl=$(abspath $(MVL)) --compiler=rust --backend=wasm $(DIR)
 
 assurance: guard-mvl ## Full assurance: check + unit tests + assurance report
 	cd $(REPO_ROOT) && $(abspath $(MVL)) check $(DIR)
