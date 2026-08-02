@@ -698,6 +698,26 @@ impl Backend for WasmTextCompiler {
             indirect_sigs: &indirect_sigs,
         };
 
+        // `extern "rust"` FFI (#2049): a native host embedding wasmtime and
+        // linking the same `bridge.rs` the Rust backend already uses
+        // supplies these at runtime. Any non-scalar arg/return (String,
+        // struct, enum, Option, Result) is marshalled through the runtime
+        // module's own boxed-value constructors, which only produce valid
+        // pointers if the guest imports the *same* memory the runtime module
+        // owns — so force the `(import "runtime" "memory" ...)` path on
+        // whenever a rust-abi extern exists, even if the body never happens
+        // to call an `_mvl_*` helper itself. Forcing this unconditionally
+        // (rather than only for non-scalar signatures) keeps the rule simple
+        // and avoids a two-separate-memories bug that would otherwise only
+        // show up once an extern signature grows a String/struct param.
+        if tir
+            .externs
+            .iter()
+            .any(|ed| ed.abi == "rust" && !ed.fns.is_empty())
+        {
+            ctx.needs_runtime.set(true);
+        }
+
         // Collect unique generic-function instantiations needed by the corpus fns.
         let instantiations = collect_generic_instantiations(
             &fns,
@@ -740,6 +760,36 @@ impl Backend for WasmTextCompiler {
         emit_lambda_fns(&mut fns_out, &ctx);
 
         let mut out = String::from("(module\n");
+
+        // `extern "rust"` FFI imports (#2049). Declared under a separate
+        // "extern" namespace so they read as distinct from the compiler's
+        // own "runtime" module — a native host (embedding wasmtime, linking
+        // the same `bridge.rs` the Rust backend already builds against)
+        // supplies these. The signature mirrors `emit_fn`'s own param/return
+        // lowering exactly, so a call site (already emitting a plain
+        // `call $name` after pushing its args — this is what was silently
+        // broken before) produces the exact stack shape declared here.
+        //
+        // Emitted before the runtime/WASI imports below (rather than after,
+        // where it read more naturally) because WAT requires every import to
+        // precede any function/global/etc. definition, and
+        // `emit_wasi_runtime`/`emit_wasi_runtime_shared_memory` below emit
+        // real function bodies (the WASI shim, `_start`) — `wasm-tools
+        // parse` rejects an import appearing after those with "import after
+        // function".
+        for ed in &tir.externs {
+            if ed.abi != "rust" {
+                continue;
+            }
+            for ef in &ed.fns {
+                let sig = extern_fn_signature(&ef.params, &ef.ret_ty, &ctx);
+                out.push_str(&format!(
+                    "  (import \"extern\" \"{}\"\n    (func ${}{sig}))\n",
+                    ef.name, ef.name
+                ));
+            }
+        }
+
         if ctx.needs_runtime.get() {
             // runtime.wasm exports its memory and the `_mvl_string_*` ops;
             // the user module imports both. Runtime data lives at 1 MB+,
@@ -5813,6 +5863,32 @@ fn emit_binary(out: &mut String, op: BinaryOp, left: &TirExpr, right: &TirExpr, 
         BinaryOp::And | BinaryOp::Or => unreachable!("short-circuited above"),
     };
     out.push_str(&format!("    {opcode}\n"));
+}
+
+/// WASM `(param ...) (result ...)` text for an `extern "rust"` fn
+/// declaration. Mirrors `emit_fn`'s own param/return-type lowering exactly —
+/// String (and `Secret[String]`/`Tainted[String]`, labels are compile-time
+/// only) splits into two `i32` params and, on return, WASM multi-value
+/// `(result i32 i32)`; everything else is `wasm_ty`'s single value. Kept in
+/// lockstep with `emit_fn` deliberately duplicated rather than shared: the
+/// two call sites differ (a `(func $name ...)` body vs. a bare `(import ...)`
+/// declaration) enough that threading one through the other would obscure
+/// both.
+fn extern_fn_signature(params: &[TirParam], ret_ty: &Ty, ctx: &Ctx) -> String {
+    let mut sig = String::new();
+    for p in params {
+        if is_string_ty(&p.ty, ctx) {
+            sig.push_str(" (param i32 i32)");
+        } else {
+            sig.push_str(&format!(" (param {})", wasm_ty(&p.ty, ctx)));
+        }
+    }
+    if is_string_ty(ret_ty, ctx) {
+        sig.push_str(" (result i32 i32)");
+    } else if !matches!(ret_ty, Ty::Unit) {
+        sig.push_str(&format!(" (result {})", wasm_ty(ret_ty, ctx)));
+    }
+    sig
 }
 
 fn wasm_ty(ty: &Ty, ctx: &Ctx) -> &'static str {
