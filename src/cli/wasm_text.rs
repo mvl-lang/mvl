@@ -9,6 +9,7 @@
 //! `wasmtime`, compare stdout to the expected string.
 
 use mvl::mvl::backends::llvm_text::lli;
+use mvl::mvl::backends::wasm_host_glue;
 use mvl::mvl::backends::wasm_text::{emitter_handles_method_natively, WasmTextCompiler};
 use mvl::mvl::backends::{AssertMode, Backend};
 use mvl::mvl::checker;
@@ -596,7 +597,7 @@ fn ensure_transitive_rust_backed_stdlib(prog: &Program, prelude: &mut Vec<Progra
 }
 
 /// Lower `prog` (with prelude) to TIR and emit a WAT string.
-fn compile_wat(prog: &Program, module_name: &str, assert_mode: AssertMode) -> String {
+fn compile_wat(prog: &Program, module_name: &str, assert_mode: AssertMode) -> (String, TirProgram) {
     let mut prelude = loader::load_implicit_prelude();
     prelude.extend(load_full_prelude(
         std::iter::once(prog),
@@ -647,7 +648,7 @@ fn compile_wat(prog: &Program, module_name: &str, assert_mode: AssertMode) -> St
     compiler.assert_mode = assert_mode;
     let wat = compiler.emit_program(&entry_tir, module_name);
     warn_about_stubs(&compiler, module_name);
-    wat
+    (wat, entry_tir)
 }
 
 /// Warn about functions the emitter stubbed to `unreachable`.
@@ -730,12 +731,17 @@ fn merge_tir_programs(programs: &[TirProgram]) -> TirProgram {
 /// same-dir files share declarations without explicit `use` imports), then
 /// each is lowered with its own `expr_types`. Falls back to the single-file
 /// path when there are no sibling modules.
+/// Compiles `prog` (plus any sibling `.mvl` modules in its directory) to WAT,
+/// returning the merged `TirProgram` alongside it — callers that only need
+/// the WAT (`build_project_wasm`) ignore the second element; `run_one_case`
+/// uses it to detect `extern "rust"` fns for the wasmtime-embedding host
+/// glue path (#2049).
 fn compile_wat_multi(
     prog: &Program,
     path: &str,
     module_name: &str,
     assert_mode: AssertMode,
-) -> String {
+) -> (String, TirProgram) {
     let entry_dir = Path::new(path).parent().unwrap_or_else(|| Path::new("."));
     let sibling_modules = loader::load_sibling_modules_transitive(prog, entry_dir);
 
@@ -851,7 +857,7 @@ fn compile_wat_multi(
     compiler.assert_mode = assert_mode;
     let wat = compiler.emit_program(&merged, module_name);
     warn_about_stubs(&compiler, module_name);
-    wat
+    (wat, merged)
 }
 
 /// Resolve `path` to an entry `.mvl` file — `path` itself if it's a file, or
@@ -879,7 +885,7 @@ pub(super) fn build_project_wasm(path: &str, assert_mode: AssertMode, target: &s
     let file_path = resolve_entry_path(path);
     let (prog, _src) = super::parse_or_exit(&file_path);
     let module_name = loader::stem(&file_path);
-    let wat = compile_wat_multi(&prog, &file_path, &module_name, assert_mode);
+    let (wat, _tir) = compile_wat_multi(&prog, &file_path, &module_name, assert_mode);
     let out_path = format!("{module_name}.wat");
     fs::write(&out_path, &wat).unwrap_or_else(|e| {
         eprintln!("error: cannot write {out_path}: {e}");
@@ -940,7 +946,7 @@ fn run_one_case(
         };
     }
 
-    let wat = compile_wat_multi(&prog, &file_str, &module_name, AssertMode::Always);
+    let (wat, tir) = compile_wat_multi(&prog, &file_str, &module_name, AssertMode::Always);
 
     let wat_tmp = match tempfile::NamedTempFile::with_suffix(".wat") {
         Ok(t) => t,
@@ -1048,22 +1054,54 @@ fn run_one_case(
         }
     }
 
-    let mut wasmtime_cmd = process::Command::new(wasmtime_bin);
-    wasmtime_cmd.arg("run");
-    if let Some(runtime) = runtime_wasm {
-        wasmtime_cmd
-            .arg("--preload")
-            .arg(format!("runtime={}", runtime.display()));
-    }
-    let run = wasmtime_cmd.arg(wasm_tmp.path()).output();
-    let output = match run {
-        Ok(o) => o,
-        Err(e) => {
+    // `extern "rust"` FFI (#2049): when the program declares any, a plain
+    // `wasmtime run --preload runtime=...` can't satisfy the `(import
+    // "extern" ...)` declarations `wasm_text.rs` emits for them — nothing
+    // supplies that namespace. Build and run the wasmtime-embedding host
+    // glue (linking the directory's real `bridge.rs` unmodified) instead;
+    // extern-free programs keep the plain subprocess path unchanged.
+    let output = match wasm_host_glue::generate_host_main(&tir) {
+        Ok(None) => {
+            let mut wasmtime_cmd = process::Command::new(wasmtime_bin);
+            wasmtime_cmd.arg("run");
+            if let Some(runtime) = runtime_wasm {
+                wasmtime_cmd
+                    .arg("--preload")
+                    .arg(format!("runtime={}", runtime.display()));
+            }
+            match wasmtime_cmd.arg(wasm_tmp.path()).output() {
+                Ok(o) => o,
+                Err(e) => {
+                    return CaseResult {
+                        passed: false,
+                        output: String::new(),
+                        err_output: format!("  FAIL (wasmtime spawn): {file_str}: {e}\n"),
+                    }
+                }
+            }
+        }
+        Ok(Some(host_src)) => {
+            match run_extern_host(file, &host_src, runtime_wasm, wasm_tmp.path()) {
+                Ok(o) => o,
+                Err(e) => {
+                    return CaseResult {
+                        passed: false,
+                        output: String::new(),
+                        err_output: format!("  FAIL (extern-wasm host): {file_str}: {e}\n"),
+                    }
+                }
+            }
+        }
+        Err(unsupported) => {
+            let mut msg = format!("  FAIL (extern-wasm unsupported): {file_str}\n");
+            for u in &unsupported {
+                msg.push_str(&format!("    {u}\n"));
+            }
             return CaseResult {
                 passed: false,
                 output: String::new(),
-                err_output: format!("  FAIL (wasmtime spawn): {file_str}: {e}\n"),
-            }
+                err_output: msg,
+            };
         }
     };
 
@@ -1120,6 +1158,123 @@ fn run_one_case(
             err_output: String::new(),
         }
     }
+}
+
+/// Builds and runs the wasmtime-embedding host glue for a program with
+/// `extern "rust"` fns (#2049): assembles a temp crate combining the
+/// generated `host_src` (`main.rs`) with the directory's real `bridge.rs`
+/// (unmodified — the exact same file the Rust backend links in), builds it,
+/// and runs it against `guest_wasm` + the MVL WASM runtime. Returns a
+/// `process::Output` shaped exactly like the plain `wasmtime run` subprocess
+/// would, so `run_one_case`'s stdout/expected comparison doesn't need to
+/// know which path produced it.
+///
+/// Mirrors `cli/build.rs`'s existing bridge.rs detection (canonicalize +
+/// symlink-escape guard) rather than sharing code with it — that logic is a
+/// few lines, and the two callers differ enough (this one returns `Result`
+/// for a per-test-case failure; `build.rs` hard-exits the whole process)
+/// that threading one through the other would obscure both.
+fn run_extern_host(
+    file: &Path,
+    host_src: &str,
+    runtime_wasm: Option<&Path>,
+    guest_wasm: &Path,
+) -> Result<process::Output, String> {
+    let entry_dir = file.parent().unwrap_or_else(|| Path::new("."));
+    let bridge_candidate = entry_dir.join("bridge.rs");
+    let bridge_path = match fs::canonicalize(&bridge_candidate) {
+        Ok(canon_bridge) => {
+            let canon_dir = fs::canonicalize(entry_dir)
+                .map_err(|e| format!("cannot canonicalize {}: {e}", entry_dir.display()))?;
+            if !canon_bridge.starts_with(&canon_dir) {
+                return Err("bridge.rs is outside source directory — refusing to copy".to_string());
+            }
+            canon_bridge
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return Err(format!(
+                "extern \"rust\" fn(s) declared but no bridge.rs found at {} (needed to run \
+                 extern \"rust\" calls under --backend=wasm)",
+                bridge_candidate.display()
+            ));
+        }
+        Err(e) => {
+            return Err(format!(
+                "cannot resolve bridge.rs at {}: {e}",
+                bridge_candidate.display()
+            ))
+        }
+    };
+
+    let runtime_wasm = runtime_wasm.ok_or_else(|| {
+        "extern \"rust\" FFI requires the MVL WASM runtime (mvl_runtime_wasm.wasm) — \
+         run `make build-runtime-wasm` or set MVL_RUNTIME_WASM"
+            .to_string()
+    })?;
+
+    let compiler_version = env!("CARGO_PKG_VERSION");
+    let file_str = file.display().to_string();
+    let module_name = loader::stem(&file_str);
+    let path_hash = loader::scratch_dir_disambiguator(&file_str);
+    let tmp_dir = std::env::temp_dir().join(format!(
+        "mvl_wasm_extern_host_{compiler_version}_{module_name}_{path_hash}"
+    ));
+    let src_dir = tmp_dir.join("src");
+    fs::create_dir_all(&src_dir)
+        .map_err(|e| format!("cannot create {}: {e}", src_dir.display()))?;
+
+    fs::write(src_dir.join("main.rs"), host_src)
+        .map_err(|e| format!("cannot write generated host main.rs: {e}"))?;
+    fs::copy(&bridge_path, src_dir.join("bridge.rs"))
+        .map_err(|e| format!("cannot copy bridge.rs: {e}"))?;
+
+    // Absolute path dep, same pattern the Rust backend uses for
+    // --target=tokio (ADR-0027) — `mvl_runtime`'s own Cargo.toml resolves
+    // its "../core" dependency relative to wherever this path points, so no
+    // copying is needed (unlike the default Rust-backend build, which
+    // copies for concurrent-build isolation; read-only source deps don't
+    // need that here).
+    let mvl_runtime_path = mvl::mvl::runtime_xdg::ensure_runtime_rust();
+    let cargo_toml = format!(
+        r#"[package]
+name = "mvl_wasm_extern_host"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[[bin]]
+name = "host"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1"
+wasmtime = "27"
+wasmtime-wasi = "27"
+mvl_runtime = {{ path = {mvl_runtime_path:?}, package = "mvl_runtime_rust" }}
+"#
+    );
+    fs::write(tmp_dir.join("Cargo.toml"), cargo_toml)
+        .map_err(|e| format!("cannot write Cargo.toml: {e}"))?;
+
+    let build = process::Command::new("cargo")
+        .arg("build")
+        .arg("--quiet")
+        .current_dir(&tmp_dir)
+        .output()
+        .map_err(|e| format!("cargo build spawn failed: {e}"))?;
+    if !build.status.success() {
+        return Err(format!(
+            "cargo build failed:\n{}",
+            String::from_utf8_lossy(&build.stderr)
+        ));
+    }
+
+    let host_bin = tmp_dir.join("target/debug/host");
+    process::Command::new(&host_bin)
+        .arg(runtime_wasm)
+        .arg(guest_wasm)
+        .output()
+        .map_err(|e| format!("host binary spawn failed: {e}"))
 }
 
 /// Bail out with a clear message until the `wasm-browser` target's JS-host

@@ -259,13 +259,12 @@ fn emit_closure(ef: &TirExternFn) -> Result<String, String> {
             Shape::Bool => {
                 let wasm_name = format!("{native_name}_wasm");
                 wasm_params.push_str(&format!(", {wasm_name}: i32"));
-                native_arg_binds
-                    .push_str(&format!("            let {native_name} = {wasm_name} != 0;\n"));
+                native_arg_binds.push_str(&format!(
+                    "            let {native_name} = {wasm_name} != 0;\n"
+                ));
             }
             Shape::String => {
-                wasm_params.push_str(&format!(
-                    ", {native_name}_ptr: i32, {native_name}_len: i32"
-                ));
+                wasm_params.push_str(&format!(", {native_name}_ptr: i32, {native_name}_len: i32"));
                 native_arg_binds.push_str(&format!(
                     "            let {native_name} = read_mvl_string(&mut caller, {native_name}_ptr, {native_name}_len);\n"
                 ));
