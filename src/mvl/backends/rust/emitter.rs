@@ -30,6 +30,10 @@ const STDLIB_CONFLICTS: &[(&str, &[&str])] = &[
     // shadows the runtime's `io::remove(Path) -> Result[Unit, IoError]` once
     // `collections.mvl` joins the implicit prelude.
     ("io", &["join", "to_string", "remove"]),
+    // #2131: Map[K,V]::get emits a prelude free function `fn get(...)` that
+    // shadows the runtime's `env::get(String) -> Option[Tainted[String]]`
+    // once `collections.mvl` joins the implicit prelude.
+    ("env", &["get"]),
 ];
 
 /// Direction of an IFC relabel transition, used to pick the codegen shape.
@@ -856,7 +860,19 @@ impl RustEmitter {
                 None => base,
             }
         };
-        let user_fn_keys: std::collections::HashSet<String> = tir.fns.iter().map(fn_key).collect();
+        // Sibling modules count as "user-declared" too, not just the entry file
+        // (#2131): a plain free function like `fn put(row, col, text)` in one
+        // file of a multi-file program must still shadow a same-named stdlib
+        // method-dispatch trampoline (e.g. `Map[K,V]::put`'s generated bare
+        // `pub fn put(...)`), even though it's declared in a sibling, not the
+        // entry TIR. Without this, the trampoline silently wins the dedup and
+        // every call to the sibling's own `put` resolves to the wrong function.
+        let user_fn_keys: std::collections::HashSet<String> = tir
+            .fns
+            .iter()
+            .chain(sibling_tirs.iter().flat_map(|st| st.fns.iter()))
+            .map(fn_key)
+            .collect();
         let user_type_names: std::collections::HashSet<&str> =
             tir.types.iter().map(|t| t.name.as_str()).collect();
         let user_actor_names: std::collections::HashSet<&str> =
@@ -866,7 +882,7 @@ impl RustEmitter {
             std::collections::HashSet::new();
         // Pair each prelude fn with the index of the TIR it came from so we can
         // route per-file coverage state below (#1489).
-        let prelude_fns: Vec<(usize, &crate::mvl::ir::TirFn)> = prelude_tirs
+        let prelude_fn_candidates: Vec<(usize, &crate::mvl::ir::TirFn)> = prelude_tirs
             .iter()
             .enumerate()
             .flat_map(|(idx, t)| t.fns.iter().map(move |f| (idx, f)))
@@ -874,7 +890,32 @@ impl RustEmitter {
             .filter(|(_, f)| !f.body.stmts.is_empty())
             .filter(|(_, f)| !f.is_test)
             .filter(|(_, f)| !user_fn_keys.contains(&fn_key(f)))
+            .collect();
+        let is_builtin_receiver_method = |f: &crate::mvl::ir::TirFn| -> bool {
+            matches!(&f.receiver_type, Some(r) if BUILTIN_RECEIVER_TYPES.contains(&r.as_str()))
+        };
+        // Process genuine free functions and user-type extension methods BEFORE
+        // builtin-receiver-type method-dispatch trampolines (Map/Set/List/String/…),
+        // regardless of which file in `prelude_tirs` each came from (#2131).
+        // Builtin-receiver methods are synthetic: the emitter invents a bare
+        // free-function name for them purely as a codegen artifact (e.g.
+        // `Map[K,V]::put` becomes `pub fn put(...)`). `prelude_tirs` mixes
+        // genuine stdlib modules with library files pulled in from elsewhere in
+        // the program (`mvl test`'s directory-wide sibling discovery, package
+        // modules, …) with no ordering guarantee between them — so on a bare-name
+        // collision (e.g. a sibling's own `fn put(row, col, text)`), a real
+        // user-written function must always win, not whichever happened to be
+        // iterated first.
+        let prelude_fns: Vec<(usize, &crate::mvl::ir::TirFn)> = prelude_fn_candidates
+            .iter()
+            .filter(|(_, f)| !is_builtin_receiver_method(f))
+            .chain(
+                prelude_fn_candidates
+                    .iter()
+                    .filter(|(_, f)| is_builtin_receiver_method(f)),
+            )
             .filter(|(_, f)| seen_prelude_fns.insert(fn_key(f)))
+            .map(|&(idx, f)| (idx, f))
             .collect();
 
         // Build dispatch table for function name collisions.
