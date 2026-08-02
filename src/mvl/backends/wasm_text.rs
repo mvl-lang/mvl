@@ -2337,7 +2337,11 @@ fn collect_locals_ctx_expr(expr: &TirExpr, locals: &mut Vec<(String, Ty)>, ctx: 
 fn collect_locals_stmt(stmt: &TirStmt, locals: &mut Vec<(String, Ty)>) {
     match stmt {
         TirStmt::Let {
-            pattern, ty, init, ..
+            pattern,
+            ty,
+            init,
+            span,
+            ..
         } => {
             if let Pattern::Ident(name, _) = pattern {
                 if peels_to_string(ty) {
@@ -2348,6 +2352,16 @@ fn collect_locals_stmt(stmt: &TirStmt, locals: &mut Vec<(String, Ty)>) {
                 } else {
                     locals.push((name.clone(), ty.clone()));
                 }
+            }
+            // `let x: ref List/Set/Array[T] = <existing var/expr>;` needs a
+            // deep-copy temp pair (see the matching arm in `emit_stmt`) — the
+            // pre-scan can't check `slice_is_supported` (no `ctx` here), so
+            // declare unconditionally whenever the shape could match; unused
+            // locals are harmless.
+            if is_let_deep_copy_shape(ty, init) {
+                let off = span.offset;
+                locals.push((format!("__clone_ptr_{off}"), Ty::Bool)); // i32
+                locals.push((format!("__clone_len_{off}"), Ty::Int)); // i64
             }
             collect_locals_expr(init, locals);
         }
@@ -2623,7 +2637,11 @@ fn emit_stmt(out: &mut String, stmt: &TirStmt, ctx: &Ctx) {
         // The local was already declared in the fn prelude via
         // `collect_locals_block`. Here we just evaluate the init and store.
         TirStmt::Let {
-            pattern, ty, init, ..
+            pattern,
+            ty,
+            init,
+            span,
+            ..
         } => {
             if let Pattern::Ident(name, _) = pattern {
                 emit_expr(out, init, ctx);
@@ -2631,6 +2649,21 @@ fn emit_stmt(out: &mut String, stmt: &TirStmt, ctx: &Ctx) {
                     // Init leaves (ptr, len) on stack — store into split locals.
                     out.push_str(&format!("    local.set ${name}_len\n"));
                     out.push_str(&format!("    local.set ${name}_ptr\n"));
+                } else if is_let_deep_copy_shape(ty, init) && slice_is_supported(ty, ctx) {
+                    // See `is_let_deep_copy_shape` — alias the pointer would
+                    // let mutations through `name` corrupt the init's source.
+                    ctx.needs_runtime.set(true);
+                    let off = span.offset;
+                    let ptr_tmp = format!("__clone_ptr_{off}");
+                    let len_tmp = format!("__clone_len_{off}");
+                    out.push_str(&format!("    local.tee ${ptr_tmp}\n"));
+                    out.push_str("    call $_mvl_array_len\n");
+                    out.push_str(&format!("    local.set ${len_tmp}\n"));
+                    out.push_str(&format!("    local.get ${ptr_tmp}\n"));
+                    out.push_str("    i64.const 0\n");
+                    out.push_str(&format!("    local.get ${len_tmp}\n"));
+                    out.push_str("    call $_mvl_array_slice\n");
+                    out.push_str(&format!("    local.set ${name}\n"));
                 } else {
                     out.push_str(&format!("    local.set ${name}\n"));
                 }
@@ -5823,6 +5856,33 @@ fn collection_elem_ty(ty: &Ty) -> Option<&Ty> {
             _ => return None,
         }
     }
+}
+
+/// Whether `let name: ref List/Set/Array[T] = init;` needs a deep copy
+/// instead of a bare `local.set` alias.
+///
+/// WASM's `List`/`Set`/`Array` values are handles to a heap-allocated
+/// `MvlArray` — `local.set` just copies the *pointer*. For a fresh literal
+/// (`List { .. }`/`Set { .. }`/`Map { .. }`) that pointer is already unique,
+/// so aliasing it is fine. But `let x: ref Set[Int] = self;` (or any other
+/// non-literal init — a parameter, a field read, another local) makes `x`
+/// and the source share one buffer: mutating `x` (`x.insert(...)`) silently
+/// corrupts the source too, since MVL's collections are supposed to have
+/// value semantics, not reference semantics. `std/config.mvl`,
+/// `std/json.mvl`, and `std/pbt.mvl` all rely on `let out: ref T = base;`
+/// followed by mutation expecting `base` to be untouched — this was a
+/// latent, unexercised bug because `WASM_CORPUS` never routes through those
+/// library files (#2124).
+///
+/// Scoped to `List`/`Set`/`Array` (matches [`collection_elem_ty`]) — `Map`
+/// has no runtime clone primitive yet in WASM and only two concrete
+/// instantiations (`_si64`/`_str`), so it is left for a follow-up.
+fn is_let_deep_copy_shape(ty: &Ty, init: &TirExpr) -> bool {
+    matches!(ty, Ty::Ref(_, inner) if collection_elem_ty(inner).is_some())
+        && !matches!(
+            init.kind,
+            TirExprKind::List { .. } | TirExprKind::Set { .. } | TirExprKind::Map { .. }
+        )
 }
 
 /// True when `ty` is a `Set<T>`, possibly wrapped in `Ref`/`Labeled`/`Refined`
@@ -10644,6 +10704,49 @@ mod validated_module_tests {
                  assert_eq(ys.len(), 3);\n\
              }}\n"
         ));
+        assert!(stubbed.is_empty(), "unexpected stubs: {stubbed:?}");
+    }
+
+    /// `let alias: ref Set[Int] = original;` followed by a mutation through
+    /// `alias` must not corrupt `original` — `std/config.mvl`'s `merge` and
+    /// `std/pbt.mvl`'s shrink loop both rely on exactly this shape (`let out:
+    /// ref Map/List[T] = base;`) expecting `base` untouched (#2124). A bare
+    /// `local.set` aliases the same heap array; mutating through `alias` then
+    /// silently mutates `original` too.
+    #[test]
+    fn ref_let_binding_from_existing_var_deep_copies_not_aliases() {
+        let (wat, stubbed) = emit(
+            "test fn t() -> Unit {\n\
+                 let original: Set[Int] = {1, 2, 3};\n\
+                 let alias: ref Set[Int] = original;\n\
+                 alias.insert(99);\n\
+                 assert_eq(original.len(), 3);\n\
+                 assert_eq(alias.len(), 4);\n\
+             }\n",
+        );
+        assert!(stubbed.is_empty(), "unexpected stubs: {stubbed:?}");
+        assert!(
+            wat.contains("call $_mvl_array_slice"),
+            "expected a deep copy via _mvl_array_slice: {wat}"
+        );
+        assert!(
+            !wat.contains("call $_mvl_array_clone"),
+            "refcount-bump clone still aliases the same buffer, not a fix: {wat}"
+        );
+    }
+
+    /// `let x: Set[Int] = {1, 2, 3};` (a fresh literal) must keep its plain
+    /// `local.set` — no deep copy needed since the literal's buffer is
+    /// already unique. Guards against `is_let_deep_copy_shape` over-firing.
+    #[test]
+    fn let_binding_from_fresh_literal_does_not_deep_copy() {
+        let stubbed = emit_and_validate(
+            "test fn t() -> Unit {\n\
+                 let s: ref Set[Int] = {1, 2, 3};\n\
+                 s.insert(4);\n\
+                 assert_eq(s.len(), 4);\n\
+             }\n",
+        );
         assert!(stubbed.is_empty(), "unexpected stubs: {stubbed:?}");
     }
 }

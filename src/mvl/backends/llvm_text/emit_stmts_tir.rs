@@ -14,7 +14,7 @@ use crate::mvl::ir::{
 };
 
 use super::emit_helpers::ty_to_type_expr;
-use super::{RefLocal, TextEmitter, MAIN_RET};
+use super::{HeapKind, RefLocal, TextEmitter, MAIN_RET};
 
 impl TextEmitter {
     /// TIR variant of [`Self::exclude_returned_value`] — walks a `TirExpr`.
@@ -266,7 +266,34 @@ impl TextEmitter {
                             .push(format!("  {ptr} = alloca {ty_str}"));
                     }
                     if let Some(v) = val {
-                        self.push_instr(&format!("store {ty_str} {v}, ptr {ptr}"));
+                        // `let alias: ref List/Set/Array[T] = <existing var/expr>;`
+                        // (T scalar — `HeapKind::Array`) — a bare pointer store
+                        // aliases the same heap `MvlArray` as the source. Two
+                        // owning locals then both decrement its refcount at
+                        // scope exit: a double-free. Worse, since neither copy
+                        // observes the other's mutations as independent, this
+                        // also violates MVL's array value semantics. A fresh
+                        // literal init (`List { .. }`/`Set { .. }`) already
+                        // owns a unique buffer, so only non-literal inits need
+                        // the deep copy (#2124).
+                        let needs_deep_copy =
+                            matches!(Self::heap_kind(&elem_ty), Some(HeapKind::Array))
+                                && !matches!(
+                                    init.kind,
+                                    TirExprKind::List { .. }
+                                        | TirExprKind::Set { .. }
+                                        | TirExprKind::Map { .. }
+                                );
+                        if needs_deep_copy {
+                            self.ensure_extern("declare ptr @_mvl_array_deep_clone(ptr)");
+                            let cloned = self.next_reg();
+                            self.push_instr(&format!(
+                                "{cloned} = call ptr @_mvl_array_deep_clone(ptr {v})"
+                            ));
+                            self.push_instr(&format!("store {ty_str} {cloned}, ptr {ptr}"));
+                        } else {
+                            self.push_instr(&format!("store {ty_str} {v}, ptr {ptr}"));
+                        }
                     }
                     if let Pattern::Ident(name, _) = pattern {
                         if let Some(hk) = Self::heap_kind(&elem_ty) {
