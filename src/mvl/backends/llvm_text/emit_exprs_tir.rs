@@ -4008,6 +4008,29 @@ impl TextEmitter {
                 Ok(Some(result))
             }
 
+            // `Set[T].map(f) -> Set[U]` (#2134) — checked ahead of the
+            // combined List/Set/Array arm below because `_mvl_list_map` is
+            // receiver-agnostic and does not deduplicate. Reuses the same
+            // runtime call, then dedupes the result in place with
+            // `_mvl_array_dedup` — the same generic byte-equal dedup Set
+            // literal construction already relies on (#1845), so this
+            // doesn't introduce new semantics for pointer-typed elements
+            // beyond what Set already has.
+            ("map", "ptr")
+                if args.len() == 1
+                    && self.is_closure_arg_tir(&args[0])
+                    && matches!(unwrap_labels(&receiver.ty), Ty::Set(_)) =>
+            {
+                let closure = match self.emit_as_hof_closure_tir(&args[0], &[0])? {
+                    Some(p) => p,
+                    None => return Ok(None),
+                };
+                let mapped = self.emit_c_call_simple(method, &val, &[("ptr", &closure)]);
+                self.ensure_extern("declare void @_mvl_array_dedup(ptr)");
+                self.push_instr(&format!("call void @_mvl_array_dedup(ptr {mapped})"));
+                Ok(Some(mapped))
+            }
+
             // ── HOF: filter / map / take_while / skip_while / any / all ───
             ("filter" | "map" | "take_while" | "skip_while", "ptr")
                 if args.len() == 1 && self.is_closure_arg_tir(&args[0]) =>
