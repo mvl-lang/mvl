@@ -6,14 +6,20 @@
 # Backend support:
 #   transpiler (default) — full demo, extern "rust" bridge linked via bridge.rs
 #   LLVM                 — pure tests only (handler_test.mvl); extern stubs return defaults
+#   WASM                  — handler_test.mvl + storage.mvl fully run (extern "rust" FFI via
+#                           a wasmtime-embedding host, #2049) — real bridge.rs, unmodified.
+#                           main.mvl itself does NOT run under --backend=wasm yet: it uses
+#                           std.log (Logger), whose formatting builtins the WASM backend
+#                           doesn't support (a separate, pre-existing gap, unrelated to FFI).
 #
 # Run from this directory or from the repo root.
-.PHONY: help guard-mvl build check prove lint test-solver test test-llvm assurance mcdc mutate fuzz smoke run all clean
+.PHONY: help guard-mvl build build-wasm check prove lint test-solver test test-llvm test-wasm assurance mcdc mutate fuzz smoke run all clean
 
 .DEFAULT_GOAL := help
 
 MVL  := ../../target/debug/mvl
 DIR  := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
+WASM_RUNTIME_PATH := $(DIR)../../target/wasm32-wasip1/debug/mvl_runtime_wasm.wasm
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z0-9_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-12s\033[0m %s\n", $$1, $$2}'
@@ -29,6 +35,9 @@ guard-mvl: ## Validate MVL binary is present (does NOT recompile)
 
 build: guard-mvl ## Compile the example to a native binary (requires bridge.rs)
 	$(MVL) build $(DIR)main.mvl
+
+build-wasm: guard-mvl ## Compile main.mvl to WAT via --backend=wasm (produces the artifact; see test-wasm to run it)
+	$(MVL) build $(DIR)main.mvl --backend=wasm
 
 check: guard-mvl ## Type-check all source files
 	$(MVL) check $(DIR)
@@ -64,10 +73,8 @@ test: guard-mvl ## Run all tests (transpiler backend; extern bridge required)
 test-llvm: guard-mvl ## Run pure tests only via LLVM backend (no extern calls)
 	$(MVL) test $(DIR)handler_test.mvl --backend=llvm
 
-# No test-wasm target: handler_test.mvl exercises dispatch(), whose Err(e)
-# re-wrap of an auth failure calls the extern "rust" verify_request_auth —
-# blocked by #2049 (extern "rust" FFI unsupported on --backend=wasm), not
-# fixable here.
+test-wasm: guard-mvl ## Run handler_test.mvl + storage.mvl `test fn`s under --backend=wasm (real extern "rust" FFI, #2049)
+	MVL_RUNTIME_WASM=$(WASM_RUNTIME_PATH) $(MVL) test $(DIR) --backend=wasm
 
 assurance: guard-mvl ## Assurance report: spec coverage, MC/DC, mutation score (verbose)
 	$(MVL) assurance $(DIR) --verbose
