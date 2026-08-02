@@ -703,6 +703,11 @@ fn typeexpr_to_ty(te: &TypeExpr) -> Ty {
                 };
                 Ty::Array(Box::new(inner), size)
             }
+            "Option" if args.len() == 1 => Ty::Option(Box::new(typeexpr_to_ty(&args[0]))),
+            "Result" if args.len() == 2 => Ty::Result(
+                Box::new(typeexpr_to_ty(&args[0])),
+                Box::new(typeexpr_to_ty(&args[1])),
+            ),
             _ => Ty::Named(name.clone(), args.iter().map(typeexpr_to_ty).collect()),
         },
         TypeExpr::Option { inner, .. } => Ty::Option(Box::new(typeexpr_to_ty(inner))),

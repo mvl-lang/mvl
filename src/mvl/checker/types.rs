@@ -360,6 +360,10 @@ pub fn resolve(expr: &TypeExpr) -> Ty {
                 Ty::Ptr(Box::new(inner))
             }
             "Ptr" => Ty::Unknown,
+            "Option" if args.len() == 1 => Ty::Option(Box::new(resolve(&args[0]))),
+            "Result" if args.len() == 2 => {
+                Ty::Result(Box::new(resolve(&args[0])), Box::new(resolve(&args[1])))
+            }
             _ => Ty::Named(name.clone(), args.iter().map(resolve).collect()),
         },
         TypeExpr::Option { inner, .. } => Ty::Option(Box::new(resolve(inner))),

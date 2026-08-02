@@ -9988,4 +9988,73 @@ mod validated_module_tests {
         assert!(wat.contains("local.set $out_len"), "{wat}");
         assert!(!wat.contains("local.set $out\n"), "{wat}");
     }
+
+    /// `Option[T]::is_some`'s synthesised bare `self` param used to resolve to
+    /// `Ty::Named("Option", ..)` instead of `Ty::Option(..)` (the receiver-type
+    /// conversion in `checker::types::resolve`/`ir::lower::typeexpr_to_ty` had
+    /// no `"Option"`/`"Result"` case), so `unify_ty_params` never matched the
+    /// call site's concrete receiver and the method always stubbed (#2125).
+    /// Bodies mirror `std/core.mvl`; declared locally so these tests don't
+    /// depend on the stdlib being loaded.
+    const OPTION_IS_SOME_IS_NONE: &str = "pub fn Option[T]::is_some(self) -> Bool {\n\
+                                               match self { Some(_) => true, None => false }\n\
+                                           }\n\
+                                           pub fn Option[T]::is_none(self) -> Bool {\n\
+                                               match self { Some(_) => false, None => true }\n\
+                                           }\n";
+
+    const RESULT_IS_OK_IS_ERR: &str = "pub fn Result[T, E]::is_ok(self) -> Bool {\n\
+                                            match self { Ok(_) => true, Err(_) => false }\n\
+                                        }\n\
+                                        pub fn Result[T, E]::is_err(self) -> Bool {\n\
+                                            match self { Ok(_) => false, Err(_) => true }\n\
+                                        }\n";
+
+    #[test]
+    fn option_is_some_on_int_lowers() {
+        let stubbed = emit_and_validate(&format!(
+            "{OPTION_IS_SOME_IS_NONE}\
+             test fn t() -> Unit {{\n\
+                 let x: Option[Int] = Some(5);\n\
+                 assert_eq(x.is_some(), true);\n\
+             }}\n"
+        ));
+        assert!(stubbed.is_empty(), "unexpected stubs: {stubbed:?}");
+    }
+
+    #[test]
+    fn option_is_none_on_int_lowers() {
+        let stubbed = emit_and_validate(&format!(
+            "{OPTION_IS_SOME_IS_NONE}\
+             test fn t() -> Unit {{\n\
+                 let x: Option[Int] = None;\n\
+                 assert_eq(x.is_none(), true);\n\
+             }}\n"
+        ));
+        assert!(stubbed.is_empty(), "unexpected stubs: {stubbed:?}");
+    }
+
+    #[test]
+    fn result_is_ok_on_int_string_lowers() {
+        let stubbed = emit_and_validate(&format!(
+            "{RESULT_IS_OK_IS_ERR}\
+             test fn t() -> Unit {{\n\
+                 let x: Result[Int, String] = Ok(5);\n\
+                 assert_eq(x.is_ok(), true);\n\
+             }}\n"
+        ));
+        assert!(stubbed.is_empty(), "unexpected stubs: {stubbed:?}");
+    }
+
+    #[test]
+    fn result_is_err_on_int_string_lowers() {
+        let stubbed = emit_and_validate(&format!(
+            "{RESULT_IS_OK_IS_ERR}\
+             test fn t() -> Unit {{\n\
+                 let x: Result[Int, String] = Err(\"boom\");\n\
+                 assert_eq(x.is_err(), true);\n\
+             }}\n"
+        ));
+        assert!(stubbed.is_empty(), "unexpected stubs: {stubbed:?}");
+    }
 }
