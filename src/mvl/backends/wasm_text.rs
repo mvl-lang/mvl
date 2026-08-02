@@ -638,13 +638,20 @@ impl Backend for WasmTextCompiler {
         let (literals, heap_start) =
             collect_literals(&literal_scan_fns, &tir.actors, needs_wasi, &audit_relabels);
         let (enum_types, enum_variants) = collect_enums(&tir.types);
-        let mut struct_layouts = collect_structs(&tir.types);
+        // Collected before `collect_structs` (moved ahead of its previous
+        // position below `collect_structs`/`collect_actors`) — struct field
+        // layout needs to peel alias references (`type Port = Int where
+        // ...` used as a field type is `Ty::Named("Port", [])` in TIR, not
+        // `Ty::Int`) to size fields correctly; see `field_byte_size` (#2049
+        // follow-up: found while building the WASM extern-FFI host glue,
+        // which needs byte-accurate struct layouts to marshal fields).
+        let type_aliases = collect_type_aliases(&tir.types);
+        let mut struct_layouts = collect_structs(&tir.types, &type_aliases);
         // Actor state layouts land in `struct_layouts` so the handle behaves
         // like a struct pointer everywhere (#2012).
-        let actors = collect_actors(&tir.actors, &mut struct_layouts);
+        let actors = collect_actors(&tir.actors, &mut struct_layouts, &type_aliases);
         let struct_layouts = struct_layouts;
         let payload_enums = collect_payload_enums(&tir.types);
-        let type_aliases = collect_type_aliases(&tir.types);
         let empty_subst: HashMap<String, Ty> = HashMap::new();
         let generic_fn_map: HashMap<String, (Vec<GenericParam>, Vec<TirParam>)> = all_fns
             .iter()
@@ -7290,27 +7297,61 @@ fn collect_enums(
 // Fields are packed at their natural alignment (4 or 8 bytes). Total size is
 // rounded up to 8-byte alignment so adjacent allocations don't share a word.
 
-fn field_byte_size(ty: &Ty) -> u32 {
+/// Peel a field's declared type down to the representation
+/// `field_byte_size`/`field_alignment` actually size against — `Ty::Ref`/
+/// `Ty::Labeled`/`Ty::Refined` wrappers, and `type X = <target>` alias
+/// references (`type Port = Int where ...` used as a field type lowers to
+/// `Ty::Named("Port", [])` in TIR, not `Ty::Int` — see `typeexpr_to_ty` in
+/// `ir/lower.rs`, a "shallow conversion").
+///
+/// Without this, a struct field typed as an alias to `Int`/`UInt`/`Float`
+/// fell into `field_byte_size`'s 4-byte default (real data corruption: the
+/// struct was under-allocated and a following field's offset landed inside
+/// the 8 bytes `emit_struct_store`/`emit_field_access` — which DO resolve
+/// aliases via `Ctx::type_aliases` — actually read and wrote for that field).
+/// Found while building the WASM `extern "rust"` FFI host glue, which needs
+/// byte-accurate struct layouts to marshal fields correctly; unrelated to
+/// FFI itself, so fixed here rather than worked around in the new code.
+fn resolve_field_ty<'a>(ty: &'a Ty, aliases: &'a HashMap<String, Ty>) -> std::borrow::Cow<'a, Ty> {
     match ty {
+        Ty::Ref(_, inner) | Ty::Labeled(_, inner) | Ty::Refined(inner, _) => {
+            match resolve_field_ty(inner, aliases) {
+                std::borrow::Cow::Borrowed(t) => std::borrow::Cow::Owned(t.clone()),
+                owned => owned,
+            }
+        }
+        Ty::Named(name, args) if args.is_empty() => match aliases.get(name.as_str()) {
+            Some(target) => std::borrow::Cow::Owned(resolve_field_ty(target, aliases).into_owned()),
+            None => std::borrow::Cow::Borrowed(ty),
+        },
+        _ => std::borrow::Cow::Borrowed(ty),
+    }
+}
+
+fn field_byte_size(ty: &Ty, aliases: &HashMap<String, Ty>) -> u32 {
+    match resolve_field_ty(ty, aliases).as_ref() {
         Ty::Int | Ty::UInt | Ty::Float => 8,
         // Everything else is an i32-width value in the struct slot.
         _ => 4,
     }
 }
 
-fn field_alignment(ty: &Ty) -> u32 {
-    field_byte_size(ty)
+fn field_alignment(ty: &Ty, aliases: &HashMap<String, Ty>) -> u32 {
+    field_byte_size(ty, aliases)
 }
 
-fn collect_structs(types: &[TirTypeDecl]) -> HashMap<String, StructLayout> {
+fn collect_structs(
+    types: &[TirTypeDecl],
+    type_aliases: &HashMap<String, Ty>,
+) -> HashMap<String, StructLayout> {
     let mut map = HashMap::new();
     for td in types {
         if let TirTypeBody::Struct { fields, .. } = &td.body {
             let mut offset = 0u32;
             let mut slots = Vec::new();
             for f in fields {
-                let size = field_byte_size(&f.ty);
-                let align = field_alignment(&f.ty);
+                let size = field_byte_size(&f.ty, type_aliases);
+                let align = field_alignment(&f.ty, type_aliases);
                 // Align up.
                 offset = (offset + align - 1) & !(align - 1);
                 slots.push(FieldSlot {
@@ -7346,14 +7387,15 @@ fn collect_structs(types: &[TirTypeDecl]) -> HashMap<String, StructLayout> {
 fn collect_actors(
     actors: &[TirActorDecl],
     layouts: &mut HashMap<String, StructLayout>,
+    type_aliases: &HashMap<String, Ty>,
 ) -> HashMap<String, ActorInfo> {
     let mut map = HashMap::new();
     for (idx, ad) in actors.iter().enumerate() {
         let mut offset = 0u32;
         let mut slots = Vec::new();
         for f in &ad.fields {
-            let size = field_byte_size(&f.ty);
-            let align = field_alignment(&f.ty);
+            let size = field_byte_size(&f.ty, type_aliases);
+            let align = field_alignment(&f.ty, type_aliases);
             offset = (offset + align - 1) & !(align - 1);
             slots.push(FieldSlot {
                 name: f.name.clone(),
@@ -8421,6 +8463,41 @@ mod tests {
         let mono = crate::mvl::passes::mono::monomorphize(&prog, &all_fns, &expr_types);
         let tir = crate::mvl::ir::lower::lower(&prog, &mono, &expr_types);
         WasmTextCompiler::new().emit_program(&tir, "test")
+    }
+
+    /// Regression for a data-corruption bug found while building the WASM
+    /// `extern "rust"` FFI host glue (#2049 follow-up): `type Port = Int
+    /// where ...` used as a struct field lowers to `Ty::Named("Port", [])`
+    /// in TIR (a "shallow conversion", see `typeexpr_to_ty` in
+    /// `ir/lower.rs`), not `Ty::Int`. `field_byte_size` had no alias
+    /// resolution and fell into its 4-byte default for that field, while
+    /// `emit_struct_store`/`emit_field_access` (which DO resolve aliases via
+    /// `Ctx::type_aliases`) correctly treated it as an 8-byte `i64` slot —
+    /// under-allocating the struct so a following field's offset landed
+    /// inside those 8 bytes. Fixed by threading `type_aliases` into
+    /// `field_byte_size`/`field_alignment` via `resolve_field_ty`.
+    #[test]
+    fn refined_alias_struct_field_does_not_overlap_following_field() {
+        let wat = compile(
+            "type Port = Int where self > 0 && self <= 65535\n\
+             type Config = struct { port: Port, name: String }\n\
+             fn main() -> Unit ! Console {\n\
+                 let c: Config = Config { port: 8080, name: \"hi\" };\n\
+                 println(c.name)\n\
+             }\n",
+        );
+        // 8 bytes for `port` (i64) + 4 for `name`'s pointer, rounded to 16 —
+        // NOT 8 (which is what the 4-byte-default bug produced).
+        assert!(
+            wat.contains("i32.const 16\n    call $_mvl_struct_alloc"),
+            "{wat}"
+        );
+        assert!(wat.contains("i64.store offset=0"), "{wat}");
+        assert!(
+            wat.contains("i32.store offset=8"),
+            "`name` must be stored at offset=8, past the full 8-byte `port` \
+             slot, not overlapping it at offset=4\n{wat}"
+        );
     }
 
     const COUNTER: &str = "actor Counter {\n\
