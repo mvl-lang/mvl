@@ -812,6 +812,68 @@ pub unsafe extern "C" fn _mvl_array_slice(a: i32, start: i64, end: i64) -> i32 {
     out
 }
 
+/// `_mvl_array_concat(a, b)` — new array holding `a`'s elements followed
+/// by `b`'s (#2114). Port of `runtime/llvm/`'s `_mvl_list_concat`.
+///
+/// Elements are copied byte-wise at `elem_size` granularity, same caveat as
+/// `_mvl_array_slice`: correct for scalar/pointer arrays, not refcount-aware
+/// for `*MvlString` elements — the emitter's `concat_is_supported` gate
+/// keeps `List[String]::concat` off this path.
+///
+/// `a` and `b` must share the same `elem_size`, which the type system
+/// guarantees (`List[T]::concat` requires both operands to be `List[T]`).
+///
+/// # Safety
+/// `a` and `b` must each be a valid `MvlArray` pointer or null.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn _mvl_array_concat(a: i32, b: i32) -> i32 {
+    let (es, la, lb) = match (a, b) {
+        (0, 0) => return _mvl_array_new(8, 0),
+        (0, _) => {
+            let arr_b = unsafe { &*(b as usize as *const MvlArray) };
+            (arr_b.elem_size, 0, arr_b.len)
+        }
+        (_, 0) => {
+            let arr_a = unsafe { &*(a as usize as *const MvlArray) };
+            (arr_a.elem_size, arr_a.len, 0)
+        }
+        (_, _) => {
+            let arr_a = unsafe { &*(a as usize as *const MvlArray) };
+            let arr_b = unsafe { &*(b as usize as *const MvlArray) };
+            (arr_a.elem_size, arr_a.len, arr_b.len)
+        }
+    };
+    let total = la + lb;
+    let out = _mvl_array_new(es, total);
+    if total == 0 {
+        return out;
+    }
+    let dst = unsafe { &mut *(out as usize as *mut MvlArray) };
+    if la > 0 {
+        let arr_a = unsafe { &*(a as usize as *const MvlArray) };
+        unsafe {
+            core::ptr::copy_nonoverlapping(
+                arr_a.ptr as *const u8,
+                dst.ptr as *mut u8,
+                (la as usize) * (es as usize),
+            );
+        }
+    }
+    if lb > 0 {
+        let arr_b = unsafe { &*(b as usize as *const MvlArray) };
+        let dst_off = (dst.ptr as usize) + (la as usize) * (es as usize);
+        unsafe {
+            core::ptr::copy_nonoverlapping(
+                arr_b.ptr as *const u8,
+                dst_off as *mut u8,
+                (lb as usize) * (es as usize),
+            );
+        }
+    }
+    dst.len = total;
+    out
+}
+
 /// `_mvl_string_ptr_array_drop(a)` — refcount decrement for a `List[String]`
 /// array. When the refcount hits zero each element `*MvlString` is dropped
 /// via `_mvl_string_drop`, then the backing buffer and struct are freed.

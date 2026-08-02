@@ -433,6 +433,11 @@ const RUNTIME_IMPORTS: &[(&str, &str)] = &[
     // `.slice(start, end)` — MVL `Int` bounds are i64 (#2014). Backs
     // `List[T]::take`/`::skip`, which are pure-MVL wrappers over `slice`.
     ("_mvl_array_slice", "(param i32 i64 i64) (result i32)"),
+    // `.concat(other)` (#2114) — new array holding `self`'s elements
+    // followed by `other`'s. Byte-wise copy at `elem_size` granularity,
+    // same caveat as `slice`: correct for scalar/pointer arrays, not
+    // refcount-aware for `List[String]` elements.
+    ("_mvl_array_concat", "(param i32 i32) (result i32)"),
     ("_mvl_array_drop", "(param i32)"),
     ("_mvl_string_ptr_array_drop", "(param i32)"),
     ("_mvl_string_ptr_array_dedup", "(param i32)"),
@@ -1212,6 +1217,37 @@ fn slice_is_supported(ty: &Ty, ctx: &Ctx) -> bool {
     }
 }
 
+/// Whether `.concat(other)` can be lowered for this receiver (#2114).
+///
+/// Same underlying mechanism as [`slice_is_supported`] — `_mvl_array_concat`
+/// copies both arrays' elements byte-wise at `elem_size` granularity into a
+/// fresh array — so it excludes the same refcounted-box element types for
+/// the same reason (String, nested collections, Map, Option, Result: a
+/// byte-wise copy aliases the pointee without bumping its refcount, and
+/// `local_drop_fn` would then double-drop it).
+///
+/// Unlike `slice_is_supported`, this does *not* exclude structs and
+/// payload enums. Those are boxed pointers too, but `_mvl_struct_alloc`
+/// never frees its allocations (#1821 — intentionally leaked, corpus
+/// allocations are short-lived) and `local_drop_fn` already maps every
+/// non-String collection — struct-element lists included — to the
+/// shallow `_mvl_array_drop` (frees the buffer, not the elements). So
+/// aliasing struct/payload-enum pointers via `concat` carries no double-free
+/// risk today: nothing ever frees the pointee to begin with.
+fn concat_is_supported(ty: &Ty, ctx: &Ctx) -> bool {
+    match collection_elem_ty(ty) {
+        None => false,
+        Some(elem) => {
+            let elem = resolve_ty_param(elem, ctx.type_subst);
+            !(peels_to_string(&elem)
+                || collection_elem_ty(&elem).is_some()
+                || map_key_val_ty(&elem).is_some()
+                || option_inner_ty(&elem).is_some()
+                || result_ok_ty(&elem).is_some())
+        }
+    }
+}
+
 fn clone_is_supported(ty: &Ty, ctx: &Ctx) -> bool {
     if collection_elem_ty(ty).is_some() {
         return true;
@@ -1609,18 +1645,21 @@ fn emit_fn(out: &mut String, f: &TirFn, ctx: &Ctx) {
     *ctx.string_params.borrow_mut() = f
         .params
         .iter()
-        .filter(|p| peels_to_string(&p.ty))
+        .filter(|p| is_string_ty(&p.ty, ctx))
         .map(|p| p.name.clone())
         .collect();
 
     let (wasm_name, _) = effective_name(f, ctx.needs_wasi);
     // Populate the per-function String-param set so the Var emitter knows
     // which String locals are split (ptr, len) params vs unsupported locals.
+    // `is_string_ty` (not `peels_to_string`) so a named alias to `String`
+    // (e.g. `type BoundedInput = String where ...`, #2112) is recognized
+    // too — matches the param-splitting decision just below.
     {
         let mut sp = ctx.string_params.borrow_mut();
         sp.clear();
         for p in &f.params {
-            if peels_to_string(&p.ty) {
+            if is_string_ty(&p.ty, ctx) {
                 sp.insert(p.name.clone());
             }
         }
@@ -1628,7 +1667,7 @@ fn emit_fn(out: &mut String, f: &TirFn, ctx: &Ctx) {
 
     out.push_str(&format!("  (func ${wasm_name}"));
     for p in &f.params {
-        if peels_to_string(&p.ty) {
+        if is_string_ty(&p.ty, ctx) {
             // String (or Secret[String]/Tainted[String] — #2013, labels are
             // compile-time only) params split into two i32 WASM params: (ptr, len).
             out.push_str(&format!(
@@ -1639,7 +1678,7 @@ fn emit_fn(out: &mut String, f: &TirFn, ctx: &Ctx) {
             out.push_str(&format!(" (param ${} {})", p.name, wasm_ty(&p.ty, ctx)));
         }
     }
-    if peels_to_string(&f.ret_ty) {
+    if is_string_ty(&f.ret_ty, ctx) {
         // String returns as two i32s (ptr, len) — WASM multi-value return.
         out.push_str(" (result i32 i32)");
     } else if !matches!(f.ret_ty, Ty::Unit) {
@@ -1667,7 +1706,7 @@ fn emit_fn(out: &mut String, f: &TirFn, ctx: &Ctx) {
     // multi-value i32×2 — deferred) and when AssertMode is Assume.
     let has_checkable_ensures = ctx.assert_mode != AssertMode::Assume
         && !matches!(f.ret_ty, Ty::Unit)
-        && !peels_to_string(&f.ret_ty)
+        && !is_string_ty(&f.ret_ty, ctx)
         && (f.ensures.iter().any(is_runtime_checkable)
             || f.return_refinement
                 .as_ref()
@@ -1869,7 +1908,29 @@ fn collect_locals_ctx(block: &TirBlock, locals: &mut Vec<(String, Ty)>, ctx: &Ct
 
 fn collect_locals_ctx_stmt(stmt: &TirStmt, locals: &mut Vec<(String, Ty)>, ctx: &Ctx) {
     match stmt {
-        TirStmt::Let { init, .. } => collect_locals_ctx_expr(init, locals, ctx),
+        TirStmt::Let {
+            pattern, ty, init, ..
+        } => {
+            // The ctx-free first pass (`collect_locals_stmt`) already
+            // split `{name}_ptr`/`{name}_len` locals for a bare `String`
+            // (or `Ref`/`Labeled`/`Refined`-wrapped `String`) binding via
+            // `peels_to_string`, which can't see through a named type
+            // alias (e.g. `type BoundedInput = String where ...`) without
+            // a `ctx.type_aliases` lookup. When `ty` is such an alias, it
+            // instead declared a single scalar local — wrong shape, since
+            // `emit_stmt`'s `is_string_ty` (ctx-aware, #2112) correctly
+            // treats the init as a String and pushes two i32s. Speculatively
+            // add the split locals here too; harmless if `peels_to_string`
+            // already caught it (same names, deduped), and leaves the wrong
+            // scalar local as dead-but-harmless when it didn't.
+            if let Pattern::Ident(name, _) = pattern {
+                if is_string_ty(ty, ctx) {
+                    locals.push((format!("{name}_ptr"), Ty::Bool)); // i32
+                    locals.push((format!("{name}_len"), Ty::Bool)); // i32
+                }
+            }
+            collect_locals_ctx_expr(init, locals, ctx)
+        }
         TirStmt::Assign { target, value, .. } => {
             // `base.field = …` on a String field needs a scratch local to hold
             // the new handle while the old one is dropped (see
@@ -2231,7 +2292,7 @@ fn collect_locals_stmt(stmt: &TirStmt, locals: &mut Vec<(String, Ty)>) {
             span,
         } => {
             // Stmt-form match needs the same scrutinee temp as expr-form.
-            locals.push((format!("__match_{}", span.offset), scrutinee.ty.clone()));
+            push_match_scrutinee_locals(locals, &format!("__match_{}", span.offset), &scrutinee.ty);
             collect_locals_expr(scrutinee, locals);
             let inner_ty = option_inner_ty(&scrutinee.ty).cloned();
             for arm in arms {
@@ -2265,7 +2326,7 @@ fn collect_locals_expr(expr: &TirExpr, locals: &mut Vec<(String, Ty)>) {
         TirExprKind::Match { scrutinee, arms } => {
             // Fresh temp for the scrutinee value — `emit_match` stashes
             // the scrutinee here so it doesn't re-evaluate per arm.
-            locals.push((match_temp_name(expr), scrutinee.ty.clone()));
+            push_match_scrutinee_locals(locals, &match_temp_name(expr), &scrutinee.ty);
             collect_locals_expr(scrutinee, locals);
             let inner_ty = option_inner_ty(&scrutinee.ty).cloned();
             let span_off = expr.span.offset;
@@ -3587,6 +3648,25 @@ fn emit_expr(out: &mut String, expr: &TirExpr, ctx: &Ctx) {
             emit_expr(out, &args[1], ctx);
             out.push_str("    call $_mvl_array_slice\n");
         }
+        // `.concat(other)` on List / Array — new array holding `self`'s
+        // elements followed by `other`'s (#2114). A `builtin fn` in
+        // std/lists.mvl with no WASM runtime function at all until now —
+        // there was no native arm here for *any* element type, scalar or
+        // struct, so any `List[T]::concat` call fell to the `;; unsupported
+        // expr` catch-all and stubbed the whole calling function.
+        TirExprKind::MethodCall {
+            receiver,
+            method,
+            args,
+        } if method == "concat"
+            && args.len() == 1
+            && concat_is_supported(&resolve_ty_param(&receiver.ty, ctx.type_subst), ctx) =>
+        {
+            ctx.needs_runtime.set(true);
+            emit_expr(out, receiver, ctx);
+            emit_expr(out, &args[0], ctx);
+            out.push_str("    call $_mvl_array_concat\n");
+        }
         // `.get(i)` on List / Array — returns `Option[T]` (heap-allocated
         // MvlOption). Element type comes from the receiver's collection
         // type. Runtime handles the OOB check + Option wrapping.
@@ -4138,9 +4218,18 @@ fn emit_match_impl(
         })
         .unwrap_or_else(|| "    if\n".to_string());
 
-    // Store scrutinee once — arms compare against it repeatedly.
+    // Store scrutinee once — arms compare against it repeatedly. A String
+    // scrutinee leaves two values (ptr, len) on the stack, so it needs the
+    // split locals `push_match_scrutinee_locals` declared, not the single
+    // `$temp` every other scrutinee type uses (#2113).
+    let scrutinee_is_string = peels_to_string(&scrutinee.ty);
     emit_expr(out, scrutinee, ctx);
-    out.push_str(&format!("    local.set ${temp}\n"));
+    if scrutinee_is_string {
+        out.push_str(&format!("    local.set ${temp}_len\n"));
+        out.push_str(&format!("    local.set ${temp}_ptr\n"));
+    } else {
+        out.push_str(&format!("    local.set ${temp}\n"));
+    }
 
     // Split arms into checked (literal-pattern) and default (wildcard /
     // ident at any position — first one wins). Guards fall through to
@@ -4156,9 +4245,17 @@ fn emit_match_impl(
         match &arm.pattern {
             Pattern::Literal(lit, _) => {
                 // scrutinee == literal ?
-                out.push_str(&format!("    local.get ${temp}\n"));
-                emit_literal(out, lit, ctx);
-                out.push_str(&format!("    {}\n", eq_op_for(&scrutinee.ty, ctx)));
+                if scrutinee_is_string {
+                    ctx.needs_runtime.set(true);
+                    out.push_str(&format!("    local.get ${temp}_ptr\n"));
+                    out.push_str(&format!("    local.get ${temp}_len\n"));
+                    emit_literal(out, lit, ctx);
+                    out.push_str("    call $_mvl_string_eq\n");
+                } else {
+                    out.push_str(&format!("    local.get ${temp}\n"));
+                    emit_literal(out, lit, ctx);
+                    out.push_str(&format!("    {}\n", eq_op_for(&scrutinee.ty, ctx)));
+                }
                 out.push_str(&if_open);
                 emit_match_body(out, &arm.body, ctx);
                 out.push_str("    else\n");
@@ -4794,7 +4891,7 @@ fn emit_enum_variant_construct(
 /// the field type to choose the correct WASM store opcode.
 fn emit_struct_store(out: &mut String, val: &TirExpr, field_ty: &Ty, byte_off: u32, ctx: &Ctx) {
     match field_ty {
-        _ if peels_to_string(field_ty) => {
+        _ if is_string_ty(field_ty, ctx) => {
             // String fields are stored as *MvlString (i32 pointer).
             // val pushes (ptr, len); call _mvl_string_new to heap-allocate.
             ctx.needs_runtime.set(true);
@@ -5180,6 +5277,22 @@ fn eq_op_for(ty: &Ty, ctx: &Ctx) -> &'static str {
 /// emit paths agree.
 fn match_temp_name(expr: &TirExpr) -> String {
     format!("__match_{}", expr.span.offset)
+}
+
+/// Declare the scrutinee-cache local(s) for a `match` (expr- or stmt-form).
+/// A String scrutinee needs split `(_ptr, _len)` i32 locals — `emit_expr`
+/// leaves two values on the stack for it, not one (#2113: `emit_match_impl`
+/// used to unconditionally `local.set` a single temp, which silently
+/// dropped one of the two and declared the wrong local shape for any
+/// String-typed match scrutinee that wasn't already a bare, pre-split
+/// `Var`). Everything else keeps a single scalar local of its own type.
+fn push_match_scrutinee_locals(locals: &mut Vec<(String, Ty)>, temp: &str, scrutinee_ty: &Ty) {
+    if peels_to_string(scrutinee_ty) {
+        locals.push((format!("{temp}_ptr"), Ty::Bool));
+        locals.push((format!("{temp}_len"), Ty::Bool));
+    } else {
+        locals.push((temp.to_string(), scrutinee_ty.clone()));
+    }
 }
 
 /// Compute the WASM block-type a statement-form `match` should carry.
@@ -5725,17 +5838,24 @@ fn is_float_ctx(ty: &Ty, ctx: &Ctx) -> bool {
 }
 
 /// True if this MVL type is a String (possibly via generic type param
-/// resolution). Layers `ctx.type_subst` resolution on top of the ctx-free
-/// [`peels_to_string`] peel so the two helpers share one definition of
-/// "String, possibly wrapped in Ref/Labeled/Refined" instead of duplicating
-/// it — `peels_to_string` stays the ctx-free version for call sites (like
+/// resolution or a named type alias, e.g. `type BoundedInput = String
+/// where ...`). Layers `ctx.type_subst`/`ctx.type_aliases` resolution
+/// (mirroring `is_float_ctx`) on top of the ctx-free [`peels_to_string`]
+/// peel so the two helpers share one definition of "String, possibly
+/// wrapped in Ref/Labeled/Refined" instead of duplicating it —
+/// `peels_to_string` stays the ctx-free version for call sites (like
 /// `collect_locals_stmt`) that run without a `Ctx` in scope.
 fn is_string_ty(ty: &Ty, ctx: &Ctx) -> bool {
     match ty {
-        Ty::Named(name, args) if args.is_empty() => ctx
-            .type_subst
-            .get(name.as_str())
-            .is_some_and(|concrete| is_string_ty(concrete, ctx)),
+        Ty::Named(name, args) if args.is_empty() => {
+            if let Some(concrete) = ctx.type_subst.get(name.as_str()) {
+                return is_string_ty(concrete, ctx);
+            }
+            if let Some(aliased) = ctx.type_aliases.get(name.as_str()) {
+                return is_string_ty(&aliased.clone(), ctx);
+            }
+            false
+        }
         Ty::Ref(_, inner) | Ty::Labeled(_, inner) | Ty::Refined(inner, _) => {
             is_string_ty(inner, ctx)
         }
@@ -6315,16 +6435,26 @@ pub fn emitter_handles_method_natively(receiver_ty: &Ty, method: &str) -> bool {
         );
     }
     if collection_elem_ty(receiver_ty).is_some() {
-        // `clone` and `slice` have native arms too. Both are conditional —
-        // `clone_is_supported` / `slice_is_supported` gate them on the element
-        // type — so this answers for the shape and the emitter's own guard has
-        // the final say. Listing them keeps this function honest about which
-        // methods have arms at all; omitting them was harmless only because
-        // `slice` is `builtin` in std/lists.mvl (no body to instantiate) and
-        // `clone` has no std declaration, i.e. by luck rather than by design.
+        // `clone`, `slice`, and `concat` have native arms too. All three are
+        // conditional — `clone_is_supported` / `slice_is_supported` /
+        // `concat_is_supported` gate them on the element type — so this
+        // answers for the shape and the emitter's own guard has the final
+        // say. Listing them keeps this function honest about which methods
+        // have arms at all; omitting them was harmless only because
+        // `slice`/`concat` are `builtin` in std/lists.mvl (no body to
+        // instantiate) and `clone` has no std declaration, i.e. by luck
+        // rather than by design.
         return matches!(
             method,
-            "len" | "is_empty" | "get" | "push" | "contains" | "insert" | "clone" | "slice"
+            "len"
+                | "is_empty"
+                | "get"
+                | "push"
+                | "contains"
+                | "insert"
+                | "clone"
+                | "slice"
+                | "concat"
         );
     }
     false
@@ -8715,10 +8845,12 @@ mod generic_ext_method_tests {
 
     #[test]
     fn emitter_handles_method_natively_is_receiver_shaped() {
-        // `concat` is a runtime call on String but a pure-MVL body on List —
-        // a name-only check would wrongly claim both.
+        // `concat` has native arms on both receivers (#2114 added the List
+        // one), but each dispatches to a completely different runtime call
+        // (`_mvl_string_concat` vs `_mvl_array_concat`) — a name-only check
+        // would collapse that distinction.
         assert!(emitter_handles_method_natively(&Ty::String, "concat"));
-        assert!(!emitter_handles_method_natively(
+        assert!(emitter_handles_method_natively(
             &Ty::List(Box::new(Ty::Int)),
             "concat"
         ));
@@ -9692,5 +9824,131 @@ mod validated_module_tests {
     #[test]
     fn unsupported_marker_spelling_is_pinned() {
         assert_eq!(UNSUPPORTED_MARKER, ";; unsupported");
+    }
+
+    /// #2112: a `let` binding, fn param, or struct field typed as a named
+    /// alias to `String` (`type BoundedInput = String where ...`) used to
+    /// declare a single scalar `i64` local/param/store instead of split
+    /// `(_ptr, _len)` i32s — `peels_to_string` is ctx-free and can't see
+    /// through `Ty::Named` without a `ctx.type_aliases` lookup, while the
+    /// emit side (`is_string_ty`) already resolved it correctly, so the two
+    /// sides disagreed on shape and the module failed to validate.
+    #[test]
+    fn string_type_alias_let_binding_param_and_field_use_split_locals() {
+        let (wat, stubbed) = emit(
+            "pub type BoundedInput = String where len(self) <= 4096\n\
+             pub type SqlQuery = struct {\n\
+                 template: BoundedInput,\n\
+                 param_count: Int,\n\
+             }\n\
+             pub total fn build_sql_query(template: BoundedInput, param_count: Int) -> SqlQuery {\n\
+                 SqlQuery { template: template, param_count: param_count }\n\
+             }\n\
+             test fn t() -> Unit {\n\
+                 let tmpl: BoundedInput = \"SELECT COUNT(*) FROM users\";\n\
+                 let q: SqlQuery = build_sql_query(tmpl, 0);\n\
+                 assert_eq(q.param_count, 0);\n\
+             }\n",
+        );
+        validate(&wat);
+        assert!(stubbed.is_empty(), "unexpected stubs: {stubbed:?}");
+        assert!(wat.contains("(local $tmpl_ptr i32)"), "{wat}");
+        assert!(wat.contains("(local $tmpl_len i32)"), "{wat}");
+        assert!(
+            wat.contains("(param $template_ptr i32) (param $template_len i32)"),
+            "{wat}"
+        );
+    }
+
+    /// #2113: `emit_match_impl` unconditionally cached the scrutinee in a
+    /// single `$temp` local via one `local.set`. For a String scrutinee
+    /// that isn't already a bare, pre-split `Var`, `emit_expr` leaves two
+    /// i32s (ptr, len) on the stack — the single `local.set` only consumed
+    /// one, and the declared local was the wrong shape besides (a scalar,
+    /// not a split ptr/len pair). Nested `match` on a String bound from an
+    /// outer arm (not a `let`) is exactly this shape: `r.category` is
+    /// `Option[String]`, so the inner match's scrutinee `c` is a fresh
+    /// value each time, not a variable already carrying split locals.
+    #[test]
+    fn nested_match_on_string_bound_from_outer_arm_uses_split_scrutinee_locals() {
+        let (wat, stubbed) = emit(
+            "fn classify(x: Option[String]) -> Int {\n\
+                 match x {\n\
+                     Some(c) => match c { \"high-value\" => 1, _ => 0 },\n\
+                     None => 0,\n\
+                 }\n\
+             }\n\
+             test fn t() -> Unit {\n\
+                 assert_eq(classify(Some(\"high-value\")), 1);\n\
+                 assert_eq(classify(Some(\"other\")), 0);\n\
+                 assert_eq(classify(None), 0);\n\
+             }\n",
+        );
+        validate(&wat);
+        assert!(stubbed.is_empty(), "unexpected stubs: {stubbed:?}");
+        assert!(wat.contains("call $_mvl_string_eq"), "{wat}");
+    }
+
+    /// #2114: `List[T]::concat` had no native emission arm at all — it's a
+    /// `builtin fn` in `std/lists.mvl` with no body to monomorphize, so
+    /// every call fell straight to the `;; unsupported expr` catch-all and
+    /// stubbed the whole calling function, regardless of element type.
+    #[test]
+    fn concat_on_int_list_lowers() {
+        let (wat, stubbed) = emit(
+            "test fn t() -> Unit {\n\
+                 let xs: List[Int] = [1, 2];\n\
+                 let ys: List[Int] = xs.concat([3, 4]);\n\
+                 assert_eq(ys.len(), 4);\n\
+             }\n",
+        );
+        validate(&wat);
+        assert!(stubbed.is_empty(), "unexpected stubs: {stubbed:?}");
+        assert!(wat.contains("call $_mvl_array_concat"), "{wat}");
+    }
+
+    /// Struct-element lists are the case that actually motivated #2114
+    /// (`task_pipeline`'s `enrich_high_value`/`parser.mvl` both concat
+    /// `List[Record]`). Unlike `slice`/`clone`, struct/payload-enum pointers
+    /// are not excluded here — `_mvl_struct_alloc` never frees its
+    /// allocations (#1821), so aliasing them via a byte-wise copy carries
+    /// no double-free risk, and `local_drop_fn` already treats every
+    /// non-String collection (struct-element lists included) as a shallow
+    /// `_mvl_array_drop`.
+    #[test]
+    fn concat_on_struct_list_lowers() {
+        let (wat, stubbed) = emit(
+            "type Point = struct { x: Int, y: Int }\n\
+             test fn t() -> Unit {\n\
+                 let ps: List[Point] = [Point { x: 1, y: 2 }];\n\
+                 let qs: List[Point] = ps.concat([Point { x: 3, y: 4 }]);\n\
+                 assert_eq(qs.len(), 2);\n\
+             }\n",
+        );
+        validate(&wat);
+        assert!(stubbed.is_empty(), "unexpected stubs: {stubbed:?}");
+        assert!(wat.contains("call $_mvl_array_concat"), "{wat}");
+    }
+
+    /// `List[String]::concat` must still stub — `_mvl_array_concat` copies
+    /// `*MvlString` pointers byte-wise without bumping their refcount, and
+    /// both the original and the concatenated list would then double-drop
+    /// each shared string, same reasoning as `slice_on_string_list_stubs_
+    /// instead_of_double_freeing`.
+    #[test]
+    fn concat_on_string_list_stubs_instead_of_double_freeing() {
+        let (wat, stubbed) = emit(
+            "test fn t() -> Unit {\n\
+                 let xs: List[String] = [\"a\", \"b\"];\n\
+                 let ys: List[String] = xs.concat([\"c\"]);\n\
+                 assert_eq(ys.len(), 3);\n\
+             }\n",
+        );
+        validate(&wat);
+        assert_eq!(stubbed, vec!["t".to_string()], "the caller must stub");
+        assert!(
+            !wat.contains("call $_mvl_array_concat"),
+            "a String-element concat must not be lowered: {wat}"
+        );
     }
 }
