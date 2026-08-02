@@ -549,7 +549,13 @@ pub fn find_module_file(entry_dir: &Path, mod_name: &str) -> Option<PathBuf> {
 /// hid real syntax problems in `std/*.mvl` for months (#2000).  Surface them
 /// with the same formatting as `parse_file` and abort.
 pub fn load_implicit_prelude() -> Vec<Program> {
-    const IMPLICIT: &[&str] = &["core.mvl", "strings.mvl", "lists.mvl", "effects.mvl"];
+    const IMPLICIT: &[&str] = &[
+        "core.mvl",
+        "strings.mvl",
+        "lists.mvl",
+        "collections.mvl",
+        "effects.mvl",
+    ];
     let mut progs = Vec::new();
     for name in IMPLICIT {
         let content = stdlib::stdlib_content(name).unwrap_or_else(|| {

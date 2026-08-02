@@ -240,7 +240,7 @@ impl TypeChecker {
         let unlabeled = ty.unlabeled();
         // Built-in iterable types.
         match unlabeled {
-            Ty::List(inner) | Ty::Array(inner, _) => return *inner.clone(),
+            Ty::List(inner) | Ty::Array(inner, _) | Ty::Set(inner) => return *inner.clone(),
             Ty::Unknown => return Ty::Unknown, // propagate without double-reporting
             _ => {}
         }

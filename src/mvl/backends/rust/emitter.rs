@@ -26,7 +26,10 @@ const STDLIB_CONFLICTS: &[(&str, &[&str])] = &[
     ),
     // #928: List[String]::join emits a prelude free function `fn join(...)` that
     // shadows the runtime's `io::join(Path, String) -> Path`. Same for `to_string`.
-    ("io", &["join", "to_string"]),
+    // #2131: Map[K,V]::remove emits a prelude free function `fn remove(...)` that
+    // shadows the runtime's `io::remove(Path) -> Result[Unit, IoError]` once
+    // `collections.mvl` joins the implicit prelude.
+    ("io", &["join", "to_string", "remove"]),
 ];
 
 /// Direction of an IFC relabel transition, used to pick the codegen shape.
