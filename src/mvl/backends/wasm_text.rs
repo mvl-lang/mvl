@@ -50,6 +50,19 @@
 //! what backs `List[T]::map`/`filter`/`fold`/`sort_by`/`min_by`/`max_by`
 //! (#2014).
 //!
+//! `extern "rust"` FFI (#2049, ADR-0062): supported for `Int`/`Bool`/
+//! `String`/user structs/unit-enums/refinement-newtype-aliases/labels
+//! (`Secret`/`Tainted`/`Clean`/`Public`)/`Option`/`Result` nested over the
+//! above. `(import "extern" "<name>" ...)` is declared here for every
+//! `extern "rust"` fn (this file's own responsibility); satisfying those
+//! imports at run time is `wasm_host_glue.rs`'s job — a generated,
+//! wasmtime-embedding native host that links the directory's real
+//! `bridge.rs` unmodified. Payload-carrying enums, `List`/`Map`/`Set`, and
+//! `Fn` values crossing the extern boundary are not supported yet (reported
+//! via `UnsupportedExternFn`, not silently mis-marshalled) — this is *not*
+//! a new `extern "wasm"` ABI keyword, `extern "rust"` is unchanged; the
+//! whole surface is compiler-internal codegen, see ADR-0062 for why.
+//!
 //! Deliberately not supported (later phases of #1817):
 //! - *Capturing* closures — these need an environment representation, not just
 //!   a function pointer. See `03_functions/higher_order_test.mvl` and
@@ -58,8 +71,7 @@
 //!   than emitted, so the failure stays inside the one function.
 //! - `Map` beyond `Map[String, Int]`
 //! - String concat (`_mvl_string_concat` wiring is incomplete)
-//! - Arbitrary-fd `write`/`read`/`open` (real files, WASI preopens),
-//!   `extern "wasm"` ABI — separate ticket
+//! - Arbitrary-fd `write`/`read`/`open` (real files, WASI preopens)
 //!
 //! Actors (#2012, ADR-0059): supported for spawn, behaviour sends, and
 //! `pub test fn` synchronous reads. Single-threaded run-to-completion — the

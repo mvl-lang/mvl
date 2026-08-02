@@ -63,3 +63,4 @@
 | [0059](0059-wasm-actor-scheduling.md) | WASM actor model — run-to-completion scheduling on WASI preview 1, in-module scheduler with compile-time static dispatch | Accepted (§2 scope-amended 2026-07-30) |
 | ~~0060~~ | ~~Reserved for #2050 (declared source of truth must be executable and falsifiable)~~ | Not yet written |
 | [0061](0061-assurance-vocabulary.md) | Assurance vocabulary — the case and three levels below it (traceability, verification, evidence) | Accepted |
+| [0062](0062-wasm-extern-rust-ffi-embedded-wasmtime-host.md) | WASM `extern "rust"` FFI via an embedded-wasmtime host — real bridge.rs execution under `--backend=wasm` | Accepted |
