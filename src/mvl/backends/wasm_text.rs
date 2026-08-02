@@ -128,17 +128,23 @@ impl Default for WasmTextCompiler {
 /// allocated block, and resolved MVL type (used to choose the WASM load/store
 /// opcode and to unpack `*MvlString` fields into `(ptr, len)` on reads).
 #[derive(Debug, Clone)]
-struct FieldSlot {
-    name: String,
-    offset: u32,
-    ty: Ty,
+pub(crate) struct FieldSlot {
+    pub(crate) name: String,
+    pub(crate) offset: u32,
+    pub(crate) ty: Ty,
 }
 
 /// Pre-computed memory layout for a single struct type.
+///
+/// `pub(crate)`: reused as-is by `wasm_host_glue` (#2049) so the extern
+/// "rust" FFI host glue marshals struct fields at the exact same byte
+/// offsets this emitter itself uses — recomputing an independent copy would
+/// only need to drift once to silently corrupt every struct crossing the
+/// FFI boundary.
 #[derive(Debug, Clone)]
-struct StructLayout {
-    total_size: u32,
-    fields: Vec<FieldSlot>,
+pub(crate) struct StructLayout {
+    pub(crate) total_size: u32,
+    pub(crate) fields: Vec<FieldSlot>,
 }
 
 /// One variant within a payload-carrying enum.
@@ -6066,7 +6072,7 @@ fn underlying_named_ty(ty: &Ty, ctx: &Ctx) -> Option<String> {
 // `wasm_ty` looks them up to resolve the underlying WASM primitive type so
 // that e.g. a refined Float alias emits `f64` locals, not `i64`.
 
-fn collect_type_aliases(types: &[TirTypeDecl]) -> HashMap<String, Ty> {
+pub(crate) fn collect_type_aliases(types: &[TirTypeDecl]) -> HashMap<String, Ty> {
     let mut aliases = HashMap::new();
     for td in types {
         if let TirTypeBody::Alias(target) = &td.body {
@@ -7312,7 +7318,10 @@ fn collect_enums(
 /// Found while building the WASM `extern "rust"` FFI host glue, which needs
 /// byte-accurate struct layouts to marshal fields correctly; unrelated to
 /// FFI itself, so fixed here rather than worked around in the new code.
-fn resolve_field_ty<'a>(ty: &'a Ty, aliases: &'a HashMap<String, Ty>) -> std::borrow::Cow<'a, Ty> {
+fn resolve_field_ty<'a>(
+    ty: &'a Ty,
+    aliases: &'a HashMap<String, Ty>,
+) -> std::borrow::Cow<'a, Ty> {
     match ty {
         Ty::Ref(_, inner) | Ty::Labeled(_, inner) | Ty::Refined(inner, _) => {
             match resolve_field_ty(inner, aliases) {
@@ -7340,7 +7349,7 @@ fn field_alignment(ty: &Ty, aliases: &HashMap<String, Ty>) -> u32 {
     field_byte_size(ty, aliases)
 }
 
-fn collect_structs(
+pub(crate) fn collect_structs(
     types: &[TirTypeDecl],
     type_aliases: &HashMap<String, Ty>,
 ) -> HashMap<String, StructLayout> {
