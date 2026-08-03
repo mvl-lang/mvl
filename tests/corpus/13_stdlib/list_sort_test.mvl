@@ -1,0 +1,59 @@
+// 13_stdlib/list_sort_test.mvl — natural-order sort(), no comparator.
+//
+// `sort()` is `builtin` (std/lists.mvl) because MVL has no user-facing
+// trait system (ADR-0053), so `a < b` on a generic `T` cannot type-check in
+// an MVL body — only element types with a well-defined ordering (Int,
+// Byte, String) are correct here. For anything else, or an explicit
+// ordering, use `sort_by` (tests/corpus/13_stdlib/list_sort_by_test.mvl).
+//
+// The WASM backend (#2173) sorts in-place and hands the same array pointer
+// back — multiple reads after sort exercise that the array survives being
+// read from repeatedly (a prior version corrupted it after one read, #2173).
+
+test fn sort_int_ascending() -> Unit {
+    let xs: List[Int] = [3, 1, 4, 1, 5, 9, 2, 6];
+    let sorted: List[Int] = xs.sort();
+    assert_eq(sorted.len(), 8);
+    assert_eq(sorted.get(0).unwrap_or(-1), 1);
+    assert_eq(sorted.get(1).unwrap_or(-1), 1);
+    assert_eq(sorted.get(2).unwrap_or(-1), 2);
+    assert_eq(sorted.get(7).unwrap_or(-1), 9);
+}
+
+test fn sort_int_empty() -> Unit {
+    let xs: List[Int] = [];
+    let sorted: List[Int] = xs.sort();
+    assert_eq(sorted.len(), 0);
+}
+
+test fn sort_int_single() -> Unit {
+    let xs: List[Int] = [42];
+    let sorted: List[Int] = xs.sort();
+    assert_eq(sorted.len(), 1);
+    assert_eq(sorted.get(0).unwrap_or(-1), 42);
+}
+
+test fn sort_int_already_sorted() -> Unit {
+    let xs: List[Int] = [1, 2, 3, 4, 5];
+    let sorted: List[Int] = xs.sort();
+    assert_eq(sorted.get(0).unwrap_or(-1), 1);
+    assert_eq(sorted.get(4).unwrap_or(-1), 5);
+}
+
+// Every index read back after sort — the WASM regression (#2173) only
+// corrupted the middle element after a prior element had already been read.
+test fn sort_string_ascending() -> Unit {
+    let xs: List[String] = ["banana", "apple", "cherry"];
+    let sorted: List[String] = xs.sort();
+    assert_eq(sorted.len(), 3);
+    assert_eq(sorted.get(0).unwrap_or("?"), "apple");
+    assert_eq(sorted.get(1).unwrap_or("?"), "banana");
+    assert_eq(sorted.get(2).unwrap_or("?"), "cherry");
+}
+
+test fn sort_string_single() -> Unit {
+    let xs: List[String] = ["only"];
+    let sorted: List[String] = xs.sort();
+    assert_eq(sorted.len(), 1);
+    assert_eq(sorted.get(0).unwrap_or("?"), "only");
+}

@@ -30,6 +30,29 @@ test fn parse_int_empty_returns_err() -> Unit {
     assert_eq(v, -1);
 }
 
+test fn parse_float_valid() -> Unit {
+    let v: Float = match "3.5".parse_float() {
+        Ok(n) => n,
+        Err(_) => -1.0,
+    };
+    assert_eq(v, 3.5);
+}
+
+test fn parse_float_negative() -> Unit {
+    let v: Float = "-2.25".parse_float().unwrap_or(0.0);
+    assert_eq(v, -2.25);
+}
+
+test fn parse_float_invalid_returns_err() -> Unit {
+    let v: Float = "not-a-number".parse_float().unwrap_or(-1.0);
+    assert_eq(v, -1.0);
+}
+
+test fn parse_float_empty_returns_err() -> Unit {
+    let v: Float = "".parse_float().unwrap_or(-1.0);
+    assert_eq(v, -1.0);
+}
+
 test fn split_basic_comma_separated() -> Unit {
     let parts: List[String] = "a,b,c".split(",");
     assert_eq(parts.len(), 3);
