@@ -2070,6 +2070,62 @@ fn correct_payload_pattern_locals(
     }
 }
 
+/// Add the `Pattern::Some`/`Pattern::Ok` scratch temp (holding the
+/// `*MvlString` pointer mid-unpack) when the binding's payload type is a
+/// generic parameter that only resolves to a String through
+/// `ctx.type_subst` — e.g. `Option[T]::map`'s own body, `match self {
+/// Some(x) => Some(f(x)), None => None }`, monomorphized with `T = String`.
+///
+/// The `$name_ptr`/`$name_len` split locals for `x` itself don't need this:
+/// `emit_generic_fn`'s declaration loop already re-resolves *every*
+/// collected local's type through `type_subst` before deciding whether to
+/// split it, so those come out right regardless of what the ctx-unaware
+/// first pass (`collect_match_arm_locals`) guessed. But the scratch temp is
+/// a *separate*, span-keyed entry that first pass only pushes when it can
+/// already see the payload is string-shaped — which it can't here, since
+/// `T` isn't substituted yet at that point — so nothing ever adds it, and
+/// the emit side (which resolves the substitution) still references an
+/// undeclared local. Found via `examples/log_analyzer`'s
+/// `Option[Tainted[String]]::map(|v| relabel trust(v, ...))` (#2158).
+fn correct_generic_string_binding_temps(
+    pattern: &Pattern,
+    scrutinee_ty: &Ty,
+    locals: &mut Vec<(String, Ty)>,
+    ctx: &Ctx,
+) {
+    match pattern {
+        Pattern::Some { inner, span } => {
+            let Pattern::Ident(name, _) = inner.as_ref() else {
+                return;
+            };
+            if name == "_" {
+                return;
+            }
+            let Some(inner_ty) = option_inner_ty(scrutinee_ty) else {
+                return;
+            };
+            if peels_to_string(&resolve_ty_param(inner_ty, ctx.type_subst)) {
+                locals.push((mvl_some_string_temp_name(span), Ty::Bool));
+            }
+        }
+        Pattern::Ok { inner, span } => {
+            let Pattern::Ident(name, _) = inner.as_ref() else {
+                return;
+            };
+            if name == "_" {
+                return;
+            }
+            let Some(inner_ty) = result_ok_ty(scrutinee_ty) else {
+                return;
+            };
+            if peels_to_string(&resolve_ty_param(inner_ty, ctx.type_subst)) {
+                locals.push((mvl_ok_string_temp_name(span), Ty::Bool));
+            }
+        }
+        _ => {}
+    }
+}
+
 // ── ctx-aware local scan (#1821) ─────────────────────────────────────────
 //
 // A second pass over the function body that requires `ctx` to identify:
@@ -2172,6 +2228,7 @@ fn collect_locals_ctx_stmt(stmt: &TirStmt, locals: &mut Vec<(String, Ty)>, ctx: 
             collect_locals_ctx_expr(scrutinee, locals, ctx);
             for arm in arms {
                 correct_payload_pattern_locals(&arm.pattern, &scrutinee.ty, locals, ctx);
+                correct_generic_string_binding_temps(&arm.pattern, &scrutinee.ty, locals, ctx);
                 match &arm.body {
                     TirMatchBody::Expr(e) => collect_locals_ctx_expr(e, locals, ctx),
                     TirMatchBody::Block(b) => collect_locals_ctx(b, locals, ctx),
@@ -2288,6 +2345,7 @@ fn collect_locals_ctx_expr(expr: &TirExpr, locals: &mut Vec<(String, Ty)>, ctx: 
             collect_locals_ctx_expr(scrutinee, locals, ctx);
             for arm in arms {
                 correct_payload_pattern_locals(&arm.pattern, &scrutinee.ty, locals, ctx);
+                correct_generic_string_binding_temps(&arm.pattern, &scrutinee.ty, locals, ctx);
                 match &arm.body {
                     TirMatchBody::Expr(e) => collect_locals_ctx_expr(e, locals, ctx),
                     TirMatchBody::Block(b) => collect_locals_ctx(b, locals, ctx),
@@ -3073,6 +3131,22 @@ fn emit_expr(out: &mut String, expr: &TirExpr, ctx: &Ctx) {
                 out.push_str("    i32.wrap_i64\n");
                 out.push_str("    i32.const 255\n");
                 out.push_str("    i32.and\n");
+                return;
+            }
+            // `Map::new()` / `Map[K, V]::new()` — the only way to spell an
+            // *empty* map (`{}` is an empty block, not an empty map
+            // literal). Had no arm at all — regardless of `K`/`V`, the
+            // checker resolves this call to the literal name `Map::new`,
+            // and nothing here recognized it, so it fell through to the
+            // generic named-function-call fallback and emitted `call
+            // $Map::new` — a symbol nothing declares (#2164). `V`'s actual
+            // shape doesn't matter at construction time: every value gets
+            // zero/sign-extended into the same i64 slot on `.insert()`
+            // (`emit_map_value_push`), the same runtime layout `_mvl_map_
+            // new_si64`'s other callers (map literals) already produce.
+            if name == "Map::new" && args.is_empty() {
+                ctx.needs_runtime.set(true);
+                out.push_str("    call $_mvl_map_new_si64\n");
                 return;
             }
             // `std.env`'s `args()` / `get(name)` — both `builtin fn`s that the
@@ -6131,6 +6205,21 @@ fn option_inner_ty(ty: &Ty) -> Option<&Ty> {
                 cur = inner;
             }
             Ty::Option(t) => return Some(t),
+            // A generic method's own `self: Option[T]` parameter is typed
+            // with this named-wrapper spelling instead of the structural
+            // `Ty::Option(T)` — the same shape `resolve_ty_param` already
+            // normalizes, but only *after* substitution; every caller here
+            // (including the ctx-free first locals-collection pass, run
+            // before any substitution) still sees the named form and fell
+            // through to `None`, so `Option[T]::map`'s own `Some(x) =>
+            // Some(f(x))` body declared `x` as a bogus `Ty::Int` fallback —
+            // fine until `T` resolved to a String and the emit side
+            // referenced undeclared `$x_ptr`/`$x_len` locals (#2158).
+            // Mirrors the checker's own `normalize_option_result` fix for
+            // the identical bug shape (#2149).
+            Ty::Named(name, args) if name == "Option" && args.len() == 1 => {
+                return Some(&args[0]);
+            }
             _ => return None,
         }
     }
@@ -6164,6 +6253,12 @@ fn result_ok_ty(ty: &Ty) -> Option<&Ty> {
                 cur = inner;
             }
             Ty::Result(ok, _) => return Some(ok),
+            // See `option_inner_ty`'s comment on the same named-wrapper
+            // shape (#2158/#2149) — a generic method's own `self:
+            // Result[T, E]` parameter is typed this way pre-substitution.
+            Ty::Named(name, args) if name == "Result" && args.len() == 2 => {
+                return Some(&args[0]);
+            }
             _ => return None,
         }
     }
@@ -6178,6 +6273,11 @@ fn result_err_ty(ty: &Ty) -> Option<&Ty> {
                 cur = inner;
             }
             Ty::Result(_, err) => return Some(err),
+            // See `option_inner_ty`'s comment on the same named-wrapper
+            // shape (#2158/#2149).
+            Ty::Named(name, args) if name == "Result" && args.len() == 2 => {
+                return Some(&args[1]);
+            }
             _ => return None,
         }
     }
