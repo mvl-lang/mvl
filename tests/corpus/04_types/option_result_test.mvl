@@ -570,3 +570,37 @@ test fn sibling_wildcard_after_qualified_ok_arm() -> Unit {
     assert_eq(payload_text_or_wildcard_in_ok(Ok(Payload::Num(3))), "other");
     assert_eq(payload_text_or_wildcard_in_ok(Err("boom")), "err");
 }
+
+// #2145: `Option[Unit]`'s payload slot has no meaningful data — under LLVM
+// its type resolves to `void`, and matching it (even a `Some(_)` arm that
+// never uses the payload) emitted an invalid `load void, ptr %pp`, which
+// crashed the whole module at load time. `Result[Unit, E]`'s `Ok` arm
+// already had the equivalent guard; `Option`'s `Some` arm never got it.
+fn produce_some_unit() -> Option[Unit] {
+    Some(())
+}
+
+fn produce_none_unit() -> Option[Unit] {
+    None
+}
+
+test fn option_unit_some_wildcard_match() -> Unit {
+    match produce_some_unit() {
+        Some(_) => assert_eq(1, 1),
+        None    => assert_eq(1, 0),
+    }
+}
+
+test fn option_unit_none_match() -> Unit {
+    match produce_none_unit() {
+        Some(_) => assert_eq(1, 0),
+        None    => assert_eq(1, 1),
+    }
+}
+
+test fn option_unit_some_bound_ident_match() -> Unit {
+    match produce_some_unit() {
+        Some(x) => assert_eq(1, 1),
+        None    => assert_eq(1, 0),
+    }
+}

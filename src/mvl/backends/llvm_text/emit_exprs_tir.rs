@@ -1395,41 +1395,54 @@ impl TextEmitter {
             self.fn_ctx.terminated = false;
 
             let mut bound_vars: Vec<String> = Vec::new();
+            // `Option[Unit]`'s payload slot has no meaningful data to load —
+            // `inner_load_ty` resolves to LLVM's `void`, which is only a
+            // valid *function return* type, never a value type. `load void,
+            // ptr %pp` is invalid IR that crashes `lli` at module load, even
+            // for a `Some(_)` arm that never uses the payload (#2145).
+            // Mirrors `emit_result_match_tir`'s `Ok` arm, which already
+            // skips the equivalent load for `Result[Unit, E]`.
             if let Pattern::Some { inner, .. } = &arm.pattern {
-                let pp = self.next_reg();
-                self.push_instr(&format!(
-                    "{pp} = extractvalue {RESULT_LLVM_TY} {scrut_val}, 1"
-                ));
-                let some_val = self.next_reg();
-                self.push_instr(&format!("{some_val} = load {inner_load_ty}, ptr {pp}"));
-                self.fn_ctx
-                    .reg_types
-                    .insert(some_val.clone(), inner_load_ty.clone());
-                match inner.as_ref() {
-                    Pattern::Ident(var_name, _) if var_name != "_" && !var_name.contains("::") => {
-                        self.fn_ctx
-                            .locals
-                            .insert(var_name.clone(), some_val.clone());
-                        if let Some(ref imty) = inner_ty {
-                            if let Some(te) = super::emit_helpers::ty_to_type_expr(imty) {
-                                self.fn_ctx.local_mvl_types.insert(var_name.clone(), te);
+                if inner_load_ty != "void" {
+                    let pp = self.next_reg();
+                    self.push_instr(&format!(
+                        "{pp} = extractvalue {RESULT_LLVM_TY} {scrut_val}, 1"
+                    ));
+                    let some_val = self.next_reg();
+                    self.push_instr(&format!("{some_val} = load {inner_load_ty}, ptr {pp}"));
+                    self.fn_ctx
+                        .reg_types
+                        .insert(some_val.clone(), inner_load_ty.clone());
+                    match inner.as_ref() {
+                        Pattern::Ident(var_name, _)
+                            if var_name != "_" && !var_name.contains("::") =>
+                        {
+                            self.fn_ctx
+                                .locals
+                                .insert(var_name.clone(), some_val.clone());
+                            if let Some(ref imty) = inner_ty {
+                                if let Some(te) = super::emit_helpers::ty_to_type_expr(imty) {
+                                    self.fn_ctx.local_mvl_types.insert(var_name.clone(), te);
+                                }
                             }
+                            bound_vars.push(var_name.clone());
                         }
-                        bound_vars.push(var_name.clone());
+                        // `Some(Variant(x))` / `Some(Variant { f: x })` (#2177) —
+                        // the discriminant check (if needed) already happened in
+                        // `some_dispatch_bb`; here just extract and bind the
+                        // nested variant's own payload fields.
+                        Pattern::TupleStruct { name, fields, .. } => {
+                            bound_vars.extend(
+                                self.bind_tuple_variant_fields_tir(name, fields, &some_val),
+                            );
+                        }
+                        Pattern::Struct { name, fields, .. } => {
+                            bound_vars.extend(
+                                self.bind_struct_variant_fields_tir(name, fields, &some_val),
+                            );
+                        }
+                        _ => {}
                     }
-                    // `Some(Variant(x))` / `Some(Variant { f: x })` (#2177) —
-                    // the discriminant check (if needed) already happened in
-                    // `some_dispatch_bb`; here just extract and bind the
-                    // nested variant's own payload fields.
-                    Pattern::TupleStruct { name, fields, .. } => {
-                        bound_vars
-                            .extend(self.bind_tuple_variant_fields_tir(name, fields, &some_val));
-                    }
-                    Pattern::Struct { name, fields, .. } => {
-                        bound_vars
-                            .extend(self.bind_struct_variant_fields_tir(name, fields, &some_val));
-                    }
-                    _ => {}
                 }
             }
 
