@@ -396,13 +396,12 @@ test-runtime-llvm: ## Unit-test runtime/llvm/ crate natively (peer of test-runti
 #
 # `lambda_capture_test.mvl` needed capturing closures (#2118, fixed: every
 # lambda value is now a heap-boxed `{funcidx, envptr}` pair, mirroring the
-# LLVM backend's `emit_closures_tir.rs`) and is back in the main corpus glob
-# below. `higher_order_test.mvl` stays excluded: closures work there too now,
-# but `hof_apply_named_function` passes a *named* top-level function where a
-# `fn(Int) -> Int` value is expected — a distinct gap (no table slot for a
-# named function, only for lambda literals) that #2118 didn't touch.
-WASM_CORPUS_EXCLUDE := \
-	tests/corpus/03_functions/higher_order_test.mvl
+# LLVM backend's `emit_closures_tir.rs`). `higher_order_test.mvl`'s
+# `hof_apply_named_function` needed a named top-level function usable as a
+# `fn(...)` value too (#2159, fixed: synthesizes a thin non-capturing
+# wrapper lambda and boxes it the same way). Both are back in the main
+# corpus glob below — nothing left to exclude.
+WASM_CORPUS_EXCLUDE :=
 
 # Directories with nothing excluded pass through whole — mvlr prints a
 # per-test checkmark + pass/fail count for a directory arg, but runs a bare
