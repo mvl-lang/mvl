@@ -1250,19 +1250,51 @@ impl TextEmitter {
         self.fn_ctx.reg_types.insert(disc_reg.clone(), "i8".into());
 
         let n = self.fn_ctx.bb;
-        self.fn_ctx.bb += arms.len() + 2;
+        // `Some(Variant(x))` / `Some(Variant { f: x })` (#2177) — a nested
+        // payload-enum pattern one level inside the Option wrapper. Any such
+        // arm needs its own discriminant checked before running its body —
+        // without it, `Some(A::X(x)) => .., _ => default` would run the X
+        // arm's body (reading its fields at X's offsets) for an actual
+        // `Some(A::Y(..))`, instead of falling through to the wildcard. Route
+        // every qualified `Some(...)` arm through one `some_dispatch_bb`,
+        // which performs a second switch on the inner variant's own
+        // discriminant — mirrors `emit_result_match_tir`'s `err_dispatch_bb`.
+        let qualified_some_indices: Vec<usize> = arms
+            .iter()
+            .enumerate()
+            .filter(|(_, a)| {
+                matches!(&a.pattern, Pattern::Some { inner, .. }
+                    if Self::qualified_variant_name(inner).is_some())
+            })
+            .map(|(i, _)| i)
+            .collect();
+        let use_some_dispatch = !qualified_some_indices.is_empty();
+
+        self.fn_ctx.bb += arms.len() + 2 + usize::from(use_some_dispatch);
         let default_bb = format!("match_default_{n}");
-        let merge_bb = format!("match_merge_{}", n + arms.len() + 1);
+        let merge_bb = format!(
+            "match_merge_{}",
+            n + arms.len() + 1 + usize::from(use_some_dispatch)
+        );
         let arm_bbs: Vec<String> = (0..arms.len())
             .map(|i| format!("match_arm_{}", n + i))
             .collect();
+        let some_dispatch_bb = format!("some_dispatch_{}", n + arms.len());
 
         let mut switch_str = format!("switch i8 {disc_reg}, label %{default_bb} [\n");
         let mut wildcard_arm: Option<usize> = None;
+        let mut some_outer_added = false;
         for (idx, arm) in arms.iter().enumerate() {
             match &arm.pattern {
                 Pattern::Some { .. } => {
-                    switch_str.push_str(&format!("    i8 0, label %{}\n", arm_bbs[idx]));
+                    if use_some_dispatch {
+                        if !some_outer_added {
+                            switch_str.push_str(&format!("    i8 0, label %{some_dispatch_bb}\n"));
+                            some_outer_added = true;
+                        }
+                    } else {
+                        switch_str.push_str(&format!("    i8 0, label %{}\n", arm_bbs[idx]));
+                    }
                 }
                 Pattern::None(_) => {
                     switch_str.push_str(&format!("    i8 1, label %{}\n", arm_bbs[idx]));
@@ -1274,6 +1306,65 @@ impl TextEmitter {
         }
         switch_str.push_str("  ]");
         self.push_instr(&switch_str);
+
+        // Two-level dispatch: load the Option's payload value, switch on its
+        // own discriminant.
+        if use_some_dispatch {
+            self.fn_ctx.fn_buf.push(format!("{some_dispatch_bb}:"));
+            self.fn_ctx.current_bb = some_dispatch_bb.clone();
+            self.fn_ctx.terminated = false;
+
+            let pp = self.next_reg();
+            self.push_instr(&format!(
+                "{pp} = extractvalue {RESULT_LLVM_TY} {scrut_val}, 1"
+            ));
+            let some_val = self.next_reg();
+            self.push_instr(&format!("{some_val} = load {inner_load_ty}, ptr {pp}"));
+            self.fn_ctx
+                .reg_types
+                .insert(some_val.clone(), inner_load_ty.clone());
+
+            // A payload-carrying variant lowers to the same `{i8,ptr}` tagged
+            // union as Result/Option (RESULT_LLVM_TY) — its own discriminant
+            // must be extracted before switching, since LLVM's `switch`
+            // requires an integer condition (a struct value crashes `lli`
+            // with "switch condition must have integer type").
+            let inner_disc = self.next_reg();
+            self.push_instr(&format!(
+                "{inner_disc} = extractvalue {RESULT_LLVM_TY} {some_val}, 0"
+            ));
+            self.fn_ctx
+                .reg_types
+                .insert(inner_disc.clone(), "i8".into());
+
+            let inner_default = format!("some_dispatch_default_{}", n + arms.len());
+            let mut inner_sw = format!("switch i8 {inner_disc}, label %{inner_default} [\n");
+            for &idx in &qualified_some_indices {
+                if let Pattern::Some { inner, .. } = &arms[idx].pattern {
+                    if let Some(qname) = Self::qualified_variant_name(inner) {
+                        if let Some(disc) = self.pattern_discriminant(qname) {
+                            inner_sw.push_str(&format!("    i8 {disc}, label %{}\n", arm_bbs[idx]));
+                        }
+                    }
+                }
+            }
+            inner_sw.push_str("  ]");
+            self.push_instr(&inner_sw);
+
+            // A `Some(...)` value whose nested variant matches none of the
+            // qualified arms falls through to the wildcard arm (if any) —
+            // NOT an unconditional trap. `default_bb` (emitted below)
+            // already implements exactly that fallback (wildcard body, or
+            // trap if there is no wildcard), so route here rather than
+            // duplicating that logic. Without this, `Some(A::X(x)) => ..,
+            // _ => default` would trap instead of running the wildcard for
+            // an actual `Some(A::Y(..))`.
+            self.fn_ctx.fn_buf.push(format!("{inner_default}:"));
+            self.fn_ctx.current_bb = inner_default.clone();
+            self.fn_ctx.terminated = false;
+            self.push_instr(&format!("br label %{default_bb}"));
+            self.fn_ctx.terminated = true;
+        }
 
         let mut phi_entries: Vec<(String, String, String)> = Vec::new();
         let mut no_val_arms: Vec<String> = Vec::new();
@@ -1287,7 +1378,7 @@ impl TextEmitter {
             self.fn_ctx.current_bb = arm_bb.clone();
             self.fn_ctx.terminated = false;
 
-            let mut bound_var: Option<String> = None;
+            let mut bound_vars: Vec<String> = Vec::new();
             if let Pattern::Some { inner, .. } = &arm.pattern {
                 let pp = self.next_reg();
                 self.push_instr(&format!(
@@ -1298,8 +1389,8 @@ impl TextEmitter {
                 self.fn_ctx
                     .reg_types
                     .insert(some_val.clone(), inner_load_ty.clone());
-                if let Pattern::Ident(var_name, _) = inner.as_ref() {
-                    if var_name != "_" {
+                match inner.as_ref() {
+                    Pattern::Ident(var_name, _) if var_name != "_" && !var_name.contains("::") => {
                         self.fn_ctx
                             .locals
                             .insert(var_name.clone(), some_val.clone());
@@ -1308,8 +1399,21 @@ impl TextEmitter {
                                 self.fn_ctx.local_mvl_types.insert(var_name.clone(), te);
                             }
                         }
-                        bound_var = Some(var_name.clone());
+                        bound_vars.push(var_name.clone());
                     }
+                    // `Some(Variant(x))` / `Some(Variant { f: x })` (#2177) —
+                    // the discriminant check (if needed) already happened in
+                    // `some_dispatch_bb`; here just extract and bind the
+                    // nested variant's own payload fields.
+                    Pattern::TupleStruct { name, fields, .. } => {
+                        bound_vars
+                            .extend(self.bind_tuple_variant_fields_tir(name, fields, &some_val));
+                    }
+                    Pattern::Struct { name, fields, .. } => {
+                        bound_vars
+                            .extend(self.bind_struct_variant_fields_tir(name, fields, &some_val));
+                    }
+                    _ => {}
                 }
             }
 
@@ -1328,7 +1432,7 @@ impl TextEmitter {
             } else {
                 self.fn_ctx.heap_locals.truncate(heap_snapshot);
             }
-            if let Some(ref var_name) = bound_var {
+            for var_name in &bound_vars {
                 self.fn_ctx.locals.remove(var_name);
                 self.fn_ctx.local_mvl_types.remove(var_name);
             }
@@ -1443,13 +1547,29 @@ impl TextEmitter {
         self.fn_ctx.reg_types.insert(disc_reg.clone(), "i8".into());
 
         let n = self.fn_ctx.bb;
-        // Collect Err arm indices whose inner pattern is a qualified enum variant
-        // (e.g. `Err(AuthError::InvalidCredentials)`, bare or struct-shaped like
-        // `Err(AuthError::AccountLocked { attempts })`). When there are multiple
-        // such arms they must NOT all emit `i8 1` in the outer switch — LLVM
-        // rejects duplicate case values. Instead route all of them to one
-        // `err_dispatch_bb` which performs a second switch on the inner error
-        // discriminant.
+        // Collect Ok/Err arm indices whose inner pattern is a qualified enum
+        // variant (e.g. `Err(AuthError::InvalidCredentials)`, bare or
+        // struct-shaped like `Err(AuthError::AccountLocked { attempts })`,
+        // or `Ok(Payload::Text(x))`, #2177). When 2+ such arms share an
+        // outer tag they must NOT all emit the same `i8` case in the outer
+        // switch — LLVM rejects duplicate case values. Instead route all of
+        // them to one dispatch block which performs a second switch on the
+        // inner variant's own discriminant. Dispatch whenever a qualified
+        // arm exists at all, not just when there are 2+ — even a single
+        // qualified arm needs its own discriminant checked, or
+        // `Ok(A::X{..}) => .., _ => default` would wrongly run the X arm's
+        // body (reading its fields at X's offsets) for an actual `A::Y`,
+        // instead of falling through to the wildcard.
+        let qualified_ok_indices: Vec<usize> = arms
+            .iter()
+            .enumerate()
+            .filter(|(_, a)| {
+                matches!(&a.pattern, Pattern::Ok { inner, .. }
+                    if Self::qualified_variant_name(inner).is_some())
+            })
+            .map(|(i, _)| i)
+            .collect();
+        let use_ok_dispatch = !qualified_ok_indices.is_empty();
         let qualified_err_indices: Vec<usize> = arms
             .iter()
             .enumerate()
@@ -1459,26 +1579,44 @@ impl TextEmitter {
             })
             .map(|(i, _)| i)
             .collect();
-        let use_err_dispatch = qualified_err_indices.len() > 1;
+        let use_err_dispatch = !qualified_err_indices.is_empty();
 
-        self.fn_ctx.bb += arms.len() + 2 + usize::from(use_err_dispatch);
+        self.fn_ctx.bb +=
+            arms.len() + 2 + usize::from(use_ok_dispatch) + usize::from(use_err_dispatch);
         let default_bb = format!("match_default_{n}");
         let merge_bb = format!(
             "match_merge_{}",
-            n + arms.len() + 1 + usize::from(use_err_dispatch)
+            n + arms.len() + 1 + usize::from(use_ok_dispatch) + usize::from(use_err_dispatch)
         );
         let arm_bbs: Vec<String> = (0..arms.len())
             .map(|i| format!("match_arm_{}", n + i))
             .collect();
-        let err_dispatch_bb = format!("err_dispatch_{}", n + arms.len());
+        // `ok_dispatch` and `err_dispatch` each need their own reserved
+        // number (shared with their own `_default` block, distinguished by
+        // prefix) — offset `err_dispatch` past `ok_dispatch`'s slot when
+        // both are present so their numbers don't collide.
+        let ok_dispatch_bb = format!("ok_dispatch_{}", n + arms.len());
+        let err_dispatch_bb = format!(
+            "err_dispatch_{}",
+            n + arms.len() + usize::from(use_ok_dispatch)
+        );
 
         let mut switch_str = format!("switch i8 {disc_reg}, label %{default_bb} [\n");
         let mut wildcard_arm: Option<usize> = None;
+        let mut ok_outer_added = false;
         let mut err_outer_added = false;
         for (idx, arm) in arms.iter().enumerate() {
             match &arm.pattern {
                 Pattern::Ok { .. } => {
-                    switch_str.push_str(&format!("    i8 0, label %{}\n", arm_bbs[idx]));
+                    if use_ok_dispatch {
+                        // Add the single outer Ok case only once.
+                        if !ok_outer_added {
+                            switch_str.push_str(&format!("    i8 0, label %{ok_dispatch_bb}\n"));
+                            ok_outer_added = true;
+                        }
+                    } else {
+                        switch_str.push_str(&format!("    i8 0, label %{}\n", arm_bbs[idx]));
+                    }
                 }
                 Pattern::Err { .. } => {
                     if use_err_dispatch {
@@ -1498,6 +1636,59 @@ impl TextEmitter {
         }
         switch_str.push_str("  ]");
         self.push_instr(&switch_str);
+
+        // Two-level dispatch: load the Ok payload value, switch on its own
+        // discriminant.
+        if use_ok_dispatch {
+            self.fn_ctx.fn_buf.push(format!("{ok_dispatch_bb}:"));
+            self.fn_ctx.current_bb = ok_dispatch_bb.clone();
+            self.fn_ctx.terminated = false;
+
+            let pp = self.next_reg();
+            self.push_instr(&format!(
+                "{pp} = extractvalue {RESULT_LLVM_TY} {scrut_val}, 1"
+            ));
+            let ok_val = self.next_reg();
+            self.push_instr(&format!("{ok_val} = load {ok_load_ty}, ptr {pp}"));
+            self.fn_ctx
+                .reg_types
+                .insert(ok_val.clone(), ok_load_ty.clone());
+
+            // A payload-carrying variant lowers to the same `{i8,ptr}` tagged
+            // union as Result/Option (RESULT_LLVM_TY) — its own discriminant
+            // must be extracted before switching (a struct value crashes
+            // `lli` with "switch condition must have integer type").
+            let inner_disc = self.next_reg();
+            self.push_instr(&format!(
+                "{inner_disc} = extractvalue {RESULT_LLVM_TY} {ok_val}, 0"
+            ));
+            self.fn_ctx
+                .reg_types
+                .insert(inner_disc.clone(), "i8".into());
+
+            let inner_default = format!("ok_dispatch_default_{}", n + arms.len());
+            let mut inner_sw = format!("switch i8 {inner_disc}, label %{inner_default} [\n");
+            for &idx in &qualified_ok_indices {
+                if let Pattern::Ok { inner, .. } = &arms[idx].pattern {
+                    if let Some(qname) = Self::qualified_variant_name(inner) {
+                        if let Some(disc) = self.pattern_discriminant(qname) {
+                            inner_sw.push_str(&format!("    i8 {disc}, label %{}\n", arm_bbs[idx]));
+                        }
+                    }
+                }
+            }
+            inner_sw.push_str("  ]");
+            self.push_instr(&inner_sw);
+
+            // An `Ok(...)` value whose nested variant matches none of the
+            // qualified arms falls through to the wildcard arm (if any),
+            // same as the `Err` dispatch below — not an unconditional trap.
+            self.fn_ctx.fn_buf.push(format!("{inner_default}:"));
+            self.fn_ctx.current_bb = inner_default.clone();
+            self.fn_ctx.terminated = false;
+            self.push_instr(&format!("br label %{default_bb}"));
+            self.fn_ctx.terminated = true;
+        }
 
         // Two-level dispatch: load inner error value, switch on its discriminant.
         if use_err_dispatch {
@@ -1553,12 +1744,18 @@ impl TextEmitter {
             inner_sw.push_str("  ]");
             self.push_instr(&inner_sw);
 
+            // An `Err(...)` value whose nested variant matches none of the
+            // qualified arms falls through to the wildcard arm (if any) —
+            // NOT an unconditional trap. `default_bb` (emitted below)
+            // already implements exactly that fallback (#2177: found while
+            // fixing the analogous `Some`/`Ok` gap above — this arm had the
+            // same bug, just unexercised because every existing corpus test
+            // with a qualified `Err(...)` arm happens to cover every variant
+            // of the error enum exhaustively).
             self.fn_ctx.fn_buf.push(format!("{inner_default}:"));
             self.fn_ctx.current_bb = inner_default.clone();
             self.fn_ctx.terminated = false;
-            self.ensure_extern("declare void @llvm.trap()");
-            self.push_instr("call void @llvm.trap()");
-            self.push_instr("unreachable");
+            self.push_instr(&format!("br label %{default_bb}"));
             self.fn_ctx.terminated = true;
         }
 
@@ -1584,11 +1781,30 @@ impl TextEmitter {
                     self.fn_ctx
                         .reg_types
                         .insert(ok_val.clone(), ok_load_ty.clone());
-                    if let Pattern::Ident(var_name, _) = inner.as_ref() {
-                        if var_name != "_" {
+                    match inner.as_ref() {
+                        // Qualified names are discriminant checks, not
+                        // variable bindings — the dispatch (if needed) is
+                        // already done in ok_dispatch_bb. Plain names ARE
+                        // variable bindings and must be bound for arm body use.
+                        Pattern::Ident(var_name, _)
+                            if var_name != "_" && !var_name.contains("::") =>
+                        {
                             self.fn_ctx.locals.insert(var_name.clone(), ok_val.clone());
                             bound_vars.push(var_name.clone());
                         }
+                        // `Ok(Variant(x))` / `Ok(Variant { f: x })` (#2177) —
+                        // the discriminant check (if needed) already
+                        // happened in ok_dispatch_bb; here just extract and
+                        // bind the nested variant's own payload fields.
+                        Pattern::TupleStruct { name, fields, .. } => {
+                            bound_vars
+                                .extend(self.bind_tuple_variant_fields_tir(name, fields, &ok_val));
+                        }
+                        Pattern::Struct { name, fields, .. } => {
+                            bound_vars
+                                .extend(self.bind_struct_variant_fields_tir(name, fields, &ok_val));
+                        }
+                        _ => {}
                     }
                 }
                 Pattern::Ok { .. } => {}
