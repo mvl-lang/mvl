@@ -388,3 +388,53 @@ test fn result_and_then_propagates_err_from_lambda() -> Unit {
         Err(MapAndThenError::WasErr) => assert_eq(1, 0),
     }
 }
+
+// #2158: `Option[T]::map`/`Result[T,E]::map`/`Result[T,E]::and_then`'s own
+// generic bodies (`match self { Some(x) => Some(f(x)), None => None }`)
+// bind `x` from `self`'s *own* `Option[T]`/`Result[T,E]` parameter type,
+// which the checker/backends represent with a named-wrapper spelling
+// (`Ty::Named("Option", [T])`) rather than the structural `Ty::Option(T)` —
+// the same shape #2125/#2149 already had to normalize elsewhere.
+// `option_inner_ty`/`result_ok_ty`/`result_err_ty` didn't recognize it, so
+// when `T` resolved to a String-shaped type (here `Tainted[String]`), the
+// WASM backend declared `x` as a plain scalar local but the emit side
+// still referenced the (never-declared) split `$x_ptr`/`$x_len` locals —
+// "unknown local" at assembly time. An Int-typed `T` (as in the #2149
+// tests above) never exposes this: only a String/labeled-String payload
+// needs the ptr/len split at all.
+test fn option_map_transforms_tainted_string_value() -> Unit {
+    let o: Option[Tainted[String]] = Some(relabel taint("hello", "T-2158-A"));
+    let sanitized: Option[String] = o.map(|v: Tainted[String]| relabel trust(v, "T-2158-B"));
+    match sanitized {
+        Some(s) => assert_eq(s, "hello"),
+        None    => assert_eq(1, 0),
+    }
+}
+
+test fn option_map_propagates_none_for_string_payload() -> Unit {
+    let o: Option[Tainted[String]] = None;
+    let sanitized: Option[String] = o.map(|v: Tainted[String]| relabel trust(v, "T-2158-C"));
+    match sanitized {
+        Some(_) => assert_eq(1, 0),
+        None    => assert_eq(1, 1),
+    }
+}
+
+test fn result_map_transforms_ok_string_value() -> Unit {
+    let r: Result[String, MapAndThenError] = Ok("hi");
+    let s: Result[String, MapAndThenError] = r.map(|v: String| v.to_upper());
+    match s {
+        Ok(v)  => assert_eq(v, "HI"),
+        Err(_) => assert_eq(1, 0),
+    }
+}
+
+test fn result_and_then_chains_string_into_ok() -> Unit {
+    let r: Result[String, MapAndThenError] = Ok("hi");
+    let c: Result[String, MapAndThenError] =
+        r.and_then(|v: String| Ok(v.to_upper()));
+    match c {
+        Ok(v)  => assert_eq(v, "HI"),
+        Err(_) => assert_eq(1, 0),
+    }
+}

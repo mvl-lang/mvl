@@ -1,9 +1,11 @@
 // 05_collections/map_test.mvl — Map[K, V] construction, lookup, insertion.
 //
-// Map literal: `{"a": 1, "b": 2}` — non-empty populates a map.
-// `Map::new()` is skipped on the LLVM backend (see #1842); tests here use
-// literal construction and start from a small non-empty map when insertion
-// needs to grow it.
+// Map literal: `{"a": 1, "b": 2}` — non-empty populates a map. `{}` is an
+// empty block, not an empty map — `Map[K, V]::new()` is the only way to
+// spell an empty one. Most tests here use literal construction and start
+// from a small non-empty map when insertion needs to grow it; a dedicated
+// case below covers `Map::new()` itself on all three backends (#2164 —
+// the WASM backend had no emitter arm for it at all).
 //
 // `.get(key)` returns `Option[V]` — MVL has no null. `.insert(k, v)` is a
 // mutating method requiring `ref Map[K, V]`.
@@ -11,6 +13,23 @@
 test fn map_literal_and_len() -> Unit {
     let m: Map[String, Int] = {"a": 1, "b": 2, "c": 3};
     assert_eq(m.len(), 3);
+}
+
+// #2164: `Map::new()` / `Map[K, V]::new()` had no WASM emitter arm at all
+// — every call fell through to the generic named-function-call fallback
+// and emitted `call $Map::new`, a symbol nothing declares.
+test fn map_new_starts_empty() -> Unit {
+    let m: Map[String, Int] = Map[String, Int]::new();
+    assert_eq(m.len(), 0);
+    assert_eq(m.is_empty(), true);
+}
+
+test fn map_new_then_insert_grows_map() -> Unit {
+    let m: ref Map[String, Int] = Map[String, Int]::new();
+    m.insert("a", 1);
+    m.insert("b", 2);
+    assert_eq(m.len(), 2);
+    assert_eq(m.get("a").unwrap_or(-1), 1);
 }
 
 test fn map_get_hit_returns_some() -> Unit {
