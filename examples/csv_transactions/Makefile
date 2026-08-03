@@ -2,13 +2,14 @@
 #
 # Demonstrates std.csv: pure parser, Tainted[String] cells, decode trust boundary.
 # Run from this directory or from the repo root.
-.PHONY: help guard-mvl check prove test-solver test assurance smoke run clean
+.PHONY: help guard-mvl check prove test-solver test test-wasm assurance smoke run clean
 
 .DEFAULT_GOAL := help
 
 MVL       := ../../target/debug/mvl
 DIR       := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
 REPO_ROOT := $(abspath $(DIR)../..)
+WASM_RUNTIME := ../../target/wasm32-wasip1/debug/mvl_runtime_wasm.wasm
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z0-9_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-12s\033[0m %s\n", $$1, $$2}'
@@ -43,6 +44,9 @@ test-solver: guard-mvl ## Show per-file solver statistics
 
 test: guard-mvl ## Run unit tests from main_test.mvl
 	cd $(REPO_ROOT) && $(abspath $(MVL)) test $(DIR)
+
+test-wasm: guard-mvl ## Run tests via --backend=wasm
+	cd $(REPO_ROOT) && MVL_RUNTIME_WASM=$(abspath $(WASM_RUNTIME)) $(abspath $(MVL)) test $(DIR) --backend=wasm
 
 assurance: guard-mvl ## Full assurance: check + unit tests + assurance report
 	cd $(REPO_ROOT) && $(abspath $(MVL)) check $(DIR)main.mvl

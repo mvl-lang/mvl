@@ -657,7 +657,7 @@ impl Backend for WasmTextCompiler {
             .copied()
             .collect();
         let (literals, heap_start) =
-            collect_literals(&literal_scan_fns, &tir.actors, needs_wasi, &audit_relabels);
+            collect_literals(&literal_scan_fns, &tir.actors, &audit_relabels);
         let (enum_types, enum_variants) = collect_enums(&tir.types);
         // Collected before `collect_structs` (moved ahead of its previous
         // position below `collect_structs`/`collect_actors`) — struct field
@@ -818,6 +818,29 @@ impl Backend for WasmTextCompiler {
             }
         }
 
+        // `needs_wasi` (has a `fn main() -> Unit`) used to be the *only*
+        // trigger for emitting the literal `(data ...)` sections, `$heap`
+        // bump allocator, and `$mvl_int_to_string`/`$mvl_println`/etc.
+        // helpers below. That's wrong: `mvl test --backend=wasm` compiles
+        // and runs each `test fn` standalone via `wasmtime run --invoke`,
+        // with no synthesized `main` at all — `needs_wasi` was always false
+        // there, so string literals silently got NO data written at their
+        // assigned offsets (a correctness bug: comparisons against
+        // uninitialized memory could spuriously match) and any `.to_string()`
+        // on an `Int` referenced an undefined `$mvl_int_to_string`, rejecting
+        // the whole module (#2153). Both are actually needed whenever the
+        // compiled body *references* them, independent of whether a WASI
+        // entry point exists — checked by scanning the already-built
+        // `fns_out` for the exact call-site strings, the same text-based
+        // detection this file already uses for `ctx.needs_runtime`-style gating.
+        let needs_wasi_helpers = needs_wasi
+            || !literals.is_empty()
+            || fns_out.contains("call $mvl_int_to_string")
+            || fns_out.contains("call $mvl_println")
+            || fns_out.contains("call $mvl_eprintln")
+            || fns_out.contains("call $mvl_write")
+            || fns_out.contains("call $mvl_now");
+
         if ctx.needs_runtime.get() {
             // runtime.wasm exports its memory and the `_mvl_string_*` ops;
             // the user module imports both. Runtime data lives at 1 MB+,
@@ -831,12 +854,12 @@ impl Backend for WasmTextCompiler {
                     "  (import \"runtime\" \"{name}\"\n    (func ${name} {signature}))\n"
                 ));
             }
-            if needs_wasi {
+            if needs_wasi_helpers {
                 // WASI blob but without its own `(memory 1) (export "memory")`
                 // — memory is imported above.
                 out.push_str(&emit_wasi_runtime_shared_memory(heap_start, &literals));
             }
-        } else if needs_wasi {
+        } else if needs_wasi_helpers {
             // Standalone WASI module — own memory, no runtime preload
             // needed. Matches the pre-#1819 behaviour for simple programs.
             out.push_str(&emit_wasi_runtime(heap_start, &literals));
@@ -8428,19 +8451,22 @@ fn collect_payload_enums(types: &[TirTypeDecl]) -> HashMap<String, PayloadEnumIn
 fn collect_literals(
     fns: &[&TirFn],
     actors: &[TirActorDecl],
-    needs_wasi: bool,
     audit_relabels: &AuditRelabels,
 ) -> (HashMap<String, (u32, u32)>, u32) {
     let mut map = HashMap::new();
     let mut next = LITERAL_BASE;
     // Seed "true" / "false" so `Bool.to_string()` has offsets to point at.
-    // Cheap: 4 + 5 = 9 bytes of data section even when unused.
-    if needs_wasi {
-        for lit in &["true", "false"] {
-            let len = lit.len() as u32;
-            map.insert((*lit).to_string(), (next, len));
-            next += len;
-        }
+    // Cheap: 4 + 5 = 9 bytes of data section even when unused. Unconditional
+    // (not gated on `needs_wasi`, i.e. "has a `fn main`") for the same reason
+    // the emission gate below was fixed in #2153: `mvl test --backend=wasm`
+    // compiles each `test fn` standalone with no synthesized `main`, so
+    // `needs_wasi` was always false there — `Bool::to_string()`'s lookup
+    // (`ctx.literals.get("true")`) silently fell back to `(0, 0)` instead of
+    // a hard error, producing an empty/garbage string rather than "true".
+    for lit in &["true", "false"] {
+        let len = lit.len() as u32;
+        map.insert((*lit).to_string(), (next, len));
+        next += len;
     }
     for f in fns {
         collect_block(&f.body, &mut map, &mut next, audit_relabels);
@@ -9230,12 +9256,21 @@ mod tests {
         );
         assert!(!wat.contains(";; unsupported"), "{wat}");
         assert!(!wat.contains("body stubbed"), "{wat}");
+        // Scoped to `describe`'s own body — the module now also carries the
+        // WASI helper blob (this program has string literals, #2153), and
+        // `$mvl_now`'s alignment rounding has its own unrelated `i32.and`.
+        let describe_start = wat.find("(func $describe").expect("describe not in module");
+        let describe_body = &wat[describe_start..];
+        let describe_end = describe_body
+            .find("\n  (export")
+            .unwrap_or(describe_body.len());
+        let describe_body = &describe_body[..describe_end];
         // The three `Solo(Weekday::X)` arms get one guard each; the
         // `Duo(Weekday::Mon, Season::Spring)` arm gets two ANDed together
         // (both slots live); `Duo(_, Season::Fall)` gets one (first slot is
         // wildcarded); `Duo(_, _)` gets none. Total: 3 + 2 + 1 = 6.
         assert_eq!(
-            wat.matches("i32.and").count(),
+            describe_body.matches("i32.and").count(),
             6,
             "expected 6 total inner-discriminant guards across all arms\n{wat}"
         );
@@ -10920,5 +10955,69 @@ mod validated_module_tests {
              }\n",
         );
         assert!(stubbed.is_empty(), "unexpected stubs: {stubbed:?}");
+    }
+
+    /// #2153: `mvl test --backend=wasm` compiles each `test fn` standalone
+    /// via `wasmtime run --invoke`, with no synthesized `fn main`. The
+    /// literal `(data ...)` sections, `$mvl_alloc`/`$heap`, and
+    /// `$mvl_int_to_string`/`$mvl_println`/etc. were only ever emitted when
+    /// `needs_wasi` (has a `fn main`) was true — silently correct for every
+    /// other test path (`mvlr` synthesizes a wrapping `main`), but wrong
+    /// here: string literals got assigned offsets with *no data written
+    /// there*, so a comparison against two different literals could
+    /// spuriously match (comparing uninitialized memory to itself).
+    #[test]
+    fn string_literal_data_section_present_without_main() {
+        let (wat, stubbed) = emit(
+            "test fn t() -> Unit {\n\
+                 let a: String = \"hello\";\n\
+                 let b: String = \"world\";\n\
+                 assert_eq(a == b, false);\n\
+             }\n",
+        );
+        assert!(stubbed.is_empty(), "unexpected stubs: {stubbed:?}");
+        validate(&wat);
+        assert!(
+            wat.contains("(data (i32.const"),
+            "no-main module must still write its string literals' data: {wat}"
+        );
+    }
+
+    /// Same root cause (#2153), the `Int::to_string()` half: the helper
+    /// itself lives outside `runtime/wasm/` (a small inline WAT function,
+    /// `$mvl_int_to_string`) and was gated behind the same wrong condition
+    /// — a no-`main` module calling `.to_string()` on an `Int` referenced an
+    /// undefined function, failing to assemble at all.
+    #[test]
+    fn int_to_string_helper_defined_without_main() {
+        let (wat, stubbed) = emit(
+            "fn stringify(x: Int) -> String { x.to_string() }\n\
+             test fn t() -> Unit {\n\
+                 assert_eq(stringify(42), \"42\");\n\
+             }\n",
+        );
+        assert!(stubbed.is_empty(), "unexpected stubs: {stubbed:?}");
+        validate(&wat);
+        assert!(
+            wat.contains("(func $mvl_int_to_string"),
+            "no-main module calling Int::to_string() must still define the helper: {wat}"
+        );
+    }
+
+    /// Same root cause (#2153) again, `Bool::to_string()`'s half: "true"/
+    /// "false" are pre-seeded literals `collect_literals` only added when
+    /// `needs_wasi` was true, so a no-`main` module's `Bool::to_string()`
+    /// looked up an unseeded literal and silently fell back to `(0, 0)` —
+    /// an empty string instead of "true"/"false".
+    #[test]
+    fn bool_to_string_literals_seeded_without_main() {
+        let (wat, stubbed) = emit(
+            "test fn t() -> Unit {\n\
+                 assert_eq(true.to_string(), \"true\");\n\
+                 assert_eq(false.to_string(), \"false\");\n\
+             }\n",
+        );
+        assert!(stubbed.is_empty(), "unexpected stubs: {stubbed:?}");
+        validate(&wat);
     }
 }
