@@ -1,0 +1,39 @@
+// 01_expressions/numeric_conversion_test.mvl — Int/UInt::to_float() and
+// Float::to_int() had no WASM emitter arm at all (silent `unreachable`
+// stub) — found while porting examples/log_analyzer to std.json, whose
+// number handling round-trips through both directions.
+
+test fn int_to_float_positive() -> Unit {
+    let n: Int = 5;
+    assert_eq(n.to_float(), 5.0);
+}
+
+test fn int_to_float_negative() -> Unit {
+    let n: Int = -3;
+    assert_eq(n.to_float(), -3.0);
+}
+
+test fn int_to_float_zero() -> Unit {
+    let n: Int = 0;
+    assert_eq(n.to_float(), 0.0);
+}
+
+test fn float_to_int_truncates_toward_zero() -> Unit {
+    let f: Float = 5.9;
+    assert_eq(f.to_int(), 5);
+}
+
+test fn float_to_int_negative_truncates_toward_zero() -> Unit {
+    let f: Float = -5.9;
+    assert_eq(f.to_int(), -5);
+}
+
+test fn float_to_int_zero() -> Unit {
+    let f: Float = 0.0;
+    assert_eq(f.to_int(), 0);
+}
+
+test fn round_trip_int_to_float_to_int() -> Unit {
+    let n: Int = 42;
+    assert_eq(n.to_float().to_int(), 42);
+}

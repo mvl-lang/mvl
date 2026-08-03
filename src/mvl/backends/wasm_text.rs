@@ -3647,6 +3647,31 @@ fn emit_expr(out: &mut String, expr: &TirExpr, ctx: &Ctx) {
                 }
             }
         }
+        // Int/UInt::to_float() and Float::to_int() — native i64<->f64
+        // conversion instructions, no runtime call needed. Had no emitter
+        // arm at all (found while porting `examples/log_analyzer` to
+        // `std.json`, whose number handling round-trips through both).
+        // `to_int()` truncates toward zero, matching `i64.trunc_f64_s` and
+        // every other backend's `as i64`/`fptosi` semantics.
+        TirExprKind::MethodCall {
+            receiver,
+            method,
+            args,
+        } if matches!(receiver.ty, Ty::Int | Ty::UInt)
+            && method == "to_float"
+            && args.is_empty() =>
+        {
+            emit_expr(out, receiver, ctx);
+            out.push_str("    f64.convert_i64_s\n");
+        }
+        TirExprKind::MethodCall {
+            receiver,
+            method,
+            args,
+        } if matches!(receiver.ty, Ty::Float) && method == "to_int" && args.is_empty() => {
+            emit_expr(out, receiver, ctx);
+            out.push_str("    i64.trunc_f64_s\n");
+        }
         // Int/UInt/Float::abs/clamp/pow (#2122). WASM has native `f64.abs`/
         // `f64.max`/`f64.min` for Float but no integer min/max/abs opcode and
         // no exponentiation opcode for either family, so Int/UInt route
@@ -7394,6 +7419,12 @@ pub fn emitter_handles_method_natively(receiver_ty: &Ty, method: &str) -> bool {
         );
     }
     if matches!(receiver_ty, Ty::Float) && method == "to_string" {
+        return true;
+    }
+    if matches!(receiver_ty, Ty::Int | Ty::UInt) && method == "to_float" {
+        return true;
+    }
+    if matches!(receiver_ty, Ty::Float) && method == "to_int" {
         return true;
     }
     // Int/UInt/Float::abs/clamp/pow (#2122).
