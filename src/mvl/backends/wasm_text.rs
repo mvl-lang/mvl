@@ -2198,6 +2198,20 @@ fn collect_locals_ctx_expr(expr: &TirExpr, locals: &mut Vec<(String, Ty)>, ctx: 
                     }
                 }
             }
+            // A named top-level function used as a value (#2159) routes
+            // through `emit_named_fn_as_value` → `emit_closure_value`, which
+            // needs the same `__env_*`/`__closure_*` temps a lambda literal
+            // gets from `collect_locals_expr`'s `Lambda` arm — this ctx-free
+            // pass can't tell "named function value" apart from an ordinary
+            // `Var` read (that needs `ctx.fn_params`/`fn_locals`), hence
+            // registering it here instead.
+            if matches!(resolve_ty_param(&expr.ty, ctx.type_subst), Ty::Fn(..))
+                && fn_value_ty(name, ctx).is_none()
+            {
+                let off = expr.span.offset;
+                locals.push((format!("__env_{off}"), Ty::Bool));
+                locals.push((format!("__closure_{off}"), Ty::Bool));
+            }
         }
         TirExprKind::FieldAccess { expr: recv, field } => {
             collect_locals_ctx_expr(recv, locals, ctx);
@@ -2989,23 +3003,14 @@ fn emit_expr(out: &mut String, expr: &TirExpr, ctx: &Ctx) {
                 return;
             }
             // A bare reference to a *named function* used as a value —
-            // `apply(double, 3)` where `double` is a top-level fn (#2014).
-            // Function values are table indices, and only lambda literals are
-            // given table slots, so there is no index to push here. Falling
-            // through emitted `local.get $double` for a local that does not
-            // exist, which makes `wasm-tools` reject the entire module rather
-            // than just this function. Stub instead, keeping the failure local.
-            //
-            // Supporting it means adding named functions to the `elem` segment;
-            // deliberately out of scope, since the file that needs it
-            // (03_functions/higher_order_test.mvl) also returns closures from a
-            // factory and would still need real capture support.
+            // `apply(double, 3)` where `double` is a top-level fn (#2159,
+            // follow-up to #2014/#2118). `emit_named_fn_as_value` synthesizes
+            // a thin non-capturing wrapper lambda and boxes it exactly like a
+            // real lambda literal.
             if matches!(resolve_ty_param(&expr.ty, ctx.type_subst), Ty::Fn(..))
                 && fn_value_ty(name, ctx).is_none()
             {
-                out.push_str(&format!(
-                    "    ;; unsupported: `{name}` is a named function used as a value\n"
-                ));
+                emit_named_fn_as_value(out, expr, name, ctx);
                 return;
             }
             out.push_str(&format!("    local.get ${name}\n"));
@@ -6995,6 +7000,59 @@ fn walk_block_for_captures(
     }
 }
 
+/// A bare reference to a named top-level function used as a value —
+/// `apply(double, 3)` (#2159, follow-up to #2014/#2118).
+///
+/// Only lambda literals get a table slot from `register_lambda`; a named
+/// function has none. Rather than a second, parallel table-registration
+/// path, synthesize a thin non-capturing wrapper lambda —
+/// `|p0: T0, p1: T1, ...| -> R { name(p0, p1, ...) }` — built directly from
+/// `expr.ty`'s already-resolved `Ty::Fn(params, ret, ..)` shape (the
+/// checker already typed this `Var` reference that way; no separate
+/// top-level signature registry is needed), and feed it through the exact
+/// same `emit_closure_value` a real lambda literal uses. Mirrors the LLVM
+/// backend's `make_named_fn_closure_hof` (`emit_helpers.rs`), which
+/// synthesizes the same kind of trampoline function.
+fn emit_named_fn_as_value(out: &mut String, expr: &TirExpr, name: &str, ctx: &Ctx) {
+    let (param_tys, ret_ty) = match resolve_ty_param(&expr.ty, ctx.type_subst) {
+        Ty::Fn(params, ret, ..) => (params, *ret),
+        other => {
+            out.push_str(&format!(
+                "    ;; unsupported: `{name}` used as a value has non-fn type {other:?}\n"
+            ));
+            return;
+        }
+    };
+    let params: Vec<TirParam> = param_tys
+        .iter()
+        .enumerate()
+        .map(|(i, ty)| TirParam {
+            name: format!("__wp{i}"),
+            ty: ty.clone(),
+            capability: None,
+            span: expr.span,
+        })
+        .collect();
+    let args: Vec<TirExpr> = params
+        .iter()
+        .map(|p| TirExpr {
+            kind: TirExprKind::Var(p.name.clone()),
+            ty: p.ty.clone(),
+            span: expr.span,
+        })
+        .collect();
+    let body = TirExpr {
+        kind: TirExprKind::FnCall {
+            name: name.to_string(),
+            args,
+            type_args: Vec::new(),
+        },
+        ty: ret_ty,
+        span: expr.span,
+    };
+    emit_closure_value(out, expr, &params, &body, ctx);
+}
+
 /// Emit a lambda literal as a runtime *value*: a pointer to a heap-boxed
 /// `{funcidx: i32, envptr: i32}` pair (#2118).
 ///
@@ -10499,19 +10557,21 @@ mod stub_reporting_tests {
     /// a value has no table slot, so `local.get $double` named a local that
     /// never existed.
     #[test]
-    fn named_function_as_value_stubs() {
+    fn named_function_as_value_compiles_via_synthesized_wrapper() {
+        // A named top-level function used as a value (#2159) is no longer
+        // stubbed — `emit_named_fn_as_value` synthesizes a thin
+        // non-capturing wrapper lambda and boxes it exactly like a real
+        // lambda literal.
         let (wat, stubbed) = compile_with(
             "fn double(x: Int) -> Int { x * 2 }\n\
              fn apply(f: fn(Int) -> Int, v: Int) -> Int { f(v) }\n\
              test fn t() -> Unit { assert_eq(apply(double, 3), 6); }\n",
         );
-        assert_eq!(stubbed, vec!["t".to_string()], "{wat}");
-        // The `;; unsupported` marker itself is discarded along with the body it
-        // was written into — unlike the capturing-lambda case above, which
-        // writes its note straight to the function's output. The reported name
-        // is the actionable part either way.
-        assert!(!wat.contains("local.get $double"), "{wat}");
-        // `apply` itself is fine — only the caller that names a function stubs.
+        assert!(stubbed.is_empty(), "unexpected stubs: {stubbed:?}\n{wat}");
+        assert!(!wat.contains("body stubbed"), "{wat}");
+        assert!(!wat.contains("named function used as a value"), "{wat}");
+        // The synthesized wrapper calls straight through to `double`.
+        assert!(wat.contains("call $double"), "{wat}");
         assert!(wat.contains("call_indirect (type $sig_i64_r_i64)"), "{wat}");
     }
 
