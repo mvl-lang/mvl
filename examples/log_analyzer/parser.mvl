@@ -131,7 +131,9 @@ pub total fn entry_summary(entry: LogEntry) -> String {
 pub total fn is_error_level(entry: LogEntry) -> Bool {
     match entry.level {
         Severity::Error => true,
-        _               => false,
+        Severity::Warn  => false,
+        Severity::Info  => false,
+        Severity::Debug => false,
     }
 }
 
@@ -140,7 +142,7 @@ pub total fn is_error_level(entry: LogEntry) -> Bool {
 // unlabeled data flows freely into a Tainted context (Public ⊑ Tainted).
 
 test fn check_debug_level_is_ok() -> Unit {
-    let result: Result[Severity, ParseError] = parse_level(relabel taint("debug", "TEST"));
+    let result: Result[Severity, ParseError] = parse_level(relabel taint("debug", "TEST-DEBUG"));
     let ok: Int = match result {
         Ok(_)  => 1,
         Err(_) => 0,
@@ -149,7 +151,7 @@ test fn check_debug_level_is_ok() -> Unit {
 }
 
 test fn check_error_level_is_ok() -> Unit {
-    let result: Result[Severity, ParseError] = parse_level(relabel taint("error", "TEST"));
+    let result: Result[Severity, ParseError] = parse_level(relabel taint("error", "TEST-ERROR"));
     let ok: Int = match result {
         Ok(_)  => 1,
         Err(_) => 0,
@@ -159,7 +161,7 @@ test fn check_error_level_is_ok() -> Unit {
 
 // to_lower() enables case-insensitive level parsing (Phase 4).
 test fn check_uppercase_error_level_is_ok() -> Unit {
-    let result: Result[Severity, ParseError] = parse_level(relabel taint("ERROR", "TEST"));
+    let result: Result[Severity, ParseError] = parse_level(relabel taint("ERROR", "TEST-UPPERCASE"));
     let ok: Int = match result {
         Ok(_)  => 1,
         Err(_) => 0,
@@ -168,7 +170,7 @@ test fn check_uppercase_error_level_is_ok() -> Unit {
 }
 
 test fn check_unknown_level_is_err() -> Unit {
-    let result: Result[Severity, ParseError] = parse_level(relabel taint("verbose", "TEST"));
+    let result: Result[Severity, ParseError] = parse_level(relabel taint("verbose", "TEST-UNKNOWN"));
     let err: Int = match result {
         Ok(_)  => 0,
         Err(_) => 1,
@@ -177,7 +179,7 @@ test fn check_unknown_level_is_err() -> Unit {
 }
 
 test fn check_empty_level_is_err() -> Unit {
-    let result: Result[Severity, ParseError] = parse_level(relabel taint("", "TEST"));
+    let result: Result[Severity, ParseError] = parse_level(relabel taint("", "TEST-EMPTY"));
     let err: Int = match result {
         Ok(_)  => 0,
         Err(_) => 1,
