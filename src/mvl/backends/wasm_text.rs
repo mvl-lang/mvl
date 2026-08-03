@@ -2014,6 +2014,10 @@ fn correct_payload_pattern_locals(
 ) {
     let (target, enum_ty): (&Pattern, Option<&Ty>) = match pattern {
         Pattern::TupleStruct { .. } | Pattern::Struct { .. } => (pattern, Some(scrutinee_ty)),
+        // `Some(Variant(x))` / `Some(Variant { f: x })` (#2163) — same
+        // nested-payload shape as the `Ok` arm below, just sourced from the
+        // Option's own payload type instead of the Result's Ok type.
+        Pattern::Some { inner, .. } => (inner.as_ref(), option_inner_ty(scrutinee_ty)),
         Pattern::Err { inner, .. } => (inner.as_ref(), result_err_ty(scrutinee_ty)),
         Pattern::Ok { inner, .. } => (inner.as_ref(), result_ok_ty(scrutinee_ty)),
         _ => return,
@@ -4899,15 +4903,52 @@ fn emit_match_impl(
             // `Some(inner)` pattern on Option[T]. Check tag == 0, then in
             // the arm body bind `inner` to the extracted payload via the
             // typed value getter. `Pattern::Ident("_")` skips the bind.
+            //
+            // `inner` can also be a nested payload-enum pattern
+            // (`Some(Value::String(x))`, #2163) — narrow on that variant's
+            // own discriminant too (nested if, ANDed into the Some check)
+            // before extracting and binding its fields.
             Pattern::Some { inner, span } => {
                 ctx.needs_runtime.set(true);
                 let inner_ty = option_inner_ty(&scrutinee.ty).cloned().unwrap_or(Ty::Int);
+                let nested_variant = match inner.as_ref() {
+                    Pattern::TupleStruct { .. } | Pattern::Struct { .. } => {
+                        wasm_qualified_variant_name(inner)
+                            .and_then(|q| payload_variant_for(q, ctx).cloned())
+                    }
+                    _ => None,
+                };
+                if matches!(
+                    inner.as_ref(),
+                    Pattern::TupleStruct { .. } | Pattern::Struct { .. }
+                ) && nested_variant.is_none()
+                {
+                    out.push_str("    ;; unsupported Some(..) nested pattern: unknown variant\n");
+                    for _ in 0..open_ifs {
+                        out.push_str("    end\n");
+                    }
+                    return;
+                }
                 out.push_str(&format!("    local.get ${temp}\n"));
                 out.push_str("    call $_mvl_option_tag\n");
                 out.push_str("    i32.eqz\n"); // 1 when tag was 0 (Some)
+                if let Some(pv) = &nested_variant {
+                    // Nested if, not an unconditional AND — the wrapped
+                    // payload pointer is only valid to dereference when the
+                    // Option is actually Some.
+                    out.push_str("    if (result i32)\n");
+                    out.push_str(&format!("    local.get ${temp}\n"));
+                    out.push_str("    call $_mvl_option_value_i32\n");
+                    out.push_str("    i32.load offset=0\n");
+                    out.push_str(&format!("    i32.const {}\n", pv.disc));
+                    out.push_str("    i32.eq\n");
+                    out.push_str("    else\n");
+                    out.push_str("    i32.const 0\n");
+                    out.push_str("    end\n");
+                }
                 out.push_str(&if_open);
-                if let Pattern::Ident(name, _) = inner.as_ref() {
-                    if name != "_" {
+                match inner.as_ref() {
+                    Pattern::Ident(name, _) if name != "_" => {
                         if is_string_ty(&inner_ty, ctx) {
                             // `Option[String]`'s payload slot stores the
                             // `*MvlString` pointer as i32 (same convention as
@@ -4935,6 +4976,23 @@ fn emit_match_impl(
                             out.push_str(&format!("    local.set ${name}\n"));
                         }
                     }
+                    Pattern::TupleStruct { .. } | Pattern::Struct { .. } => {
+                        if let Some(pv) = &nested_variant {
+                            let inner_off = inner.span().offset;
+                            let val_local = format!("__wv_{span_offset}_{inner_off}");
+                            let pp_local = format!("__wpp_{span_offset}_{inner_off}");
+                            out.push_str(&format!("    local.get ${temp}\n"));
+                            out.push_str("    call $_mvl_option_value_i32\n");
+                            out.push_str(&format!("    local.set ${val_local}\n"));
+                            out.push_str(&format!("    local.get ${val_local}\n"));
+                            out.push_str("    i32.load offset=4\n");
+                            out.push_str(&format!("    local.set ${pp_local}\n"));
+                            emit_wrapped_variant_field_binds(
+                                out, &pp_local, pv, inner, inner_off, ctx,
+                            );
+                        }
+                    }
+                    _ => {}
                 }
                 emit_match_body(out, &arm.body, ctx);
                 out.push_str("    else\n");
@@ -4952,15 +5010,51 @@ fn emit_match_impl(
                 open_ifs += 1;
             }
             // `Ok(inner)` pattern on Result[T, E]. Check tag == 0, bind inner.
+            //
+            // `inner` can also be a nested payload-enum pattern
+            // (`Ok(Value::String(x))`, #2163) — mirrors `Pattern::Some`'s
+            // nested-variant handling above.
             Pattern::Ok { inner, span } => {
                 ctx.needs_runtime.set(true);
                 let ok_ty = result_ok_ty(&scrutinee.ty).cloned().unwrap_or(Ty::Int);
+                let nested_variant = match inner.as_ref() {
+                    Pattern::TupleStruct { .. } | Pattern::Struct { .. } => {
+                        wasm_qualified_variant_name(inner)
+                            .and_then(|q| payload_variant_for(q, ctx).cloned())
+                    }
+                    _ => None,
+                };
+                if matches!(
+                    inner.as_ref(),
+                    Pattern::TupleStruct { .. } | Pattern::Struct { .. }
+                ) && nested_variant.is_none()
+                {
+                    out.push_str("    ;; unsupported Ok(..) nested pattern: unknown variant\n");
+                    for _ in 0..open_ifs {
+                        out.push_str("    end\n");
+                    }
+                    return;
+                }
                 out.push_str(&format!("    local.get ${temp}\n"));
                 out.push_str("    call $_mvl_result_tag\n");
                 out.push_str("    i32.eqz\n"); // 1 when tag == 0 (Ok)
+                if let Some(pv) = &nested_variant {
+                    // Nested if, not an unconditional AND — the wrapped
+                    // payload pointer is only valid to dereference when the
+                    // Result is actually Ok.
+                    out.push_str("    if (result i32)\n");
+                    out.push_str(&format!("    local.get ${temp}\n"));
+                    out.push_str("    call $_mvl_result_value_i32\n");
+                    out.push_str("    i32.load offset=0\n");
+                    out.push_str(&format!("    i32.const {}\n", pv.disc));
+                    out.push_str("    i32.eq\n");
+                    out.push_str("    else\n");
+                    out.push_str("    i32.const 0\n");
+                    out.push_str("    end\n");
+                }
                 out.push_str(&if_open);
-                if let Pattern::Ident(name, _) = inner.as_ref() {
-                    if name != "_" {
+                match inner.as_ref() {
+                    Pattern::Ident(name, _) if name != "_" => {
                         if is_string_ty(&ok_ty, ctx) {
                             // `Result[String, E]`'s Ok slot stores the
                             // `*MvlString` pointer as i32 (same convention as
@@ -4988,6 +5082,23 @@ fn emit_match_impl(
                             out.push_str(&format!("    local.set ${name}\n"));
                         }
                     }
+                    Pattern::TupleStruct { .. } | Pattern::Struct { .. } => {
+                        if let Some(pv) = &nested_variant {
+                            let inner_off = inner.span().offset;
+                            let val_local = format!("__wv_{span_offset}_{inner_off}");
+                            let pp_local = format!("__wpp_{span_offset}_{inner_off}");
+                            out.push_str(&format!("    local.get ${temp}\n"));
+                            out.push_str("    call $_mvl_result_value_i32\n");
+                            out.push_str(&format!("    local.set ${val_local}\n"));
+                            out.push_str(&format!("    local.get ${val_local}\n"));
+                            out.push_str("    i32.load offset=4\n");
+                            out.push_str(&format!("    local.set ${pp_local}\n"));
+                            emit_wrapped_variant_field_binds(
+                                out, &pp_local, pv, inner, inner_off, ctx,
+                            );
+                        }
+                    }
+                    _ => {}
                 }
                 emit_match_body(out, &arm.body, ctx);
                 out.push_str("    else\n");
@@ -5693,6 +5804,46 @@ fn emit_propagate(out: &mut String, inner: &TirExpr, expr: &TirExpr, ctx: &Ctx) 
 
 // ── Local collection helpers (#1821) ─────────────────────────────────────
 
+/// Push speculative locals for a nested payload-enum variant pattern
+/// (`Variant(x)` / `Variant { f: x, .. }`) found one level inside a
+/// `Some(...)`/`Ok(...)` wrapper (#2163) — e.g. `Some(Value::String(x))`.
+///
+/// This runs in the ctx-free first pass, before `ctx.payload_enums` is
+/// available, so it can't resolve real field types yet. It declares:
+/// - `__wv_<outer_off>_<inner_off>` / `__wpp_<outer_off>_<inner_off>` — the
+///   wrapped variant's own value/payload-pointer temps (emit-side names
+///   these the same way, keyed by the outer `Some`/`Ok` span offset and the
+///   inner variant pattern's own span offset).
+/// - Per bound field: a `Ty::Int` placeholder (overwritten with the real
+///   type by `correct_payload_pattern_locals` for non-String fields), plus
+///   speculative `{name}_ptr`/`{name}_len`/`__svs_<inner_off>_<name>`
+///   locals — redundant for non-String fields but cheap, deduped later
+///   (mirrors the top-level `Pattern::TupleStruct` arm's own approach).
+fn push_wrapped_variant_field_locals_speculative(
+    inner: &Pattern,
+    outer_span_offset: u32,
+    locals: &mut Vec<(String, Ty)>,
+) {
+    let inner_off = inner.span().offset;
+    locals.push((format!("__wv_{outer_span_offset}_{inner_off}"), Ty::Bool)); // i32
+    locals.push((format!("__wpp_{outer_span_offset}_{inner_off}"), Ty::Bool)); // i32
+    let field_pats: Vec<&Pattern> = match inner {
+        Pattern::TupleStruct { fields, .. } => fields.iter().collect(),
+        Pattern::Struct { fields: named, .. } => named.iter().map(|(_, p)| p).collect(),
+        _ => return,
+    };
+    for pat in field_pats {
+        if let Pattern::Ident(name, _) = pat {
+            if name != "_" && !name.contains("::") {
+                locals.push((name.clone(), Ty::Int));
+                locals.push((format!("{name}_ptr"), Ty::Bool)); // i32
+                locals.push((format!("{name}_len"), Ty::Bool)); // i32
+                locals.push((format!("__svs_{inner_off}_{name}"), Ty::Bool)); // i32
+            }
+        }
+    }
+}
+
 /// Declare locals needed by a single match arm pattern. Extracted so both
 /// `collect_locals_stmt` (TirStmt::Match) and `collect_locals_expr`
 /// (TirExprKind::Match) can share the same logic.
@@ -5722,6 +5873,18 @@ fn collect_match_arm_locals(
                         locals.push((name.clone(), ty));
                     }
                 }
+            } else if matches!(
+                inner.as_ref(),
+                Pattern::TupleStruct { .. } | Pattern::Struct { .. }
+            ) {
+                // `Some(Variant(x))` / `Some(Variant { f: x })` (#2163) — a
+                // nested payload-enum pattern one level inside the Option
+                // wrapper. This first pass has no `ctx.payload_enums`, so it
+                // can't know real field types yet; push speculative
+                // placeholders now and let `correct_payload_pattern_locals`
+                // (ctx-aware second pass) overwrite non-String fields with
+                // their real type.
+                push_wrapped_variant_field_locals_speculative(inner, span_offset, locals);
             }
         }
         Pattern::Ok { inner, span } => {
@@ -5746,6 +5909,13 @@ fn collect_match_arm_locals(
                         locals.push((name.clone(), ty));
                     }
                 }
+            } else if matches!(
+                inner.as_ref(),
+                Pattern::TupleStruct { .. } | Pattern::Struct { .. }
+            ) {
+                // `Ok(Variant(x))` / `Ok(Variant { f: x })` (#2163) — mirrors
+                // the `Some` case above, sourced from the Result's Ok type.
+                push_wrapped_variant_field_locals_speculative(inner, span_offset, locals);
             }
         }
         Pattern::Err { inner, .. } => match inner.as_ref() {
@@ -5887,6 +6057,70 @@ fn payload_variant_for<'a>(qname: &str, ctx: &'a Ctx) -> Option<&'a PayloadVaria
     ctx.payload_enums
         .get(type_name)
         .and_then(|info| info.variants.iter().find(|v| v.name == qname))
+}
+
+/// Bind each field of a nested payload-enum variant pattern
+/// (`Variant(x)` / `Variant { f: x, .. }`) matched one level inside a
+/// `Some(...)`/`Ok(...)` wrapper (#2163) — e.g. `Some(Value::String(x))`.
+///
+/// `payload_ptr_local` must already hold the variant's own payload pointer
+/// (loaded from the wrapped enum's header offset 4 by the caller). `inner_off`
+/// keys each field's String-unpack scratch temp uniquely per match arm,
+/// matching the naming `push_wrapped_variant_field_locals_speculative`
+/// declares. Mirrors the load/bind sequence the top-level `Pattern::TupleStruct`
+/// arm and the `Pattern::Err { inner: Pattern::Struct }` arm already use for
+/// their own (differently-scoped) payload pointers.
+fn emit_wrapped_variant_field_binds(
+    out: &mut String,
+    payload_ptr_local: &str,
+    pv: &PayloadVariant,
+    inner: &Pattern,
+    inner_off: u32,
+    ctx: &Ctx,
+) {
+    let field_pats: Vec<(usize, &Pattern)> = match inner {
+        Pattern::TupleStruct { fields, .. } => fields.iter().enumerate().collect(),
+        Pattern::Struct {
+            fields: named_fields,
+            ..
+        } => pv
+            .field_names
+            .iter()
+            .enumerate()
+            .filter_map(|(slot, fname)| {
+                named_fields
+                    .iter()
+                    .find(|(n, _)| n == fname)
+                    .map(|(_, p)| (slot, p))
+            })
+            .collect(),
+        _ => return,
+    };
+    for (slot, pat) in field_pats {
+        if let Pattern::Ident(name, _) = pat {
+            if name != "_" && !name.contains("::") {
+                let field_ty = pv.fields.get(slot).cloned().unwrap_or(Ty::Int);
+                let byte_off = (slot as u32) * 8;
+                out.push_str(&format!("    local.get ${payload_ptr_local}\n"));
+                if peels_to_string(&field_ty) {
+                    // String payload: stored as i64-extended *MvlString.
+                    // Load, narrow to i32, unpack to (ptr, len) split locals.
+                    out.push_str(&format!("    i64.load offset={byte_off}\n"));
+                    out.push_str("    i32.wrap_i64\n");
+                    let sv_tmp = format!("__svs_{inner_off}_{name}");
+                    out.push_str(&format!("    local.tee ${sv_tmp}\n"));
+                    out.push_str(&format!("    i32.load offset={MVL_STRING_OFFSET_PTR}\n"));
+                    out.push_str(&format!("    local.set ${name}_ptr\n"));
+                    out.push_str(&format!("    local.get ${sv_tmp}\n"));
+                    out.push_str(&format!("    i32.load offset={MVL_STRING_OFFSET_LEN}\n"));
+                    out.push_str(&format!("    local.set ${name}_len\n"));
+                } else {
+                    emit_payload_load(out, &field_ty, byte_off, ctx);
+                    out.push_str(&format!("    local.set ${name}\n"));
+                }
+            }
+        }
+    }
 }
 
 /// WASM equality opcode for a scrutinee type. Types beyond scalar defaults
