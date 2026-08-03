@@ -7,7 +7,7 @@
 //! `cross_backend_tir/program.rs` substring tests cover the same
 //! concern against the TIR walker.
 
-use super::common::{compile, compile_with_sibling};
+use super::common::{compile, compile_with_sibling, compile_with_siblings};
 
 #[test]
 fn unit_function_emits_ret_void() {
@@ -69,6 +69,30 @@ fn sibling_fn_emitted_in_flat_module() {
         "sibling @add not in IR: {ir}"
     );
     assert!(ir.contains("define i32 @main()"), "main not in IR: {ir}");
+}
+
+/// A sibling whose body calls a function declared in a *later* sibling must
+/// see that callee's real return type, not the `Int` fallback default
+/// (#2152). Order matters here: `caller_mod` (calls `helper`) is listed
+/// *before* `callee_mod` (declares `helper`) — the exact shape
+/// `examples/bzip`'s `bwt.mvl` calling `intlist.mvl`'s `int_list_set` hit,
+/// which previously produced `call i64 @helper` at the call site while
+/// `helper` itself was `define ptr @helper` — an invalid-IR type mismatch
+/// `lli` rejected the whole module for.
+#[test]
+fn cross_sibling_call_sees_later_siblings_real_return_type() {
+    let caller_mod = "pub fn use_helper(x: List[Int]) -> List[Int] { helper(x) }";
+    let callee_mod = "pub fn helper(x: List[Int]) -> List[Int] { x }";
+    let entry = "fn main() -> Unit { }";
+    let ir = compile_with_siblings(entry, &[caller_mod, callee_mod]);
+    assert!(
+        ir.contains("call ptr @helper("),
+        "call site must see helper's real ptr return type, got: {ir}"
+    );
+    assert!(
+        !ir.contains("call i64 @helper("),
+        "call site fell back to the wrong Int default: {ir}"
+    );
 }
 
 /// `extern "rust"` block emits an opaque `declare` stub so callers produce valid IR.
