@@ -1269,6 +1269,20 @@ impl TextEmitter {
             .map(|(i, _)| i)
             .collect();
         let use_some_dispatch = !qualified_some_indices.is_empty();
+        // A non-qualified `Some(x)` / `Some(_)` arm sitting alongside
+        // qualified ones (e.g. `Some(A::X(x)) => .., Some(_) => .., None =>
+        // ..`) is this dispatch's own catch-all for "Some, but not any of
+        // the qualified variants" — distinct from the match's overall
+        // trailing wildcard `_`, which `default_bb` already covers for tags
+        // this dispatch doesn't own at all (e.g. `None`). Without routing
+        // to it, #2168: the arm's body is emitted but never reached — that
+        // `Some(_)` case unconditionally falls into `default_bb` and either
+        // wrongly runs an unrelated wildcard body or traps.
+        let some_fallback_idx: Option<usize> = arms.iter().position(|a| {
+            matches!(&a.pattern, Pattern::Some { inner, .. }
+                if matches!(inner.as_ref(), Pattern::Wildcard(_))
+                    || matches!(inner.as_ref(), Pattern::Ident(name, _) if !name.contains("::")))
+        });
 
         self.fn_ctx.bb += arms.len() + 2 + usize::from(use_some_dispatch);
         let default_bb = format!("match_default_{n}");
@@ -1352,17 +1366,19 @@ impl TextEmitter {
             self.push_instr(&inner_sw);
 
             // A `Some(...)` value whose nested variant matches none of the
-            // qualified arms falls through to the wildcard arm (if any) —
-            // NOT an unconditional trap. `default_bb` (emitted below)
-            // already implements exactly that fallback (wildcard body, or
-            // trap if there is no wildcard), so route here rather than
-            // duplicating that logic. Without this, `Some(A::X(x)) => ..,
-            // _ => default` would trap instead of running the wildcard for
-            // an actual `Some(A::Y(..))`.
+            // qualified arms falls through to: a sibling non-qualified
+            // `Some(x)`/`Some(_)` arm if one exists (#2168), else the
+            // match's own trailing wildcard arm (if any) via `default_bb` —
+            // NOT an unconditional trap. Without this, `Some(A::X(x)) =>
+            // .., Some(_) => .., None => ..` would skip the middle arm
+            // entirely for an actual `Some(A::Y(..))`.
             self.fn_ctx.fn_buf.push(format!("{inner_default}:"));
             self.fn_ctx.current_bb = inner_default.clone();
             self.fn_ctx.terminated = false;
-            self.push_instr(&format!("br label %{default_bb}"));
+            let fallback_target = some_fallback_idx
+                .map(|idx| arm_bbs[idx].clone())
+                .unwrap_or_else(|| default_bb.clone());
+            self.push_instr(&format!("br label %{fallback_target}"));
             self.fn_ctx.terminated = true;
         }
 
@@ -1580,6 +1596,22 @@ impl TextEmitter {
             .map(|(i, _)| i)
             .collect();
         let use_err_dispatch = !qualified_err_indices.is_empty();
+        // A non-qualified `Ok(x)`/`Ok(_)` (or `Err(x)`/`Err(_)`) arm sitting
+        // alongside qualified ones — e.g. `Ok(A::X(x)) => .., Ok(_) => ..,
+        // Err(_) => ..` — is this dispatch's own catch-all for "Ok, but not
+        // any of the qualified variants", distinct from the match's overall
+        // trailing wildcard `_` (#2168: without routing to it, that arm's
+        // body is emitted but never reached).
+        let ok_fallback_idx: Option<usize> = arms.iter().position(|a| {
+            matches!(&a.pattern, Pattern::Ok { inner, .. }
+                if matches!(inner.as_ref(), Pattern::Wildcard(_))
+                    || matches!(inner.as_ref(), Pattern::Ident(name, _) if !name.contains("::")))
+        });
+        let err_fallback_idx: Option<usize> = arms.iter().position(|a| {
+            matches!(&a.pattern, Pattern::Err { inner, .. }
+                if matches!(inner.as_ref(), Pattern::Wildcard(_))
+                    || matches!(inner.as_ref(), Pattern::Ident(name, _) if !name.contains("::")))
+        });
 
         self.fn_ctx.bb +=
             arms.len() + 2 + usize::from(use_ok_dispatch) + usize::from(use_err_dispatch);
@@ -1681,12 +1713,17 @@ impl TextEmitter {
             self.push_instr(&inner_sw);
 
             // An `Ok(...)` value whose nested variant matches none of the
-            // qualified arms falls through to the wildcard arm (if any),
-            // same as the `Err` dispatch below — not an unconditional trap.
+            // qualified arms falls through to: a sibling non-qualified
+            // `Ok(x)`/`Ok(_)` arm if one exists (#2168), else the match's
+            // own trailing wildcard arm (if any) via `default_bb` — not an
+            // unconditional trap.
             self.fn_ctx.fn_buf.push(format!("{inner_default}:"));
             self.fn_ctx.current_bb = inner_default.clone();
             self.fn_ctx.terminated = false;
-            self.push_instr(&format!("br label %{default_bb}"));
+            let fallback_target = ok_fallback_idx
+                .map(|idx| arm_bbs[idx].clone())
+                .unwrap_or_else(|| default_bb.clone());
+            self.push_instr(&format!("br label %{fallback_target}"));
             self.fn_ctx.terminated = true;
         }
 
@@ -1745,17 +1782,22 @@ impl TextEmitter {
             self.push_instr(&inner_sw);
 
             // An `Err(...)` value whose nested variant matches none of the
-            // qualified arms falls through to the wildcard arm (if any) —
-            // NOT an unconditional trap. `default_bb` (emitted below)
-            // already implements exactly that fallback (#2177: found while
-            // fixing the analogous `Some`/`Ok` gap above — this arm had the
-            // same bug, just unexercised because every existing corpus test
-            // with a qualified `Err(...)` arm happens to cover every variant
-            // of the error enum exhaustively).
+            // qualified arms falls through to: a sibling non-qualified
+            // `Err(x)`/`Err(_)` arm if one exists (#2168), else the match's
+            // own trailing wildcard arm (if any) via `default_bb` — NOT an
+            // unconditional trap. `default_bb` (emitted below) already
+            // implements the wildcard fallback (#2177: found while fixing
+            // the analogous `Some`/`Ok` gap above — this arm had the same
+            // bug, just unexercised because every existing corpus test with
+            // a qualified `Err(...)` arm happens to cover every variant of
+            // the error enum exhaustively).
             self.fn_ctx.fn_buf.push(format!("{inner_default}:"));
             self.fn_ctx.current_bb = inner_default.clone();
             self.fn_ctx.terminated = false;
-            self.push_instr(&format!("br label %{default_bb}"));
+            let fallback_target = err_fallback_idx
+                .map(|idx| arm_bbs[idx].clone())
+                .unwrap_or_else(|| default_bb.clone());
+            self.push_instr(&format!("br label %{fallback_target}"));
             self.fn_ctx.terminated = true;
         }
 
