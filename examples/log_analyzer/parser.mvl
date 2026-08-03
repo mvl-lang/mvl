@@ -138,8 +138,10 @@ pub total fn is_error_level(entry: LogEntry) -> Bool {
 }
 
 // ── Internal unit tests ────────────────────────────────────────────────────
-// Plain String literals are compatible with Tainted[String] parameters:
-// unlabeled data flows freely into a Tainted context (Public ⊑ Tainted).
+// A bare String literal is NOT compatible with a Tainted[String] parameter —
+// labeled and unlabeled types are distinct, no implicit coercion either
+// direction (checker/types.rs's `types_compatible`, #894). Each call below
+// makes the taint explicit via `relabel taint(...)`.
 
 test fn check_debug_level_is_ok() -> Unit {
     let result: Result[Severity, ParseError] = parse_level(relabel taint("debug", "TEST-DEBUG"));
