@@ -8,6 +8,13 @@ MVL  := ../../target/debug/mvl
 DIR  := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
 WASM_RUNTIME := ../../target/wasm32-wasip1/debug/mvl_runtime_wasm.wasm
 
+# $(MVL) always points at the freshly-built local binary above, never an
+# installed toolchain — so the re-exec `mvl` does by default (jumping to a
+# project-pinned installed version per `requires-mvl`) is never what we
+# want here. Without this, every target silently tests whatever version
+# happens to be installed under XDG_DATA_HOME instead of this checkout.
+export MVL_NO_REEXEC := 1
+
 help: ## Show this help
 	@grep -E '^[a-zA-Z0-9_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-12s\033[0m %s\n", $$1, $$2}'
 
