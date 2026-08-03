@@ -1061,6 +1061,68 @@ impl TextEmitter {
         bound
     }
 
+    /// Extract and bind a tuple-shaped enum-variant pattern's positional
+    /// fields (`Variant(p1, p2, ..)`) out of an already-loaded `{i8,ptr}`
+    /// payload-enum value `val` (#2177). Mirrors
+    /// [`Self::bind_struct_variant_fields_tir`]'s named-field counterpart —
+    /// struct- and tuple-shaped variants share an identical payload layout,
+    /// only the pattern syntax differs. Returns the bound local names, for
+    /// the caller to remove from scope at the arm's exit.
+    pub(super) fn bind_tuple_variant_fields_tir(
+        &mut self,
+        variant_name: &str,
+        fields: &[Pattern],
+        val: &str,
+    ) -> Vec<String> {
+        let field_tys: Vec<TypeExpr> = self
+            .variant_payload_types(variant_name)
+            .map(|s| s.to_vec())
+            .unwrap_or_default();
+        if field_tys.is_empty() || fields.is_empty() {
+            return Vec::new();
+        }
+
+        let payload_ptr = self.next_reg();
+        self.push_instr(&format!(
+            "{payload_ptr} = extractvalue {RESULT_LLVM_TY} {val}, 1"
+        ));
+        self.fn_ctx
+            .reg_types
+            .insert(payload_ptr.clone(), "ptr".into());
+
+        let n_slots = field_tys.len();
+        let mut bound = Vec::new();
+        for (slot, pat) in fields.iter().enumerate() {
+            let Some(field_ty_expr) = field_tys.get(slot) else {
+                continue;
+            };
+            let Pattern::Ident(var_name, _) = pat else {
+                continue;
+            };
+            if var_name == "_" || var_name.contains("::") {
+                continue;
+            }
+            let field_llvm = self.llvm_ty_ctx(field_ty_expr);
+            let slot_ptr = self.next_reg();
+            self.push_instr(&format!(
+                "{slot_ptr} = getelementptr [{n_slots} x i64], ptr {payload_ptr}, i32 0, i32 {slot}"
+            ));
+            let field_val = self.next_reg();
+            self.push_instr(&format!("{field_val} = load {field_llvm}, ptr {slot_ptr}"));
+            self.fn_ctx
+                .reg_types
+                .insert(field_val.clone(), field_llvm.clone());
+            self.fn_ctx
+                .locals
+                .insert(var_name.clone(), field_val.clone());
+            self.fn_ctx
+                .local_mvl_types
+                .insert(var_name.clone(), field_ty_expr.clone());
+            bound.push(var_name.clone());
+        }
+        bound
+    }
+
     /// Load the discriminant (as `i8`) of tuple-payload slot `slot` out of
     /// `payload_ptr`, which points at a `[n_slots x i64]` array. Handles both
     /// nested payload-enum fields (`RESULT_LLVM_TY`, extractvalue tag 0) and
