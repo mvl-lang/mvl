@@ -1629,6 +1629,114 @@ pub unsafe extern "C" fn _mvl_array_dedup_i32(a: i32) {
     arr.len = write as i32;
 }
 
+// ── List[T]::sort() — natural ordering, no comparator (#2173) ────────────
+//
+// `sort(self)` consumes its receiver (not `ref`), so the emitter drops the
+// `self` local right after the call returns, same as it would for any other
+// consumed value. These functions sort the existing buffer in-place (no new
+// allocation) and hand the *same* pointer back like `_mvl_array_clone` does
+// — which means, just like `_mvl_array_clone`, they must bump the
+// refcount before returning. Skipping that bump was an earlier version's
+// bug: the emitter's drop of the (aliased) `self` local freed the array out
+// from under the returned handle, corrupting whichever `List[String]`
+// element the next allocation happened to reuse that memory for.
+
+/// `_mvl_array_sort_i64(a) -> *MvlArray` — sort i64 elements ascending
+/// in-place (Int / UInt) and return the same pointer with `rc` bumped.
+/// Numeric order, unlike `runtime/llvm`'s `_mvl_list_sort`, which sorts by
+/// raw bit pattern.
+///
+/// # Safety
+/// `a` must be a valid `MvlArray*` with `elem_size == 8`, or 0.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn _mvl_array_sort_i64(a: i32) -> i32 {
+    if a == 0 {
+        return a;
+    }
+    let arr = &mut *(a as usize as *mut MvlArray);
+    let len = arr.len as usize;
+    if len > 1 {
+        let slice = std::slice::from_raw_parts_mut(arr.ptr as *mut i64, len);
+        slice.sort_unstable();
+    }
+    arr.rc += 1;
+    a
+}
+
+/// `_mvl_array_sort_i32(a) -> *MvlArray` — sort i32 elements ascending
+/// in-place (Bool / Byte) and return the same pointer with `rc` bumped.
+/// Non-pointer 4-byte scalars only — `List[String]` uses
+/// [`_mvl_string_ptr_array_sort`] instead.
+///
+/// # Safety
+/// `a` must be a valid `MvlArray*` with `elem_size == 4` holding plain i32
+/// values (not `*MvlString` pointers), or 0.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn _mvl_array_sort_i32(a: i32) -> i32 {
+    if a == 0 {
+        return a;
+    }
+    let arr = &mut *(a as usize as *mut MvlArray);
+    let len = arr.len as usize;
+    if len > 1 {
+        let slice = std::slice::from_raw_parts_mut(arr.ptr as *mut i32, len);
+        slice.sort_unstable();
+    }
+    arr.rc += 1;
+    a
+}
+
+/// `_mvl_array_sort_f64(a) -> *MvlArray` — sort f64 elements ascending
+/// in-place (Float) and return the same pointer with `rc` bumped. Uses
+/// `total_cmp` for a well-defined order across NaN / signed-zero rather
+/// than `partial_cmp`, which would panic on `None`.
+///
+/// # Safety
+/// `a` must be a valid `MvlArray*` with `elem_size == 8`, or 0.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn _mvl_array_sort_f64(a: i32) -> i32 {
+    if a == 0 {
+        return a;
+    }
+    let arr = &mut *(a as usize as *mut MvlArray);
+    let len = arr.len as usize;
+    if len > 1 {
+        let slice = std::slice::from_raw_parts_mut(arr.ptr as *mut f64, len);
+        slice.sort_by(|x, y| x.total_cmp(y));
+    }
+    arr.rc += 1;
+    a
+}
+
+/// `_mvl_string_ptr_array_sort(a) -> *MvlArray` — sort `*MvlString`
+/// elements ascending by byte content, in-place (`List[String]`), and
+/// return the same pointer with `rc` bumped. Reorders the pointer values
+/// only; no string is cloned or dropped.
+///
+/// # Safety
+/// `a` must be a valid `MvlArray*` with `elem_size == 4` holding
+/// `*MvlString` pointers, or 0.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn _mvl_string_ptr_array_sort(a: i32) -> i32 {
+    if a == 0 {
+        return a;
+    }
+    let arr = &mut *(a as usize as *mut MvlArray);
+    let len = arr.len as usize;
+    if len > 1 {
+        let slice = std::slice::from_raw_parts_mut(arr.ptr as *mut i32, len);
+        slice.sort_by(|&x, &y| {
+            let xp = core::ptr::read(x as usize as *const i32);
+            let xl = core::ptr::read((x as usize + 4) as *const i32);
+            let yp = core::ptr::read(y as usize as *const i32);
+            let yl = core::ptr::read((y as usize + 4) as *const i32);
+            slice_or_empty(xp, xl).cmp(slice_or_empty(yp, yl))
+        });
+    }
+    arr.rc += 1;
+    a
+}
+
 /// `_mvl_array_contains_i64(a, val) -> i32` — 1 if `val` is in the array, 0 otherwise.
 /// Used for `Set[Int].contains(val)`.
 #[unsafe(no_mangle)]
@@ -3228,6 +3336,120 @@ mod tests {
         assert_eq!(unsafe { get_i64(a, 0) }, 100);
         assert_eq!(unsafe { get_i64(a, 2) }, 300);
         unsafe { _mvl_array_drop(a) };
+    }
+
+    // ── sort (#2173) ────
+
+    #[test]
+    fn sort_i64_ascending() {
+        let a = _mvl_array_new(8, 4);
+        for v in [3i64, 1, 2] {
+            unsafe { _mvl_array_push_i64(a, v) };
+        }
+        let sorted = unsafe { _mvl_array_sort_i64(a) };
+        assert_eq!(sorted, a, "sorts in place, same pointer");
+        assert_eq!(unsafe { get_i64(sorted, 0) }, 1);
+        assert_eq!(unsafe { get_i64(sorted, 1) }, 2);
+        assert_eq!(unsafe { get_i64(sorted, 2) }, 3);
+        // `a` (the original binding) and `sorted` (the returned value) are
+        // the same aliased pointer — the emitter drops both, matching
+        // `_mvl_array_clone`'s contract. Two drops must be safe (#2173: an
+        // earlier version skipped the rc bump, so the first drop freed the
+        // array out from under the second).
+        unsafe { _mvl_array_drop(a) };
+        assert_eq!(
+            unsafe { get_i64(sorted, 1) },
+            2,
+            "still alive after one drop"
+        );
+        unsafe { _mvl_array_drop(sorted) };
+    }
+
+    #[test]
+    fn sort_i64_empty_and_singleton() {
+        let empty = _mvl_array_new(8, 4);
+        assert_eq!(unsafe { _mvl_array_len(_mvl_array_sort_i64(empty)) }, 0);
+        unsafe { _mvl_array_drop(empty) };
+
+        let one = _mvl_array_new(8, 4);
+        unsafe { _mvl_array_push_i64(one, 7) };
+        let sorted = unsafe { _mvl_array_sort_i64(one) };
+        assert_eq!(unsafe { get_i64(sorted, 0) }, 7);
+        unsafe { _mvl_array_drop(sorted) };
+    }
+
+    #[test]
+    fn sort_i32_ascending() {
+        let a = _mvl_array_new(4, 4);
+        for v in [3i32, 1, 2] {
+            unsafe { _mvl_array_push_i32(a, v) };
+        }
+        let sorted = unsafe { _mvl_array_sort_i32(a) };
+        for (i, want) in [1i32, 2, 3].into_iter().enumerate() {
+            let p = unsafe { _mvl_array_get(sorted, i as i64) };
+            assert_eq!(unsafe { *(p as usize as *const i32) }, want);
+        }
+        unsafe { _mvl_array_drop(sorted) };
+    }
+
+    #[test]
+    fn sort_f64_ascending_handles_negatives() {
+        let a = _mvl_array_new(8, 4);
+        for v in [3.5f64, -1.0, 0.0, 2.25] {
+            unsafe { _mvl_array_push_f64(a, v) };
+        }
+        let sorted = unsafe { _mvl_array_sort_f64(a) };
+        let want = [-1.0f64, 0.0, 2.25, 3.5];
+        for (i, w) in want.into_iter().enumerate() {
+            let p = unsafe { _mvl_array_get(sorted, i as i64) };
+            assert_eq!(unsafe { *(p as usize as *const f64) }, w);
+        }
+        unsafe { _mvl_array_drop(sorted) };
+    }
+
+    unsafe fn mvl_string_ptr_array(strs: &[&str]) -> i32 {
+        let a = _mvl_array_new(4, strs.len() as i32);
+        for s in strs {
+            let ms = alloc_mvl_string(s.as_bytes());
+            unsafe { _mvl_array_push_i32(a, ms) };
+        }
+        a
+    }
+
+    unsafe fn string_at(a: i32, idx: i64) -> String {
+        let p = unsafe { _mvl_array_get(a, idx) };
+        let ms_ptr = unsafe { *(p as usize as *const i32) };
+        let ptr = unsafe { *(ms_ptr as usize as *const i32) };
+        let len = unsafe { *((ms_ptr as usize + 4) as *const i32) };
+        core::str::from_utf8(unsafe { slice_or_empty(ptr, len) })
+            .unwrap()
+            .to_string()
+    }
+
+    #[test]
+    fn sort_string_ptr_array_lexicographic() {
+        let a = unsafe { mvl_string_ptr_array(&["banana", "apple", "cherry"]) };
+        let sorted = unsafe { _mvl_string_ptr_array_sort(a) };
+        assert_eq!(sorted, a, "sorts in place, same pointer");
+        assert_eq!(unsafe { string_at(sorted, 0) }, "apple");
+        assert_eq!(unsafe { string_at(sorted, 1) }, "banana");
+        assert_eq!(unsafe { string_at(sorted, 2) }, "cherry");
+        // Mirrors the emitter's `xs.sort()` codegen: both the pre-sort
+        // binding (`a`) and the returned value (`sorted`, same aliased
+        // pointer) get dropped — the rc bump in `_mvl_string_ptr_array_sort`
+        // must make that safe rather than a double-free (#2173).
+        unsafe { _mvl_string_ptr_array_drop(a) };
+        assert_eq!(
+            unsafe { string_at(sorted, 1) },
+            "banana",
+            "still alive after one drop"
+        );
+        unsafe { _mvl_string_ptr_array_drop(sorted) };
+    }
+
+    #[test]
+    fn sort_string_ptr_array_null_is_noop() {
+        assert_eq!(unsafe { _mvl_string_ptr_array_sort(0) }, 0);
     }
 
     // ── slice (#2014) ────

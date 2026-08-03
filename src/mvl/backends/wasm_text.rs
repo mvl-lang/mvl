@@ -489,6 +489,12 @@ const RUNTIME_IMPORTS: &[(&str, &str)] = &[
     // contains / insert for `Set[T].contains` / `Set[T].insert`.
     ("_mvl_array_dedup_i64", "(param i32)"),
     ("_mvl_array_dedup_i32", "(param i32)"),
+    // `List[T]::sort()` — natural ordering, no comparator (#2173). Mutate
+    // in place and return the same pointer (`self` is consumed, not `ref`).
+    ("_mvl_array_sort_i64", "(param i32) (result i32)"),
+    ("_mvl_array_sort_i32", "(param i32) (result i32)"),
+    ("_mvl_array_sort_f64", "(param i32) (result i32)"),
+    ("_mvl_string_ptr_array_sort", "(param i32) (result i32)"),
     ("_mvl_array_contains_i64", "(param i32 i64) (result i32)"),
     ("_mvl_array_contains_i32", "(param i32 i32) (result i32)"),
     ("_mvl_array_insert_i64", "(param i32 i64)"),
@@ -525,6 +531,7 @@ const RUNTIME_IMPORTS: &[(&str, &str)] = &[
     // Group H — String parse ops. Take raw (ptr, len) byte slice; return
     // heap-allocated MvlResult pointer.
     ("_mvl_string_parse_int", "(param i32 i32) (result i32)"),
+    ("_mvl_string_parse_float", "(param i32 i32) (result i32)"),
     // ── std.io — WASI file operations ───────────────────────────────────
     // Takes path as (ptr, len); returns heap-allocated MvlResult.
     ("_mvl_io_read_file", "(param i32 i32) (result i32)"),
@@ -3912,6 +3919,19 @@ fn emit_expr(out: &mut String, expr: &TirExpr, ctx: &Ctx) {
             emit_expr(out, receiver, ctx);
             out.push_str("    call $_mvl_string_parse_int\n");
         }
+        // `String.parse_float()` — same shape as `parse_int` (#2174): returns
+        // a heap-allocated MvlResult pointer whose Ok payload is an f64
+        // bit-packed into the i64 slot; `result_ok_ty`/`is_float_ctx`-aware
+        // consumers (`unwrap_or`, `match`, ...) already reinterpret it back.
+        TirExprKind::MethodCall {
+            receiver,
+            method,
+            args,
+        } if peels_to_string(&receiver.ty) && method == "parse_float" && args.is_empty() => {
+            ctx.needs_runtime.set(true);
+            emit_expr(out, receiver, ctx);
+            out.push_str("    call $_mvl_string_parse_float\n");
+        }
         // `Result[T, E].unwrap_or(default)` — inline if/else on the tag,
         // then drop the Result box. Mirrors the Option.unwrap_or handler.
         TirExprKind::MethodCall {
@@ -4290,6 +4310,37 @@ fn emit_expr(out: &mut String, expr: &TirExpr, ctx: &Ctx) {
             emit_expr(out, receiver, ctx);
             emit_expr(out, &args[0], ctx);
             out.push_str("    call $_mvl_array_concat\n");
+        }
+        // `.sort()` on List — natural ordering, no comparator (#2173). A
+        // `builtin fn` in std/lists.mvl (no MVL body to monomorphize, unlike
+        // `sort_by`) with no WASM runtime arm at all until now. `self` is
+        // consumed (not `ref`), so the runtime function sorts the buffer
+        // in-place and hands the same pointer back — no clone, no new
+        // allocation. Scoped to the element types `std/lists.mvl`'s own doc
+        // comment calls out as correctly orderable: Int/UInt/Byte/Bool
+        // (numeric), Float (numeric), and String (lexicographic).
+        TirExprKind::MethodCall {
+            receiver,
+            method,
+            args,
+        } if method == "sort" && args.is_empty() => {
+            let elem_ty = resolve_ty_param(&receiver.ty, ctx.type_subst);
+            if let Some(elem_ty) = collection_elem_ty(&elem_ty).cloned() {
+                ctx.needs_runtime.set(true);
+                emit_expr(out, receiver, ctx);
+                let sort_fn = if is_string_ty(&elem_ty, ctx) {
+                    "_mvl_string_ptr_array_sort"
+                } else if is_float_ctx(&elem_ty, ctx) {
+                    "_mvl_array_sort_f64"
+                } else if wasm_ty(&elem_ty, ctx) == "i32" {
+                    "_mvl_array_sort_i32"
+                } else {
+                    "_mvl_array_sort_i64"
+                };
+                out.push_str(&format!("    call ${sort_fn}\n"));
+            } else {
+                out.push_str("    ;; unsupported: List::sort() on non-collection receiver\n");
+            }
         }
         // `.get(i)` on List / Array — returns `Option[T]` (heap-allocated
         // MvlOption). Element type comes from the receiver's collection
@@ -7574,6 +7625,7 @@ pub fn emitter_handles_method_natively(receiver_ty: &Ty, method: &str) -> bool {
                 | "replace"
                 | "split"
                 | "parse_int"
+                | "parse_float"
         );
     }
     if matches!(receiver_ty, Ty::Float) && method == "to_string" {
@@ -7631,6 +7683,7 @@ pub fn emitter_handles_method_natively(receiver_ty: &Ty, method: &str) -> bool {
                 | "clone"
                 | "slice"
                 | "concat"
+                | "sort"
         );
     }
     false

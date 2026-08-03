@@ -16,8 +16,8 @@
 use std::ptr;
 
 use crate::memory::{
-    _mvl_alloc, _mvl_array_new, _mvl_free, _mvl_string_drop, _mvl_string_new, MvlArray, MvlMap,
-    MvlMapSlot, MvlString,
+    _mvl_alloc, _mvl_array_new, _mvl_free, _mvl_string_clone, _mvl_string_drop, _mvl_string_new,
+    MvlArray, MvlMap, MvlMapSlot, MvlString,
 };
 
 // ── format (#901) ───────────────────────────────────────────────────────────
@@ -1624,6 +1624,40 @@ pub unsafe extern "C" fn _mvl_list_sort(list: *mut MvlArray) -> *mut MvlArray {
     for (i, v) in vals.iter().enumerate() {
         let dst = (*out).ptr.add(i * es);
         std::ptr::copy_nonoverlapping(v.to_ne_bytes().as_ptr(), dst, es);
+    }
+    out
+}
+
+/// `_mvl_list_sort_str(list)` — return a new `List[String]` sorted ascending
+/// by byte content (#2173).
+///
+/// `_mvl_list_sort` compares elements as raw i64 bit patterns, which for a
+/// `*mut MvlString` element is the heap *address*, not the string's
+/// content — order would depend on allocation order rather than being
+/// lexicographic. Elements are cloned (refcount bumped) into the output
+/// array rather than moved, since `list` and the returned array are
+/// independent owners once `sort()` returns — matching what a hand-written
+/// `sort_by` body achieves via `.clone()`.
+///
+/// # Safety
+/// `list` must be a valid `MvlArray*` (elem_size == 8, holding `*mut
+/// MvlString` elements) or null.
+#[no_mangle]
+pub unsafe extern "C" fn _mvl_list_sort_str(list: *mut MvlArray) -> *mut MvlArray {
+    if list.is_null() {
+        return _mvl_array_new(8, 0);
+    }
+    let len = (*list).len as usize;
+    let out = _mvl_array_new(8, len.max(1));
+    let mut ptrs: Vec<*mut MvlString> = (0..len)
+        .map(|i| {
+            let src = (*list).ptr.add(i * 8) as *const *mut MvlString;
+            _mvl_string_clone(*src)
+        })
+        .collect();
+    ptrs.sort_unstable_by(|&a, &b| as_str(a).cmp(as_str(b)));
+    for p in ptrs {
+        _mvl_array_push(out, &p as *const *mut MvlString as *const u8);
     }
     out
 }

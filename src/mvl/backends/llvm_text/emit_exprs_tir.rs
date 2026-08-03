@@ -4278,6 +4278,22 @@ impl TextEmitter {
                 self.fn_ctx.reg_types.insert(reg.clone(), "i1".into());
                 Ok(Some(reg))
             }
+            // `List[String]::sort()` needs its own C-ABI symbol (#2173) —
+            // `_mvl_list_sort` (the `LLVM_DISPATCH` entry `emit_c_call_simple`
+            // below reaches for) compares elements as raw i64 bit patterns,
+            // which for a `*MvlString` element is the heap address, not the
+            // string's content. Checked ahead of the generic arm so String
+            // receivers never reach it.
+            ("sort", "ptr")
+                if args.is_empty()
+                    && matches!(unwrap_labels(&receiver.ty), Ty::List(e) | Ty::Array(e, _) if matches!(unwrap_labels(e), Ty::String)) =>
+            {
+                self.ensure_extern("declare ptr @_mvl_list_sort_str(ptr)");
+                let reg = self.next_reg();
+                self.push_instr(&format!("{reg} = call ptr @_mvl_list_sort_str(ptr {val})"));
+                self.fn_ctx.reg_types.insert(reg.clone(), "ptr".into());
+                Ok(Some(reg))
+            }
             ("sort", "ptr") if args.is_empty() => {
                 Ok(Some(self.emit_c_call_simple("sort", &val, &[])))
             }
