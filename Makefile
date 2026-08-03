@@ -394,15 +394,15 @@ test-runtime-llvm: ## Unit-test runtime/llvm/ crate natively (peer of test-runti
 # `call_indirect` (see the scope note in ADR-0059 §2 for why that does not
 # contradict the actor-dispatch decision).
 #
-# The two remaining exclusions need *capturing* closures, which is a distinct
-# piece of work — an environment representation, not just a function pointer.
-# `higher_order_test.mvl` returns closures from a factory
-# (`make_adder(k) -> fn(Int) -> Int`) and `lambda_capture_test.mvl` tests
-# capture-by-value directly. Both would need the `{fn_ptr, env_ptr}` pair the
-# LLVM backend builds in `emit_closures_tir.rs`.
+# `lambda_capture_test.mvl` needed capturing closures (#2118, fixed: every
+# lambda value is now a heap-boxed `{funcidx, envptr}` pair, mirroring the
+# LLVM backend's `emit_closures_tir.rs`) and is back in the main corpus glob
+# below. `higher_order_test.mvl` stays excluded: closures work there too now,
+# but `hof_apply_named_function` passes a *named* top-level function where a
+# `fn(Int) -> Int` value is expected — a distinct gap (no table slot for a
+# named function, only for lambda literals) that #2118 didn't touch.
 WASM_CORPUS_EXCLUDE := \
-	tests/corpus/03_functions/higher_order_test.mvl \
-	tests/corpus/07_ownership/lambda_capture_test.mvl
+	tests/corpus/03_functions/higher_order_test.mvl
 
 # Directories with nothing excluded pass through whole — mvlr prints a
 # per-test checkmark + pass/fail count for a directory arg, but runs a bare

@@ -351,6 +351,13 @@ struct LambdaEntry {
     body: TirExpr,
     ret_ty: Ty,
     type_subst: HashMap<String, Ty>,
+    /// Free variables read from the enclosing scope (#2118), in a fixed
+    /// order that also fixes their byte offset in the heap-allocated
+    /// environment (`i * 8`). Empty for a non-capturing lambda — it still
+    /// gets a `$__env` param like every lambda (the calling convention is
+    /// uniform across the whole `Ty::Fn` shape, see `emit_closure_value`),
+    /// just never reads it.
+    captures: Vec<(String, Ty)>,
 }
 
 impl Ctx<'_> {
@@ -844,7 +851,10 @@ impl Backend for WasmTextCompiler {
             || fns_out.contains("call $mvl_println")
             || fns_out.contains("call $mvl_eprintln")
             || fns_out.contains("call $mvl_write")
-            || fns_out.contains("call $mvl_now");
+            || fns_out.contains("call $mvl_now")
+            // A closure value (capturing or not) heap-allocates its env and
+            // its `{funcidx, envptr}` box via `$mvl_alloc` (#2118).
+            || fns_out.contains("call $mvl_alloc");
 
         if ctx.needs_runtime.get() {
             // runtime.wasm exports its memory and the `_mvl_string_*` ops;
@@ -1420,10 +1430,17 @@ fn clone_is_supported(ty: &Ty, ctx: &Ctx) -> bool {
     }
 }
 
-/// Function-typed parameters of the body being emitted, for [`Ctx::fn_params`].
+/// All parameters of the body being emitted, for [`Ctx::fn_params`].
 ///
-/// Only `Ty::Fn` params are kept, because the single consumer is `fn_value_ty`'s
-/// "is this name a callable value?" question (#2014).
+/// Originally only `Ty::Fn` params were kept, because the sole consumer was
+/// `fn_value_ty`'s "is this name a callable value?" question (#2014) — safe
+/// either way, since it resolves the looked-up type and only matches the
+/// `Ty::Fn` shape, so a wider registry doesn't change its answer. Widened to
+/// every param (#2118): `collect_lambda_captures` needs to look up the type
+/// of *any* outer parameter a lambda reads (not just fn-typed ones) to tell
+/// a genuine scalar capture from an unsupported one — `repeat_byte(b: Byte,
+/// count: Int)`'s `range(0, count).map(|_| b)` failed to recognize `b` as
+/// capturable and fell through to the stub path until this widened.
 ///
 /// These must NOT go into [`Ctx::fn_locals`]. An earlier cut did exactly that,
 /// and since `emit_stmt(Return)` derives its drop sweep from `fn_locals`, the
@@ -1431,10 +1448,9 @@ fn clone_is_supported(ty: &Ty, ctx: &Ctx) -> bool {
 /// `local.get $self; call $_mvl_array_drop` — freeing the *caller's* list on the
 /// way out. `list_any` then reused `xs` for its second `.any()` call and
 /// trapped. A parameter is neither `(local …)`-declared nor owned by the callee.
-fn fn_value_params(params: &[TirParam]) -> Vec<(String, Ty)> {
+fn fn_scope_params(params: &[TirParam]) -> Vec<(String, Ty)> {
     params
         .iter()
-        .filter(|p| matches!(p.ty, Ty::Fn(..)))
         .map(|p| (p.name.clone(), p.ty.clone()))
         .collect()
 }
@@ -1897,7 +1913,7 @@ fn emit_fn(out: &mut String, f: &TirFn, ctx: &Ctx) {
     // Publish the locals list so emit_stmt(Return) can emit drops on
     // explicit-return paths without threading locals through every call.
     *ctx.fn_locals.borrow_mut() = locals.clone();
-    *ctx.fn_params.borrow_mut() = fn_value_params(&f.params);
+    *ctx.fn_params.borrow_mut() = fn_scope_params(&f.params);
     // Publish this function's `let` bindings so `exclude_returned_locals`
     // can chase a returned `Var(name)` back to its initializer (#2023,
     // #2052's one-`let`-removed case).
@@ -2661,6 +2677,20 @@ fn collect_locals_expr(expr: &TirExpr, locals: &mut Vec<(String, Ty)>) {
             }
             locals.push((mvl_map_temp_name(expr), Ty::Bool));
         }
+        // A lambda literal used as a value needs two i32 temps to build its
+        // heap-boxed `{funcidx, envptr}` pair (#2118) — `__env_*` always
+        // (0/null when non-capturing), `__closure_*` for the box itself.
+        // Declared unconditionally, even for a lambda that ends up stubbed
+        // (an unsupported capture) or never actually captures anything: an
+        // unused local is harmless, and this fn has no `ctx` to know which
+        // case applies. The lambda's own *body* is not recursed into here —
+        // it is a separate emission unit collected by its own
+        // `collect_locals_expr` call inside `emit_one_lambda_fn`.
+        TirExprKind::Lambda { .. } => {
+            let off = expr.span.offset;
+            locals.push((format!("__env_{off}"), Ty::Bool));
+            locals.push((format!("__closure_{off}"), Ty::Bool));
+        }
         _ => {}
     }
 }
@@ -3005,12 +3035,20 @@ fn emit_expr(out: &mut String, expr: &TirExpr, ctx: &Ctx) {
             // runtime table index, not a name: emitting `call $f` produced
             // "unknown func: failed to find name `$f`".
             if let Some((param_tys, ret_ty)) = fn_value_ty(name, ctx) {
+                // `$name` holds a pointer to the closure's `{funcidx,
+                // envptr}` box (#2118) — unpack both. Env goes first (it's
+                // the lambda's first param), then the real arguments, then
+                // the callee index on top, right before `call_indirect`.
+                // `$name` is a plain local/param, so reading it twice is a
+                // side-effect-free re-read, not a re-evaluation.
+                out.push_str(&format!("    local.get ${name}\n"));
+                out.push_str("    i32.load offset=4\n");
                 for a in args {
                     emit_expr(out, a, ctx);
                 }
                 let sig = register_indirect_sig(&param_tys, &ret_ty, ctx);
-                // Callee index goes on top of the stack, after the arguments.
                 out.push_str(&format!("    local.get ${name}\n"));
+                out.push_str("    i32.load\n");
                 out.push_str(&format!("    call_indirect (type {sig})\n"));
                 return;
             }
@@ -4005,12 +4043,18 @@ fn emit_expr(out: &mut String, expr: &TirExpr, ctx: &Ctx) {
             out.push_str(&format!("    br_if ${brk}\n"));
 
             out.push_str(&format!("    local.get ${out_local}\n"));
+            // `$f_local` holds a pointer to `f`'s closure box (#2118) — env
+            // first (the lambda's first param), matching the general
+            // fn-value `call_indirect` site above.
+            out.push_str(&format!("    local.get ${f_local}\n"));
+            out.push_str("    i32.load offset=4\n");
             out.push_str(&format!("    local.get ${arr_local}\n"));
             out.push_str(&format!("    local.get ${idx_local}\n"));
             out.push_str("    call $_mvl_array_get\n");
             let (load_op, _) = list_elem_load_op(&elem_ty, ctx);
             out.push_str(&format!("    {load_op}\n"));
             out.push_str(&format!("    local.get ${f_local}\n"));
+            out.push_str("    i32.load\n");
             let sig = register_indirect_sig(std::slice::from_ref(&elem_ty), &ret_ty, ctx);
             out.push_str(&format!("    call_indirect (type {sig})\n"));
             let insert_fn = if is_i32(&ret_ty, ctx) {
@@ -4411,13 +4455,12 @@ fn emit_expr(out: &mut String, expr: &TirExpr, ctx: &Ctx) {
         TirExprKind::Spawn { actor_type, fields } => {
             emit_actor_spawn(out, actor_type, fields, expr, ctx);
         }
-        // Lambda literal as a value — pushes its funcref table index (#2014).
-        // The body is emitted later as a top-level function by
-        // `emit_lambda_fns`; only non-capturing lambdas work, since the emitted
-        // function takes the lambda's own parameters and nothing else.
+        // Lambda literal as a value — pushes a pointer to a heap-boxed
+        // `{funcidx: i32, envptr: i32}` pair (#2118; was a bare funcidx
+        // before capturing lambdas existed, #2014). The body is emitted
+        // later as a top-level function by `emit_lambda_fns`.
         TirExprKind::Lambda { params, body } => {
-            let idx = register_lambda(expr, params, body, ctx);
-            out.push_str(&format!("    i32.const {idx}\n"));
+            emit_closure_value(out, expr, params, body, ctx);
         }
         // User-defined extension method on a custom struct (#2054) — checked
         // last so it never shadows a builtin-type special case above (e.g. a
@@ -6648,11 +6691,14 @@ fn mangle_generic_method_name(
 // inside the single emitted module, so nothing crosses the `--preload`
 // boundary. Actor dispatch remains static.
 //
-// Only *non-capturing* lambdas are supported, which is what the corpus in
-// scope for #2014 uses (`|x: Int| x * 2`, `|a: Int, b: Int| a < b`). A
-// capturing lambda needs an environment parameter and a closure representation
-// — that is `03_functions/higher_order_test.mvl` and
-// `07_ownership/lambda_capture_test.mvl`, still excluded from WASM_CORPUS.
+// Lambdas that capture a scalar outer variable are supported too (#2118):
+// every function value is a pointer to a heap-boxed `{funcidx, envptr}` pair
+// (see `emit_closure_value`), and every `(type $sig…)` declared below always
+// takes an env pointer as its first param — uniform across capturing and
+// non-capturing lambdas alike, since a generic HOF body's `call_indirect`
+// can't know ahead of time which kind of closure value it's about to
+// invoke. A capture of a heap-owned type (String, a collection, a struct)
+// is still unsupported — see `is_capturable_scalar`.
 
 /// WASM-level signature of a resolved function type, as
 /// (type-name, `(func …)` declaration).
@@ -6672,7 +6718,9 @@ fn indirect_sig(params: &[Ty], ret: &Ty, ctx: &Ctx) -> (String, String) {
     // type-checks `call_indirect` *dynamically*, so that mismatch passed
     // validation and trapped at runtime (#2014).
     let mut name = String::from("$sig");
-    let mut decl = String::from("(func");
+    // Every lambda takes `$__env i32` first (#2118) — baked into every
+    // declared signature so `name` doesn't need an "env or not" variant.
+    let mut decl = String::from("(func (param i32)");
     let push = |slot: &str, name: &mut String, decl: &mut String| {
         name.push('_');
         name.push_str(slot);
@@ -6708,6 +6756,310 @@ fn register_indirect_sig(params: &[Ty], ret: &Ty, ctx: &Ctx) -> String {
     name
 }
 
+/// Types a closure environment slot can hold (#2118).
+///
+/// Scoped to plain scalars deliberately: a heap-owning capture (`String`,
+/// `List[T]`, `Map[K,V]`, `Set[T]`, a struct with heap fields) would need to
+/// be deep-cloned into the environment — sharing the raw pointer risks a
+/// double free the moment both the outer function's copy and the lambda's
+/// loaded-from-env copy run through `emit_fn_heap_drops` for the same heap
+/// block. Every capture in the issue's own motivating examples (`b: Byte`,
+/// `n: Int` in `examples/bzip`) is a plain scalar; deep-clone-on-capture for
+/// heap types is real design work, not this fix's scope. A capture outside
+/// this set is simply left out of the returned list, so it stays absent
+/// from the lambda's `declared` set and the existing `undeclared_local_ref`
+/// stub path (unchanged) catches it exactly as it does today.
+///
+/// `UByte` is deliberately excluded even though it's a plain scalar: neither
+/// `wasm_ty` nor `is_i32` has a dedicated arm for it (both silently fall
+/// through to a default), a pre-existing gap this fix doesn't try to paper
+/// over — safer to leave a `UByte` capture stubbed than guess its width.
+fn is_capturable_scalar(ty: &Ty) -> bool {
+    matches!(
+        ty,
+        Ty::Int | Ty::UInt | Ty::Float | Ty::Bool | Ty::Byte | Ty::Char
+    )
+}
+
+/// Free variables in `body` that resolve to a name declared in the
+/// *enclosing* function's params/locals (per `ctx.fn_params`/`ctx.fn_locals`
+/// — this is called from `register_lambda`, while `ctx` is still the
+/// *caller's* context, before a lambda's own `Ctx` is derived) rather than
+/// the lambda's own params. `param_names` excludes the lambda's own
+/// parameters (and, recursively, any nested lambda's own parameters) so a
+/// shadowing inner name is never mistaken for a capture.
+///
+/// Structural (TIR-level) rather than the text-scanning
+/// `undeclared_local_ref` used elsewhere in this file, because here the
+/// *type* of each free variable is needed (to size/lay out the
+/// environment and to decide `is_capturable_scalar`) and the caller's
+/// `ctx.fn_locals`/`ctx.fn_params` are only available at this call site —
+/// `emit_one_lambda_fn` runs later, once module-wide, long after the
+/// caller's own `Ctx` is gone. Mirrors the LLVM backend's
+/// `collect_lambda_captures_tir` (`emit_closures_tir.rs`) structurally;
+/// adapted to this file's `Vec<(String, Ty)>` registries instead of LLVM's
+/// `HashMap` `fn_ctx.locals`/`ref_locals`.
+fn collect_lambda_captures(
+    body: &TirExpr,
+    param_names: &std::collections::HashSet<String>,
+    ctx: &Ctx,
+) -> Vec<(String, Ty)> {
+    let mut seen = std::collections::HashSet::new();
+    let mut caps = Vec::new();
+    walk_expr_for_captures(body, param_names, ctx, &mut seen, &mut caps);
+    caps
+}
+
+fn capture_var_if_outer_local(
+    name: &str,
+    exclude: &std::collections::HashSet<String>,
+    ctx: &Ctx,
+    seen: &mut std::collections::HashSet<String>,
+    caps: &mut Vec<(String, Ty)>,
+) {
+    if exclude.contains(name) || seen.contains(name) {
+        return;
+    }
+    seen.insert(name.to_string());
+    let ty = ctx
+        .fn_params
+        .borrow()
+        .iter()
+        .find(|(n, _)| n == name)
+        .map(|(_, t)| t.clone())
+        .or_else(|| {
+            ctx.fn_locals
+                .borrow()
+                .iter()
+                .find(|(n, _)| n == name)
+                .map(|(_, t)| t.clone())
+        });
+    if let Some(ty) = ty {
+        if is_capturable_scalar(&resolve_ty_param(&ty, ctx.type_subst)) {
+            caps.push((name.to_string(), ty));
+        }
+    }
+}
+
+fn walk_expr_for_captures(
+    expr: &TirExpr,
+    exclude: &std::collections::HashSet<String>,
+    ctx: &Ctx,
+    seen: &mut std::collections::HashSet<String>,
+    caps: &mut Vec<(String, Ty)>,
+) {
+    match &expr.kind {
+        TirExprKind::Var(name) => capture_var_if_outer_local(name, exclude, ctx, seen, caps),
+        TirExprKind::Lambda { params, body } => {
+            let mut inner_excl = exclude.clone();
+            for p in params {
+                inner_excl.insert(p.name.clone());
+            }
+            walk_expr_for_captures(body, &inner_excl, ctx, seen, caps);
+        }
+        TirExprKind::Binary { left, right, .. } => {
+            walk_expr_for_captures(left, exclude, ctx, seen, caps);
+            walk_expr_for_captures(right, exclude, ctx, seen, caps);
+        }
+        TirExprKind::Unary { expr, .. } => walk_expr_for_captures(expr, exclude, ctx, seen, caps),
+        TirExprKind::FnCall { name, args, .. } => {
+            capture_var_if_outer_local(name, exclude, ctx, seen, caps);
+            for a in args {
+                walk_expr_for_captures(a, exclude, ctx, seen, caps);
+            }
+        }
+        TirExprKind::MethodCall { receiver, args, .. } => {
+            walk_expr_for_captures(receiver, exclude, ctx, seen, caps);
+            for a in args {
+                walk_expr_for_captures(a, exclude, ctx, seen, caps);
+            }
+        }
+        TirExprKind::FieldAccess { expr, .. } => {
+            walk_expr_for_captures(expr, exclude, ctx, seen, caps)
+        }
+        TirExprKind::If { cond, then, else_ } => {
+            walk_expr_for_captures(cond, exclude, ctx, seen, caps);
+            walk_block_for_captures(then, exclude, ctx, seen, caps);
+            if let Some(e) = else_ {
+                walk_expr_for_captures(e, exclude, ctx, seen, caps);
+            }
+        }
+        TirExprKind::Block(b) => walk_block_for_captures(b, exclude, ctx, seen, caps),
+        TirExprKind::Construct { fields, .. } => {
+            for (_, v) in fields {
+                walk_expr_for_captures(v, exclude, ctx, seen, caps);
+            }
+        }
+        TirExprKind::Match { scrutinee, arms } => {
+            walk_expr_for_captures(scrutinee, exclude, ctx, seen, caps);
+            for arm in arms {
+                match &arm.body {
+                    TirMatchBody::Expr(e) => walk_expr_for_captures(e, exclude, ctx, seen, caps),
+                    TirMatchBody::Block(b) => walk_block_for_captures(b, exclude, ctx, seen, caps),
+                }
+            }
+        }
+        TirExprKind::Consume(inner)
+        | TirExprKind::Propagate(inner)
+        | TirExprKind::Borrow { expr: inner, .. } => {
+            walk_expr_for_captures(inner, exclude, ctx, seen, caps);
+        }
+        TirExprKind::Relabel { expr, .. } => walk_expr_for_captures(expr, exclude, ctx, seen, caps),
+        TirExprKind::List { elems } | TirExprKind::Set { elems } => {
+            for e in elems {
+                walk_expr_for_captures(e, exclude, ctx, seen, caps);
+            }
+        }
+        TirExprKind::Map { pairs } => {
+            for (k, v) in pairs {
+                walk_expr_for_captures(k, exclude, ctx, seen, caps);
+                walk_expr_for_captures(v, exclude, ctx, seen, caps);
+            }
+        }
+        TirExprKind::Spawn { fields, .. } => {
+            for (_, v) in fields {
+                walk_expr_for_captures(v, exclude, ctx, seen, caps);
+            }
+        }
+        TirExprKind::Select { arms } => {
+            for arm in arms {
+                walk_expr_for_captures(&arm.expr, exclude, ctx, seen, caps);
+                walk_block_for_captures(&arm.body, exclude, ctx, seen, caps);
+            }
+        }
+        TirExprKind::Literal(_) | TirExprKind::Quantifier(_) => {}
+    }
+}
+
+fn walk_block_for_captures(
+    block: &TirBlock,
+    exclude: &std::collections::HashSet<String>,
+    ctx: &Ctx,
+    seen: &mut std::collections::HashSet<String>,
+    caps: &mut Vec<(String, Ty)>,
+) {
+    for stmt in &block.stmts {
+        match stmt {
+            TirStmt::Expr { expr, .. } => walk_expr_for_captures(expr, exclude, ctx, seen, caps),
+            TirStmt::Let { init, .. } => walk_expr_for_captures(init, exclude, ctx, seen, caps),
+            TirStmt::Assign { value, .. } => {
+                walk_expr_for_captures(value, exclude, ctx, seen, caps)
+            }
+            TirStmt::Return { value: Some(e), .. } => {
+                walk_expr_for_captures(e, exclude, ctx, seen, caps)
+            }
+            TirStmt::Return { value: None, .. } => {}
+            TirStmt::While { cond, body, .. } => {
+                walk_expr_for_captures(cond, exclude, ctx, seen, caps);
+                walk_block_for_captures(body, exclude, ctx, seen, caps);
+            }
+            TirStmt::For { iter, body, .. } => {
+                walk_expr_for_captures(iter, exclude, ctx, seen, caps);
+                walk_block_for_captures(body, exclude, ctx, seen, caps);
+            }
+            TirStmt::If {
+                cond, then, else_, ..
+            } => {
+                walk_expr_for_captures(cond, exclude, ctx, seen, caps);
+                walk_block_for_captures(then, exclude, ctx, seen, caps);
+                match else_ {
+                    Some(TirElseBranch::Block(b)) => {
+                        walk_block_for_captures(b, exclude, ctx, seen, caps)
+                    }
+                    Some(TirElseBranch::If(s)) => {
+                        let tmp_block = TirBlock {
+                            stmts: vec![(**s).clone()],
+                            span: Span::default(),
+                        };
+                        walk_block_for_captures(&tmp_block, exclude, ctx, seen, caps);
+                    }
+                    None => {}
+                }
+            }
+            TirStmt::Match {
+                scrutinee, arms, ..
+            } => {
+                walk_expr_for_captures(scrutinee, exclude, ctx, seen, caps);
+                for arm in arms {
+                    match &arm.body {
+                        TirMatchBody::Expr(e) => {
+                            walk_expr_for_captures(e, exclude, ctx, seen, caps)
+                        }
+                        TirMatchBody::Block(b) => {
+                            walk_block_for_captures(b, exclude, ctx, seen, caps)
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Emit a lambda literal as a runtime *value*: a pointer to a heap-boxed
+/// `{funcidx: i32, envptr: i32}` pair (#2118).
+///
+/// Boxed unconditionally, even when `captures` is empty (env = 0/null): a
+/// generic HOF body like `List[T]::map`'s is compiled once per element-type
+/// instantiation and `call_indirect`s through an abstract `f` parameter that
+/// different call sites can bind to either a capturing or a non-capturing
+/// lambda — the representation has to be uniform across every value of a
+/// given `Ty::Fn` shape, not just within one call site. Mirrors the LLVM
+/// backend's `%__closure_type` struct (`emit_closures_tir.rs`), and inherits
+/// its documented tradeoff: `$mvl_alloc` never frees, so a closure literal
+/// evaluated in a loop leaks one 8-byte block (env) plus one 8-byte block
+/// (the box) per iteration.
+fn emit_closure_value(
+    out: &mut String,
+    expr: &TirExpr,
+    params: &[TirParam],
+    body: &TirExpr,
+    ctx: &Ctx,
+) {
+    let idx = register_lambda(expr, params, body, ctx);
+    let captures = ctx.lambdas.borrow()[idx as usize].captures.clone();
+    let off = expr.span.offset;
+    let env_local = format!("__env_{off}");
+    let closure_local = format!("__closure_{off}");
+
+    if captures.is_empty() {
+        out.push_str("    i32.const 0\n");
+        out.push_str(&format!("    local.set ${env_local}\n"));
+    } else {
+        let env_size = captures.len() * 8;
+        out.push_str(&format!("    i32.const {env_size}\n"));
+        out.push_str("    call $mvl_alloc\n");
+        out.push_str(&format!("    local.set ${env_local}\n"));
+        for (i, (name, ty)) in captures.iter().enumerate() {
+            let field_off = capture_env_offset(i);
+            out.push_str(&format!("    local.get ${env_local}\n"));
+            out.push_str(&format!("    local.get ${name}\n"));
+            let store_op = if matches!(ty, Ty::Float) {
+                "f64.store"
+            } else if is_i32(ty, ctx) {
+                "i32.store"
+            } else {
+                "i64.store"
+            };
+            if field_off == 0 {
+                out.push_str(&format!("    {store_op}\n"));
+            } else {
+                out.push_str(&format!("    {store_op} offset={field_off}\n"));
+            }
+        }
+    }
+
+    out.push_str("    i32.const 8\n");
+    out.push_str("    call $mvl_alloc\n");
+    out.push_str(&format!("    local.set ${closure_local}\n"));
+    out.push_str(&format!("    local.get ${closure_local}\n"));
+    out.push_str(&format!("    i32.const {idx}\n"));
+    out.push_str("    i32.store\n");
+    out.push_str(&format!("    local.get ${closure_local}\n"));
+    out.push_str(&format!("    local.get ${env_local}\n"));
+    out.push_str("    i32.store offset=4\n");
+    out.push_str(&format!("    local.get ${closure_local}\n"));
+}
+
 /// Assign (or reuse) a table slot for a lambda literal, returning its index.
 ///
 /// Keyed on the source span *and* the enclosing type substitution. The span
@@ -6733,6 +7085,13 @@ fn register_lambda(expr: &TirExpr, params: &[TirParam], body: &TirExpr, ctx: &Ct
     if let Some(idx) = ctx.lambda_slots.borrow().get(&key) {
         return *idx;
     }
+    // Capture analysis needs the *caller's* `ctx.fn_locals`/`ctx.fn_params`
+    // (#2118) — done here, before the lambda's own slot/body are set up,
+    // because `emit_lambda_fns` drains `ctx.lambdas` in a later, module-wide
+    // pass where the calling function's `Ctx` no longer exists.
+    let param_names: std::collections::HashSet<String> =
+        params.iter().map(|p| p.name.clone()).collect();
+    let captures = collect_lambda_captures(body, &param_names, ctx);
     let mut lambdas = ctx.lambdas.borrow_mut();
     let idx = lambdas.len() as u32;
     // The emitted function name must be per-instantiation too, or two table
@@ -6748,6 +7107,7 @@ fn register_lambda(expr: &TirExpr, params: &[TirParam], body: &TirExpr, ctx: &Ct
         body: body.clone(),
         ret_ty: body.ty.clone(),
         type_subst: ctx.type_subst.clone(),
+        captures,
     });
     ctx.lambda_slots.borrow_mut().insert(key, idx);
     idx
@@ -6812,12 +7172,22 @@ fn emit_lambda_fns(out: &mut String, ctx: &Ctx) {
                 &l.body,
                 &l.ret_ty,
                 &l.type_subst,
+                &l.captures,
                 ctx,
             );
         }
     }
 }
 
+/// Byte offset of capture `i` inside its lambda's heap environment. Every
+/// slot is 8 bytes regardless of the capture's actual width (i32 wastes 4
+/// bytes of padding) — simpler than variable-width packing, and captured
+/// environments are tiny (#2118).
+fn capture_env_offset(i: usize) -> usize {
+    i * 8
+}
+
+#[allow(clippy::too_many_arguments)]
 fn emit_one_lambda_fn(
     out: &mut String,
     wasm_name: &str,
@@ -6825,12 +7195,19 @@ fn emit_one_lambda_fn(
     body: &TirExpr,
     ret_ty: &Ty,
     type_subst: &HashMap<String, Ty>,
+    captures: &[(String, Ty)],
     ctx: &Ctx,
 ) {
     let lam_ctx = derived_ctx(ctx, type_subst);
 
     let ret = resolve_ty_param(ret_ty, type_subst);
-    out.push_str(&format!("  (func ${wasm_name}"));
+    // Every lambda takes an environment pointer as its first param, whether
+    // or not it captures anything — the calling convention has to be
+    // uniform across a `Ty::Fn` shape, since `call_indirect` at a generic
+    // HOF call site (e.g. `List[T]::map`'s body) can't know ahead of time
+    // whether the specific closure value it's about to invoke captures
+    // anything (#2118). A non-capturing lambda just never reads `$__env`.
+    out.push_str(&format!("  (func ${wasm_name} (param $__env i32)"));
     {
         let mut sp = lam_ctx.string_params.borrow_mut();
         for p in params {
@@ -6860,7 +7237,16 @@ fn emit_one_lambda_fn(
     let mut locals: Vec<(String, Ty)> = Vec::new();
     collect_locals_expr(body, &mut locals);
     dedup_locals_keep_last(&mut locals);
-    for (name, ty) in &locals {
+    // Captures become ordinary locals too — loaded from `$__env` once at
+    // function entry (below), then indistinguishable from any other local
+    // for the rest of the body, including `emit_fn_heap_drops` at function
+    // exit (a no-op for these, since captures are restricted to scalars
+    // `local_drop_fn` never matches). Prepended so a capture can never
+    // collide with a `collect_locals_expr` temp keyed off the same span.
+    let mut all_locals: Vec<(String, Ty)> = captures.to_vec();
+    all_locals.extend(locals.iter().cloned());
+    dedup_locals_keep_last(&mut all_locals);
+    for (name, ty) in &all_locals {
         let concrete = resolve_ty_param(ty, type_subst);
         if peels_to_string(&concrete) {
             out.push_str(&format!("    (local ${name}_ptr i32)\n"));
@@ -6872,27 +7258,52 @@ fn emit_one_lambda_fn(
             ));
         }
     }
-    *lam_ctx.fn_locals.borrow_mut() = locals.clone();
-    *lam_ctx.fn_params.borrow_mut() = fn_value_params(params);
+    *lam_ctx.fn_locals.borrow_mut() = all_locals.clone();
+    *lam_ctx.fn_params.borrow_mut() = fn_scope_params(params);
 
     let mut body_buf = String::new();
+    // Load every capture out of the environment before the real body runs.
+    // Captures are restricted to `is_capturable_scalar` types, so this is
+    // always a single scalar load — no ptr/len pairs to unpack.
+    for (i, (name, ty)) in captures.iter().enumerate() {
+        let concrete = resolve_ty_param(ty, type_subst);
+        let off = capture_env_offset(i);
+        let load_op = if matches!(concrete, Ty::Float) {
+            "f64.load"
+        } else if is_i32(&concrete, &lam_ctx) {
+            "i32.load"
+        } else {
+            "i64.load"
+        };
+        body_buf.push_str("    local.get $__env\n");
+        if off == 0 {
+            body_buf.push_str(&format!("    {load_op}\n"));
+        } else {
+            body_buf.push_str(&format!("    {load_op} offset={off}\n"));
+        }
+        body_buf.push_str(&format!("    local.set ${name}\n"));
+    }
     emit_expr(&mut body_buf, body, &lam_ctx);
     // A capturing lambda reads a name it neither declares nor takes as a
-    // parameter. Only non-capturing lambdas are representable here (there is no
-    // environment pointer), and without this check the emitted function
-    // references an undefined local — `wasm-tools` then rejects the *whole*
-    // module with "unknown local: failed to find name `$k`", taking every
-    // unrelated function down with it. Stubbing keeps the failure contained to
-    // the one function that cannot be compiled, which is the same bargain the
-    // rest of the emitter makes (#2014).
-    let declared: std::collections::HashSet<&str> = locals
+    // parameter. Captures recognized by `collect_lambda_captures` are now
+    // declared locals (above) and so never trip this; it remains as a
+    // defense-in-depth catch-all for anything that check doesn't recognize
+    // (a heap-owned capture, deliberately excluded — see
+    // `is_capturable_scalar` — or any node kind the structural walk
+    // misses), so an unsupported case still stubs loudly instead of
+    // emitting a function that references an undefined local — `wasm-tools`
+    // would otherwise reject the *whole* module with "unknown local: failed
+    // to find name `$k`", taking every unrelated function down with it
+    // (#2014, #2118).
+    let declared: std::collections::HashSet<&str> = all_locals
         .iter()
         .map(|(n, _)| n.as_str())
         .chain(params.iter().map(|p| p.name.as_str()))
+        .chain(std::iter::once("__env"))
         .collect();
     if let Some(captured) = undeclared_local_ref(&body_buf, &declared) {
         out.push_str(&format!(
-            "    ;; unsupported: lambda captures `{captured}` — closures need an environment\n"
+            "    ;; unsupported: lambda captures `{captured}` — only scalar captures are supported (#2118)\n"
         ));
         emit_stub_body(out, wasm_name, ctx);
     } else if body_buf.contains(UNSUPPORTED_MARKER) {
@@ -7523,7 +7934,7 @@ fn emit_generic_fn(
     // the two callers above); resolution through `type_subst` happens at each
     // read site, since `mono_ctx.type_subst` is live for the whole body.
     *mono_ctx.fn_locals.borrow_mut() = locals.clone();
-    *mono_ctx.fn_params.borrow_mut() = fn_value_params(&f.params);
+    *mono_ctx.fn_params.borrow_mut() = fn_scope_params(&f.params);
     let mut let_inits = HashMap::new();
     collect_let_inits_block(&f.body, &mut let_inits);
     *mono_ctx.fn_let_inits.borrow_mut() = let_inits;
@@ -8004,7 +8415,7 @@ fn emit_actor_method(out: &mut String, info: &ActorInfo, m: &TirActorMethod, ctx
         body.push_str(&format!("    (local ${} {})\n", name, wasm_ty(ty, ctx)));
     }
     *ctx.fn_locals.borrow_mut() = locals.clone();
-    *ctx.fn_params.borrow_mut() = fn_value_params(&m.params);
+    *ctx.fn_params.borrow_mut() = fn_scope_params(&m.params);
     let mut let_inits = HashMap::new();
     collect_let_inits_block(&m.body, &mut let_inits);
     *ctx.fn_let_inits.borrow_mut() = let_inits;
@@ -8074,7 +8485,7 @@ fn emit_extension_method(out: &mut String, f: &TirFn, ctx: &Ctx) {
         body.push_str(&format!("    (local ${} {})\n", name, wasm_ty(ty, ctx)));
     }
     *ctx.fn_locals.borrow_mut() = locals.clone();
-    *ctx.fn_params.borrow_mut() = fn_value_params(&f.params);
+    *ctx.fn_params.borrow_mut() = fn_scope_params(&f.params);
     let mut let_inits = HashMap::new();
     collect_let_inits_block(&f.body, &mut let_inits);
     *ctx.fn_let_inits.borrow_mut() = let_inits;
@@ -9789,7 +10200,7 @@ mod funcref_table_tests {
         assert!(wat.contains("(table 1 funcref)"), "{wat}");
         assert!(wat.contains("(elem (i32.const 0) $__lambda_"), "{wat}");
         assert!(
-            wat.contains("(type $sig_i64_r_i64 (func (param i64) (result i64)))"),
+            wat.contains("(type $sig_i64_r_i64 (func (param i32) (param i64) (result i64)))"),
             "{wat}"
         );
         assert!(wat.contains("call_indirect (type $sig_i64_r_i64)"), "{wat}");
@@ -10025,7 +10436,9 @@ mod stub_reporting_tests {
     /// taking every unrelated function down with it. It must stub instead, so
     /// the damage stays inside the one function that cannot be compiled.
     #[test]
-    fn capturing_lambda_stubs_instead_of_emitting_undeclared_local() {
+    fn scalar_capturing_lambda_compiles_with_environment() {
+        // A scalar capture (#2118) is no longer stubbed — `k` is heap-boxed
+        // into the closure's environment and loaded back inside the lambda.
         let (wat, stubbed) = compile_with(
             "pub fn List[T]::mymap[U](self, f: fn(T) -> U) -> List[U] {\n\
                  let r: ref List[U] = [];\n\
@@ -10040,12 +10453,46 @@ mod stub_reporting_tests {
              }\n",
         );
         assert!(
-            stubbed.iter().any(|n| n.starts_with("__lambda_")),
-            "capturing lambda not stubbed: {stubbed:?}\n{wat}"
+            !stubbed.iter().any(|n| n.starts_with("__lambda_")),
+            "capturing lambda unexpectedly stubbed: {stubbed:?}\n{wat}"
         );
-        assert!(wat.contains("lambda captures `k`"), "{wat}");
-        // The undefined reference must not survive into the module.
-        assert!(!wat.contains("local.get $k"), "{wat}");
+        assert!(!wat.contains("body stubbed"), "{wat}");
+        assert!(!wat.contains("lambda captures"), "{wat}");
+        // The lambda function loads `k` from its env pointer instead of
+        // reading an undeclared local.
+        assert!(wat.contains("(func $__lambda_"), "{wat}");
+        assert!(wat.contains("(param $__env i32)"), "{wat}");
+        assert!(wat.contains("local.get $__env"), "{wat}");
+        assert!(wat.contains("local.set $k"), "{wat}");
+        // The call site boxes `k` into a heap environment before invoking.
+        assert!(wat.contains("call $mvl_alloc"), "{wat}");
+    }
+
+    /// A capture of a heap-owned type (here `String`) is still unsupported
+    /// (#2118 scopes captures to `is_capturable_scalar`) — deep-clone-on-
+    /// capture semantics are real design work this fix doesn't take on, so
+    /// the pre-existing stub-and-contain behavior must still apply.
+    #[test]
+    fn heap_owned_capturing_lambda_still_stubs() {
+        let (wat, stubbed) = compile_with(
+            "pub fn List[T]::mymap[U](self, f: fn(T) -> U) -> List[U] {\n\
+                 let r: ref List[U] = [];\n\
+                 for x in self { r.push(f(x)) };\n\
+                 r\n\
+             }\n\
+             test fn t() -> Unit {\n\
+                 let suffix: String = \"!\";\n\
+                 let xs: List[String] = [\"hi\"];\n\
+                 let d: List[String] = xs.mymap(|x: String| x.concat(suffix));\n\
+                 assert_eq(d.len(), 1);\n\
+             }\n",
+        );
+        assert!(
+            stubbed.iter().any(|n| n.starts_with("__lambda_")),
+            "heap-owned capturing lambda not stubbed: {stubbed:?}\n{wat}"
+        );
+        assert!(wat.contains("lambda captures `suffix"), "{wat}");
+        assert!(!wat.contains("local.get $suffix"), "{wat}");
     }
 
     /// Same failure mode from the other direction: a top-level function used as
@@ -10316,11 +10763,12 @@ mod validated_module_tests {
         ));
         validate(&wat);
         assert!(stubbed.is_empty(), "unexpected stubs: {stubbed:?}");
-        // The lambda body takes (ptr, len), so its `(type)` must too. The old
-        // i64 form passed validation and trapped only when `call_indirect` ran.
+        // The lambda body takes (env, ptr, len) — env first (#2118), then the
+        // (ptr, len) pair — so its `(type)` must too. The old i64 form passed
+        // validation and trapped only when `call_indirect` ran.
         assert!(
-            wat.contains("(func (param i32) (param i32) (result i64))"),
-            "String lambda signature must be a (ptr, len) pair: {wat}"
+            wat.contains("(func (param i32) (param i32) (param i32) (result i64))"),
+            "String lambda signature must be (env, ptr, len): {wat}"
         );
         assert!(
             !wat.contains("(func (param i64) (result i64))"),
