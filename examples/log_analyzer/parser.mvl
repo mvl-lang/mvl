@@ -74,12 +74,20 @@ pub total fn parse_level(raw: Tainted[String]) -> Result[Severity, ParseError] {
 /// (braces, colons, quoting) is public syntax, but the field VALUES
 /// extracted from it are re-tainted immediately, preserving the same
 /// "Tainted until sanitized" boundary a `serde_json` extern would enforce.
+// Two sequential matches rather than one nested pattern with a sibling
+// wildcard (`Err(_) => ..., Ok(Value::Object(o)) => ..., Ok(_) => ...`) —
+// that shape hits an LLVM backend bug where both `Ok(...)` arms lower to
+// the same switch-case discriminant (`i8 0`), producing a `.ll` module
+// with a duplicate case value that `lli` rejects outright. Filed for the
+// compiler; this is the workaround.
 partial fn parse_raw_entry(raw: Tainted[String]) -> Result[RawEntry, ParseError] {
     let json_str: String = relabel trust(raw, "JSON-STRUCTURE");
     match decode(json_str) {
-        Err(_)               => Err(ParseError::InvalidJson),
-        Ok(Value::Object(o)) => raw_entry_from_fields(o),
-        Ok(_)                => Err(ParseError::InvalidJson),
+        Err(_)     => Err(ParseError::InvalidJson),
+        Ok(parsed) => match parsed {
+            Value::Object(o) => raw_entry_from_fields(o),
+            _                => Err(ParseError::InvalidJson),
+        },
     }
 }
 

@@ -1,6 +1,6 @@
 # log_analyzer example — MVL Phase 4 demonstration
 # Run from this directory: make build, make test, etc.
-.PHONY: help guard-mvl build check prove lint test-solver test test-wasm assurance mcdc mutate fuzz generate smoke run run-llvm all clean
+.PHONY: help guard-mvl build check prove lint test-solver test test-llvm test-wasm assurance mcdc mutate fuzz generate smoke run run-llvm run-wasm all clean
 
 .DEFAULT_GOAL := help
 
@@ -54,6 +54,9 @@ test-solver: guard-mvl ## Show per-file solver statistics for all source files
 test: guard-mvl ## Run all standalone _test.mvl files (18 tests)
 	$(MVL) test $(DIR)
 
+test-llvm: guard-mvl ## Run tests via --backend=llvm
+	$(MVL) test $(DIR) --backend=llvm
+
 test-wasm: guard-mvl ## Run tests via --backend=wasm
 	MVL_RUNTIME_WASM=$(WASM_RUNTIME) $(MVL) test $(DIR) --backend=wasm
 
@@ -82,7 +85,20 @@ run: guard-mvl logs.jsonl ## Analyze logs.jsonl (requires: make generate)
 	$(MVL) run $(DIR)main.mvl -- --file logs.jsonl
 
 run-llvm: guard-mvl logs.jsonl ## Analyze logs.jsonl via LLVM backend (requires: make generate)
-	$(MVL) run $(DIR)main.mvl --backend=llvm-inkwell -- --file logs.jsonl
+	$(MVL) run $(DIR)main.mvl --backend=llvm -- --file logs.jsonl
+
+# `mvl run --backend=wasm` is rejected outright by the CLI ("use `mvl build
+# --backend=wasm` (via wasmtime) or `mvl test --backend=wasm`") — this
+# mirrors tools/mvlr's own build -> wasm-tools parse -> wasmtime run chain
+# for a single fn-main file, since there is no built-in `mvl run-wasm`.
+# `--dir` grants the module access to the cwd so `read_file` can see
+# logs.jsonl.
+run-wasm: guard-mvl logs.jsonl ## Analyze logs.jsonl via WASM backend (requires: make generate; wasmtime + wasm-tools)
+	@tmp=$$(mktemp -d) || exit 1; \
+	trap 'rm -rf "$$tmp"' EXIT; \
+	(cd "$$tmp" && $(abspath $(MVL)) build $(DIR)main.mvl --backend=wasm) || exit 1; \
+	wasm-tools parse "$$tmp/main.wat" -o "$$tmp/main.wasm" || exit 1; \
+	wasmtime run --dir=$(DIR)::. --preload runtime=$(abspath $(WASM_RUNTIME)) "$$tmp/main.wasm" -- --file logs.jsonl
 
 logs.jsonl:
 	$(MAKE) generate
