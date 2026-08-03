@@ -3729,6 +3729,9 @@ impl TextEmitter {
                 self.fn_ctx.reg_types.insert(reg.clone(), "i64".into());
                 Ok(Some(reg))
             }
+            // Inverted bounds (`lo > hi`) return the receiver unchanged
+            // rather than the unconditional smax/smin composition — mirrors
+            // the Rust backend's "safe" `emit_safe_clamp` (#2122).
             ("clamp", "i64") if args.len() == 2 => {
                 let lo = match self.emit_expr_tir(&args[0])? {
                     Some(v) => v,
@@ -3742,9 +3745,15 @@ impl TextEmitter {
                 self.push_instr(&format!(
                     "{clamped_lo} = call i64 @llvm.smax.i64(i64 {val}, i64 {lo})"
                 ));
+                let clamped = self.next_reg();
+                self.push_instr(&format!(
+                    "{clamped} = call i64 @llvm.smin.i64(i64 {clamped_lo}, i64 {hi})"
+                ));
+                let inverted = self.next_reg();
+                self.push_instr(&format!("{inverted} = icmp sgt i64 {lo}, {hi}"));
                 let reg = self.next_reg();
                 self.push_instr(&format!(
-                    "{reg} = call i64 @llvm.smin.i64(i64 {clamped_lo}, i64 {hi})"
+                    "{reg} = select i1 {inverted}, i64 {val}, i64 {clamped}"
                 ));
                 self.fn_ctx.reg_types.insert(reg.clone(), "i64".into());
                 Ok(Some(reg))
@@ -3929,6 +3938,9 @@ impl TextEmitter {
                 self.fn_ctx.reg_types.insert(reg.clone(), "double".into());
                 Ok(Some(reg))
             }
+            // Inverted bounds (`lo > hi`) return the receiver unchanged
+            // rather than the unconditional maxnum/minnum composition —
+            // mirrors the Rust backend's "safe" `emit_safe_clamp` (#2122).
             ("clamp", "double") if args.len() == 2 => {
                 let lo = match self.emit_expr_tir(&args[0])? {
                     Some(v) => v,
@@ -3942,9 +3954,15 @@ impl TextEmitter {
                 self.push_instr(&format!(
                     "{clamped_lo} = call double @llvm.maxnum.f64(double {val}, double {lo})"
                 ));
+                let clamped = self.next_reg();
+                self.push_instr(&format!(
+                    "{clamped} = call double @llvm.minnum.f64(double {clamped_lo}, double {hi})"
+                ));
+                let inverted = self.next_reg();
+                self.push_instr(&format!("{inverted} = fcmp ogt double {lo}, {hi}"));
                 let reg = self.next_reg();
                 self.push_instr(&format!(
-                    "{reg} = call double @llvm.minnum.f64(double {clamped_lo}, double {hi})"
+                    "{reg} = select i1 {inverted}, double {val}, double {clamped}"
                 ));
                 self.fn_ctx.reg_types.insert(reg.clone(), "double".into());
                 Ok(Some(reg))

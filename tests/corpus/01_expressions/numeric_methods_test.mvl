@@ -1,0 +1,107 @@
+// 01_expressions/numeric_methods_test.mvl — Int/UInt/Float::abs/clamp/pow (#2122)
+//
+// Regression coverage for the WASM backend, which had no emitter arm for
+// these three builtin methods at all (silent `unreachable` stub). Rust
+// already covers this surface in tests/stdlib/arithmetic_test.mvl, but that
+// file isn't part of the WASM corpus matrix — this file is, so it pins the
+// fix across all three backends.
+
+// ── Int::abs ─────────────────────────────────────────────────────────────
+
+test fn int_abs_positive() -> Unit {
+    let n: Int = 5;
+    assert_eq(n.abs(), 5);
+}
+
+test fn int_abs_negative() -> Unit {
+    let n: Int = -5;
+    assert_eq(n.abs(), 5);
+}
+
+test fn int_abs_zero() -> Unit {
+    let n: Int = 0;
+    assert_eq(n.abs(), 0);
+}
+
+// ── Int::clamp ───────────────────────────────────────────────────────────
+
+test fn int_clamp_within_range() -> Unit {
+    let n: Int = 5;
+    assert_eq(n.clamp(0, 10), 5);
+}
+
+test fn int_clamp_below_range() -> Unit {
+    let n: Int = -5;
+    assert_eq(n.clamp(0, 10), 0);
+}
+
+test fn int_clamp_above_range() -> Unit {
+    let n: Int = 50;
+    assert_eq(n.clamp(0, 10), 10);
+}
+
+// Inverted bounds (low > high): the "safe" semantics return the receiver
+// unchanged rather than an unspecified min/max composition, mirroring the
+// Rust backend's `emit_safe_clamp`.
+test fn int_clamp_inverted_bounds_returns_receiver_unchanged() -> Unit {
+    let n: Int = 5;
+    assert_eq(n.clamp(10, 0), 5);
+}
+
+// ── Int::pow ─────────────────────────────────────────────────────────────
+
+test fn int_pow_basic() -> Unit {
+    let n: Int = 2;
+    assert_eq(n.pow(10), 1024);
+}
+
+test fn int_pow_zero_exponent() -> Unit {
+    let n: Int = 7;
+    assert_eq(n.pow(0), 1);
+}
+
+// ── Float::abs ───────────────────────────────────────────────────────────
+
+test fn float_abs_negative() -> Unit {
+    let f: Float = -3.5;
+    assert_eq(f.abs(), 3.5);
+}
+
+test fn float_abs_positive() -> Unit {
+    let f: Float = 2.7;
+    assert_eq(f.abs(), 2.7);
+}
+
+// ── Float::clamp ─────────────────────────────────────────────────────────
+
+test fn float_clamp_within_range() -> Unit {
+    let x: Float = 3.5;
+    assert_eq(x.clamp(0.0, 5.0), 3.5);
+}
+
+test fn float_clamp_below_range() -> Unit {
+    let x: Float = -1.0;
+    assert_eq(x.clamp(0.0, 5.0), 0.0);
+}
+
+test fn float_clamp_above_range() -> Unit {
+    let x: Float = 9.0;
+    assert_eq(x.clamp(0.0, 5.0), 5.0);
+}
+
+test fn float_clamp_inverted_bounds_returns_receiver_unchanged() -> Unit {
+    let x: Float = 3.5;
+    assert_eq(x.clamp(5.0, 1.0), 3.5);
+}
+
+// ── Float::pow ───────────────────────────────────────────────────────────
+
+test fn float_pow_basic() -> Unit {
+    let f: Float = 2.0;
+    assert_eq(f.pow(3.0), 8.0);
+}
+
+test fn float_pow_zero_exponent() -> Unit {
+    let f: Float = 7.0;
+    assert_eq(f.pow(0.0), 1.0);
+}

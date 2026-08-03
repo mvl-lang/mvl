@@ -554,6 +554,11 @@ const RUNTIME_IMPORTS: &[(&str, &str)] = &[
     // after the call, same as `_mvl_string_new` (Group B).
     ("_mvl_float_to_string", "(param f64) (result i32)"),
     ("_mvl_format", "(param i32 i32 i32) (result i32)"),
+    // Group K — Int/UInt/Float::pow (#2122). WASM has no integer or f64
+    // exponentiation opcode, unlike abs/ceil/floor/sqrt/min/max, which are
+    // native instructions and need no runtime call at all.
+    ("_mvl_int_pow", "(param i64 i64) (result i64)"),
+    ("_mvl_float_pow", "(param f64 f64) (result f64)"),
 ];
 
 /// Layout offsets on `MvlString` — mirrors `runtime/wasm/src/lib.rs` /
@@ -2577,6 +2582,32 @@ fn collect_locals_expr(expr: &TirExpr, locals: &mut Vec<(String, Ty)>) {
             if matches!(receiver.ty, Ty::Float) && method == "to_string" {
                 locals.push((mvl_string_temp_name(expr), Ty::Bool));
             }
+            // `abs`/`clamp` on Int/UInt/Float (#2122) — both need the
+            // receiver stashed in a temp so it can be read more than once
+            // (a `select`-based abs, or clamp's bounds check); `clamp`
+            // additionally needs its two argument temps, plus one more for
+            // Int/UInt's intermediate `max(n, lo)` (Float uses the native
+            // `f64.max`/`f64.min` instructions directly, no intermediate
+            // needed). `pow` needs no temps — receiver and arg go straight
+            // onto the stack for the runtime call.
+            if matches!(receiver.ty, Ty::Int | Ty::UInt | Ty::Float)
+                && matches!(method.as_str(), "abs" | "clamp")
+            {
+                let off = expr.span.offset;
+                let num_ty = if matches!(receiver.ty, Ty::Float) {
+                    Ty::Float
+                } else {
+                    Ty::Int
+                };
+                locals.push((format!("__num_n_{off}"), num_ty.clone()));
+                if method == "clamp" {
+                    locals.push((format!("__num_lo_{off}"), num_ty.clone()));
+                    locals.push((format!("__num_hi_{off}"), num_ty.clone()));
+                    if !matches!(receiver.ty, Ty::Float) {
+                        locals.push((format!("__num_max_{off}"), Ty::Int));
+                    }
+                }
+            }
             // `Set[T].map(f)` — native-arm loop temps (#2124). Declared
             // whenever the shape matches, even if `set_map_is_supported`
             // will end up gating the arm off at emission time (this fn has
@@ -3576,6 +3607,95 @@ fn emit_expr(out: &mut String, expr: &TirExpr, ctx: &Ctx) {
                 other => {
                     out.push_str(&format!("    ;; unsupported to_string on {other:?}\n"));
                 }
+            }
+        }
+        // Int/UInt/Float::abs/clamp/pow (#2122). WASM has native `f64.abs`/
+        // `f64.max`/`f64.min` for Float but no integer min/max/abs opcode and
+        // no exponentiation opcode for either family, so Int/UInt route
+        // through `select`-based arithmetic (signed comparisons — this
+        // backend already treats `UInt` as a plain signed i64 everywhere
+        // else, e.g. the `<`/`>` operators) and `pow` always calls the
+        // runtime. `clamp` mirrors the Rust backend's `emit_safe_clamp`:
+        // inverted bounds (`lo > hi`) return the receiver unchanged rather
+        // than an unspecified min/max composition.
+        TirExprKind::MethodCall {
+            receiver,
+            method,
+            args,
+        } if matches!(receiver.ty, Ty::Int | Ty::UInt | Ty::Float)
+            && matches!(method.as_str(), "abs" | "clamp" | "pow") =>
+        {
+            let off = expr.span.offset;
+            let is_float = matches!(receiver.ty, Ty::Float);
+            match method.as_str() {
+                "abs" => {
+                    if is_float {
+                        emit_expr(out, receiver, ctx);
+                        out.push_str("    f64.abs\n");
+                    } else {
+                        let n = format!("__num_n_{off}");
+                        emit_expr(out, receiver, ctx);
+                        out.push_str(&format!("    local.set ${n}\n"));
+                        out.push_str(&format!(
+                            "    i64.const 0\n    local.get ${n}\n    i64.sub\n"
+                        ));
+                        out.push_str(&format!("    local.get ${n}\n"));
+                        out.push_str(&format!(
+                            "    local.get ${n}\n    i64.const 0\n    i64.lt_s\n"
+                        ));
+                        out.push_str("    select\n");
+                    }
+                }
+                "pow" => {
+                    ctx.needs_runtime.set(true);
+                    emit_expr(out, receiver, ctx);
+                    emit_expr(out, &args[0], ctx);
+                    if is_float {
+                        out.push_str("    call $_mvl_float_pow\n");
+                    } else {
+                        out.push_str("    call $_mvl_int_pow\n");
+                    }
+                }
+                "clamp" => {
+                    let n = format!("__num_n_{off}");
+                    let lo = format!("__num_lo_{off}");
+                    let hi = format!("__num_hi_{off}");
+                    let ty = if is_float { "f64" } else { "i64" };
+                    emit_expr(out, receiver, ctx);
+                    out.push_str(&format!("    local.set ${n}\n"));
+                    emit_expr(out, &args[0], ctx);
+                    out.push_str(&format!("    local.set ${lo}\n"));
+                    emit_expr(out, &args[1], ctx);
+                    out.push_str(&format!("    local.set ${hi}\n"));
+                    // Inverted bounds (lo > hi): return `n` unchanged.
+                    out.push_str(&format!("    local.get ${lo}\n    local.get ${hi}\n"));
+                    out.push_str(&format!(
+                        "    {ty}.gt{}\n",
+                        if is_float { "" } else { "_s" }
+                    ));
+                    out.push_str(&format!("    if (result {ty})\n"));
+                    out.push_str(&format!("      local.get ${n}\n"));
+                    out.push_str("    else\n");
+                    if is_float {
+                        out.push_str(&format!(
+                            "      local.get ${n}\n      local.get ${lo}\n      f64.max\n"
+                        ));
+                        out.push_str(&format!("      local.get ${hi}\n      f64.min\n"));
+                    } else {
+                        let max = format!("__num_max_{off}");
+                        // max(n, lo)
+                        out.push_str(&format!(
+                            "      local.get ${n}\n      local.get ${lo}\n      local.get ${n}\n      local.get ${lo}\n      i64.gt_s\n      select\n"
+                        ));
+                        out.push_str(&format!("      local.set ${max}\n"));
+                        // min(max, hi)
+                        out.push_str(&format!(
+                            "      local.get ${max}\n      local.get ${hi}\n      local.get ${max}\n      local.get ${hi}\n      i64.lt_s\n      select\n"
+                        ));
+                    }
+                    out.push_str("    end\n");
+                }
+                _ => unreachable!(),
             }
         }
         // String query methods — route through `runtime/wasm/` ops. Receiver
@@ -6863,6 +6983,12 @@ pub fn emitter_handles_method_natively(receiver_ty: &Ty, method: &str) -> bool {
         );
     }
     if matches!(receiver_ty, Ty::Float) && method == "to_string" {
+        return true;
+    }
+    // Int/UInt/Float::abs/clamp/pow (#2122).
+    if matches!(receiver_ty, Ty::Int | Ty::UInt | Ty::Float)
+        && matches!(method, "abs" | "clamp" | "pow")
+    {
         return true;
     }
     if option_inner_ty(receiver_ty).is_some() || result_ok_ty(receiver_ty).is_some() {

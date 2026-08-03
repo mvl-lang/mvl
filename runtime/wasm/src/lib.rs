@@ -233,6 +233,26 @@ pub extern "C" fn _mvl_float_to_string(v: f64) -> i32 {
     alloc_mvl_string(format!("{v}").as_bytes())
 }
 
+/// `Int.pow(exp)` / `UInt.pow(exp)` (#2122) — WASM has no integer
+/// exponentiation opcode. Negative exponents return 0 (consistent with
+/// `runtime/llvm/src/lib.rs::_mvl_int_pow`'s saturating-toward-zero
+/// behaviour, which this mirrors exactly).
+#[unsafe(no_mangle)]
+pub extern "C" fn _mvl_int_pow(base: i64, exp: i64) -> i64 {
+    if exp < 0 {
+        return 0;
+    }
+    base.wrapping_pow(exp as u32)
+}
+
+/// `Float.pow(exp)` (#2122) — WASM has no `f64` exponentiation opcode
+/// (unlike `abs`/`ceil`/`floor`/`sqrt`/`min`/`max`, which are native
+/// instructions). Matches LLVM's `llvm.pow.f64` intrinsic.
+#[unsafe(no_mangle)]
+pub extern "C" fn _mvl_float_pow(base: f64, exp: f64) -> f64 {
+    base.powf(exp)
+}
+
 /// Increment the refcount and return the same pointer. Passing an
 /// `MvlString` around by clone gives every holder a valid reference; the
 /// last drop frees. Null-safe.
