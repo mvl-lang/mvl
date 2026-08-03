@@ -108,6 +108,22 @@ impl LlvmTextCompiler {
             }
             emitter.emit_program_tir(&stripped)?;
         }
+        // Register every sibling's types and function signatures *before*
+        // emitting any of their bodies — the same pre-registration pass
+        // `compile_to_ir_test_crate_with_siblings` already does (its own
+        // comment: "Siblings are sorted alphabetically, so a function module
+        // may precede its type module"). This function did register+emit,
+        // register+emit, one sibling at a time instead, so a sibling whose
+        // body calls a function declared in a *later* sibling (e.g.
+        // `bwt.mvl` calling `intlist.mvl`'s `int_list_set`) saw an
+        // unregistered `fn_ret_types` entry and fell back to the `Int`
+        // default, producing a call site typed `i64` for a function that
+        // actually returns `ptr` — the same class of bug #1645 fixed for
+        // prelude-stripped functions and the test-crate path, just never
+        // fixed here, in the plain `mvl run --backend=llvm` path (#2152).
+        for sib in siblings {
+            emitter.emit_program_tir_types_and_sigs(sib);
+        }
         for sib in siblings {
             emitter.emit_program_tir(sib)?;
         }

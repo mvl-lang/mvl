@@ -47,6 +47,48 @@ pub fn compile_with_sibling(entry_src: &str, sibling_src: &str) -> String {
         .expect("compile_to_ir_with_siblings_tir failed")
 }
 
+/// Compile `entry_src` with multiple sibling modules, in the given order,
+/// into one flat IR module. Order matters for reproducing cross-sibling
+/// registration bugs (#2152): pass the *caller* sibling before the *callee*
+/// sibling to exercise the ordering a real multi-file example can hit.
+pub fn compile_with_siblings(entry_src: &str, sibling_srcs: &[&str]) -> String {
+    let parse = |src: &str| {
+        let (mut p, errs) = Parser::new(src);
+        assert!(errs.is_empty(), "lex errors: {errs:?}");
+        let prog = p.parse_program();
+        assert!(p.errors().is_empty(), "parse errors: {:?}", p.errors());
+        prog
+    };
+
+    let entry_prog = parse(entry_src);
+    let sib_progs: Vec<_> = sibling_srcs.iter().map(|s| parse(s)).collect();
+
+    let mut expr_types = crate::mvl::checker::collect_prelude_expr_types(&[]);
+    let cr = crate::mvl::checker::check(&entry_prog);
+    expr_types.extend(cr.expr_types);
+
+    let tir_entry = {
+        let all_fns = crate::mvl::passes::mono::collect_fns([&entry_prog]);
+        let mono = crate::mvl::passes::mono::monomorphize(&entry_prog, &all_fns, &expr_types);
+        crate::mvl::ir::lower::lower(&entry_prog, &mono, &expr_types)
+    };
+    let tir_sibs: Vec<_> = sib_progs
+        .iter()
+        .map(|sib_prog| {
+            let mut sib_types = crate::mvl::checker::collect_prelude_expr_types(&[]);
+            sib_types.extend(crate::mvl::checker::check(sib_prog).expr_types);
+            let all_fns = crate::mvl::passes::mono::collect_fns([sib_prog]);
+            let mono = crate::mvl::passes::mono::monomorphize(sib_prog, &all_fns, &sib_types);
+            crate::mvl::ir::lower::lower(sib_prog, &mono, &sib_types)
+        })
+        .collect();
+
+    let compiler = LlvmTextCompiler::with_context(std::collections::HashMap::new());
+    compiler
+        .compile_to_ir_with_siblings_tir(&[], &tir_sibs, &tir_entry, "test")
+        .expect("compile_to_ir_with_siblings_tir failed")
+}
+
 pub fn compile(src: &str) -> String {
     let (mut p, errs) = Parser::new(src);
     assert!(errs.is_empty(), "lex errors: {errs:?}");
