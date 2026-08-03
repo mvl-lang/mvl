@@ -6,7 +6,6 @@
 
 MVL  := ../../target/debug/mvl
 DIR  := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
-MVLR := ../../tools/mvlr
 WASM_RUNTIME := ../../target/wasm32-wasip1/debug/mvl_runtime_wasm.wasm
 
 help: ## Show this help
@@ -61,8 +60,8 @@ test: guard-mvl ## Run all standalone _test.mvl files
 test-llvm: guard-mvl ## Run tests via LLVM backend
 	$(MVL) test $(DIR) --backend=llvm
 
-test-wasm: guard-mvl ## Run tests via WASM backend
-	MVL_RUNTIME_WASM=$(WASM_RUNTIME) $(MVLR) --mvl=$(MVL) --compiler=rust --backend=wasm $(DIR)
+test-wasm: guard-mvl ## Run tests via --backend=wasm (real extern "rust" FFI via the wasmtime-embedding host, #2049)
+	MVL_RUNTIME_WASM=$(WASM_RUNTIME) $(MVL) test $(DIR) --backend=wasm
 
 assurance: guard-mvl ## Assurance report: spec coverage, MC/DC, mutation score (verbose)
 	$(MVL) assurance $(DIR) --verbose
