@@ -3,12 +3,13 @@
 # recursive ADTs (HuffmanTree), pure core + effect boundary.
 #
 # Run from this directory: make check, make test, make run
-.PHONY: help guard-mvl build check prove lint test-solver test assurance mcdc mutate smoke run run-llvm all clean
+.PHONY: help guard-mvl build check prove lint test-solver test test-wasm assurance mcdc mutate smoke run run-llvm all clean
 
 .DEFAULT_GOAL := help
 
 MVL  := ../../target/debug/mvl
 DIR  := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
+WASM_RUNTIME := ../../target/wasm32-wasip1/debug/mvl_runtime_wasm.wasm
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z0-9_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-12s\033[0m %s\n", $$1, $$2}'
@@ -55,6 +56,9 @@ test-solver: guard-mvl ## Show per-file solver statistics for all source files
 
 test: guard-mvl ## Run all inline test fn and roundtrip_test.mvl (transpiler backend)
 	$(MVL) test $(DIR)
+
+test-wasm: guard-mvl ## Run tests via --backend=wasm
+	MVL_RUNTIME_WASM=$(WASM_RUNTIME) $(MVL) test $(DIR) --backend=wasm
 
 
 assurance: guard-mvl ## Assurance report: spec coverage, MC/DC, mutation score (verbose)

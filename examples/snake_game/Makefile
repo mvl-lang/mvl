@@ -1,11 +1,12 @@
 # snake_game — terminal Snake game demonstrating pkg.tui, effects, and game loop.
 # Run from this directory or from the repo root.
-.PHONY: help guard-mvl build check prove test-solver test assurance smoke run clean
+.PHONY: help guard-mvl build check prove test-solver test test-wasm assurance smoke run clean
 
 .DEFAULT_GOAL := help
 
 MVL  := ../../target/debug/mvl
 DIR  := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
+WASM_RUNTIME := ../../target/wasm32-wasip1/debug/mvl_runtime_wasm.wasm
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z0-9_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-12s\033[0m %s\n", $$1, $$2}'
@@ -49,6 +50,9 @@ test-solver: guard-mvl ## Show per-file solver statistics
 
 test: guard-mvl ## Run game logic tests (no terminal required)
 	$(MVL) test $(DIR)game_test.mvl
+
+test-wasm: guard-mvl ## Run game logic tests via --backend=wasm (no terminal required)
+	MVL_RUNTIME_WASM=$(WASM_RUNTIME) $(MVL) test $(DIR)game_test.mvl --backend=wasm
 
 assurance: guard-mvl ## Run MVL assurance report for the pure game logic
 	$(MVL) assurance $(DIR)game.mvl
