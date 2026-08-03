@@ -686,9 +686,25 @@ pub fn run(path: &str, quiet: bool, verbose: bool, coverage: bool, bdd: bool, us
         .collect();
     for src_file in &source_files {
         let file_str = src_file.display().to_string();
-        let module_name = qualified_module_name(&file_str);
+        let mut module_name = qualified_module_name(&file_str);
         if covered_stems.contains(&module_name) {
-            continue; // already covered by a *_test.mvl file
+            // `qualified_module_name` strips a trailing `_test` so
+            // `foo_test.mvl` and `foo.mvl` collapse to the same Rust module
+            // name when `foo_test.mvl` is the discovered *_test.mvl file —
+            // that's the intended collapse for a *_test.mvl file itself
+            // (`covered_stems` above), but here it means `foo.mvl`'s own
+            // inline `test fn`s are mistaken for "already covered by
+            // foo_test.mvl" and silently dropped, even though the two
+            // files test entirely different declarations. Disambiguate
+            // instead of skipping — the two module names just need to be
+            // distinct, not skip real test coverage. Found via
+            // examples/log_analyzer: `main.mvl`/`parser.mvl`/`utils.mvl`
+            // each have inline tests alongside a same-stem `_test.mvl`
+            // sibling, and all three were silently excluded from `mvl
+            // test <dir>` (Rust backend) — visible only by comparing
+            // against `mvl test <dir> --backend=wasm`, which has no
+            // *_test.mvl-collapsing step and discovered every inline test.
+            module_name = format!("{module_name}_inline");
         }
         let (prog, src) = super::parse_or_exit(&file_str);
         // Only include if the file has at least one test fn.
