@@ -519,3 +519,54 @@ test fn nested_struct_variant_field_in_ok() -> Unit {
     assert_eq(attempts_in_ok(Ok(AccessError::NotFound)), -1);
     assert_eq(attempts_in_ok(Err("bad")), -1);
 }
+
+// #2168: a qualified `Some(Variant(x))`/`Ok(Variant(x))` arm sharing an
+// outer tag with a sibling non-qualified `Some(_)`/`Ok(_)` (or a bound
+// `Some(other)`/`Ok(other)`) arm made the sibling's body unreachable on
+// LLVM — the discriminant-dispatch block #2177 added only knew how to fall
+// through to the match's own trailing wildcard, not to an in-group
+// catch-all sitting between the qualified arm and that wildcard.
+fn payload_text_or_other_in_some(v: Option[Payload]) -> String {
+    match v {
+        Some(Payload::Text(s)) => s,
+        Some(_)                => "other",
+        None                   => "none",
+    }
+}
+
+fn payload_num_or_bound_in_some(v: Option[Payload]) -> Int {
+    match v {
+        Some(Payload::Num(n)) => n,
+        Some(other)           => match other {
+            Payload::Num(n) => n,
+            _               => -2,
+        },
+        None                  => -1,
+    }
+}
+
+fn payload_text_or_wildcard_in_ok(v: Result[Payload, String]) -> String {
+    match v {
+        Ok(Payload::Text(s)) => s,
+        Ok(_)                => "other",
+        Err(_)               => "err",
+    }
+}
+
+test fn sibling_wildcard_after_qualified_some_arm() -> Unit {
+    assert_eq(payload_text_or_other_in_some(Some(Payload::Text("hi"))), "hi");
+    assert_eq(payload_text_or_other_in_some(Some(Payload::Num(3))), "other");
+    assert_eq(payload_text_or_other_in_some(None), "none");
+}
+
+test fn sibling_bound_arm_after_qualified_some_arm() -> Unit {
+    assert_eq(payload_num_or_bound_in_some(Some(Payload::Num(7))), 7);
+    assert_eq(payload_num_or_bound_in_some(Some(Payload::Text("x"))), -2);
+    assert_eq(payload_num_or_bound_in_some(None), -1);
+}
+
+test fn sibling_wildcard_after_qualified_ok_arm() -> Unit {
+    assert_eq(payload_text_or_wildcard_in_ok(Ok(Payload::Text("hi"))), "hi");
+    assert_eq(payload_text_or_wildcard_in_ok(Ok(Payload::Num(3))), "other");
+    assert_eq(payload_text_or_wildcard_in_ok(Err("boom")), "err");
+}
