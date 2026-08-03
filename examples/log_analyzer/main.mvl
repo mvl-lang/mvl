@@ -37,7 +37,7 @@ type PipelineError = enum {
 
 // ── Main pipeline ───────────────────────────────────────────────────────────
 
-fn run(logger: val Logger) -> Result[Unit, RunError] ! FileRead + Console + Log + Env {
+total fn run(logger: val Logger) -> Result[Unit, RunError] ! FileRead + Console + Log + Env {
     let args: Map[String, ArgValue] = parse_args([
         required("file",  ArgType::Str),
         optional("level", ArgType::Str),
@@ -62,11 +62,11 @@ fn run(logger: val Logger) -> Result[Unit, RunError] ! FileRead + Console + Log 
 
 /// Handle a run-time error: log it with the human-readable reason.
 /// Effect is ! Log only — tighter than main's full effect list.
-fn handle_run_error(logger: val Logger, e: RunError) -> Unit ! Log {
+total fn handle_run_error(logger: val Logger, e: RunError) -> Unit ! Log {
     logger.error("run failed", {"reason": run_error_message(e)})
 }
 
-fn main() -> Unit ! FileRead + Console + Log + Env {
+total fn main() -> Unit ! FileRead + Console + Log + Env {
     let logger: Logger = default_logger();
     match run(logger) {
         Ok(_)  => (),

@@ -3,6 +3,8 @@
 // Kept in its own module so both `main.mvl` and `main_test.mvl` can
 // import the type + message helper without redeclaration.
 
+/// Run-time failure modes for the log analyzer pipeline (I/O vs. the
+/// Rust-side analysis pipeline).
 pub type RunError = enum {
     IOFailure,
     PipelineFailed,
