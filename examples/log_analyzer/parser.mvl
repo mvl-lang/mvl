@@ -1,21 +1,19 @@
 // parser.mvl — JSON log parsing module.
 //
 // Demonstrates:
-//   1. extern "rust" trust boundary — serde_json for JSON parsing
+//   1. std.json — pure MVL JSON parsing, zero extern trust boundary
 //   2. IFC labels: Tainted input → sanitize → String
 //   3. Total functions with exhaustive match (Req 8, Req 3)
 //   4. Phase 4: Result.and_then / Result.map replace ? operator chains
 //   5. Phase 4: std.string.to_lower for case-insensitive level matching
 //   6. Phase 4: List[LogEntry] pipeline — filter → map → fold
 //
-// Assurance note: 1 extern block (2 trust-boundary functions).
+// No extern block: JSON decode/encode is native MVL (std.json), added
+// after this example was first written — this module used to bridge to
+// serde_json via `extern "rust"`.
 
-// ── Trust boundary: serde_json crate ──────────────────────────────────────
-
-extern "rust" {
-    fn serde_json_parse_entry(raw: Tainted[String]) -> Result[RawEntry, ParseError];
-    fn serde_json_to_json_string(report: Report) -> String;
-}
+use std.json.{Value, decode, encode}
+use std.collections.{Map}
 
 // ── Domain types ───────────────────────────────────────────────────────────
 
@@ -71,10 +69,88 @@ pub total fn parse_level(raw: Tainted[String]) -> Result[Severity, ParseError] {
     }
 }
 
+/// Parse `{"level": ..., "message": ..., "timestamp": ...}` into a
+/// `RawEntry` using the pure-MVL `std.json` decoder — the JSON *structure*
+/// (braces, colons, quoting) is public syntax, but the field VALUES
+/// extracted from it are re-tainted immediately, preserving the same
+/// "Tainted until sanitized" boundary a `serde_json` extern would enforce.
+// Two sequential matches rather than one nested pattern with a sibling
+// wildcard (`Err(_) => ..., Ok(Value::Object(o)) => ..., Ok(_) => ...`) —
+// that shape hits an LLVM backend bug where both `Ok(...)` arms lower to
+// the same switch-case discriminant (`i8 0`), producing a `.ll` module
+// with a duplicate case value that `lli` rejects outright. Filed for the
+// compiler; this is the workaround.
+partial fn parse_raw_entry(raw: Tainted[String]) -> Result[RawEntry, ParseError] {
+    let json_str: String = relabel trust(raw, "JSON-STRUCTURE");
+    match decode(json_str) {
+        Err(_)     => Err(ParseError::InvalidJson),
+        Ok(parsed) => match parsed {
+            Value::Object(o) => raw_entry_from_fields(o),
+            _                => Err(ParseError::InvalidJson),
+        },
+    }
+}
+
+// `get_string_field`/`get_number_field` deliberately split the lookup into
+// two sequential matches (`Option[Value]`, then `Value`'s own variant)
+// rather than one nested pattern `Some(Value::String(x)) => x`. The nested
+// form hits a WASM backend bug — the String binding's `$name_ptr`/`$name_len`
+// locals go undeclared, and the whole function fails to assemble
+// (`unknown local: failed to find name`). Filed for the compiler; this is
+// the workaround.
+fn get_string_field(fields: Map[String, Value], key: String) -> Option[String] {
+    match fields.get(key) {
+        None    => None,
+        Some(v) => match v {
+            Value::String(s) => Some(s),
+            _                => None,
+        },
+    }
+}
+
+fn get_number_field(fields: Map[String, Value], key: String) -> Option[Float] {
+    match fields.get(key) {
+        None    => None,
+        Some(v) => match v {
+            Value::Number(n) => Some(n),
+            _                => None,
+        },
+    }
+}
+
+fn raw_entry_from_fields(fields: Map[String, Value]) -> Result[RawEntry, ParseError] {
+    match get_string_field(fields, "level") {
+        None            => Err(ParseError::MissingField),
+        Some(raw_level) => raw_entry_with_level(fields, raw_level),
+    }
+}
+
+fn raw_entry_with_level(fields: Map[String, Value], raw_level: String) -> Result[RawEntry, ParseError] {
+    match get_string_field(fields, "message") {
+        None           => Err(ParseError::MissingField),
+        Some(message)  => raw_entry_with_message(fields, raw_level, message),
+    }
+}
+
+fn raw_entry_with_message(
+    fields: Map[String, Value],
+    raw_level: String,
+    message: String,
+) -> Result[RawEntry, ParseError] {
+    match get_number_field(fields, "timestamp") {
+        None     => Err(ParseError::MissingField),
+        Some(ts) => Ok(RawEntry {
+            level:     relabel taint(raw_level, "JSON-FIELD-LEVEL"),
+            message:   relabel taint(message, "JSON-FIELD-MESSAGE"),
+            timestamp: ts.to_int(),
+        }),
+    }
+}
+
 /// Parse a single JSON log line — external input stays Tainted until sanitized.
 /// The `?` operator short-circuits on `Err`, equivalent to `.and_then()` chaining.
-pub total fn parse_line(raw: Tainted[String]) -> Result[LogEntry, ParseError] {
-    let entry: RawEntry = serde_json_parse_entry(raw)?;
+pub partial fn parse_line(raw: Tainted[String]) -> Result[LogEntry, ParseError] {
+    let entry: RawEntry = parse_raw_entry(raw)?;
     let level: Severity = parse_level(entry.level)?;
     Ok(LogEntry {
         level:     level,
@@ -83,9 +159,67 @@ pub total fn parse_line(raw: Tainted[String]) -> Result[LogEntry, ParseError] {
     })
 }
 
-/// Serialise a `Report` to a JSON string for output.
-pub total fn report_to_json(report: Report) -> String {
-    serde_json_to_json_string(report)
+/// Parse every line of `content` into a `LogEntry`, silently skipping blank
+/// lines and lines that fail to parse (malformed JSON, a missing field, or
+/// an unrecognized level) — a single corrupt record in a JSONL stream
+/// should not block analysis of the rest.
+pub partial fn parse_lines(content: Tainted[String]) -> List[LogEntry] {
+    let lines: List[String] = relabel trust(content, "JSON-STRUCTURE").split("\n");
+    let out: ref List[LogEntry] = [];
+    for i in range(0, lines.len()) {
+        let line: String = lines.get(i).unwrap_or("").trim();
+        if line.len() > 0 {
+            match parse_line(relabel taint(line, "JSON-LINE")) {
+                Ok(entry) => out.push(entry),
+                Err(_)    => {},
+            }
+        } else {
+        }
+    }
+    out
+}
+
+/// True iff `level`'s parsed `Severity` matches `wanted` (case-insensitive
+/// against the CLI's `--level` argument).
+fn severity_matches(level: Severity, wanted_lower: String) -> Bool {
+    match level {
+        Severity::Error => wanted_lower == "error",
+        Severity::Warn  => wanted_lower == "warn",
+        Severity::Info  => wanted_lower == "info",
+        Severity::Debug => wanted_lower == "debug",
+    }
+}
+
+/// Retain only entries whose severity matches `level` (case-insensitive).
+///
+/// An explicit loop rather than `entries.filter(|e| ...)` — that predicate
+/// would need to capture `level: String`, and the WASM backend's closure
+/// support is currently scoped to scalar captures only (#2118).
+pub total fn filter_by_level(entries: List[LogEntry], wanted_level: String) -> List[LogEntry] {
+    let wanted: String = wanted_level.to_lower();
+    let out: ref List[LogEntry] = [];
+    for i in range(0, entries.len()) {
+        match entries.get(i) {
+            None    => {},
+            Some(e) => {
+                if severity_matches(e.level, wanted) {
+                    out.push(e)
+                } else {
+                }
+            },
+        }
+    }
+    out
+}
+
+/// Serialise a `Report` to a JSON string for output, via `std.json.encode`.
+pub partial fn report_to_json(report: Report) -> String {
+    let fields: ref Map[String, Value] = Map[String, Value]::new();
+    fields.insert("count", Value::Number(report.count.to_float()));
+    fields.insert("errors", Value::Number(report.errors.to_float()));
+    fields.insert("warnings", Value::Number(report.warnings.to_float()));
+    fields.insert("infos", Value::Number(report.infos.to_float()));
+    encode(Value::Object(fields))
 }
 
 // ── Phase 4 List[LogEntry] pipeline ───────────────────────────────────────
@@ -138,8 +272,10 @@ pub total fn is_error_level(entry: LogEntry) -> Bool {
 }
 
 // ── Internal unit tests ────────────────────────────────────────────────────
-// Plain String literals are compatible with Tainted[String] parameters:
-// unlabeled data flows freely into a Tainted context (Public ⊑ Tainted).
+// A bare String literal is NOT compatible with a Tainted[String] parameter —
+// labeled and unlabeled types are distinct, no implicit coercion either
+// direction (checker/types.rs's `types_compatible`, #894). Each call below
+// makes the taint explicit via `relabel taint(...)`.
 
 test fn check_debug_level_is_ok() -> Unit {
     let result: Result[Severity, ParseError] = parse_level(relabel taint("debug", "TEST-DEBUG"));

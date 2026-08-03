@@ -1,11 +1,11 @@
 // main.mvl — Log analyzer entry point.
 //
 // Demonstrates:
-//   1. extern "rust" trust boundary — domain-specific pipeline logic in Rust
-//   2. IFC labels: Tainted[String] from read_file — trust boundary crossed inside Rust bridge
+//   1. std.json — pure MVL JSON pipeline, zero extern trust boundary
+//   2. IFC labels: Tainted[String] from read_file, sanitized inside parser.mvl
 //   3. Effect declarations: FileRead + Console + Log on I/O functions
 //   4. Multi-module design: use imports document cross-module dependencies
-//   5. stdlib usage: std.io, std.args, std.log
+//   5. stdlib usage: std.io, std.args, std.log, std.json
 //   6. Phase 4: Option.map replaces manual None/Some match for level sanitization
 //   7. Phase 4: std.log for structured output replacing raw println
 //
@@ -13,7 +13,10 @@
 //   mvl run examples/log_analyzer/main.mvl -- --file logs.jsonl
 //   mvl run examples/log_analyzer/main.mvl -- --file logs.jsonl --level error
 //
-// Assurance note: 1 extern block (1 trust-boundary function — domain pipeline only).
+// No extern block: the whole pipeline (parse → filter → aggregate →
+// encode) is native MVL, in parser.mvl. This example used to bridge the
+// domain pipeline to Rust (serde_json + hand-rolled JSON encoding) before
+// std.json existed.
 
 // ── Standard library imports ────────────────────────────────────────────────
 
@@ -21,23 +24,11 @@ use std.args.{parse_args, required, optional, get_str, get_str_opt, ArgType, Arg
 use std.io.{read_file}
 use std.log.{Logger, default_logger}
 use errors.{RunError, run_error_message}
-
-// ── Trust boundary: domain-specific pipeline logic ──────────────────────────
-
-extern "rust" {
-    fn analyze_and_format(content: Tainted[String], level: Option[String]) -> Result[String, PipelineError];
-}
-
-// ── Domain types ───────────────────────────────────────────────────────────
-
-type PipelineError = enum {
-    InvalidInput,
-    ParseFailed,
-}
+use parser.{LogEntry, Report, parse_lines, filter_by_level, build_report, report_to_json}
 
 // ── Main pipeline ───────────────────────────────────────────────────────────
 
-total fn run(logger: val Logger) -> Result[Unit, RunError] ! FileRead + Console + Log + Env {
+partial fn run(logger: val Logger) -> Result[Unit, RunError] ! FileRead + Console + Log + Env {
     let args: Map[String, ArgValue] = parse_args([
         required("file",  ArgType::Str),
         optional("level", ArgType::Str),
@@ -47,15 +38,16 @@ total fn run(logger: val Logger) -> Result[Unit, RunError] ! FileRead + Console 
     match read_file(file_path) {
         Err(_) => Err(RunError::IOFailure),
         Ok(content) => {
-            let pipeline_result: Result[String, PipelineError] = analyze_and_format(content, level_opt);
-            match pipeline_result {
-                Err(_) => Err(RunError::PipelineFailed),
-                Ok(json_report) => {
-                    logger.info("analysis complete", {"output": "json"});
-                    println(json_report);
-                    Ok(())
-                }
-            }
+            let entries: List[LogEntry] = parse_lines(content);
+            let filtered: List[LogEntry] = match level_opt {
+                None      => entries,
+                Some(lvl) => filter_by_level(entries, lvl),
+            };
+            let report: Report = build_report(filtered);
+            let json_report: String = report_to_json(report);
+            logger.info("analysis complete", {"output": "json"});
+            println(json_report);
+            Ok(())
         }
     }
 }
@@ -66,7 +58,7 @@ total fn handle_run_error(logger: val Logger, e: RunError) -> Unit ! Log {
     logger.error("run failed", {"reason": run_error_message(e)})
 }
 
-total fn main() -> Unit ! FileRead + Console + Log + Env {
+partial fn main() -> Unit ! FileRead + Console + Log + Env {
     let logger: Logger = default_logger();
     match run(logger) {
         Ok(_)  => (),
