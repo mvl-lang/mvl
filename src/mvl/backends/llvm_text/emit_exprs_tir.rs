@@ -86,7 +86,7 @@ impl TextEmitter {
             TirExprKind::Block(block) => self.emit_block_tir(block),
 
             TirExprKind::If { cond, then, else_ } => {
-                self.emit_if_expr_tir(cond, then, else_.as_deref())
+                self.emit_if_expr_tir(cond, then, else_.as_deref(), &expr.ty)
             }
 
             TirExprKind::FnCall { name, args, .. } => self.emit_fn_call_tir(name, args),
@@ -151,15 +151,28 @@ impl TextEmitter {
     }
 
     /// TIR variant of [`Self::emit_if_expr`].
+    ///
+    /// `result_ty` is the whole if-expression's own checker-resolved type
+    /// (`expr.ty` at the call site) — used to type the merge point's `phi`
+    /// correctly instead of guessing from one branch's emitted value text.
+    /// A bare literal branch value (e.g. a `Char` literal, emitted as a raw
+    /// numeric string with no `%` register prefix) gave `infer_val_type` no
+    /// way to tell an `i32`-shaped `Char` from an `i64`-shaped `Int` — it
+    /// silently defaulted to `i64`, producing a `phi i64` merged into an
+    /// `i32`-declared return slot: invalid IR that crashes `lli` at module
+    /// load (#2146).
     fn emit_if_expr_tir(
         &mut self,
         cond: &TirExpr,
         then: &crate::mvl::ir::TirBlock,
         else_: Option<&TirExpr>,
+        result_ty: &Ty,
     ) -> Result<Option<String>, String> {
         match else_ {
             Some(e) => match &e.kind {
-                TirExprKind::Block(b) => self.emit_if_phi_tir_from_blocks(cond, then, Some(b)),
+                TirExprKind::Block(b) => {
+                    self.emit_if_phi_tir_from_blocks(cond, then, Some(b), Some(result_ty))
+                }
                 TirExprKind::If { .. } => {
                     let cond_val = match self.emit_expr_tir(cond)? {
                         Some(v) => v,
@@ -172,7 +185,7 @@ impl TextEmitter {
                         "br i1 {cond_val}, label %{then_bb}, label %{else_bb}"
                     ));
                     self.start_bb(&then_bb);
-                    let then_val = self.emit_block_tir(then)?;
+                    let then_val = self.emit_block_tir_typed(then, Some(result_ty))?;
                     let then_end = self.fn_ctx.current_bb.clone();
                     if !self.fn_ctx.terminated {
                         self.push_instr(&format!("br label %{merge_bb}"));
@@ -186,7 +199,7 @@ impl TextEmitter {
                     self.start_bb(&merge_bb);
                     match (then_val, else_val) {
                         (Some(tv), Some(ev)) => {
-                            let phi_ty = self.infer_val_type(&tv);
+                            let phi_ty = self.ty_to_llvm_ctx(result_ty);
                             let result = self.next_reg();
                             self.push_instr(&format!(
                                 "{result} = phi {phi_ty} [ {tv}, %{then_end} ], [ {ev}, %{else_end} ]"
@@ -197,9 +210,9 @@ impl TextEmitter {
                         _ => Ok(None),
                     }
                 }
-                _ => self.emit_if_phi_tir_from_blocks(cond, then, None),
+                _ => self.emit_if_phi_tir_from_blocks(cond, then, None, Some(result_ty)),
             },
-            None => self.emit_if_phi_tir_from_blocks(cond, then, None),
+            None => self.emit_if_phi_tir_from_blocks(cond, then, None, Some(result_ty)),
         }
     }
 

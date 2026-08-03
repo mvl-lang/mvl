@@ -10,7 +10,7 @@
 //! re-infer types from initializers.
 
 use crate::mvl::ir::{
-    LValue, LetKind, Pattern, TirBlock, TirElseBranch, TirExpr, TirExprKind, TirStmt,
+    LValue, LetKind, Pattern, TirBlock, TirElseBranch, TirExpr, TirExprKind, TirStmt, Ty,
 };
 
 use super::emit_helpers::ty_to_type_expr;
@@ -47,6 +47,27 @@ impl TextEmitter {
     /// Walk a [`TirBlock`] and emit the trailing expression's SSA register
     /// (mirrors `emit_block(&Block)` semantics).
     pub(super) fn emit_block_tir(&mut self, block: &TirBlock) -> Result<Option<String>, String> {
+        self.emit_block_tir_typed(block, None)
+    }
+
+    /// [`Self::emit_block_tir`], additionally threading the *expected* type
+    /// of the block's trailing value (when the caller knows it) down into a
+    /// bare tail-position `if`/`else` statement's phi construction.
+    ///
+    /// Needed because a bare literal branch value (e.g. a `Char` literal,
+    /// emitted as a raw numeric string with no `%` register prefix) gives
+    /// `infer_val_type` no way to tell an `i32`-shaped `Char` from an
+    /// `i64`-shaped `Int` — it silently defaults to `i64`, producing a
+    /// `phi i64` that gets returned into an `i32`-declared slot: invalid IR
+    /// that crashes `lli` at module load (#2146). `TirStmt`/`TirBlock` carry
+    /// no `.ty` of their own (unlike `TirExpr`), so this has to be threaded
+    /// in from a caller that *does* know the expected type — e.g. a
+    /// function's own `ret_ty` when this is the function's body block.
+    pub(super) fn emit_block_tir_typed(
+        &mut self,
+        block: &TirBlock,
+        expected_ty: Option<&Ty>,
+    ) -> Result<Option<String>, String> {
         let stmts = &block.stmts;
         if stmts.is_empty() {
             return Ok(None);
@@ -59,7 +80,7 @@ impl TextEmitter {
             TirStmt::Expr { expr, .. } => self.emit_expr_tir(expr),
             TirStmt::If {
                 cond, then, else_, ..
-            } => self.emit_if_stmt_chain_tir(cond, then, else_.as_ref()),
+            } => self.emit_if_stmt_chain_tir(cond, then, else_.as_ref(), expected_ty),
             TirStmt::Match {
                 scrutinee, arms, ..
             } => self.emit_match_expr_tir(scrutinee, arms),
@@ -74,16 +95,20 @@ impl TextEmitter {
     ///
     /// Emits an `if`-statement that, at block-tail position, returns a phi value.
     /// Recursively follows `TirElseBranch::If` chains so deep `else if` trees
-    /// emit correct IR.
+    /// emit correct IR. `expected_ty` is threaded through from
+    /// [`Self::emit_block_tir_typed`] — see its doc comment (#2146).
     fn emit_if_stmt_chain_tir(
         &mut self,
         cond: &TirExpr,
         then: &TirBlock,
         else_: Option<&TirElseBranch>,
+        expected_ty: Option<&Ty>,
     ) -> Result<Option<String>, String> {
         match else_ {
-            None => self.emit_if_phi_tir_from_blocks(cond, then, None),
-            Some(TirElseBranch::Block(b)) => self.emit_if_phi_tir_from_blocks(cond, then, Some(b)),
+            None => self.emit_if_phi_tir_from_blocks(cond, then, None, expected_ty),
+            Some(TirElseBranch::Block(b)) => {
+                self.emit_if_phi_tir_from_blocks(cond, then, Some(b), expected_ty)
+            }
             Some(TirElseBranch::If(nested)) => {
                 if let TirStmt::If {
                     cond: ncond,
@@ -106,7 +131,7 @@ impl TextEmitter {
                     let heap_locals_snapshot = self.fn_ctx.heap_locals.len();
 
                     self.start_bb(&then_bb);
-                    let then_val = self.emit_block_tir(then)?;
+                    let then_val = self.emit_block_tir_typed(then, expected_ty)?;
                     let then_end = self.fn_ctx.current_bb.clone();
                     if !self.fn_ctx.terminated {
                         self.drop_scope_locals(heap_locals_snapshot, then_val.as_deref());
@@ -116,7 +141,8 @@ impl TextEmitter {
                     }
 
                     self.start_bb(&else_bb);
-                    let else_val = self.emit_if_stmt_chain_tir(ncond, nthen, nelse.as_ref())?;
+                    let else_val =
+                        self.emit_if_stmt_chain_tir(ncond, nthen, nelse.as_ref(), expected_ty)?;
                     let else_end = self.fn_ctx.current_bb.clone();
                     if !self.fn_ctx.terminated {
                         self.drop_scope_locals(heap_locals_snapshot, else_val.as_deref());
@@ -128,7 +154,9 @@ impl TextEmitter {
                     self.start_bb(&merge_bb);
                     match (then_val, else_val) {
                         (Some(tv), Some(ev)) => {
-                            let phi_ty = self.infer_val_type(&tv);
+                            let phi_ty = expected_ty
+                                .map(|ty| self.ty_to_llvm_ctx(ty))
+                                .unwrap_or_else(|| self.infer_val_type(&tv));
                             let result = self.next_reg();
                             self.push_instr(&format!(
                                 "{result} = phi {phi_ty} [ {tv}, %{then_end} ], [ {ev}, %{else_end} ]"
@@ -147,11 +175,19 @@ impl TextEmitter {
 
     /// Shared helper: emit if/else with phi merging when both branches yield a
     /// value. Used by both block-tail If statements and If expressions.
+    /// `result_ty_hint` — the merge point's expected type, when a caller
+    /// knows it (e.g. `expr.ty` for an if-*expression*, or a function's
+    /// `ret_ty` when this if is the function body's tail statement) — types
+    /// the `phi` directly instead of guessing from one branch's emitted
+    /// value text, which can't tell an `i32`-shaped `Char` literal from an
+    /// `i64`-shaped `Int` literal (#2146). Threaded into both branch blocks
+    /// too, so a *nested* tail-position if/else picks up the same hint.
     pub(super) fn emit_if_phi_tir_from_blocks(
         &mut self,
         cond: &TirExpr,
         then: &TirBlock,
         else_: Option<&TirBlock>,
+        result_ty_hint: Option<&Ty>,
     ) -> Result<Option<String>, String> {
         let cond_val = match self.emit_expr_tir(cond)? {
             Some(v) => v,
@@ -170,7 +206,7 @@ impl TextEmitter {
         let heap_locals_snapshot = self.fn_ctx.heap_locals.len();
 
         self.start_bb(&then_bb);
-        let then_val = self.emit_block_tir(then)?;
+        let then_val = self.emit_block_tir_typed(then, result_ty_hint)?;
         let then_end = self.fn_ctx.current_bb.clone();
         if !self.fn_ctx.terminated {
             self.drop_scope_locals(heap_locals_snapshot, then_val.as_deref());
@@ -181,7 +217,7 @@ impl TextEmitter {
 
         self.start_bb(&else_bb);
         let else_val = if let Some(b) = else_ {
-            self.emit_block_tir(b)?
+            self.emit_block_tir_typed(b, result_ty_hint)?
         } else {
             None
         };
@@ -197,7 +233,9 @@ impl TextEmitter {
 
         match (then_val, else_val) {
             (Some(tv), Some(ev)) => {
-                let phi_ty = self.infer_val_type(&tv).clone();
+                let phi_ty = result_ty_hint
+                    .map(|ty| self.ty_to_llvm_ctx(ty))
+                    .unwrap_or_else(|| self.infer_val_type(&tv));
                 let result = self.next_reg();
                 self.push_instr(&format!(
                     "{result} = phi {phi_ty} [ {tv}, %{then_end} ], [ {ev}, %{else_end} ]"
