@@ -38,6 +38,7 @@ make -C tests/spikes/001-parser help
 | `001-parser/` | Parser-in-MVL — recursive-descent parser written in MVL itself | Active | #187 |
 | `003-gzip/` | gzip compress/decompress in pure MVL (LZ77 + fixed Huffman + RFC 1952 framing) | Active | #1256 |
 | `006-wasm-backend/` | End-to-end WASM emit path (`mvl build --backend=wasm`) for two small MVL programs, plus hand-written `*_reference.wat` as a target-shape spec | Active | #1571 |
+| `007-wasm-example-harness/` | Standalone WASM host for `--backend=wasm` output — runs compiled examples outside the playground and diffs stdout against the native backend | Active | #1571 |
 
 ## Adding a new spike
 

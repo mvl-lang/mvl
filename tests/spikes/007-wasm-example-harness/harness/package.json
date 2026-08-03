@@ -1,0 +1,12 @@
+{
+  "name": "mvl-wasm-example-harness",
+  "version": "1.0.0",
+  "description": "Standalone runner for mvl build --backend=wasm output, outside a browser",
+  "type": "module",
+  "scripts": {
+    "run": "node run-example.mjs"
+  },
+  "dependencies": {
+    "@bjorn3/browser_wasi_shim": "0.4.2"
+  }
+}
