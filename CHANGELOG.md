@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.7.5] - 2026-08-04
+
+### Fixed — #2145, #2146, #2171
+
+- **LLVM: `Option[Unit]` match emitted invalid `load void`.** `Option[Unit]`'s payload slot has no meaningful data — the LLVM type for `Unit` resolves to `void`, valid only as a function *return* type, never a value type. Matching `Some(_)`/`Some(x)` on an `Option[Unit]` unconditionally emitted `load void, ptr %pp`, crashing `lli` at module load. `Result[Unit, E]`'s `Ok` arm already guarded this exact case; `Option`'s `Some` arm now does too.
+- **LLVM: a `Char` literal in an if/else merge point was typed `i64` instead of `i32`.** A `Char` literal branch value (`'x'`) is emitted as a raw numeric string with no `%` register prefix and no `.` — `infer_val_type`, which reads a merge point's `phi` type off one branch's *emitted value text*, had no way to distinguish an `i32`-shaped `Char` from an `i64`-shaped `Int` and silently defaulted to `i64`, producing invalid IR wherever the merged value flowed into an `i32`-typed slot. Fixed by threading the merge point's actual expected type down instead of guessing from value text.
+- **WASM: a payload enum imported from stdlib was never pulled into the module when only constructed/matched via calls.** `std.json.Value::Number(n)` — constructing or matching this variant compiled to `unreachable`, while an identically-shaped *locally-declared* enum worked fine. A qualified variant constructor call (`Value::Number(1.0)`) lowers to a `FnCall` node, not a bare `Var`, invisible to the WASM backend's prelude pull-in walk, which only followed *unit*-variant `Var` references that way. Fixed by seeding the pull-in walk from qualified `FnCall` names the same way it already does for qualified `Var` names.
+
 ## [1.7.4] - 2026-07-31
 
 ### Fixed — #2100
