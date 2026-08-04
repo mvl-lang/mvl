@@ -1775,6 +1775,58 @@ fn exclude_returned_locals_into(expr: &TirExpr, ctx: &Ctx, out: &mut Vec<String>
     }
 }
 
+/// If `expr` itself (no recursion through `Var`/`let` chains, unlike
+/// [`exclude_returned_locals_into`]) materializes a `*MvlString` result into
+/// a `__ms_*`-shaped temp local, return that temp's name. Shares the exact
+/// method/fn allowlist `exclude_returned_locals_into` uses for the same
+/// temps, since it's the same emission path (`emit_unpack_mvl_string`) that
+/// creates them.
+fn direct_string_temp(expr: &TirExpr) -> Option<String> {
+    match &expr.kind {
+        TirExprKind::MethodCall {
+            receiver, method, ..
+        } if peels_to_string(&receiver.ty)
+            && matches!(
+                method.as_str(),
+                "concat" | "substring" | "to_upper" | "to_lower" | "trim" | "replace"
+            ) =>
+        {
+            Some(mvl_string_temp_name(expr))
+        }
+        TirExprKind::MethodCall {
+            receiver, method, ..
+        } if matches!(receiver.ty, Ty::Float) && method == "to_string" => {
+            Some(mvl_string_temp_name(expr))
+        }
+        TirExprKind::FnCall { name, args, .. } if name == "format" && args.len() == 2 => {
+            Some(mvl_string_temp_name(expr))
+        }
+        _ => None,
+    }
+}
+
+/// If `value` is a bare `Var(name)` or `consume(Var(name))` referencing a
+/// *different*, separately drop-tracked named local (per [`local_drop_fn`]
+/// on `value`'s own type — Map/List/Set/Option/Result/a struct or payload
+/// enum, never a scalar), return that source name. Used at a
+/// non-`String` `x = value;` assignment to zero the source local
+/// immediately after the store, so a later heap-local sweep that still
+/// walks it by name (loop-per-iteration, function-exit) finds it already
+/// null instead of double-owning — and double-freeing — the same pointer
+/// `x` just took over.
+fn consumed_named_local(value: &TirExpr) -> Option<String> {
+    let name = match &value.kind {
+        TirExprKind::Var(name) => name,
+        TirExprKind::Consume(inner) => match &inner.kind {
+            TirExprKind::Var(name) => name,
+            _ => return None,
+        },
+        _ => return None,
+    };
+    local_drop_fn(name, &value.ty)?;
+    Some(name.clone())
+}
+
 /// Populate `ctx.fn_let_inits` with every `let NAME = INIT` binding in
 /// `body`, recursing into nested blocks (`if`/`else`, `while`, `match` arms)
 /// so a `let` above a conditional `return` is still found. Best-effort by
@@ -2894,8 +2946,46 @@ fn emit_stmt(out: &mut String, stmt: &TirStmt, ctx: &Ctx) {
                     // module with "unknown local".
                     out.push_str(&format!("    local.set ${name}_len\n"));
                     out.push_str(&format!("    local.set ${name}_ptr\n"));
+                    // `value`'s own `*MvlString` result (e.g.
+                    // `out.concat(c)`) was unpacked into `{name}_ptr`/
+                    // `{name}_len` above, not returned — `{name}` now owns
+                    // those exact bytes. But the temp holding that
+                    // `*MvlString` pointer (`__ms_*`, `mvl_string_temp_name`)
+                    // is still a plain fn-local, indistinguishable from any
+                    // other in-scope temp to `TirStmt::While`'s per-iteration
+                    // heap-local sweep (and the fn-exit sweep) — both would
+                    // `_mvl_string_drop` it, freeing the very bytes `{name}`
+                    // just took ownership of, out from under it. Zeroing the
+                    // temp here makes that drop a no-op (`_mvl_string_drop`
+                    // returns immediately on a null pointer) — the same
+                    // exclusion `exclude_returned_locals` already applies for
+                    // `return out.concat(c)`, just for assignment instead.
+                    if let Some(temp) = direct_string_temp(value) {
+                        out.push_str("    i32.const 0\n");
+                        out.push_str(&format!("    local.set ${temp}\n"));
+                    }
                 } else {
                     out.push_str(&format!("    local.set ${name}\n"));
+                    // `result = consume(r2);` (or a bare `result = r2;`) —
+                    // `r2` and `{name}` now hold the identical pointer, but
+                    // `r2` is still a separately drop-tracked named local
+                    // (`local_drop_fn` doesn't know its value moved). Both
+                    // `TirStmt::While`'s per-iteration sweep and the
+                    // function-exit sweep walk every in-scope local by name,
+                    // so `r2` gets dropped on schedule regardless — freeing
+                    // the exact value `{name}` just took ownership of, out
+                    // from under it (std/json.mvl's `parse_object`:
+                    // `result = consume(r2)` where `r2: Map[String, Value]`
+                    // came out of `ObjectStep::OSep(r2, ..)`). Zeroing `r2`
+                    // makes that later drop a no-op, the same trick used for
+                    // `__ms_*` string temps above — every `_mvl_*_drop`
+                    // helper is null-safe.
+                    if let Some(source) = consumed_named_local(value) {
+                        if source != *name {
+                            out.push_str("    i32.const 0\n");
+                            out.push_str(&format!("    local.set ${source}\n"));
+                        }
+                    }
                 }
             }
             LValue::Field { base, field, .. } => {
@@ -5775,6 +5865,24 @@ fn emit_enum_variant_construct(
             let field_ty = pv.fields.get(slot_idx).cloned().unwrap_or(Ty::Int);
             out.push_str(&format!("    local.get ${payload_temp}\n"));
             emit_payload_store(out, field_expr, &field_ty, byte_off, ctx);
+            // A field that's a bare named heap-owned local (`Step::Go(r,
+            // ..)` where `r: Map[...]`) is now stored *by value* into this
+            // variant's payload — but `r` itself is still a separately
+            // drop-tracked local. This constructing function's own
+            // function-exit (and, inside a loop, per-iteration) heap sweep
+            // doesn't know `r`'s value escaped into a payload it's about to
+            // return, so it drops `r` on schedule regardless — freeing the
+            // exact map this variant's payload now points to, before the
+            // caller ever sees it (std/json.mvl-shaped: `Step::Go(r, ...)`
+            // returned right after `let r: ref Map[...] = m; r.insert(..);`,
+            // mirrors LLVM's identical `exclude_returned_value_tir` gap in
+            // `emit_enum_variant_constructor_tir`, #2169). Zero the source
+            // so that later drop is the same null-safe no-op used
+            // everywhere else in this module.
+            if let Some(source) = consumed_named_local(field_expr) {
+                out.push_str("    i32.const 0\n");
+                out.push_str(&format!("    local.set ${source}\n"));
+            }
         }
         // Store payload_ptr in the header.
         out.push_str(&format!("    local.get ${temp}\n"));

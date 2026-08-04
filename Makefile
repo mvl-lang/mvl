@@ -411,6 +411,16 @@ test-runtime-llvm: ## Unit-test runtime/llvm/ crate natively (peer of test-runti
 # `fn(...)` value too (#2159, fixed: synthesizes a thin non-capturing
 # wrapper lambda and boxes it the same way). Both are back in the main
 # corpus glob below — nothing left to exclude.
+#
+# `json_decode_test.mvl` (#2169) needed three WASM ownership-tracking fixes
+# once `String::chars`/`char_at` landed (#2187) unblocked the stub: a `ref
+# String` reassigned from a `concat`/`substring`/… result inside a loop, a
+# `ref` non-String local (e.g. `Map[String,Value]`) reassigned from
+# `consume(other_local)`, and a bare named local passed as a payload-enum
+# constructor field — all three left the source local independently
+# drop-tracked after its value escaped into the new owner, so a later
+# per-iteration or fn-exit heap sweep freed it out from under the new
+# owner. Back in the main corpus glob below — nothing left to exclude.
 WASM_CORPUS_EXCLUDE :=
 
 # Directories with nothing excluded pass through whole — mvlr prints a

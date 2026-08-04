@@ -1,0 +1,68 @@
+// tests/corpus/13_stdlib/json_decode_test.mvl — LLVM backend regression for #2169.
+//
+// `std.json.decode` is a deeply recursive, mutually-recursive pure-MVL parser
+// that constructs and returns nested payload enums (`ValuePos::VP(Value,
+// Int)`, `StrPos::SP(String, Int)`, ...) across many call levels. This
+// exercised two LLVM backend bugs at once:
+//
+//   - a tuple/struct-variant field whose own LLVM representation is wider
+//     than one `i64` slot (a nested payload enum like `Value`, `{ i8, ptr }`
+//     = 16 bytes) silently overwrote the next field's slot;
+//   - user-defined enum variant payloads were `alloca`'d on the stack, which
+//     is only valid for the duration of the constructing call — every one of
+//     `decode`'s intermediate return hops read a dangling pointer once its
+//     constructing function's frame was reused.
+//
+// See also `tests/stdlib/json_test.mvl` for exhaustive encode/decode
+// correctness on the Rust backend.
+
+use std.json.{Value, decode}
+
+test fn decode_number() -> Unit {
+    match decode("42") {
+        Ok(Value::Number(n)) => assert_eq(n, 42.0),
+        _                    => assert_eq(1, 0),
+    }
+}
+
+test fn decode_bool_true() -> Unit {
+    match decode("true") {
+        Ok(Value::Bool(b)) => assert_eq(b, true),
+        _                  => assert_eq(1, 0),
+    }
+}
+
+test fn decode_null() -> Unit {
+    match decode("null") {
+        Ok(Value::Null) => assert_eq(1, 1),
+        _               => assert_eq(1, 0),
+    }
+}
+
+test fn decode_string() -> Unit {
+    match decode("\"hello\"") {
+        Ok(Value::String(s)) => assert_eq(s, "hello"),
+        _                    => assert_eq(1, 0),
+    }
+}
+
+test fn decode_array() -> Unit {
+    match decode("[1, 2, 3]") {
+        Ok(Value::Array(a)) => assert_eq(a.len(), 3),
+        _                   => assert_eq(1, 0),
+    }
+}
+
+test fn decode_object() -> Unit {
+    match decode("{\"a\": 1, \"b\": true}") {
+        Ok(Value::Object(o)) => assert_eq(o.len(), 2),
+        _                    => assert_eq(1, 0),
+    }
+}
+
+test fn decode_nested() -> Unit {
+    match decode("{\"nums\": [1, 2, 3], \"ok\": true}") {
+        Ok(Value::Object(o)) => assert_eq(o.len(), 2),
+        _                    => assert_eq(1, 0),
+    }
+}

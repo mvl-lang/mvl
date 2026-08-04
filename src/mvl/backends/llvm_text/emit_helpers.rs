@@ -97,13 +97,18 @@ impl TextEmitter {
     }
 
     pub(super) fn drop_scope_locals(&mut self, snapshot_len: usize, escape: Option<&str>) {
-        // A terminated sibling branch may have called `retain` (via
-        // `exclude_returned_value_tir`) and removed a pre-snapshot item,
-        // leaving `heap_locals.len() < snapshot_len`. In that case there are
-        // no post-snapshot items to drain — clamp to avoid a panic.
+        // Kept as a defensive clamp even though `exclude_returned_value_tir`
+        // and the let-shadowing removal in `emit_stmt_tir` no longer shrink
+        // `heap_locals` (they blank an entry's SSA name in place instead of
+        // `retain`-ing it out, precisely so this index stays valid — #2169).
         let start = snapshot_len.min(self.fn_ctx.heap_locals.len());
         let extras: Vec<_> = self.fn_ctx.heap_locals.drain(start..).collect();
         for (ssa, kind, is_ref) in extras {
+            // Blanked by `exclude_returned_value_tir`/let-shadowing — already
+            // moved elsewhere, nothing to drop.
+            if ssa.is_empty() {
+                continue;
+            }
             if escape.map(|e| e == ssa).unwrap_or(false) {
                 // Branch return value — consumed by the surrounding phi.
                 continue;
@@ -116,6 +121,9 @@ impl TextEmitter {
     /// Called before every `ret` instruction to clean up owned allocations.
     pub(super) fn emit_heap_drops(&mut self) {
         for (ssa, kind, is_ref) in self.fn_ctx.heap_locals.clone() {
+            if ssa.is_empty() {
+                continue;
+            }
             self.emit_drop_for_heap_local(&ssa, kind, is_ref);
         }
     }
@@ -952,6 +960,40 @@ impl TextEmitter {
         Some((&name[..pos], &name[pos + 2..]))
     }
 
+    /// Number of `i64`-sized slots one tuple/struct-variant field occupies in
+    /// its enclosing enum's flat payload array. Almost every field (scalars,
+    /// `String`/`List`/`Set`/`Map`, plain structs — all pointer- or
+    /// word-sized) fits in a single 8-byte slot. A field whose own LLVM
+    /// representation is `RESULT_LLVM_TY` (`{ i8, ptr }`, 16 bytes) —
+    /// `Option[T]`, `Result[T,E]`, or another multi-variant payload enum
+    /// nested as a field — needs two: storing a 16-byte struct into an
+    /// 8-byte slot silently overwrites the next field's slot, and reading it
+    /// back pulls half its bytes from whatever that neighbour actually holds
+    /// (#2169 — `ValuePos::VP(Value, Int)`'s `Value` field corrupted `Int`'s
+    /// slot and vice versa, so any match on the reconstructed `Value` hit a
+    /// garbage discriminant).
+    pub(super) fn field_slot_width(field_llvm_ty: &str) -> usize {
+        if field_llvm_ty == RESULT_LLVM_TY {
+            2
+        } else {
+            1
+        }
+    }
+
+    /// Total slot count and each field's own starting slot offset for a
+    /// tuple/struct variant's field list, accounting for
+    /// [`Self::field_slot_width`]. Replaces the field's plain index
+    /// wherever the payload array is allocated, written, or read.
+    pub(super) fn field_slot_layout(&self, field_tys: &[TypeExpr]) -> (usize, Vec<usize>) {
+        let mut offsets = Vec::with_capacity(field_tys.len());
+        let mut total = 0usize;
+        for ty in field_tys {
+            offsets.push(total);
+            total += Self::field_slot_width(&self.llvm_ty_ctx(ty));
+        }
+        (total, offsets)
+    }
+
     /// Look up the tuple payload types for `Type::Variant` (#1200).
     pub(super) fn variant_payload_types(&self, qualified_name: &str) -> Option<&[TypeExpr]> {
         let (type_name, variant_name) = Self::split_qualified(qualified_name)?;
@@ -1027,7 +1069,7 @@ impl TextEmitter {
             .reg_types
             .insert(payload_ptr.clone(), "ptr".into());
 
-        let n_slots = field_tys.len();
+        let (n_slots, offsets) = self.field_slot_layout(&field_tys);
         let mut bound = Vec::new();
         for (slot, fname) in ordered_names.iter().enumerate() {
             let Some((_, pat)) = fields.iter().find(|(n, _)| n == fname) else {
@@ -1043,7 +1085,8 @@ impl TextEmitter {
             let field_llvm = self.llvm_ty_ctx(field_ty_expr);
             let slot_ptr = self.next_reg();
             self.push_instr(&format!(
-                "{slot_ptr} = getelementptr [{n_slots} x i64], ptr {payload_ptr}, i32 0, i32 {slot}"
+                "{slot_ptr} = getelementptr [{n_slots} x i64], ptr {payload_ptr}, i32 0, i32 {}",
+                offsets[slot]
             ));
             let field_val = self.next_reg();
             self.push_instr(&format!("{field_val} = load {field_llvm}, ptr {slot_ptr}"));
@@ -1090,7 +1133,7 @@ impl TextEmitter {
             .reg_types
             .insert(payload_ptr.clone(), "ptr".into());
 
-        let n_slots = field_tys.len();
+        let (n_slots, offsets) = self.field_slot_layout(&field_tys);
         let mut bound = Vec::new();
         for (slot, pat) in fields.iter().enumerate() {
             let Some(field_ty_expr) = field_tys.get(slot) else {
@@ -1105,7 +1148,8 @@ impl TextEmitter {
             let field_llvm = self.llvm_ty_ctx(field_ty_expr);
             let slot_ptr = self.next_reg();
             self.push_instr(&format!(
-                "{slot_ptr} = getelementptr [{n_slots} x i64], ptr {payload_ptr}, i32 0, i32 {slot}"
+                "{slot_ptr} = getelementptr [{n_slots} x i64], ptr {payload_ptr}, i32 0, i32 {}",
+                offsets[slot]
             ));
             let field_val = self.next_reg();
             self.push_instr(&format!("{field_val} = load {field_llvm}, ptr {slot_ptr}"));
