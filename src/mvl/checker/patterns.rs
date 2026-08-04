@@ -84,9 +84,7 @@ impl TypeChecker {
                 // the arm's return value rather than a discarded statement.
                 // This prevents false ResultIgnored errors on Ok(...)/Err(...)
                 // that appear at the end of match arm blocks.
-                MatchBody::Block(b) => {
-                    self.infer_block_type(b, return_ty, suppress_result_ignored)
-                }
+                MatchBody::Block(b) => self.infer_block_type(b, return_ty, suppress_result_ignored),
             };
             self.env.pop_scope();
             let post_snapshot = self.env.snapshot_moved();
