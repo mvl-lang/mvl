@@ -520,14 +520,19 @@ pub unsafe extern "C" fn _mvl_str_byte_at(s: *const MvlString, i: i64, out: *mut
     }
 }
 
-/// Reconstruct a `MvlString` from a `MvlArray*` of i64 byte values (Latin-1).
+/// Reconstruct a `MvlString` from a `MvlArray*` of `Byte` values (Latin-1).
 ///
-/// Each element in the array is an i64 representing one byte (0–255). Each
-/// byte maps to the Unicode codepoint of the same numeric value, giving a
-/// lossless round-trip with `_mvl_str_byte_at` for every byte 0..=255.
+/// Each element maps to the Unicode codepoint of the same numeric value,
+/// giving a lossless round-trip with `_mvl_str_byte_at` for every byte
+/// 0..=255. `Byte` is laid out as `i8` (`elem_size == 1`, see
+/// `emit_helpers.rs::scalar_leaf`), so elements are read as raw bytes, not
+/// cast to a wider integer — a `List[Byte]`'s backing storage is only
+/// 1-byte-aligned per element, and reading it as `*const i64` previously
+/// crashed with a misaligned pointer dereference (#2123) the moment `len >
+/// 1` pushed an element off an 8-byte boundary.
 ///
 /// # Safety
-/// `arr` must be a valid `MvlArray*` or null.  Each element is an i64.
+/// `arr` must be a valid `MvlArray*` or null, with `elem_size == 1`.
 #[no_mangle]
 pub unsafe extern "C" fn _mvl_str_from_bytes(arr: *const MvlArray) -> *mut MvlString {
     if arr.is_null() {
@@ -537,9 +542,8 @@ pub unsafe extern "C" fn _mvl_str_from_bytes(arr: *const MvlArray) -> *mut MvlSt
     let es = (*arr).elem_size as usize;
     let mut s = String::with_capacity(len);
     for i in 0..len {
-        let elem_ptr = (*arr).ptr.add(i * es) as *const i64;
-        let b = (*elem_ptr & 0xFF) as u8;
-        s.push(b as char);
+        let elem_ptr = (*arr).ptr.add(i * es);
+        s.push(*elem_ptr as char);
     }
     str_to_mvl(&s)
 }
@@ -2221,6 +2225,75 @@ mod tests {
             assert_eq!(s1, "é".as_bytes());
             _mvl_string_ptr_array_drop(arr);
             _mvl_string_drop(s);
+        }
+    }
+
+    // ── mvl_str_from_bytes ─────────────────────────────────────────────────────
+
+    #[test]
+    fn str_from_bytes_ascii() {
+        unsafe {
+            let arr = _mvl_array_new(1, 0); // `Byte` elem_size == 1 (i8)
+            for b in [72u8, 105u8] {
+                _mvl_array_push(arr, &b as *const u8);
+            }
+            let s = _mvl_str_from_bytes(arr);
+            assert_eq!(_mvl_string_len(s), 2);
+            let slice = std::slice::from_raw_parts(_mvl_string_ptr(s), 2);
+            assert_eq!(slice, b"Hi");
+            _mvl_string_drop(s);
+            _mvl_array_drop(arr);
+        }
+    }
+
+    #[test]
+    fn str_from_bytes_empty() {
+        unsafe {
+            let arr = _mvl_array_new(1, 0);
+            let s = _mvl_str_from_bytes(arr);
+            assert_eq!(_mvl_string_len(s), 0);
+            _mvl_string_drop(s);
+            _mvl_array_drop(arr);
+        }
+    }
+
+    #[test]
+    fn str_from_bytes_null_array() {
+        unsafe {
+            let s = _mvl_str_from_bytes(ptr::null());
+            assert_eq!(_mvl_string_len(s), 0);
+            _mvl_string_drop(s);
+        }
+    }
+
+    // Regression for #2123: with `elem_size == 1`, the third element sits at
+    // byte offset 2 within the array's backing buffer — not 8-byte aligned.
+    // The original implementation cast that offset to `*const i64` and
+    // dereferenced it directly, which crashed with "misaligned pointer
+    // dereference" (SIGBUS-class trap) as soon as a `List[Byte]` had more
+    // than one element. Every byte 0..=255 must roundtrip losslessly (#1487).
+    #[test]
+    fn str_from_bytes_misaligned_offsets_and_full_byte_range() {
+        unsafe {
+            let arr = _mvl_array_new(1, 0);
+            for b in [0u8, 1, 127, 128, 200, 255] {
+                _mvl_array_push(arr, &b as *const u8);
+            }
+            let s = _mvl_str_from_bytes(arr);
+            // `.len` is the UTF-8 *byte* length, not the input element count —
+            // codepoints 128..=255 encode as 2 UTF-8 bytes each (0,1,127 → 1
+            // byte; 128,200,255 → 2 bytes: 3 + 6 = 9), so byte-index into the
+            // reconstructed string via `_mvl_str_byte_at` (char-indexed) is
+            // the correct way to verify the roundtrip, not `.len()`.
+            assert_eq!(_mvl_string_len(s), 9);
+            for (i, expected) in [0u8, 1, 127, 128, 200, 255].iter().enumerate() {
+                let mut out: i64 = -1;
+                let tag = _mvl_str_byte_at(s, i as i64, &mut out);
+                assert_eq!(tag, 0, "byte {i} should be Some");
+                assert_eq!(out, *expected as i64);
+            }
+            _mvl_string_drop(s);
+            _mvl_array_drop(arr);
         }
     }
 
