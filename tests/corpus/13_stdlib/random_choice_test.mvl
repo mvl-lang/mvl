@@ -8,12 +8,20 @@
 // wrong pointer type. Pinning both the non-empty (Some) and empty (None)
 // paths here catches a regression on the WASM backend specifically; the
 // Rust-backend equivalents already live in tests/stdlib/random_test.mvl.
+//
+// The `let v: Int = ...` step below is load-bearing, not style: `choice`
+// is generic (`choice[T](List[T]) -> Option[T]`), and inlining
+// `choice(xs).unwrap_or(-1)` straight into `assert_eq(...)` leaves `T`
+// unresolved for the LLVM backend's separate, backend-local checker
+// pass, which then picks the wrong (`String`) `assert_eq` overload and
+// miscompiles — same gap `io_path_test.mvl` documents for `to_string`.
 
 use std.random.{choice}
 
 test fn choice_single_element_returns_that_element() -> Unit ! Random {
     let xs: List[Int] = [42];
-    assert_eq(choice(xs).unwrap_or(-1), 42);
+    let v: Int = choice(xs).unwrap_or(-1);
+    assert_eq(v, 42);
 }
 
 test fn choice_empty_list_returns_none() -> Unit ! Random {
