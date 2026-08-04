@@ -11,7 +11,6 @@ use std::collections::HashMap;
 
 use super::context::{FnCtx, ModuleCtx, MonoQueue};
 use super::BuiltinSymbolInfo;
-use crate::mvl::checker::types::Ty;
 use crate::mvl::ir::{TirProgram, TypeExpr};
 
 // ── Public API ────────────────────────────────────────────────────────────────
@@ -235,8 +234,7 @@ const STDLIB_REPLACED_BY_DISPATCH: &[&str] = &[
 /// TIR variant of strip_prelude_extension_methods — walks `TirFn`s.
 ///
 /// Mirrors the filtering rules of the AST version: drops non-builtin extension
-/// methods, stdlib functions replaced by C-ABI dispatch, and non-builtin prelude
-/// functions returning `Option`/`Result`.
+/// methods and stdlib functions replaced by C-ABI dispatch.
 ///
 /// Generic extension methods (e.g. `List[T]::flatten`) are unaffected here:
 /// they are stashed in `mono.tir_generic_fns` before this filter runs
@@ -244,6 +242,18 @@ const STDLIB_REPLACED_BY_DISPATCH: &[&str] = &[
 /// via the monomorphization queue.  Only non-generic extensions are
 /// stripped — dispatched via emitter arms today, or silently dropped
 /// where no arm exists (#1612 remainder, not addressed in this PR).
+///
+/// Used to also drop every non-builtin prelude function returning
+/// `Option`/`Result` outright — a blanket rule from when the TIR-walking
+/// emitter's Option/Result support was new and presumably SSA-fragile for
+/// arbitrary control flow. That's no longer true (#2145/#2146/#2168/#2177
+/// all hardened Option/Result match/construct codegen), and the rule was
+/// never scoped to just the functions that actually need it: it silently
+/// dropped `std.json.decode`'s real MVL body (a genuine pure-MVL function
+/// with no native LLVM dispatch arm) while leaving its call site intact —
+/// "use of undefined value '@decode'" (#2169). Removed; nothing in
+/// `STDLIB_REPLACED_BY_DISPATCH` returns Option/Result, so this doesn't
+/// reintroduce whatever the rule was guarding against for those.
 fn strip_prelude_extension_methods_tir(prog: &TirProgram) -> TirProgram {
     let mut out = prog.clone();
     out.fns.retain(|f| {
@@ -256,24 +266,9 @@ fn strip_prelude_extension_methods_tir(prog: &TirProgram) -> TirProgram {
         if STDLIB_REPLACED_BY_DISPATCH.contains(&f.original_name.as_str()) {
             return false;
         }
-        if return_type_needs_option_abi_ty(&f.ret_ty) {
-            return false;
-        }
         true
     });
     out
-}
-
-/// Return `true` if `ty` is `Option[_]` or `Result[_, _]` (TIR-side variant
-/// of [`return_type_needs_option_abi`]).
-fn return_type_needs_option_abi_ty(ty: &Ty) -> bool {
-    match ty {
-        Ty::Option(_) | Ty::Result(_, _) => true,
-        Ty::Ref(_, inner) | Ty::Labeled(_, inner) | Ty::Refined(inner, _) => {
-            return_type_needs_option_abi_ty(inner)
-        }
-        _ => false,
-    }
 }
 
 // ── Internal emitter ──────────────────────────────────────────────────────────

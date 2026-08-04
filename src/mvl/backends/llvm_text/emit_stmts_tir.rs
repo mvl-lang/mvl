@@ -24,17 +24,36 @@ impl TextEmitter {
     /// free what now belongs to the caller. Matches the AST-side rules in
     /// `emit_types.rs::exclude_returned_value`: only `Var` is the canonical
     /// owning expression; `Consume` / `Relabel` are transparent wrappers.
+    ///
+    /// Blanks the matching entry's SSA name in place rather than physically
+    /// removing it (`Vec::retain`) — a physical removal shifts every later
+    /// index down, which silently invalidates any `heap_snapshot` a scope
+    /// above captured as a plain `heap_locals.len()` before this call ran:
+    /// an entry pushed *after* that snapshot could shift below it, so
+    /// `drop_scope_locals`'s `drain(snapshot..)` would then skip it entirely
+    /// and it would leak all the way to the function's `emit_heap_drops` —
+    /// an SSA register that only dominates one arm being read from a block
+    /// that doesn't dominate it ("Instruction does not dominate all uses",
+    /// #2169). Blanking preserves every other entry's index.
     pub(super) fn exclude_returned_value_tir(&mut self, expr: &TirExpr) {
         match &expr.kind {
             TirExprKind::Var(name) => {
                 if let Some(loc) = self.fn_ctx.ref_locals.get(name) {
                     let ptr = loc.ptr.clone();
-                    self.fn_ctx.heap_locals.retain(|(s, _, _)| *s != ptr);
+                    for entry in self.fn_ctx.heap_locals.iter_mut() {
+                        if entry.0 == ptr {
+                            entry.0.clear();
+                        }
+                    }
                     return;
                 }
                 if let Some(ssa) = self.fn_ctx.locals.get(name) {
                     let ssa = ssa.clone();
-                    self.fn_ctx.heap_locals.retain(|(s, _, _)| *s != ssa);
+                    for entry in self.fn_ctx.heap_locals.iter_mut() {
+                        if entry.0 == ssa {
+                            entry.0.clear();
+                        }
+                    }
                 }
             }
             TirExprKind::Consume(inner) | TirExprKind::Relabel { expr: inner, .. } => {
@@ -352,7 +371,16 @@ impl TextEmitter {
                     }
                     if let Some(old_ssa) = self.fn_ctx.locals.get(name) {
                         let old_ssa = old_ssa.clone();
-                        self.fn_ctx.heap_locals.retain(|(s, _, _)| *s != old_ssa);
+                        // Blank in place, don't physically remove — see the
+                        // comment on `exclude_returned_value_tir` (#2169):
+                        // a positional removal here would shift every later
+                        // heap_locals index down, invalidating any
+                        // `heap_snapshot` an enclosing scope already took.
+                        for entry in self.fn_ctx.heap_locals.iter_mut() {
+                            if entry.0 == old_ssa {
+                                entry.0.clear();
+                            }
+                        }
                     }
                     self.fn_ctx.locals.insert(name.clone(), v.clone());
                     if let Some(hk) = Self::heap_kind(&elem_ty) {

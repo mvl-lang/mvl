@@ -1407,6 +1407,12 @@ impl TextEmitter {
             self.fn_ctx.current_bb = arm_bb.clone();
             self.fn_ctx.terminated = false;
 
+            // Snapshot BEFORE binding the arm's pattern variable(s) — a bound
+            // `Some(c)` payload needs the *same* heap_locals tracking as a
+            // `let`-bound local, and must be scoped to *this* arm so
+            // `drop_scope_locals` below frees it (or excludes it on a real
+            // last-use move) instead of leaking it into the caller's frame.
+            let heap_snapshot = self.fn_ctx.heap_locals.len();
             let mut bound_vars: Vec<String> = Vec::new();
             // `Option[Unit]`'s payload slot has no meaningful data to load —
             // `inner_load_ty` resolves to LLVM's `void`, which is only a
@@ -1435,6 +1441,19 @@ impl TextEmitter {
                                 .insert(var_name.clone(), some_val.clone());
                             if let Some(ref imty) = inner_ty {
                                 if let Some(te) = super::emit_helpers::ty_to_type_expr(imty) {
+                                    // A bound `Some(c)` payload is an independently
+                                    // owned value once `.get()`/`.first()` clone
+                                    // it out of its container (#2169) — without
+                                    // this, `resolve_owned_call_arg` can't find
+                                    // `c` in `heap_locals`, falls through to
+                                    // "safe to move", and a second use of `c` as
+                                    // a call argument reuses an already-moved
+                                    // (and possibly already-dropped) pointer.
+                                    if let Some(hk) = Self::heap_kind(&te) {
+                                        self.fn_ctx
+                                            .heap_locals
+                                            .push((some_val.clone(), hk, false));
+                                    }
                                     self.fn_ctx.local_mvl_types.insert(var_name.clone(), te);
                                 }
                             }
@@ -1459,7 +1478,6 @@ impl TextEmitter {
                 }
             }
 
-            let heap_snapshot = self.fn_ctx.heap_locals.len();
             let arm_val = self.emit_match_arm_body_tir(&arm.body)?;
             let end_bb = self.fn_ctx.current_bb.clone();
             if !self.fn_ctx.terminated {
@@ -1580,6 +1598,10 @@ impl TextEmitter {
                 };
                 recovered.unwrap_or_else(|| ("i64".into(), "ptr".into()))
             }
+        };
+        let (ok_ty, err_ty): (Option<Ty>, Option<Ty>) = match unwrap_labels(&scrutinee.ty) {
+            Ty::Result(ok, err) => (Some((**ok).clone()), Some((**err).clone())),
+            _ => (None, None),
         };
 
         let disc_reg = self.next_reg();
@@ -1836,6 +1858,11 @@ impl TextEmitter {
             self.fn_ctx.current_bb = arm_bb.clone();
             self.fn_ctx.terminated = false;
 
+            // Snapshot BEFORE binding the arm's pattern variable(s) — see the
+            // identical comment in `emit_option_match_tir` (#2169): a bound
+            // `Ok(v)`/`Err(e)` payload needs heap_locals tracking scoped to
+            // *this* arm, not a leak into the caller's frame.
+            let heap_snapshot = self.fn_ctx.heap_locals.len();
             let mut bound_vars: Vec<String> = Vec::new();
 
             match &arm.pattern {
@@ -1858,6 +1885,14 @@ impl TextEmitter {
                             if var_name != "_" && !var_name.contains("::") =>
                         {
                             self.fn_ctx.locals.insert(var_name.clone(), ok_val.clone());
+                            if let Some(ref oty) = ok_ty {
+                                if let Some(te) = super::emit_helpers::ty_to_type_expr(oty) {
+                                    if let Some(hk) = Self::heap_kind(&te) {
+                                        self.fn_ctx.heap_locals.push((ok_val.clone(), hk, false));
+                                    }
+                                    self.fn_ctx.local_mvl_types.insert(var_name.clone(), te);
+                                }
+                            }
                             bound_vars.push(var_name.clone());
                         }
                         // `Ok(Variant(x))` / `Ok(Variant { f: x })` (#2177) —
@@ -1895,6 +1930,14 @@ impl TextEmitter {
                             if var_name != "_" && !var_name.contains("::") =>
                         {
                             self.fn_ctx.locals.insert(var_name.clone(), err_val.clone());
+                            if let Some(ref ety) = err_ty {
+                                if let Some(te) = super::emit_helpers::ty_to_type_expr(ety) {
+                                    if let Some(hk) = Self::heap_kind(&te) {
+                                        self.fn_ctx.heap_locals.push((err_val.clone(), hk, false));
+                                    }
+                                    self.fn_ctx.local_mvl_types.insert(var_name.clone(), te);
+                                }
+                            }
                             bound_vars.push(var_name.clone());
                         }
                         // Struct-shaped variant pattern with bound fields
@@ -1920,9 +1963,6 @@ impl TextEmitter {
                 _ => {}
             }
 
-            // Snapshot heap_locals so that variables defined inside this arm
-            // are dropped at the arm's exit, not at the function exit (#1645).
-            let heap_snapshot = self.fn_ctx.heap_locals.len();
             let arm_val = self.emit_match_arm_body_tir(&arm.body)?;
             let end_bb = self.fn_ctx.current_bb.clone();
             if !self.fn_ctx.terminated {
@@ -2098,7 +2138,7 @@ impl TextEmitter {
                     .unwrap_or_default(),
                 _ => Vec::new(),
             };
-            let n_slots = field_tys.len();
+            let (n_slots, slot_offsets) = self.field_slot_layout(&field_tys);
 
             // A flat switch on slot 0's raw ordinal alone can't distinguish
             // arms that only differ on a later slot (#2032: e.g.
@@ -2129,8 +2169,13 @@ impl TextEmitter {
                     .get(slot)
                     .map(|ty| self.llvm_ty_ctx(ty))
                     .unwrap_or_else(|| "i64".to_string());
-                let reg =
-                    self.emit_tuple_slot_discriminant_tir(&payload_ptr, n_slots, slot, &field_llvm);
+                let offset = slot_offsets.get(slot).copied().unwrap_or(slot);
+                let reg = self.emit_tuple_slot_discriminant_tir(
+                    &payload_ptr,
+                    n_slots,
+                    offset,
+                    &field_llvm,
+                );
                 slot_disc.insert(slot, reg);
             }
 
@@ -2214,7 +2259,7 @@ impl TextEmitter {
                     self.fn_ctx
                         .reg_types
                         .insert(payload_ptr.clone(), "ptr".into());
-                    let n_slots = field_tys.len();
+                    let (n_slots, offsets) = self.field_slot_layout(&field_tys);
                     for (i, inner_pat) in fields.iter().enumerate() {
                         let Some(field_ty_expr) = field_tys.get(i) else {
                             continue;
@@ -2222,7 +2267,8 @@ impl TextEmitter {
                         let field_llvm = self.llvm_ty_ctx(field_ty_expr);
                         let slot = self.next_reg();
                         self.push_instr(&format!(
-                            "{slot} = getelementptr [{n_slots} x i64], ptr {payload_ptr}, i32 0, i32 {i}"
+                            "{slot} = getelementptr [{n_slots} x i64], ptr {payload_ptr}, i32 0, i32 {}",
+                            offsets[i]
                         ));
                         let val = self.next_reg();
                         self.push_instr(&format!("{val} = load {field_llvm}, ptr {slot}"));
@@ -2510,9 +2556,24 @@ impl TextEmitter {
                     args.len()
                 ));
             }
-            let n = field_tys.len();
+            let (n, offsets) = self.field_slot_layout(&field_tys);
             let base = self.next_reg();
-            self.push_instr(&format!("{base} = alloca [{n} x i64]"));
+            // Heap-allocate, not `alloca` — this payload buffer is wrapped
+            // into the variant's `{i8,ptr}` return value, which routinely
+            // escapes the current function (returned, nested inside another
+            // enum's own field, propagated up several call levels — exactly
+            // `std/json.mvl`'s parser: `Value::Number(n)` constructed in
+            // `parse_number_val`, wrapped in `ValuePos::VP`, returned through
+            // `parse_value`/`decode` to the caller). A stack `alloca` is
+            // popped the moment its constructing function returns; every
+            // caller up the chain then reads through a dangling pointer —
+            // usually garbage, occasionally a value some *other* function's
+            // reused stack slot happens to hold, so behavior appeared to
+            // hinge on unrelated code shape elsewhere in the module (#2169).
+            // Mirrors the identical `emit_heap_slot` treatment already used
+            // for `Ok`/`Some` construction.
+            self.ensure_extern("declare ptr @_mvl_alloc(i64)");
+            self.push_instr(&format!("{base} = call ptr @_mvl_alloc(i64 {})", n * 8));
             for (i, (ty_expr, arg)) in field_tys.iter().zip(args.iter()).enumerate() {
                 let field_llvm = self.llvm_ty_ctx(ty_expr);
                 let arg_val = match self.emit_expr_tir(arg)? {
@@ -2521,9 +2582,20 @@ impl TextEmitter {
                 };
                 let slot = self.next_reg();
                 self.push_instr(&format!(
-                    "{slot} = getelementptr [{n} x i64], ptr {base}, i32 0, i32 {i}"
+                    "{slot} = getelementptr [{n} x i64], ptr {base}, i32 0, i32 {}",
+                    offsets[i]
                 ));
                 self.push_instr(&format!("store {field_llvm} {arg_val}, ptr {slot}"));
+                // Transfer ownership to the payload — mirrors the identical
+                // call in `emit_result_constructor_tir`/
+                // `emit_option_constructor_tir`. Without it, a heap-owned
+                // local (e.g. `StrPos::SP(out, cur)` where `out: ref
+                // String`) stays in the constructing function's own
+                // `heap_locals` and gets dropped at its scope exit even
+                // though this payload now holds — and returns — the exact
+                // same pointer: the caller reads a use-after-free the moment
+                // it inspects the field (#2169).
+                self.exclude_returned_value_tir(arg);
             }
             base
         };
@@ -4441,6 +4513,22 @@ impl TextEmitter {
                     Ty::List(e) | Ty::Array(e, _) => self.ty_to_llvm_ctx(e),
                     _ => "i64".to_string(),
                 };
+                // List[String]'s backing buffer stores each element's
+                // `*mut MvlString` by value — the array itself owns that
+                // reference. `_mvl_array_get` returns a pointer *into the
+                // buffer slot*, so returning the loaded pointer directly as
+                // the Option's payload hands the caller a reference the
+                // array still owns; the array's own scope-exit drop later
+                // walks and frees every contained string, so if the caller
+                // also drops the extracted element, that's a double free.
+                // Clone the string here so the Option holds an
+                // independently-owned reference, mirroring the identical
+                // fix for `Map::get` (#2047). Scalar elements (Int, Bool,
+                // …) have no ownership to share and are returned as before.
+                let elem_is_string = matches!(
+                    unwrap_labels(&receiver.ty),
+                    Ty::List(e) | Ty::Array(e, _) if matches!(unwrap_labels(e), Ty::String)
+                );
 
                 // Bounds check: 0 <= index < len. Mirror of AST emit_method_call's
                 // ("get", "ptr") arm — alloca + store + load shape (not the
@@ -4485,6 +4573,16 @@ impl TextEmitter {
                 ));
                 let elem_val = self.next_reg();
                 self.push_instr(&format!("{elem_val} = load {elem_llvm_ty}, ptr {elem_ptr}"));
+                let elem_val = if elem_is_string {
+                    self.ensure_extern("declare ptr @_mvl_string_clone(ptr)");
+                    let cloned = self.next_reg();
+                    self.push_instr(&format!(
+                        "{cloned} = call ptr @_mvl_string_clone(ptr {elem_val})"
+                    ));
+                    cloned
+                } else {
+                    elem_val
+                };
                 let elem_slot = self.next_reg();
                 self.push_instr(&format!("{elem_slot} = alloca {elem_llvm_ty}"));
                 self.push_instr(&format!("store {elem_llvm_ty} {elem_val}, ptr {elem_slot}"));
@@ -4632,6 +4730,13 @@ impl TextEmitter {
                     Ty::List(e) | Ty::Array(e, _) => self.ty_to_llvm_ctx(e),
                     _ => "i64".to_string(),
                 };
+                // See the identical clone-on-extract fix in the `("get",
+                // "ptr")` arm above (#2169) — `first()` aliases the same
+                // buffer slot and needs the same treatment.
+                let elem_is_string = matches!(
+                    unwrap_labels(&receiver.ty),
+                    Ty::List(e) | Ty::Array(e, _) if matches!(unwrap_labels(e), Ty::String)
+                );
 
                 self.ensure_extern("declare i64 @_mvl_array_len(ptr)");
                 let len = self.next_reg();
@@ -4671,6 +4776,16 @@ impl TextEmitter {
                 ));
                 let elem_val = self.next_reg();
                 self.push_instr(&format!("{elem_val} = load {elem_llvm_ty}, ptr {elem_ptr}"));
+                let elem_val = if elem_is_string {
+                    self.ensure_extern("declare ptr @_mvl_string_clone(ptr)");
+                    let cloned = self.next_reg();
+                    self.push_instr(&format!(
+                        "{cloned} = call ptr @_mvl_string_clone(ptr {elem_val})"
+                    ));
+                    cloned
+                } else {
+                    elem_val
+                };
                 let elem_slot = self.next_reg();
                 self.push_instr(&format!("{elem_slot} = alloca {elem_llvm_ty}"));
                 self.push_instr(&format!("store {elem_llvm_ty} {elem_val}, ptr {elem_slot}"));

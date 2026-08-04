@@ -411,7 +411,13 @@ test-runtime-llvm: ## Unit-test runtime/llvm/ crate natively (peer of test-runti
 # `fn(...)` value too (#2159, fixed: synthesizes a thin non-capturing
 # wrapper lambda and boxes it the same way). Both are back in the main
 # corpus glob below — nothing left to exclude.
-WASM_CORPUS_EXCLUDE :=
+#
+# `json_decode_test.mvl` exercises `std.json.decode` (#2169, LLVM/Rust
+# backends only) — the WASM backend compiles `decode` itself to an
+# `unreachable` stub (pre-existing, unrelated to #2169; no corpus file
+# called `decode` before this one, so the gap was never pinned). Tracked as
+# a follow-up; excluded here rather than silently leaving a stub uncaught.
+WASM_CORPUS_EXCLUDE := tests/corpus/13_stdlib/json_decode_test.mvl
 
 # Directories with nothing excluded pass through whole — mvlr prints a
 # per-test checkmark + pass/fail count for a directory arg, but runs a bare
