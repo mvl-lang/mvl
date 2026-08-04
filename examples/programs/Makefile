@@ -36,9 +36,10 @@ WASM_EXCLUDE := \
 	$(DIR)list_stubs.mvl \
 	$(DIR)random_dice/main.mvl
 
-# password_checker.mvl: deliberately missing bridge.rs (it demonstrates the
-# extern "rust" trust-boundary error itself) — `mvl build` needs a real
-# bridge.rs to link against, which only bridge_ok/ provides. Not a regression.
+# password_checker.mvl: intentional negative fixture for Spec 006 Requirement 3
+# (Missing Bridge Error) — `mvl build` on it MUST fail with "bridge.rs not
+# found", per tests/compile_and_run.rs::missing_bridge_exits_nonzero_with_actionable_error.
+# Not a gap to fix; bridge_ok/ and access_control/ cover the working-bridge case.
 SMOKE_EXCLUDE := \
 	$(DIR)password_checker.mvl
 
