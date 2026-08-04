@@ -1,0 +1,23 @@
+// 13_stdlib/random_choice_test.mvl — std.random.choice() on the WASM
+// backend (#2093).
+//
+// `choice(list)` emitted `_mvl_random_choice_index` and returned its bare
+// i64 index directly as if it were the `*MvlOption` pointer `Option[T]`
+// promises — the module assembled but failed `wasm-tools validate` with
+// a type mismatch, and any real use would have read garbage through the
+// wrong pointer type. Pinning both the non-empty (Some) and empty (None)
+// paths here catches a regression on the WASM backend specifically; the
+// Rust-backend equivalents already live in tests/stdlib/random_test.mvl.
+
+use std.random.{choice}
+
+test fn choice_single_element_returns_that_element() -> Unit ! Random {
+    let xs: List[Int] = [42];
+    assert_eq(choice(xs).unwrap_or(-1), 42);
+}
+
+test fn choice_empty_list_returns_none() -> Unit ! Random {
+    let xs: List[Int] = [];
+    let c: Option[Int] = choice(xs);
+    assert_eq(c.is_none(), true);
+}
