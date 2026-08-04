@@ -379,7 +379,7 @@ impl TypeChecker {
                 enclosing_actor: Some(ad.name.clone()),
                 ..FnContext::default()
             });
-            self.infer_block_type(&method.body, Some(&ret_ty));
+            self.infer_block_type(&method.body, Some(&ret_ty), false);
             self.pop_fn_context();
             self.env.pop_scope();
         }
@@ -447,7 +447,7 @@ impl TypeChecker {
                         .define(param.name.clone(), VarInfo::new(env_ty, false));
                 }
             }
-            self.infer_block_type(&method.body, Some(&ret_ty));
+            self.infer_block_type(&method.body, Some(&ret_ty), false);
             self.env.pop_scope();
             self.pop_fn_context();
         }
@@ -643,7 +643,7 @@ impl TypeChecker {
         // treated as the implicit return value rather than a discarded statement.
         // This prevents false ResultIgnored errors for `Ok(...)` / `Err(...)`
         // at the end of Result-returning functions.
-        self.infer_block_type(&fd.body, Some(&ret_ty));
+        self.infer_block_type(&fd.body, Some(&ret_ty), false);
         self.env.pop_scope();
         self.pop_fn_context();
     }

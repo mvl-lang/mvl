@@ -45,7 +45,10 @@ impl TypeChecker {
         scrutinee_ty: &Ty,
         span: Span,
     ) -> Ty {
-        self.check_match_arms(arms, scrutinee_ty, span, None)
+        // `match` used as an expression (e.g. a `let` RHS or lambda body): its
+        // value is consumed by whatever encloses it, so suppress ResultIgnored
+        // on arm tails — same reasoning as `Expr::If`'s `suppress_result_ignored`.
+        self.check_match_arms(arms, scrutinee_ty, span, None, true)
     }
 
     /// Check match arms for exhaustiveness and return the result type.
@@ -55,6 +58,7 @@ impl TypeChecker {
         scrutinee_ty: &Ty,
         span: Span,
         return_ty: Option<&Ty>,
+        suppress_result_ignored: bool,
     ) -> Ty {
         // Check each arm body. Arms are mutually exclusive at runtime (only
         // one pattern matches), so a move inside one arm must not be visible
@@ -80,7 +84,7 @@ impl TypeChecker {
                 // the arm's return value rather than a discarded statement.
                 // This prevents false ResultIgnored errors on Ok(...)/Err(...)
                 // that appear at the end of match arm blocks.
-                MatchBody::Block(b) => self.infer_block_type(b, return_ty),
+                MatchBody::Block(b) => self.infer_block_type(b, return_ty, suppress_result_ignored),
             };
             self.env.pop_scope();
             let post_snapshot = self.env.snapshot_moved();

@@ -4,6 +4,8 @@ tests/corpus/00_smoke/assertions_test.mvl	ok
 tests/corpus/00_smoke/hello_test.mvl	ok
 tests/corpus/01_expressions/bool_ops_test.mvl	ok
 tests/corpus/01_expressions/int_ops_test.mvl	ok
+tests/corpus/01_expressions/numeric_conversion_test.mvl	ok
+tests/corpus/01_expressions/numeric_methods_test.mvl	ok
 tests/corpus/01_expressions/precedence_test.mvl	ok
 tests/corpus/02_control_flow/early_return_test.mvl	ok
 tests/corpus/02_control_flow/if_expr_test.mvl	ok
@@ -37,7 +39,7 @@ tests/corpus/07_ownership/value_test.mvl	ok
 tests/corpus/08_ifc/audit_relabel_test.mvl	ok
 tests/corpus/08_ifc/secret_test.mvl	ok
 tests/corpus/08_ifc/tainted_test.mvl	ok
-tests/corpus/09_refinements/array_index_refinement_test.mvl	fail	36	1
+tests/corpus/09_refinements/array_index_refinement_test.mvl	ok
 tests/corpus/09_refinements/bitwise_refinement_test.mvl	ok
 tests/corpus/09_refinements/field_refinement_test.mvl	ok
 tests/corpus/09_refinements/float_refinement_test.mvl	ok
@@ -61,8 +63,12 @@ tests/corpus/12_actors/state_mutation_test.mvl	ok
 tests/corpus/13_stdlib/io_fd_test.mvl	ok
 tests/corpus/13_stdlib/io_open_close_test.mvl	ok
 tests/corpus/13_stdlib/io_path_test.mvl	ok
+tests/corpus/13_stdlib/json_decode_test.mvl	ok
+tests/corpus/13_stdlib/json_value_construct_match_test.mvl	ok
 tests/corpus/13_stdlib/list_hof_test.mvl	ok
 tests/corpus/13_stdlib/list_method_fallback_test.mvl	ok
 tests/corpus/13_stdlib/list_sort_by_test.mvl	ok
+tests/corpus/13_stdlib/list_sort_test.mvl	ok
 tests/corpus/13_stdlib/parse_test.mvl	ok
+tests/corpus/13_stdlib/random_choice_test.mvl	ok
 tests/corpus/13_stdlib/string_test.mvl	ok

@@ -10,6 +10,7 @@ use mvl::mvl::parser::Parser;
 use mvl::mvl::pipeline::{
     compute_rust_backed_stdlib_tirs, load_full_prelude, lower_prelude, PreludeMode,
 };
+use mvl::mvl::stdlib;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process;
@@ -212,6 +213,15 @@ pub fn run(path: &str, quiet: bool, verbose: bool, coverage: bool, bdd: bool, us
     // file's transpile) and stdlib extras (per-file filtered).  Set inside the
     // pre-scan block below.
     let n_universal_prelude_outer: usize;
+    // Checker-only prelude (#2017): includes Rust-backed stdlib modules
+    // (io, net, process, random, regex, time) via PreludeMode::TypeCheck,
+    // unlike `stdlib_prelude_progs`'s Transpile-mode extras, which deliberately
+    // excludes them (their bodies come from `mvl_runtime::stdlib::X` on the
+    // Rust side, not from re-transpiled MVL). Using the narrower Transpile-mode
+    // prelude for diagnostics reported false-positive `UndefinedFunction` for
+    // any Rust-backed symbol (`path`, `open`, `close`, …) even though the real
+    // per-file build resolves them fine. Set inside the pre-scan block below.
+    let checker_stdlib_progs_outer: Vec<mvl::mvl::parser::ast::Program>;
     // Pre-scan all test files to discover pure-MVL stdlib imports (e.g. json) and
     // extend the prelude so their types/functions are available during transpilation.
     // Also load any pkg.* package modules referenced by the test files.
@@ -465,6 +475,19 @@ pub fn run(path: &str, quiet: bool, verbose: bool, coverage: bool, bdd: bool, us
         stdlib_prelude_progs.extend(extras);
         prelude_stems.extend(std::iter::repeat_n(None, n_extras));
         n_universal_prelude_outer = stdlib_prelude_progs.len() - n_extras;
+
+        // Build the checker-only prelude (see comment at declaration above),
+        // mirroring build.rs's `checker_stdlib` construction.
+        let stdlib_dir = stdlib::ensure_stdlib();
+        let mut checker_stdlib = loader::load_implicit_prelude();
+        checker_stdlib.extend(load_full_prelude(
+            all_for_extras.iter(),
+            PreludeMode::TypeCheck {
+                stdlib_dir: &stdlib_dir,
+            },
+        ));
+        checker_stdlib.extend(pkg_progs.iter().cloned());
+        checker_stdlib_progs_outer = checker_stdlib;
     }
     // Universal prelude = implicit + pkg + siblings. Everything at indices
     // >= n_universal_prelude is a stdlib extra, filtered per-file below so a
@@ -472,6 +495,7 @@ pub fn run(path: &str, quiet: bool, verbose: bool, coverage: bool, bdd: bool, us
     // mod (which would collide with a user-declared `actor Logger`, #1707
     // phase 3).
     let n_universal_prelude = n_universal_prelude_outer;
+    let checker_stdlib_progs = checker_stdlib_progs_outer;
 
     // Collect native Cargo deps and bridge.rs from the full pkg.* closure so
     // that the test crate's Cargo.toml mirrors what `mvl build` would emit (#1481).
@@ -553,12 +577,14 @@ pub fn run(path: &str, quiet: bool, verbose: bool, coverage: bool, bdd: bool, us
         // and surfaced as a raw rustc error pointing into generated code, with
         // the real MVL diagnostic never printed at all (#2017).
         //
-        // These are warnings, not failures: `mvl test` deliberately builds a
-        // *filtered* per-file prelude (#1707 phase 3), so the checker here does
-        // not see every stdlib symbol the runtime provides and reports
-        // false-positive `UndefinedFunction`/`MissingEffect` for them. Making
-        // this strict needs a sound prelude first — tracked on #2017.
-        let check_result = checker::check_with_prelude(&stdlib_prelude_progs, &prog);
+        // These are warnings, not failures: checking against `checker_stdlib_progs`
+        // (see its declaration comment above) closes the Rust-backed-module gap
+        // that used to make this false-positive on `path`/`open`/`close`/etc.,
+        // but the checker result here is still not fully trustworthy — a handful
+        // of unrelated false positives remain (generic-substitution and totality
+        // artifacts specific to a few stdlib builtins), tracked on #2017. Making
+        // this strict needs those closed too.
+        let check_result = checker::check_with_prelude(&checker_stdlib_progs, &prog);
         if check_result.has_errors() {
             eprintln!(
                 "warning: {} checker diagnostic(s) in {file_str} \
@@ -735,12 +761,14 @@ pub fn run(path: &str, quiet: bool, verbose: bool, coverage: bool, bdd: bool, us
         // and surfaced as a raw rustc error pointing into generated code, with
         // the real MVL diagnostic never printed at all (#2017).
         //
-        // These are warnings, not failures: `mvl test` deliberately builds a
-        // *filtered* per-file prelude (#1707 phase 3), so the checker here does
-        // not see every stdlib symbol the runtime provides and reports
-        // false-positive `UndefinedFunction`/`MissingEffect` for them. Making
-        // this strict needs a sound prelude first — tracked on #2017.
-        let check_result = checker::check_with_prelude(&stdlib_prelude_progs, &prog);
+        // These are warnings, not failures: checking against `checker_stdlib_progs`
+        // (see its declaration comment above) closes the Rust-backed-module gap
+        // that used to make this false-positive on `path`/`open`/`close`/etc.,
+        // but the checker result here is still not fully trustworthy — a handful
+        // of unrelated false positives remain (generic-substitution and totality
+        // artifacts specific to a few stdlib builtins), tracked on #2017. Making
+        // this strict needs those closed too.
+        let check_result = checker::check_with_prelude(&checker_stdlib_progs, &prog);
         if check_result.has_errors() {
             eprintln!(
                 "warning: {} checker diagnostic(s) in {file_str} \

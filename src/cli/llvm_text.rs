@@ -9,6 +9,7 @@ use mvl::mvl::loader;
 use mvl::mvl::parser::ast::Program;
 use mvl::mvl::parser::Parser;
 use mvl::mvl::pipeline::{load_full_prelude, PreludeMode};
+use mvl::mvl::stdlib;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process;
@@ -41,13 +42,28 @@ fn prepare_llvm_text(
     ));
     let builtins = loader::collect_llvm_text_builtins(std::slice::from_ref(prog));
 
+    // Checker-only prelude (#2017): PreludeMode::TypeCheck sees RUST_BACKED_STDLIB
+    // modules (io, net, process, random, regex, time) that `prelude` above
+    // (PreludeMode::Transpile) deliberately excludes — their bodies come from
+    // the Rust runtime, not re-transpiled MVL, but the checker still needs
+    // their signatures to avoid false-positive UndefinedFunction. Mirrors
+    // build.rs's `checker_stdlib` construction. `prelude` itself (used for
+    // codegen below) is untouched.
+    let mut checker_stdlib = loader::load_implicit_prelude();
+    checker_stdlib.extend(load_full_prelude(
+        std::iter::once(prog),
+        PreludeMode::TypeCheck {
+            stdlib_dir: &stdlib::ensure_stdlib(),
+        },
+    ));
+
     // Run checker to get expression types for the TIR lowering pass (#1302).
     // Checker errors are logged as warnings rather than halting compilation:
     // the checker does not yet have full stdlib coverage, so some valid programs
     // produce false-positive errors (UndefinedFunction, MissingEffect).
     // Missing types propagate as `Ty::Unknown` through TIR lowering.
     let mut expr_types = checker::collect_prelude_expr_types(&prelude);
-    let check_result = checker::check_with_prelude(&prelude, prog);
+    let check_result = checker::check_with_prelude(&checker_stdlib, prog);
     if check_result.has_errors() {
         for err in &check_result.errors {
             // Rendered, not `{err:?}` — the Debug dump printed the whole
@@ -168,9 +184,21 @@ fn prepare_llvm_text_tir_multi(
     prelude.extend(pkg_progs.iter().cloned());
     let builtins = loader::collect_llvm_text_builtins(std::slice::from_ref(prog));
 
+    // Checker-only prelude (#2017) — see the comment in `prepare_llvm_text` above.
+    let mut checker_stdlib = loader::load_implicit_prelude();
+    checker_stdlib.extend(load_full_prelude(
+        std::iter::once(prog)
+            .chain(sibling_progs.iter().copied())
+            .chain(pkg_progs.iter()),
+        PreludeMode::TypeCheck {
+            stdlib_dir: &stdlib::ensure_stdlib(),
+        },
+    ));
+    checker_stdlib.extend(pkg_progs.iter().cloned());
+
     // Check entry with siblings as cross-sibling prelude (Go model: same-dir files share decls).
     let mut expr_types = checker::collect_prelude_expr_types(&prelude);
-    let check_result = checker::check_with_two_preludes(&prelude, &sibling_progs, prog);
+    let check_result = checker::check_with_two_preludes(&checker_stdlib, &sibling_progs, prog);
     if check_result.has_errors() {
         for err in &check_result.errors {
             // Rendered, not `{err:?}` — the Debug dump printed the whole
@@ -203,7 +231,8 @@ fn prepare_llvm_text_tir_multi(
                 .collect();
             let mut t = checker::collect_prelude_expr_types(&prelude);
             t.extend(
-                checker::check_with_two_preludes(&prelude, &sibling_prelude, sibling).expr_types,
+                checker::check_with_two_preludes(&checker_stdlib, &sibling_prelude, sibling)
+                    .expr_types,
             );
             t
         })

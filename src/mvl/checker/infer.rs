@@ -377,7 +377,13 @@ impl TypeChecker {
                 // Stmt::If for why moves must be branch-scoped (#1991
                 // follow-up).
                 let pre_snapshot = self.env.snapshot_moved();
-                let then_ty = self.infer_block_type(then, None);
+                // `Expr::If` is used as a sub-expression (e.g. a `let` RHS or a
+                // lambda body) — its value is always consumed by whatever
+                // encloses it, so suppress ResultIgnored on the branch tail
+                // (fixes a false positive on e.g. `r.and_then(|x| if .. {
+                // Ok(y) } else { Err(e) })`, where the branches were wrongly
+                // flagged as discarding a `Result` they were actually returning).
+                let then_ty = self.infer_block_type(then, None, true);
                 // Promote branch type by joining with the condition's label (#26 implicit flow).
                 let promoted_then = {
                     let label = ifc::join_opt(
@@ -424,7 +430,8 @@ impl TypeChecker {
             Expr::Block(block) => {
                 // Infer the type of the last expression so that block-expressions
                 // (e.g. the else-branch of an if-expression) return the correct type.
-                self.infer_block_type(block, None)
+                // Sub-expression position — see the `Expr::If` comment above.
+                self.infer_block_type(block, None, true)
             }
 
             // #12: Struct construction
@@ -619,7 +626,10 @@ impl TypeChecker {
             Expr::Select { arms, .. } => {
                 for arm in arms {
                     self.infer_expr(&arm.expr);
-                    self.infer_block_type(&arm.body, None);
+                    // `select` itself always evaluates to `Unit` (fire-and-forget
+                    // arms) — an arm body's value is genuinely discarded, unlike
+                    // `Expr::If`/`Expr::Block` above, so keep the ResultIgnored check.
+                    self.infer_block_type(&arm.body, None, false);
                 }
                 Ty::Unit
             }
