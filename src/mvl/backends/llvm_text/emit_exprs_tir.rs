@@ -1450,9 +1450,7 @@ impl TextEmitter {
                                     // a call argument reuses an already-moved
                                     // (and possibly already-dropped) pointer.
                                     if let Some(hk) = Self::heap_kind(&te) {
-                                        self.fn_ctx
-                                            .heap_locals
-                                            .push((some_val.clone(), hk, false));
+                                        self.fn_ctx.heap_locals.push((some_val.clone(), hk, false));
                                     }
                                     self.fn_ctx.local_mvl_types.insert(var_name.clone(), te);
                                 }
