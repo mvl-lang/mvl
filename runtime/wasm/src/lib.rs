@@ -1992,6 +1992,63 @@ pub unsafe extern "C" fn _mvl_map_contains_key_si64(m: i32, k_ptr: i32, k_len: i
     0
 }
 
+/// `_mvl_map_keys_str(m) -> *MvlArray` — all keys as a `List[String]`
+/// (`*MvlArray` of `*MvlString`, `elem_size` 4 — same convention
+/// `_mvl_string_split` uses). Keys are refcount-cloned, so the returned
+/// list is independently owned and safe to drop without touching this
+/// map's own entries (same reasoning as `_mvl_map_get_str`, #2047).
+///
+/// Backs `Map[String, V]::keys()` for every `V` — the key side of a
+/// `Map[String, V]` is always `String` regardless of the value type.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn _mvl_map_keys_str(m: i32) -> i32 {
+    let arr = _mvl_array_new(4, 0);
+    if m == 0 {
+        return arr;
+    }
+    let map = &*(m as usize as *const MvlMap);
+    for entry in &map.entries {
+        let cloned = _mvl_string_clone(entry.key);
+        _mvl_array_push_i32(arr, cloned);
+    }
+    arr
+}
+
+/// `_mvl_map_values_si64(m) -> *MvlArray` — all values as a `List[V]`
+/// (`*MvlArray` of i64, `elem_size` 8) for `Map[String, V]` where `V` is a
+/// plain scalar. Values are handed back verbatim — same restriction
+/// `_mvl_map_get_si64` documents; use [`_mvl_map_values_str`] for
+/// `Map[String, String]`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn _mvl_map_values_si64(m: i32) -> i32 {
+    let arr = _mvl_array_new(8, 0);
+    if m == 0 {
+        return arr;
+    }
+    let map = &*(m as usize as *const MvlMap);
+    for entry in &map.entries {
+        _mvl_array_push_i64(arr, entry.val);
+    }
+    arr
+}
+
+/// `_mvl_map_values_str(m) -> *MvlArray` — all values as a `List[String]`
+/// for `Map[String, String]`. Each value is refcount-cloned before being
+/// pushed, same reasoning as `_mvl_map_get_str` (#2047).
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn _mvl_map_values_str(m: i32) -> i32 {
+    let arr = _mvl_array_new(4, 0);
+    if m == 0 {
+        return arr;
+    }
+    let map = &*(m as usize as *const MvlMap);
+    for entry in &map.entries {
+        let cloned = _mvl_string_clone(entry.val as i32);
+        _mvl_array_push_i32(arr, cloned);
+    }
+    arr
+}
+
 /// `_mvl_map_drop_si64(m)` — decrement refcount; free when it reaches zero.
 /// Each key `*MvlString` handle is explicitly dropped before the map is freed.
 #[unsafe(no_mangle)]

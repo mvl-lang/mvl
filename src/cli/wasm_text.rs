@@ -361,7 +361,16 @@ fn pull_in_missing_prelude_items(
         );
 
         let mut newly_added: Vec<TirFn> = Vec::new();
-        for name in collector.fn_calls {
+        // Sorted, not iterated straight off the `HashSet` — `fn_calls`'
+        // iteration order is randomized per-process (Rust's default
+        // hasher), and that order directly becomes `merged.fns`' final
+        // append order below, i.e. the emitted module's function order.
+        // Two builds of the identical source could pull in the same
+        // functions in a different relative order, which is nondeterminism
+        // a WASM build has no business having (#2191).
+        let mut sorted_fn_calls: Vec<String> = collector.fn_calls.into_iter().collect();
+        sorted_fn_calls.sort();
+        for name in sorted_fn_calls {
             if known_fns.contains(&name) {
                 continue;
             }

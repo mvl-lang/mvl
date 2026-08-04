@@ -540,6 +540,9 @@ const RUNTIME_IMPORTS: &[(&str, &str)] = &[
         "_mvl_map_contains_key_si64",
         "(param i32 i32 i32) (result i32)",
     ),
+    ("_mvl_map_keys_str", "(param i32) (result i32)"),
+    ("_mvl_map_values_si64", "(param i32) (result i32)"),
+    ("_mvl_map_values_str", "(param i32) (result i32)"),
     ("_mvl_map_drop_si64", "(param i32)"),
     // Group G — Result ops (#1821 extension). i32 pointer to heap-allocated
     // MvlResult. Ok = tag 0, Err = tag 1. Corpus scope: Result[Int, String].
@@ -2787,6 +2790,12 @@ fn collect_locals_expr(expr: &TirExpr, locals: &mut Vec<(String, Ty)>) {
                 // temp so we don't need a dedicated "raw i32" ty.
                 locals.push((mvl_string_temp_name(expr), Ty::Bool));
             }
+            // `String::find(sub)` stashes `_mvl_string_find`'s raw i64
+            // sentinel across the -1 check before wrapping it in an
+            // Option (#2191).
+            if peels_to_string(&receiver.ty) && method == "find" {
+                locals.push((string_find_temp_name(expr), Ty::Int));
+            }
             // `Float.to_string()` also returns `*MvlString` (via
             // `_mvl_float_to_string`, #2039) and gets the same unpack treatment.
             if matches!(receiver.ty, Ty::Float) && method == "to_string" {
@@ -4083,9 +4092,10 @@ fn emit_expr(out: &mut String, expr: &TirExpr, ctx: &Ctx) {
         // String query methods — route through `runtime/wasm/` ops. Receiver
         // leaves `(ptr, len)` on the stack; unary methods (`.len`,
         // `.is_empty`) leave that plus nothing else. Binary methods
-        // (`.contains`, `.starts_with`, `.ends_with`) then eval
-        // the arg to append `(np, nl)`. Runtime fn pops all four i32 args
-        // and returns the result.
+        // (`.contains`, `.starts_with`, `.ends_with`) then eval the arg to
+        // append `(np, nl)`. Runtime fn pops all four i32 args and returns
+        // the result. `.find` is NOT one of these — see the dedicated arm
+        // below (#2191).
         TirExprKind::MethodCall {
             receiver,
             method,
@@ -4102,6 +4112,41 @@ fn emit_expr(out: &mut String, expr: &TirExpr, ctx: &Ctx) {
                 emit_expr(out, a, ctx);
             }
             out.push_str(&format!("    call $_mvl_string_{method}\n"));
+        }
+        // `String::find(sub) -> Option[Int]` (std/strings.mvl:55) — unlike
+        // its siblings above, this one does NOT share their shape. The
+        // runtime primitive `_mvl_string_find` predates the Option
+        // convention and still returns a bare i64 sentinel (byte position,
+        // or -1 for "not found"); calling code correctly treats `.find`'s
+        // result as an `Option[Int]` handle (`.unwrap_or()`, matching
+        // `Some`/`None`, etc., per its declared return type), so this arm
+        // wraps the sentinel into a real `*MvlOption` instead of handing
+        // the bare i64 back. Grouping `find` into the shared arm above
+        // used to skip this wrap entirely — every `.find()` call produced
+        // a module that assembled but returned garbage the instant
+        // anything treated the result as the Option it's declared to be
+        // (#2191; only surfaced once #2191's build-nondeterminism fix made
+        // failures reproducible instead of intermittent).
+        TirExprKind::MethodCall {
+            receiver,
+            method,
+            args,
+        } if peels_to_string(&receiver.ty) && method == "find" && args.len() == 1 => {
+            ctx.needs_runtime.set(true);
+            let temp = string_find_temp_name(expr);
+            emit_expr(out, receiver, ctx);
+            emit_expr(out, &args[0], ctx);
+            out.push_str("    call $_mvl_string_find\n");
+            out.push_str(&format!("    local.set ${temp}\n"));
+            out.push_str(&format!("    local.get ${temp}\n"));
+            out.push_str("    i64.const -1\n");
+            out.push_str("    i64.eq\n");
+            out.push_str("    if (result i32)\n");
+            out.push_str("    call $_mvl_option_none\n");
+            out.push_str("    else\n");
+            out.push_str(&format!("    local.get ${temp}\n"));
+            out.push_str("    call $_mvl_option_some_i64\n");
+            out.push_str("    end\n");
         }
         // String allocation-returning methods (Group B). Runtime returns
         // `*MvlString`; the emitter immediately unpacks `.ptr` / `.len`
@@ -4312,6 +4357,41 @@ fn emit_expr(out: &mut String, expr: &TirExpr, ctx: &Ctx) {
             emit_expr(out, receiver, ctx); // map ptr
             emit_expr(out, &args[0], ctx); // key → (ptr, len)
             out.push_str("    call $_mvl_map_contains_key_si64\n");
+        }
+        // `Map[String, V].keys()` — `std/collections.mvl`'s own body
+        // (`self.keys()`) is a placeholder that's dead code only by
+        // convention (the Rust/LLVM backends special-case it by name the
+        // same way this arm does); without a matching WASM arm it fell
+        // through to executing that body literally, which self-recursed
+        // until the WASM call stack was exhausted (#2192). Keys are always
+        // String regardless of the map's value type.
+        TirExprKind::MethodCall {
+            receiver,
+            method,
+            args,
+        } if map_key_val_ty(&receiver.ty).is_some() && method == "keys" && args.is_empty() => {
+            ctx.needs_runtime.set(true);
+            emit_expr(out, receiver, ctx); // map ptr
+            out.push_str("    call $_mvl_map_keys_str\n");
+        }
+        // `Map[String, V].values()` — same #2192 reasoning as `keys()`
+        // above. Value representation follows `.get()`'s existing
+        // int-vs-string split (String values are `*MvlString` handles
+        // needing a refcount clone per entry; #2047).
+        TirExprKind::MethodCall {
+            receiver,
+            method,
+            args,
+        } if map_key_val_ty(&receiver.ty).is_some() && method == "values" && args.is_empty() => {
+            ctx.needs_runtime.set(true);
+            let val_ty = map_key_val_ty(&receiver.ty).map(|(_, v)| v.clone());
+            let getter = if val_ty.as_ref().is_some_and(|v| is_string_ty(v, ctx)) {
+                "_mvl_map_values_str"
+            } else {
+                "_mvl_map_values_si64"
+            };
+            emit_expr(out, receiver, ctx); // map ptr
+            out.push_str(&format!("    call ${getter}\n"));
         }
         // Set[T].contains(val) / List[T].contains(val) — backed by MvlArray, so
         // the same linear scan serves both. `contains` returns Bool (i32).
@@ -6596,20 +6676,22 @@ fn match_arms_result_ty(arms: &[TirMatchArm], ctx: &Ctx) -> Option<Ty> {
             TirMatchBody::Block(b) => block_trailing_ty(b, ctx)?,
             _ => return None,
         };
-        // `Never` (a diverging arm — `exit()`, `panic`-style builtins, an
-        // infinite `while true` with no `break`) is a bottom type: it
-        // unifies with any other arm's type without constraining the
-        // match's overall result type. Skipping it here — rather than
-        // merging it as a real type below — is what lets a match with one
-        // value-producing arm and one diverging arm still report the real
-        // arm's type. Without this, this loop's merge step bailed to
-        // `return None` for the WHOLE match the moment it saw a `Never` arm
-        // (`wasm_ty(Never)` never equals another arm's `wasm_ty`), the
-        // enclosing `if` lost its `(result ..)` declaration, and
-        // `wasm-tools validate` rejected the module with "values remaining
-        // on stack at end of block" — `std/args.mvl::coerce_arg`'s `Err(_)
-        // => { eprintln(..); exit(1) }` arm, reached from the log_analyzer
-        // example (#2198).
+        // A diverging arm (tail calls something `-> Never`, e.g. `exit(1)`)
+        // never actually leaves a value on the stack — its body always ends
+        // in an explicit `unreachable`, which satisfies any block result
+        // type regardless. It shouldn't have to agree with its sibling
+        // arms' type, and — since this same function recurses through
+        // `block_trailing_ty` for block-bodied arms — a `Never` arm nested
+        // inside an *inner* match must not poison the *outer* match's
+        // result-type inference into giving up entirely via the `?` above.
+        // That's exactly what happened with `std/args.mvl::coerce_arg`'s
+        // `match raw.parse_int() { Ok(n) => ArgValue::Int(n), Err(_) => {
+        // ...; exit(1) } }`: the `Err` arm's `Never` disagreed with `Ok`'s
+        // `ArgValue` by the check below, so the *whole* `coerce_arg` match
+        // got no declared result type even though every reachable arm
+        // (including its `ArgType::Str` sibling) leaves one — a WASM
+        // validator stack-imbalance, not an MVL-level bug (#2191, same
+        // failure class as #2053's original comment on this function).
         if matches!(arm_ty, Ty::Never) {
             continue;
         }
@@ -6729,6 +6811,14 @@ fn choice_idx_temp_name(expr: &TirExpr) -> String {
 fn get_clone_temp_name(expr: &TirExpr) -> String {
     format!("__gc_{}_{}", expr.span.offset, expr.span.len)
 }
+
+/// Temp local for `_mvl_string_find`'s raw i64 sentinel in
+/// `String::find(sub)`, held across the `-1` check so it can be read
+/// again inside the `else` branch that wraps it in `Some` (#2191).
+fn string_find_temp_name(expr: &TirExpr) -> String {
+    format!("__sf_{}_{}", expr.span.offset, expr.span.len)
+}
+
 /// Temp local name for the `*MvlOption` pointer stashed during an
 /// `.unwrap_or(default)` invocation (tee → tag test → conditional value
 /// extract → drop). Same span-based scheme.

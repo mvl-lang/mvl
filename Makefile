@@ -2,7 +2,7 @@
 .ONESHELL:
 SHELL := /bin/bash
 
-.PHONY: help version build build-runtime-wasm build-runtime-wasm-browser test-runtime-wasm-browser test test-full test-unit test-cli test-rust-integration test-requirements test-error-messages test-fmt-roundtrip test-rust-rust test-rust-llvm test-mvl-llvm test-rust-wasm test-mvl-wasm test-rust-tokio test-runtime-rust test-runtime-llvm test-runtime-wasm wasm-stub-report test-checker-parity test-checker-parity-update test-solver test-stdlib check-compiler assure-compiler test-mvl test-bootstrap-e2e test-bdd test-grammar-coverage bump-vendor-pins test-examples test-examples-rust test-examples-llvm test-examples-wasm coverage traceability verification evidence validate-keywords lint mvl-lint format format-check format-mvl format-mvl-check assurance assurance-gate audit-backend-ast audit-cli-prelude check-adr docs docs-serve install install-runtime setup doctor clean fuzz-rust fuzz-llvm fuzz-diff fuzz-mvl test-fuzz-list mutants mutants-actors
+.PHONY: help version build build-runtime-wasm build-runtime-wasm-browser test-runtime-wasm-browser test-wasm-browser test test-full test-unit test-cli test-rust-integration test-requirements test-error-messages test-fmt-roundtrip test-rust-rust test-rust-llvm test-mvl-llvm test-rust-wasm test-mvl-wasm test-rust-tokio test-runtime-rust test-runtime-llvm test-runtime-wasm wasm-stub-report test-checker-parity test-checker-parity-update test-solver test-stdlib check-compiler assure-compiler test-mvl test-bootstrap-e2e test-bdd test-grammar-coverage bump-vendor-pins test-examples test-examples-rust test-examples-llvm test-examples-wasm coverage traceability verification evidence validate-keywords lint mvl-lint format format-check format-mvl format-mvl-check assurance assurance-gate audit-backend-ast audit-cli-prelude check-adr docs docs-serve install install-runtime setup doctor clean fuzz-rust fuzz-llvm fuzz-diff fuzz-mvl test-fuzz-list mutants mutants-actors
 
 .DEFAULT_GOAL := help
 
@@ -532,6 +532,13 @@ test-runtime-wasm-browser: build build-runtime-wasm-browser ## Smoke-test the wa
 	@command -v node > /dev/null 2>&1 || { \
 	  printf "  \033[31m✗  node not installed\033[0m\n"; exit 1; }
 	MVL_RUNTIME_WASM_BROWSER=$(WASM_BROWSER_RUNTIME_PATH) node runtime/wasm-browser/smoke_test.mjs
+
+test-wasm-browser: build build-runtime-wasm-browser ## First guarantee: build+run mvl-lang/mvl-playground's curated examples under wasm-browser
+	@command -v wasm-tools > /dev/null 2>&1 || { \
+	  printf "  \033[31m✗  wasm-tools not installed — 'cargo install wasm-tools'\033[0m\n"; exit 1; }
+	@command -v node > /dev/null 2>&1 || { \
+	  printf "  \033[31m✗  node not installed\033[0m\n"; exit 1; }
+	MVL_RUNTIME_WASM_BROWSER=$(WASM_BROWSER_RUNTIME_PATH) node runtime/wasm-browser/test_curated_examples.mjs
 
 test-examples: build ## Run `make test` for every example subdirectory
 	@examples/test-all.sh
