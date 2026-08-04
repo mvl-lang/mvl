@@ -1717,7 +1717,7 @@ mod io_fd_pull_in_tests {
         assert!(errs.is_empty(), "lex errors: {errs:?}");
         let prog = p.parse_program();
         assert!(p.errors().is_empty(), "parse errors: {:?}", p.errors());
-        let wat = compile_wat(&prog, "test", AssertMode::Always);
+        let (wat, _tir) = compile_wat(&prog, "test", AssertMode::Always);
         validate(&wat);
         wat
     }
@@ -1778,6 +1778,59 @@ mod io_fd_pull_in_tests {
             "fn main() -> Unit ! Console {\n\
                  let f: Fd = stdout();\n\
                  let _: Result[Unit, IoError] = write(f, \"hi\\n\");\n\
+             }\n",
+        );
+    }
+}
+
+/// Regression tests for #2123: `String::from_chars(...)` / `String::from_bytes(...)`
+/// are qualified *static* calls (`FnCall`, not `MethodCall`), so an unrecognized
+/// name here doesn't trip the loud `unreachable`-stub warning the way a missed
+/// `MethodCall` arm does — `mvl build --backend=wasm` exited 0 with no warning
+/// while emitting `call $String::from_chars`, a symbol nothing declares. A plain
+/// stub-emptiness assertion can't catch that; only assembling and validating the
+/// real module can, same idiom as `io_fd_pull_in_tests` above.
+#[cfg(test)]
+mod string_static_ctor_tests {
+    use super::*;
+
+    fn validate(wat: &str) {
+        let bytes = match wat::parse_str(wat) {
+            Ok(b) => b,
+            Err(e) => panic!("failed to assemble emitted WAT: {e}\n--- WAT ---\n{wat}"),
+        };
+        if let Err(e) = wasmparser::Validator::new().validate_all(&bytes) {
+            panic!("emitted module failed validation: {e}\n--- WAT ---\n{wat}");
+        }
+    }
+
+    fn build_and_validate(src: &str) -> String {
+        let (mut p, errs) = Parser::new(src);
+        assert!(errs.is_empty(), "lex errors: {errs:?}");
+        let prog = p.parse_program();
+        assert!(p.errors().is_empty(), "parse errors: {:?}", p.errors());
+        let (wat, _tir) = compile_wat(&prog, "test", AssertMode::Always);
+        validate(&wat);
+        wat
+    }
+
+    #[test]
+    fn from_chars_assembles_and_validates() {
+        build_and_validate(
+            "test fn t() -> Unit {\n\
+                 let s: String = String::from_chars([\"a\", \"b\"]);\n\
+                 assert_eq(s, \"ab\");\n\
+             }\n",
+        );
+    }
+
+    #[test]
+    fn from_bytes_assembles_and_validates() {
+        build_and_validate(
+            "test fn t() -> Unit {\n\
+                 let bytes: List[Byte] = [from_int(72), from_int(105)];\n\
+                 let s: String = String::from_bytes(bytes);\n\
+                 assert_eq(s, \"Hi\");\n\
              }\n",
         );
     }

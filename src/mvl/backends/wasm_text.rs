@@ -438,6 +438,11 @@ const RUNTIME_IMPORTS: &[(&str, &str)] = &[
     // a raw byte value (i32, 0..=255) out (#2123). Same shape as
     // `.char_at()` above, but the payload is a scalar, not a `*MvlString`.
     ("_mvl_string_byte_at", "(param i32 i32 i64) (result i32)"),
+    // `String::from_chars(chars)` / `String::from_bytes(bytes)` — qualified
+    // static constructors (#2123), not `MethodCall`s. Both take a
+    // `*MvlArray` pointer and return a `*MvlString`.
+    ("_mvl_string_from_chars", "(param i32) (result i32)"),
+    ("_mvl_string_from_bytes", "(param i32) (result i32)"),
     // Group C — MvlArray (List[T] / Array[T, N] / Set[T] backing storage,
     // #1820). Pointer-typed as i32; elements accessed by byte offset with
     // `i32.load` / `i64.load` / `f64.load` on the pointer returned by
@@ -2659,6 +2664,11 @@ fn collect_locals_expr(expr: &TirExpr, locals: &mut Vec<(String, Ty)>) {
             if name == "format" && args.len() == 2 {
                 locals.push((mvl_string_temp_name(expr), Ty::Bool));
             }
+            // `String::from_chars(...)` / `String::from_bytes(...)` also
+            // return `*MvlString` and get the same unpack treatment (#2123).
+            if (name == "String::from_chars" || name == "String::from_bytes") && args.len() == 1 {
+                locals.push((mvl_string_temp_name(expr), Ty::Bool));
+            }
             // Slot pointer for `Box::new(x)` — `i32.store` consumes the
             // address, so the emitter tees it into this local to keep it as the
             // expression's value. Ty::Bool is this file's i32-slot convention.
@@ -3177,6 +3187,28 @@ fn emit_expr(out: &mut String, expr: &TirExpr, ctx: &Ctx) {
             if name == "Map::new" && args.is_empty() {
                 ctx.needs_runtime.set(true);
                 out.push_str("    call $_mvl_map_new_si64\n");
+                return;
+            }
+            // `String::from_chars(chars)` / `String::from_bytes(bytes)` —
+            // qualified static constructors (#2123). Same "silent" failure
+            // shape as `Map::new` above: the checker resolves the call to
+            // the literal name, nothing here recognized it, so it fell
+            // through to the generic named-function-call fallback and
+            // emitted `call $String::from_chars` — a symbol nothing
+            // declares, and `mvl build` exited 0 with no warning because
+            // this path isn't `MethodCall` dispatch (no stub to report).
+            // Runtime returns `*MvlString`; unpack like any other Group B
+            // string-allocating call.
+            if (name == "String::from_chars" || name == "String::from_bytes") && args.len() == 1 {
+                ctx.needs_runtime.set(true);
+                emit_expr(out, &args[0], ctx);
+                let runtime_fn = if name == "String::from_chars" {
+                    "_mvl_string_from_chars"
+                } else {
+                    "_mvl_string_from_bytes"
+                };
+                out.push_str(&format!("    call ${runtime_fn}\n"));
+                emit_unpack_mvl_string(out, expr);
                 return;
             }
             // `std.env`'s `args()` / `get(name)` — both `builtin fn`s that the
