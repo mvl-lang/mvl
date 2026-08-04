@@ -36,6 +36,12 @@ WASM_EXCLUDE := \
 	$(DIR)list_stubs.mvl \
 	$(DIR)random_dice/main.mvl
 
+# password_checker.mvl: deliberately missing bridge.rs (it demonstrates the
+# extern "rust" trust-boundary error itself) — `mvl build` needs a real
+# bridge.rs to link against, which only bridge_ok/ provides. Not a regression.
+SMOKE_EXCLUDE := \
+	$(DIR)password_checker.mvl
+
 help: ## Show this help
 	@grep -E '^[a-zA-Z0-9_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-12s\033[0m %s\n", $$1, $$2}'
 
@@ -149,3 +155,22 @@ test-rust: ## Run all example programs via the Rust transpiler backend
 
 assurance: ## Assurance report for all example programs (verbose)
 	$(MVL) assurance $(DIR) --verbose
+
+smoke: ## Smoke-test: build every program (proves compilation without running)
+	@pass=0; fail=0; \
+	OK="\033[32m✓\033[0m"; FAIL="\033[31m✗\033[0m"; \
+	for f in $(filter-out $(SMOKE_EXCLUDE),$(ALL_PROGRAMS)); do \
+		short=$${f#$(DIR)}; \
+		out=$$($(MVL) build "$$f" 2>&1); rc=$$?; \
+		if [ $$rc -eq 0 ]; then \
+			printf "  $$OK  %s\n" "$$short"; pass=$$((pass + 1)); \
+		else \
+			printf "  $$FAIL  %s\n" "$$short"; printf "%s\n" "$$out" | sed 's/^/         /'; fail=$$((fail + 1)); \
+		fi; \
+	done; \
+	echo ""; \
+	if [ $$fail -eq 0 ]; then \
+		printf "  \033[32m✓  $$pass passed, 0 failed\033[0m\n\n"; \
+	else \
+		printf "  \033[31m✗  $$pass passed, $$fail failed\033[0m\n\n"; exit 1; \
+	fi
