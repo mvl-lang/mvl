@@ -2,7 +2,7 @@
 .ONESHELL:
 SHELL := /bin/bash
 
-.PHONY: help version build build-runtime-wasm test test-full test-unit test-rust-integration test-requirements test-error-messages test-fmt-roundtrip test-rust-rust test-rust-llvm test-mvl-llvm test-rust-wasm test-mvl-wasm test-rust-tokio test-runtime-rust test-runtime-llvm test-runtime-wasm wasm-stub-report test-checker-parity test-checker-parity-update test-solver test-stdlib check-compiler assure-compiler test-mvl test-bootstrap-e2e test-bdd test-grammar-coverage bump-vendor-pins test-examples test-examples-rust test-examples-llvm test-examples-wasm coverage traceability verification evidence validate-keywords lint mvl-lint format format-check format-mvl format-mvl-check assurance assurance-gate audit-backend-ast audit-cli-prelude check-adr docs docs-serve install install-runtime setup doctor clean fuzz-rust fuzz-llvm fuzz-diff fuzz-mvl test-fuzz-list mutants mutants-actors
+.PHONY: help version build build-runtime-wasm test test-full test-unit test-cli test-rust-integration test-requirements test-error-messages test-fmt-roundtrip test-rust-rust test-rust-llvm test-mvl-llvm test-rust-wasm test-mvl-wasm test-rust-tokio test-runtime-rust test-runtime-llvm test-runtime-wasm wasm-stub-report test-checker-parity test-checker-parity-update test-solver test-stdlib check-compiler assure-compiler test-mvl test-bootstrap-e2e test-bdd test-grammar-coverage bump-vendor-pins test-examples test-examples-rust test-examples-llvm test-examples-wasm coverage traceability verification evidence validate-keywords lint mvl-lint format format-check format-mvl format-mvl-check assurance assurance-gate audit-backend-ast audit-cli-prelude check-adr docs docs-serve install install-runtime setup doctor clean fuzz-rust fuzz-llvm fuzz-diff fuzz-mvl test-fuzz-list mutants mutants-actors
 
 .DEFAULT_GOAL := help
 
@@ -177,6 +177,7 @@ MVLR ?= $(shell test -x tools/mvlr && echo tools/mvlr || command -v mvlr 2>/dev/
 TEST_FAST_SUITES := \
 	"Grammar coverage  |test-grammar-coverage" \
 	"Unit tests        |test-unit" \
+	"CLI/bin tests     |test-cli" \
 	"Type checker      |test-type-checker" \
 	"Requirements      |test-requirements" \
 	"Error messages    |test-error-messages" \
@@ -233,7 +234,7 @@ define run_test_suites
 	fi
 endef
 
-test: build ## Fast pre-PR gate: unit, type checker, rust/rust backend, solver, grammar, stdlib
+test: build ## Fast pre-PR gate: unit, cli, type checker, rust/rust backend, solver, grammar, stdlib
 	$(call run_test_suites,$(TEST_FAST_SUITES))
 
 test-full: build ## Full pre-merge gate: everything in `test` plus codegen, parity, MVL compiler, BDD, backends, examples (~10–20 min)
@@ -241,6 +242,15 @@ test-full: build ## Full pre-merge gate: everything in `test` plus codegen, pari
 
 test-unit: ## Run unit tests only
 	cargo test --lib
+
+# `src/cli/*`'s own `#[cfg(test)]` modules (e.g. wasm_text.rs's
+# io_fd_pull_in_tests, string_static_ctor_tests) only compile into the `mvl`
+# *binary* crate (`mod cli;` lives in src/main.rs, not src/lib.rs) — `cargo
+# test --lib` above never touches them. Before this target existed, one such
+# module silently stopped compiling for two days (#2123/#2188) after
+# compile_wat's signature changed, and nothing caught it.
+test-cli: ## Run the `mvl` binary crate's own unit tests (src/cli/*), not covered by test-unit
+	cargo test --bin mvl
 
 test-type-checker: ## Run type checker integration tests (IFC, effects, labels, format)
 	cargo test --test type_checker
