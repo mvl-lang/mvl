@@ -41,6 +41,10 @@ librust_out.rlib
 # tests/spikes/006-wasm-backend/ are checked in on purpose.
 examples/**/*.wat
 
+# runtime/wasm-browser/smoke_test.mjs compiles smoke.mvl in place each run.
+runtime/wasm-browser/smoke.wat
+runtime/wasm-browser/smoke.wasm
+
 # Fuzzing runtime artifacts (cargo-fuzz)
 fuzz/corpus/
 fuzz/artifacts/

@@ -1,7 +1,10 @@
-//! CLI coverage for `--target=<name>` under `--backend=wasm` (#2093 Phase 2,
-//! step 1: flag design). `wasm-browser` is accepted by the parser but the
-//! JS-host runtime doesn't exist yet, so build/test must reject it with a
-//! clear message instead of silently falling through to the WASI path.
+//! CLI coverage for `--target=<name>` under `--backend=wasm` (#2093 Phase 2).
+//! `mvl build --backend=wasm --target=wasm-browser` emits the same WAT as
+//! every other target — the difference is entirely in which runtime module
+//! gets linked in at instantiation time (see `runtime/wasm-browser/`,
+//! ADR-0063) — so `build` accepts it like any other target. `mvl test
+//! --backend=wasm --target=wasm-browser` still rejects: `cmd_test_wasm`'s
+//! harness is wasmtime-based and has no browser/JS host to run against.
 
 use std::io::Write;
 use std::process::Command;
@@ -73,9 +76,9 @@ fn wasm_build_accepts_default_and_wasi_targets() {
 }
 
 #[test]
-fn wasm_build_rejects_wasm_browser_target_until_implemented() {
+fn wasm_build_accepts_wasm_browser_target() {
     let tmp = TempDir::new("wasm-target-browser");
-    tmp.write("hello.mvl", HELLO);
+    let file = tmp.write("hello.mvl", HELLO);
     let out = Command::new(mvl_bin())
         .args([
             "build",
@@ -87,13 +90,14 @@ fn wasm_build_rejects_wasm_browser_target_until_implemented() {
         .output()
         .expect("run mvl build");
     assert!(
-        !out.status.success(),
-        "expected --target=wasm-browser to be rejected until implemented"
+        out.status.success(),
+        "mvl build --backend=wasm --target=wasm-browser failed:\n  stdout: {}\n  stderr: {}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr),
     );
-    let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
-        stderr.contains("wasm-browser") && stderr.contains("not yet implemented"),
-        "expected a clear not-yet-implemented error, got:\n{stderr}"
+        file.with_extension("wat").exists(),
+        "expected hello.wat to be written"
     );
 }
 
