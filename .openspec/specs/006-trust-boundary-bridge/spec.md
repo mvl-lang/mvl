@@ -77,9 +77,9 @@ If a program declares `extern "rust"` blocks but no `bridge.rs` is found in the 
 
 #### Scenario: Missing bridge.rs
 
-- GIVEN `tests/corpus/09_full_programs/password_checker.mvl` declares `extern "rust"`
-- AND no `bridge.rs` exists in `tests/corpus/09_full_programs/`
-- WHEN `mvl build tests/corpus/09_full_programs/password_checker.mvl` is run
+- GIVEN `tests/fixtures/14_ffi/password_checker.mvl` declares `extern "rust"`
+- AND no `bridge.rs` exists in `tests/fixtures/14_ffi/`
+- WHEN `mvl build tests/fixtures/14_ffi/password_checker.mvl` is run
 - THEN the error message MUST include the source file path and the expected bridge.rs location
 - AND the process MUST exit with a non-zero status
 
@@ -99,8 +99,8 @@ If a program declares `extern "rust"` blocks but no `bridge.rs` is found in the 
 
 #### Scenario: No extern rust — no bridge lookup
 
-- GIVEN `tests/corpus/09_full_programs/hello_world.mvl` with no `extern "rust"` blocks
-- WHEN `mvl build tests/corpus/09_full_programs/hello_world.mvl` is run
+- GIVEN `examples/programs/hello_world.mvl` with no `extern "rust"` blocks
+- WHEN `mvl build examples/programs/hello_world.mvl` is run
 - THEN the build MUST succeed without looking for or copying any `bridge.rs`
 
 #### Scenario: Bridge file present but not needed

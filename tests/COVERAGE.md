@@ -100,7 +100,6 @@ Requirements: 1=Type Safety, 2=Memory Safety, 3=Exhaustive Match, 4=Null Elimina
 | **examples/programs/** |||||||||||||
 | examples/programs/auth_handler.mvl | ✓ | | | | ✓ | | | | | | ✓ | Auth: Result + IFC labels |
 | examples/programs/box_field_deref.mvl | ✓ | | | | | ✓ | | | | | | Box field deref |
-| examples/programs/bridge_ok/main.mvl | ✓ | | | | | | ✓ | | | | | Bridge + extern Rust |
 | examples/programs/calculator.mvl | ✓ | | ✓ | | | | | ✓ | | | | Total fns, match |
 | examples/programs/collections_basic.mvl | ✓ | | | | | | | | | | | List/Map/Set usage |
 | examples/programs/core_types_demo.mvl | ✓ | | | | | | | | | | | Core type showcase |
@@ -110,12 +109,14 @@ Requirements: 1=Type Safety, 2=Memory Safety, 3=Exhaustive Match, 4=Null Elimina
 | examples/programs/hello_world.mvl | ✓ | | | | | | ✓ | | | | | Minimal: fn main + println |
 | examples/programs/hof_lambdas.mvl | ✓ | | | | | | | | | | | Higher-order functions |
 | examples/programs/linked_list.mvl | ✓ | | | | | ✓ | | ✓ | | | | Recursive enum, Box, total |
-| examples/programs/password_checker.mvl | ✓ | | | | | | | | | | ✓ | IFC: password taint flow |
 | examples/programs/println_non_string_first_arg.mvl | ✓ | | | | | | ✓ | | | | | println type safety |
 | examples/programs/random_dice/main.mvl | ✓ | | | | | | ✓ | | | | | Random effect program |
 | examples/programs/safe_division.mvl | ✓ | | | | ✓ | | | | | ✓ | ✓ | Result + refinement + IFC |
 | examples/programs/shapes.mvl | ✓ | | ✓ | | | | | | | | | ADTs, multi-enum match |
 | examples/programs/struct_value_semantics.mvl | ✓ | | | | | ✓ | | | | | | Clone-on-pass |
+| **tests/fixtures/14_ffi/** |||||||||||||
+| tests/fixtures/14_ffi/bridge_ok/main.mvl | ✓ | | | | | | ✓ | | | | | Bridge + extern Rust (Spec 006 positive fixture) |
+| tests/fixtures/14_ffi/password_checker.mvl | ✓ | | | | | | | | | | ✓ | IFC: password taint flow (Spec 006 missing-bridge negative fixture) |
 | **11_bdd/** |||||||||||||
 | 11_bdd/calculator_bdd_test.mvl | ✓ | | ✓ | | | | | ✓ | | | | BDD tests, total fns |
 | **12_contracts/** |||||||||||||

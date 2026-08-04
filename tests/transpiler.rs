@@ -495,7 +495,7 @@ fn extern_rust_adds_mvl_runtime_to_cargo_toml() {
 fn full_program_password_checker_transpiles() {
     use mvl::mvl::backends::rust::transpile;
     use mvl::mvl::checker::check;
-    let src = include_str!("../examples/programs/password_checker.mvl");
+    let src = include_str!("../tests/fixtures/14_ffi/password_checker.mvl");
     let (mut p, lex_errs) = mvl::mvl::parser::Parser::new(src);
     assert!(lex_errs.is_empty(), "lex errors: {lex_errs:?}");
     let prog = p.parse_program();

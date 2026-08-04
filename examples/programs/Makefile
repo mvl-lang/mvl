@@ -149,3 +149,22 @@ test-rust: ## Run all example programs via the Rust transpiler backend
 
 assurance: ## Assurance report for all example programs (verbose)
 	$(MVL) assurance $(DIR) --verbose
+
+smoke: ## Smoke-test: build every program (proves compilation without running)
+	@pass=0; fail=0; \
+	OK="\033[32m✓\033[0m"; FAIL="\033[31m✗\033[0m"; \
+	for f in $(ALL_PROGRAMS); do \
+		short=$${f#$(DIR)}; \
+		out=$$($(MVL) build "$$f" 2>&1); rc=$$?; \
+		if [ $$rc -eq 0 ]; then \
+			printf "  $$OK  %s\n" "$$short"; pass=$$((pass + 1)); \
+		else \
+			printf "  $$FAIL  %s\n" "$$short"; printf "%s\n" "$$out" | sed 's/^/         /'; fail=$$((fail + 1)); \
+		fi; \
+	done; \
+	echo ""; \
+	if [ $$fail -eq 0 ]; then \
+		printf "  \033[32m✓  $$pass passed, 0 failed\033[0m\n\n"; \
+	else \
+		printf "  \033[31m✗  $$pass passed, $$fail failed\033[0m\n\n"; exit 1; \
+	fi

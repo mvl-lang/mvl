@@ -28,6 +28,13 @@ fn corpus(name: &str) -> String {
     format!("{}/examples/programs/{name}", env!("CARGO_MANIFEST_DIR"))
 }
 
+fn corpus_14_ffi(name: &str) -> String {
+    format!(
+        "{}/tests/fixtures/14_ffi/{name}",
+        env!("CARGO_MANIFEST_DIR")
+    )
+}
+
 // ── helpers ───────────────────────────────────────────────────────────────
 
 fn run_check(file: &str) -> std::process::Output {
@@ -278,7 +285,7 @@ fn auth_handler_check_passes() {
 /// Spec 006 Requirement 3: Missing Bridge Error [MUST].
 #[test]
 fn missing_bridge_exits_nonzero_with_actionable_error() {
-    let out = run_mvl_build(&corpus("password_checker.mvl"));
+    let out = run_mvl_build(&corpus_14_ffi("password_checker.mvl"));
     assert!(
         !out.status.success(),
         "mvl build must exit non-zero when bridge.rs is absent; \
@@ -303,7 +310,7 @@ fn missing_bridge_exits_nonzero_with_actionable_error() {
 /// Spec 006 Requirement 1 (Bridge Discovery) and Requirement 2 (Bridge Injection).
 #[test]
 fn build_succeeds_with_valid_bridge() {
-    let out = run_mvl_build(&corpus("bridge_ok"));
+    let out = run_mvl_build(&corpus_14_ffi("bridge_ok"));
     assert!(
         out.status.success(),
         "mvl build must succeed with a valid bridge.rs; \
