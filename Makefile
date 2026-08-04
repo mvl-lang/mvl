@@ -2,7 +2,7 @@
 .ONESHELL:
 SHELL := /bin/bash
 
-.PHONY: help version build build-runtime-wasm test test-full test-unit test-cli test-rust-integration test-requirements test-error-messages test-fmt-roundtrip test-rust-rust test-rust-llvm test-mvl-llvm test-rust-wasm test-mvl-wasm test-rust-tokio test-runtime-rust test-runtime-llvm test-runtime-wasm wasm-stub-report test-checker-parity test-checker-parity-update test-solver test-stdlib check-compiler assure-compiler test-mvl test-bootstrap-e2e test-bdd test-grammar-coverage bump-vendor-pins test-examples test-examples-rust test-examples-llvm test-examples-wasm coverage traceability verification evidence validate-keywords lint mvl-lint format format-check format-mvl format-mvl-check assurance assurance-gate audit-backend-ast audit-cli-prelude check-adr docs docs-serve install install-runtime setup doctor clean fuzz-rust fuzz-llvm fuzz-diff fuzz-mvl test-fuzz-list mutants mutants-actors
+.PHONY: help version build build-runtime-wasm build-runtime-wasm-browser test-runtime-wasm-browser test test-full test-unit test-cli test-rust-integration test-requirements test-error-messages test-fmt-roundtrip test-rust-rust test-rust-llvm test-mvl-llvm test-rust-wasm test-mvl-wasm test-rust-tokio test-runtime-rust test-runtime-llvm test-runtime-wasm wasm-stub-report test-checker-parity test-checker-parity-update test-solver test-stdlib check-compiler assure-compiler test-mvl test-bootstrap-e2e test-bdd test-grammar-coverage bump-vendor-pins test-examples test-examples-rust test-examples-llvm test-examples-wasm coverage traceability verification evidence validate-keywords lint mvl-lint format format-check format-mvl format-mvl-check assurance assurance-gate audit-backend-ast audit-cli-prelude check-adr docs docs-serve install install-runtime setup doctor clean fuzz-rust fuzz-llvm fuzz-diff fuzz-mvl test-fuzz-list mutants mutants-actors
 
 .DEFAULT_GOAL := help
 
@@ -510,6 +510,28 @@ test-runtime-wasm: ## Unit-test runtime/wasm/ under wasmtime (wasm32-wasip1 targ
 	@command -v wasmtime > /dev/null 2>&1 || { \
 	  printf "  \033[31m✗  wasmtime not installed — see https://wasmtime.dev/\033[0m\n"; exit 1; }
 	cargo test --target wasm32-wasip1 -p mvl_runtime_wasm
+
+# runtime/wasm-browser/ (#2093 Phase 2, ADR-0063) — same mvl_runtime_wasm
+# crate, compiled to wasm32-unknown-unknown instead: no WASI, its handful
+# of OS-touching functions (std.time/std.random's clock seed) resolve to a
+# JS import instead (see .cargo/config.toml's --import-undefined and
+# runtime/wasm-browser/runtime.mjs). std.env/std.io simply aren't compiled
+# in on this target — see runtime/wasm/src/lib.rs's module doc.
+WASM_BROWSER_RUNTIME_PATH := $(CURDIR)/target/wasm32-unknown-unknown/debug/mvl_runtime_wasm.wasm
+
+build-runtime-wasm-browser: ## Build runtime/wasm/ crate → wasm32-unknown-unknown target, shrunk with wasm-opt -Oz
+	@rustup target list --installed | grep -q wasm32-unknown-unknown || { \
+	  echo "installing wasm32-unknown-unknown target..."; \
+	  rustup target add wasm32-unknown-unknown; }
+	@command -v wasm-opt > /dev/null 2>&1 || { \
+	  printf "  \033[31m✗  wasm-opt not installed — 'brew install binaryen'\033[0m\n"; exit 1; }
+	cargo build -p mvl_runtime_wasm --target wasm32-unknown-unknown $(BUILD_CARGO_FLAGS)
+	wasm-opt -Oz -o $(WASM_BROWSER_RUNTIME_PATH) $(WASM_BROWSER_RUNTIME_PATH)
+
+test-runtime-wasm-browser: build build-runtime-wasm-browser ## Smoke-test the wasm-browser target end-to-end under Node
+	@command -v node > /dev/null 2>&1 || { \
+	  printf "  \033[31m✗  node not installed\033[0m\n"; exit 1; }
+	MVL_RUNTIME_WASM_BROWSER=$(WASM_BROWSER_RUNTIME_PATH) node runtime/wasm-browser/smoke_test.mjs
 
 test-examples: build ## Run `make test` for every example subdirectory
 	@examples/test-all.sh

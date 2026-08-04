@@ -1,0 +1,34 @@
+// runtime/wasm-browser/smoke.mvl — end-to-end fixture for
+// test-runtime-wasm-browser (#2093 Phase 2, ADR-0063). Not part of the
+// tests/corpus/ suite: this exercises println (WASI fd_write shim),
+// std.time.now (JS Date.now() shim), and std.random.int/choice (pure
+// Rust, no host call) all in one program with a `fn main`, which the
+// corpus's `test fn`-only convention doesn't produce.
+
+use std.time.{now, _instant_epoch_seconds}
+use std.random.{int, choice}
+
+fn main() -> Unit ! Console + Clock + Random {
+    println("hello from wasm-browser");
+
+    let secs: Int = _instant_epoch_seconds(now());
+    if secs > 0 {
+        println("clock ok");
+    } else {
+        println("clock FAILED");
+    }
+
+    let n: Int = int(1, 1);
+    if n == 1 {
+        println("random.int ok");
+    } else {
+        println("random.int FAILED");
+    }
+
+    let xs: List[Int] = [42];
+    let c: Option[Int] = choice(xs);
+    match c {
+        Some(v) => if v == 42 { println("random.choice ok") } else { println("random.choice FAILED") },
+        None => println("random.choice FAILED"),
+    }
+}

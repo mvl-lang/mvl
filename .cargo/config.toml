@@ -21,6 +21,15 @@
 [target.wasm32-wasip1]
 runner = "wasmtime run --dir=. --"
 
+# `runtime/wasm-browser/` target (#2093 Phase 2, ADR-0063): `mvl_runtime_wasm`
+# also compiles here with its handful of OS-touching functions swapped for
+# `extern "C"` declarations with no Rust-side definition (e.g. `_mvl_js_now_ms`)
+# — by default wasm-ld errors on those as undefined symbols. `--import-undefined`
+# tells it to emit them as ordinary wasm imports instead, resolved at
+# instantiation time by the JS shim in `runtime/wasm-browser/`.
+[target.wasm32-unknown-unknown]
+rustflags = ["-C", "link-args=--import-undefined"]
+
 [env]
 Z3_SYS_Z3_HEADER = { value = "/opt/homebrew/include/z3.h", force = false }
 # macOS arm64 homebrew: z3 lib directory for the linker.
