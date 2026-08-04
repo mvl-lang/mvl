@@ -607,7 +607,11 @@ impl TextEmitter {
             }
         }
 
-        let body_val = self.emit_block_tir(&f.body)?;
+        // Thread the function's declared return type down so a bare
+        // tail-position `if`/`else` (no `let`, no explicit `return`) types
+        // its merge-point `phi` correctly instead of guessing from one
+        // branch's emitted value text (#2146).
+        let body_val = self.emit_block_tir_typed(&f.body, Some(&f.ret_ty))?;
 
         if !self.fn_ctx.terminated {
             if let Some(crate::mvl::ir::TirStmt::Expr { expr, .. }) = f.body.stmts.last() {

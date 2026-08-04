@@ -335,6 +335,23 @@ fn pull_in_missing_prelude_items(
                 type_seed.insert(type_name.to_string());
             }
         }
+        // A qualified payload-enum variant *constructor call* (e.g.
+        // `Value::Number(1.0)`) lowers to `TirExprKind::FnCall { name:
+        // "Value::Number", .. }`, not a bare `Var` — invisible to the
+        // `variant_refs` loop above, which only sees unit-variant
+        // references. Without this, a payload enum reached *only* through
+        // constructor calls (never a bare unit-variant `Var`, never named in
+        // a param/return type) never gets its own `TirTypeDecl` pulled into
+        // `merged.types`, so `ctx.payload_enums` never learns about it —
+        // both constructing and matching the variant silently stub, even
+        // though an identically-shaped *locally-declared* enum (whose
+        // `TirTypeDecl` is already in `merged.types` from the initial
+        // `lower()`) works fine (#2171).
+        for name in &collector.fn_calls {
+            if let Some((type_name, _)) = name.split_once("::") {
+                type_seed.insert(type_name.to_string());
+            }
+        }
         pull_in_types(
             merged,
             &mut known_types,

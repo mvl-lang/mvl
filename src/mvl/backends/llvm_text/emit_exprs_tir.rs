@@ -86,7 +86,7 @@ impl TextEmitter {
             TirExprKind::Block(block) => self.emit_block_tir(block),
 
             TirExprKind::If { cond, then, else_ } => {
-                self.emit_if_expr_tir(cond, then, else_.as_deref())
+                self.emit_if_expr_tir(cond, then, else_.as_deref(), &expr.ty)
             }
 
             TirExprKind::FnCall { name, args, .. } => self.emit_fn_call_tir(name, args),
@@ -151,15 +151,28 @@ impl TextEmitter {
     }
 
     /// TIR variant of [`Self::emit_if_expr`].
+    ///
+    /// `result_ty` is the whole if-expression's own checker-resolved type
+    /// (`expr.ty` at the call site) — used to type the merge point's `phi`
+    /// correctly instead of guessing from one branch's emitted value text.
+    /// A bare literal branch value (e.g. a `Char` literal, emitted as a raw
+    /// numeric string with no `%` register prefix) gave `infer_val_type` no
+    /// way to tell an `i32`-shaped `Char` from an `i64`-shaped `Int` — it
+    /// silently defaulted to `i64`, producing a `phi i64` merged into an
+    /// `i32`-declared return slot: invalid IR that crashes `lli` at module
+    /// load (#2146).
     fn emit_if_expr_tir(
         &mut self,
         cond: &TirExpr,
         then: &crate::mvl::ir::TirBlock,
         else_: Option<&TirExpr>,
+        result_ty: &Ty,
     ) -> Result<Option<String>, String> {
         match else_ {
             Some(e) => match &e.kind {
-                TirExprKind::Block(b) => self.emit_if_phi_tir_from_blocks(cond, then, Some(b)),
+                TirExprKind::Block(b) => {
+                    self.emit_if_phi_tir_from_blocks(cond, then, Some(b), Some(result_ty))
+                }
                 TirExprKind::If { .. } => {
                     let cond_val = match self.emit_expr_tir(cond)? {
                         Some(v) => v,
@@ -172,7 +185,7 @@ impl TextEmitter {
                         "br i1 {cond_val}, label %{then_bb}, label %{else_bb}"
                     ));
                     self.start_bb(&then_bb);
-                    let then_val = self.emit_block_tir(then)?;
+                    let then_val = self.emit_block_tir_typed(then, Some(result_ty))?;
                     let then_end = self.fn_ctx.current_bb.clone();
                     if !self.fn_ctx.terminated {
                         self.push_instr(&format!("br label %{merge_bb}"));
@@ -186,7 +199,7 @@ impl TextEmitter {
                     self.start_bb(&merge_bb);
                     match (then_val, else_val) {
                         (Some(tv), Some(ev)) => {
-                            let phi_ty = self.infer_val_type(&tv);
+                            let phi_ty = self.ty_to_llvm_ctx(result_ty);
                             let result = self.next_reg();
                             self.push_instr(&format!(
                                 "{result} = phi {phi_ty} [ {tv}, %{then_end} ], [ {ev}, %{else_end} ]"
@@ -197,9 +210,9 @@ impl TextEmitter {
                         _ => Ok(None),
                     }
                 }
-                _ => self.emit_if_phi_tir_from_blocks(cond, then, None),
+                _ => self.emit_if_phi_tir_from_blocks(cond, then, None, Some(result_ty)),
             },
-            None => self.emit_if_phi_tir_from_blocks(cond, then, None),
+            None => self.emit_if_phi_tir_from_blocks(cond, then, None, Some(result_ty)),
         }
     }
 
@@ -1395,41 +1408,54 @@ impl TextEmitter {
             self.fn_ctx.terminated = false;
 
             let mut bound_vars: Vec<String> = Vec::new();
+            // `Option[Unit]`'s payload slot has no meaningful data to load —
+            // `inner_load_ty` resolves to LLVM's `void`, which is only a
+            // valid *function return* type, never a value type. `load void,
+            // ptr %pp` is invalid IR that crashes `lli` at module load, even
+            // for a `Some(_)` arm that never uses the payload (#2145).
+            // Mirrors `emit_result_match_tir`'s `Ok` arm, which already
+            // skips the equivalent load for `Result[Unit, E]`.
             if let Pattern::Some { inner, .. } = &arm.pattern {
-                let pp = self.next_reg();
-                self.push_instr(&format!(
-                    "{pp} = extractvalue {RESULT_LLVM_TY} {scrut_val}, 1"
-                ));
-                let some_val = self.next_reg();
-                self.push_instr(&format!("{some_val} = load {inner_load_ty}, ptr {pp}"));
-                self.fn_ctx
-                    .reg_types
-                    .insert(some_val.clone(), inner_load_ty.clone());
-                match inner.as_ref() {
-                    Pattern::Ident(var_name, _) if var_name != "_" && !var_name.contains("::") => {
-                        self.fn_ctx
-                            .locals
-                            .insert(var_name.clone(), some_val.clone());
-                        if let Some(ref imty) = inner_ty {
-                            if let Some(te) = super::emit_helpers::ty_to_type_expr(imty) {
-                                self.fn_ctx.local_mvl_types.insert(var_name.clone(), te);
+                if inner_load_ty != "void" {
+                    let pp = self.next_reg();
+                    self.push_instr(&format!(
+                        "{pp} = extractvalue {RESULT_LLVM_TY} {scrut_val}, 1"
+                    ));
+                    let some_val = self.next_reg();
+                    self.push_instr(&format!("{some_val} = load {inner_load_ty}, ptr {pp}"));
+                    self.fn_ctx
+                        .reg_types
+                        .insert(some_val.clone(), inner_load_ty.clone());
+                    match inner.as_ref() {
+                        Pattern::Ident(var_name, _)
+                            if var_name != "_" && !var_name.contains("::") =>
+                        {
+                            self.fn_ctx
+                                .locals
+                                .insert(var_name.clone(), some_val.clone());
+                            if let Some(ref imty) = inner_ty {
+                                if let Some(te) = super::emit_helpers::ty_to_type_expr(imty) {
+                                    self.fn_ctx.local_mvl_types.insert(var_name.clone(), te);
+                                }
                             }
+                            bound_vars.push(var_name.clone());
                         }
-                        bound_vars.push(var_name.clone());
+                        // `Some(Variant(x))` / `Some(Variant { f: x })` (#2177) —
+                        // the discriminant check (if needed) already happened in
+                        // `some_dispatch_bb`; here just extract and bind the
+                        // nested variant's own payload fields.
+                        Pattern::TupleStruct { name, fields, .. } => {
+                            bound_vars.extend(
+                                self.bind_tuple_variant_fields_tir(name, fields, &some_val),
+                            );
+                        }
+                        Pattern::Struct { name, fields, .. } => {
+                            bound_vars.extend(
+                                self.bind_struct_variant_fields_tir(name, fields, &some_val),
+                            );
+                        }
+                        _ => {}
                     }
-                    // `Some(Variant(x))` / `Some(Variant { f: x })` (#2177) —
-                    // the discriminant check (if needed) already happened in
-                    // `some_dispatch_bb`; here just extract and bind the
-                    // nested variant's own payload fields.
-                    Pattern::TupleStruct { name, fields, .. } => {
-                        bound_vars
-                            .extend(self.bind_tuple_variant_fields_tir(name, fields, &some_val));
-                    }
-                    Pattern::Struct { name, fields, .. } => {
-                        bound_vars
-                            .extend(self.bind_struct_variant_fields_tir(name, fields, &some_val));
-                    }
-                    _ => {}
                 }
             }
 

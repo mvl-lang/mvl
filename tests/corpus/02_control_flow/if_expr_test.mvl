@@ -35,3 +35,69 @@ test fn if_expr_chained_negative() -> Unit {
     let sign: Int = if n > 0 { 1 } else if n < 0 { -1 } else { 0 };
     assert_eq(sign, -1);
 }
+
+// #2146: a `Char` literal branch value has no `%`-register prefix and no
+// `.` (unlike a Float), so LLVM's phi-type inference — which otherwise
+// reads the type off one branch's emitted value text — had no way to tell
+// an `i32`-shaped `Char` from an `i64`-shaped `Int`; it silently defaulted
+// to `i64`, producing invalid IR wherever the merged value flowed into an
+// `i32`-typed slot (a function's declared `Char` return, an `i32` local).
+// Covers the three positions that merge a Char if/else into a value: a
+// `let`-bound if-expression, a bare tail-position if/else statement (a
+// function's own implicit return, no `let`), and an `else if` chain.
+fn char_if_expr_let_bound(use_default: Bool) -> Char {
+    let c: Char = if use_default { 'd' } else { 'e' };
+    c
+}
+
+test fn if_expr_char_let_bound() -> Unit {
+    assert_eq(char_if_expr_let_bound(true), 'd');
+    assert_eq(char_if_expr_let_bound(false), 'e');
+}
+
+fn char_if_tail_position(use_default: Bool) -> Char {
+    if use_default {
+        'x'
+    } else {
+        'y'
+    }
+}
+
+test fn if_expr_char_bare_tail_position() -> Unit {
+    assert_eq(char_if_tail_position(true), 'x');
+    assert_eq(char_if_tail_position(false), 'y');
+}
+
+fn char_if_else_if_chain(n: Int) -> Char {
+    if n == 0 {
+        'a'
+    } else if n == 1 {
+        'b'
+    } else {
+        'c'
+    }
+}
+
+test fn if_expr_char_else_if_chain() -> Unit {
+    assert_eq(char_if_else_if_chain(0), 'a');
+    assert_eq(char_if_else_if_chain(1), 'b');
+    assert_eq(char_if_else_if_chain(2), 'c');
+}
+
+fn char_if_nested_tail_position(outer: Bool, inner: Bool) -> Char {
+    if outer {
+        if inner {
+            'p'
+        } else {
+            'q'
+        }
+    } else {
+        'r'
+    }
+}
+
+test fn if_expr_char_nested_tail_position() -> Unit {
+    assert_eq(char_if_nested_tail_position(true, true), 'p');
+    assert_eq(char_if_nested_tail_position(true, false), 'q');
+    assert_eq(char_if_nested_tail_position(false, true), 'r');
+}

@@ -1,0 +1,51 @@
+// 13_stdlib/json_value_construct_match_test.mvl — construct + match a
+// payload-carrying enum *imported* from a stdlib module (#2171).
+//
+// `std.json.Value::Number(n)` — constructing and matching this variant
+// under WASM stubbed the enclosing function, while an identically-shaped
+// enum *declared locally* in the same file worked fine. Root cause: a
+// qualified variant *constructor call* (`Value::Number(1.0)` lowers to
+// `TirExprKind::FnCall { name: "Value::Number", .. }`, not a bare `Var`)
+// was invisible to the WASM backend's prelude pull-in walk, so `Value`'s
+// own type declaration never made it into the compiled module — the
+// backend's payload-enum registry never learned `Value` existed at all,
+// regardless of whether a variant was constructed or matched.
+
+use std.json.{Value}
+
+fn make_number(n: Float) -> Value {
+    Value::Number(n)
+}
+
+test fn construct_imported_payload_variant() -> Unit {
+    let v: Value = make_number(1.0);
+    match v {
+        Value::Number(n) => assert_eq(n, 1.0),
+        _                => assert(false),
+    }
+}
+
+fn extract_number(v: Value) -> Float {
+    match v {
+        Value::Number(n) => n,
+        _                => -1.0,
+    }
+}
+
+test fn match_imported_payload_variant() -> Unit {
+    assert_eq(extract_number(Value::Number(2.5)), 2.5);
+    assert_eq(extract_number(Value::Bool(true)), -1.0);
+    assert_eq(extract_number(Value::Null), -1.0);
+}
+
+fn extract_string(v: Value) -> String {
+    match v {
+        Value::String(s) => s,
+        _                => "none",
+    }
+}
+
+test fn match_imported_payload_variant_string() -> Unit {
+    assert_eq(extract_string(Value::String("hi")), "hi");
+    assert_eq(extract_string(Value::Number(1.0)), "none");
+}
