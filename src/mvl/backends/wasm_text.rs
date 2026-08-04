@@ -426,6 +426,14 @@ const RUNTIME_IMPORTS: &[(&str, &str)] = &[
     // `local_drop_fn`, which already maps a `List[String]` local to
     // `_mvl_string_ptr_array_drop`.
     ("_mvl_string_split", "(param i32 i32 i32 i32) (result i32)"),
+    // `.chars()` — (ptr, len) in, `*MvlArray` of `*MvlString` out (#2121).
+    // Same "bare array pointer, no unpack" shape as `_mvl_string_split`.
+    ("_mvl_string_chars", "(param i32 i32) (result i32)"),
+    // `.char_at(i)` — (ptr, len) string + i64 index in, `*MvlOption` wrapping
+    // a `*MvlString` out (#2175). Option is constructed runtime-side, so the
+    // call site needs no extra Option-building logic — same as
+    // `_mvl_map_get_str`'s call site.
+    ("_mvl_string_char_at", "(param i32 i32 i64) (result i32)"),
     // Group C — MvlArray (List[T] / Array[T, N] / Set[T] backing storage,
     // #1820). Pointer-typed as i32; elements accessed by byte offset with
     // `i32.load` / `i64.load` / `f64.load` on the pointer returned by
@@ -3911,6 +3919,33 @@ fn emit_expr(out: &mut String, expr: &TirExpr, ctx: &Ctx) {
             emit_expr(out, receiver, ctx);
             emit_expr(out, &args[0], ctx);
             out.push_str("    call $_mvl_string_split\n");
+        }
+        // `String.chars()` — (ptr, len) in, `*MvlArray` of `*MvlString` out
+        // (#2121). Same shape as `.split()` above: no `emit_unpack_mvl_string`,
+        // the array pointer is already what every `List[T]` op expects.
+        TirExprKind::MethodCall {
+            receiver,
+            method,
+            args,
+        } if peels_to_string(&receiver.ty) && method == "chars" && args.is_empty() => {
+            ctx.needs_runtime.set(true);
+            emit_expr(out, receiver, ctx);
+            out.push_str("    call $_mvl_string_chars\n");
+        }
+        // `String.char_at(i)` — (ptr, len) string + i64 index in, `*MvlOption`
+        // wrapping a `*MvlString` out (#2175). The runtime builds the Option
+        // itself, so the call site leaves the pointer as-is — the existing
+        // generic `Option[String]` machinery (`unwrap_or`, `match`, drop)
+        // handles it from here, same as `Map::get` below.
+        TirExprKind::MethodCall {
+            receiver,
+            method,
+            args,
+        } if peels_to_string(&receiver.ty) && method == "char_at" && args.len() == 1 => {
+            ctx.needs_runtime.set(true);
+            emit_expr(out, receiver, ctx);
+            emit_expr(out, &args[0], ctx);
+            out.push_str("    call $_mvl_string_char_at\n");
         }
         // `String.parse_int()` — returns a heap-allocated MvlResult pointer
         // (Group H import). Receiver is the raw (ptr, len) string on the stack.
