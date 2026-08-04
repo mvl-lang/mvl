@@ -61,9 +61,23 @@ impl TypeChecker {
     ///
     /// Used for if-expression then-branches where the block's value matters.
     /// The last `Stmt::Expr` provides the block's type; earlier statements
-    /// are checked normally. Unlike `check_block`, the final expression is
-    /// NOT flagged as `ResultIgnored` because its value is consumed.
-    pub(super) fn infer_block_type(&mut self, block: &Block, return_ty: Option<&Ty>) -> Ty {
+    /// are checked normally.
+    ///
+    /// `suppress_result_ignored` distinguishes two callers that both may pass
+    /// `return_ty: None`, which is otherwise indistinguishable: a block whose
+    /// *value is consumed by an enclosing expression* (an `if`/`match` used as
+    /// an expression, e.g. a `let` RHS or a lambda body — pass `true`, since
+    /// there both `if x > 0 { Ok(y) } else { Err(e) }`'s branches will be
+    /// wrongly flagged as discarding a `Result` in a false positive) vs. a
+    /// block whose value is *genuinely discarded* (a non-tail `if`/`match`
+    /// statement deep in a function body, or a `select` arm, whose own value
+    /// never flows anywhere — pass `false`, since there the check is correct).
+    pub(super) fn infer_block_type(
+        &mut self,
+        block: &Block,
+        return_ty: Option<&Ty>,
+        suppress_result_ignored: bool,
+    ) -> Ty {
         self.env.push_scope();
         let stmts = &block.stmts;
         let n = stmts.len();
@@ -116,7 +130,9 @@ impl TypeChecker {
                         // type is itself compatible with Result (the value is used).
                         // If the expected return type is Unit or incompatible, the
                         // caller is discarding the Result — emit ResultIgnored as usual.
-                        if last_ty.is_result() {
+                        // Skipped entirely when `suppress_result_ignored` — this block's
+                        // value flows to an enclosing expression, not a discard context.
+                        if last_ty.is_result() && !suppress_result_ignored {
                             let consumed_by_caller = return_ty
                                 .map(|rt| self.types_compatible_resolved(rt, &last_ty))
                                 .unwrap_or(false);
@@ -134,7 +150,13 @@ impl TypeChecker {
                     } => {
                         // `match` in tail position: check arms and infer the block's type.
                         let scrutinee_ty = self.infer_expr(scrutinee);
-                        last_ty = self.check_match_arms(arms, &scrutinee_ty, *span, return_ty);
+                        last_ty = self.check_match_arms(
+                            arms,
+                            &scrutinee_ty,
+                            *span,
+                            return_ty,
+                            suppress_result_ignored,
+                        );
                         if let Some(ret) = return_ty {
                             let resolved_ret = self.resolve_alias(ret.clone());
                             if !matches!(last_ty, Ty::Unknown)
@@ -151,7 +173,7 @@ impl TypeChecker {
                         }
                         // Mirror the ResultIgnored check from Stmt::Expr: a tail match
                         // that produces an unhandled Result must still be flagged.
-                        if last_ty.is_result() {
+                        if last_ty.is_result() && !suppress_result_ignored {
                             let consumed_by_caller = return_ty
                                 .map(|rt| self.types_compatible_resolved(rt, &last_ty))
                                 .unwrap_or(false);
@@ -170,7 +192,14 @@ impl TypeChecker {
                     } => {
                         // `if/else` in tail position: delegate to helper so that
                         // `else if` chains are also inferred recursively.
-                        last_ty = self.infer_tail_if(cond, then, else_, *span, return_ty);
+                        last_ty = self.infer_tail_if(
+                            cond,
+                            then,
+                            else_,
+                            *span,
+                            return_ty,
+                            suppress_result_ignored,
+                        );
                         // Check the overall result against the declared return type.
                         if let Some(ret) = return_ty {
                             let resolved_ret = self.resolve_alias(ret.clone());
@@ -219,6 +248,7 @@ impl TypeChecker {
         else_: &Option<ElseBranch>,
         span: Span,
         return_ty: Option<&Ty>,
+        suppress_result_ignored: bool,
     ) -> Ty {
         let cond_ty = self.infer_expr(cond);
         if !cond_ty.is_bool() && !matches!(cond_ty, Ty::Unknown) {
@@ -232,7 +262,7 @@ impl TypeChecker {
         // `then`/`else` are mutually exclusive at runtime — see Stmt::If for
         // why moves must be branch-scoped (#1991 follow-up).
         let pre_snapshot = self.env.snapshot_moved();
-        let then_ty = self.infer_block_type(then, return_ty);
+        let then_ty = self.infer_block_type(then, return_ty, suppress_result_ignored);
         self.check_branch_label_promotion(cond_label.clone(), &then_ty, return_ty, span);
         let post_then_snapshot = self.env.snapshot_moved();
         let result_ty = then_ty;
@@ -240,7 +270,7 @@ impl TypeChecker {
             self.env.restore_moved(&pre_snapshot);
             match else_branch {
                 ElseBranch::Block(b) => {
-                    let else_ty = self.infer_block_type(b, return_ty);
+                    let else_ty = self.infer_block_type(b, return_ty, suppress_result_ignored);
                     self.check_branch_label_promotion(
                         cond_label.clone(),
                         &else_ty,
@@ -268,7 +298,8 @@ impl TypeChecker {
                         span: s,
                     } = nested_if.as_ref()
                     {
-                        let nested_ty = self.infer_tail_if(c, t, e, *s, return_ty);
+                        let nested_ty =
+                            self.infer_tail_if(c, t, e, *s, return_ty, suppress_result_ignored);
                         self.check_branch_label_promotion(
                             cond_label.clone(),
                             &nested_ty,
@@ -510,7 +541,7 @@ impl TypeChecker {
                 // Pass None: non-tail if-branch body types don't constrain the
                 // function return. Early `return` inside branches uses
                 // `current_return_ty` as fallback (see Stmt::Return above).
-                let then_ty = self.infer_block_type(then, None);
+                let then_ty = self.infer_block_type(then, None, false);
                 self.check_branch_label_promotion(cond_label.clone(), &then_ty, return_ty, *span);
                 let post_then_snapshot = self.env.snapshot_moved();
 
@@ -518,7 +549,7 @@ impl TypeChecker {
                     self.env.restore_moved(&pre_snapshot);
                     match else_branch {
                         ElseBranch::Block(b) => {
-                            let else_ty = self.infer_block_type(b, None);
+                            let else_ty = self.infer_block_type(b, None, false);
                             self.check_branch_label_promotion(
                                 cond_label, &else_ty, return_ty, *span,
                             );
@@ -540,7 +571,7 @@ impl TypeChecker {
                 let scrutinee_ty = self.infer_expr(scrutinee);
                 // Pass None: non-tail match arm bodies don't constrain the function
                 // return. Early `return` in arms uses `current_return_ty` fallback.
-                self.check_match_arms(arms, &scrutinee_ty, *span, None);
+                self.check_match_arms(arms, &scrutinee_ty, *span, None, false);
             }
 
             Stmt::For {

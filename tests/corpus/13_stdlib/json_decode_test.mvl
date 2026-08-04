@@ -18,49 +18,49 @@
 
 use std.json.{Value, decode}
 
-test fn decode_number() -> Unit {
+test partial fn decode_number() -> Unit {
     match decode("42") {
         Ok(Value::Number(n)) => assert_eq(n, 42.0),
         _                    => assert_eq(1, 0),
     }
 }
 
-test fn decode_bool_true() -> Unit {
+test partial fn decode_bool_true() -> Unit {
     match decode("true") {
         Ok(Value::Bool(b)) => assert_eq(b, true),
         _                  => assert_eq(1, 0),
     }
 }
 
-test fn decode_null() -> Unit {
+test partial fn decode_null() -> Unit {
     match decode("null") {
         Ok(Value::Null) => assert_eq(1, 1),
         _               => assert_eq(1, 0),
     }
 }
 
-test fn decode_string() -> Unit {
+test partial fn decode_string() -> Unit {
     match decode("\"hello\"") {
         Ok(Value::String(s)) => assert_eq(s, "hello"),
         _                    => assert_eq(1, 0),
     }
 }
 
-test fn decode_array() -> Unit {
+test partial fn decode_array() -> Unit {
     match decode("[1, 2, 3]") {
         Ok(Value::Array(a)) => assert_eq(a.len(), 3),
         _                   => assert_eq(1, 0),
     }
 }
 
-test fn decode_object() -> Unit {
+test partial fn decode_object() -> Unit {
     match decode("{\"a\": 1, \"b\": true}") {
         Ok(Value::Object(o)) => assert_eq(o.len(), 2),
         _                    => assert_eq(1, 0),
     }
 }
 
-test fn decode_nested() -> Unit {
+test partial fn decode_nested() -> Unit {
     match decode("{\"nums\": [1, 2, 3], \"ok\": true}") {
         Ok(Value::Object(o)) => assert_eq(o.len(), 2),
         _                    => assert_eq(1, 0),
