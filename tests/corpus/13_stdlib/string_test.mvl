@@ -3,8 +3,9 @@
 // Covers the portable subset of `std/strings.mvl` that both backends lower
 // via runtime shims: `.len`, `.concat`, `.substring`, `.to_upper`,
 // `.to_lower`, `.starts_with`, `.ends_with`, `.contains`, `.is_empty`,
-// `.trim`, `.chars`, and `.char_at`. The methods are dispatched via dot
-// syntax as type-attached methods (ADR-0031 amendment), not general UFCS.
+// `.trim`, `.chars`, `.char_at`, `.byte_at`, `String::from_chars`, and
+// `String::from_bytes`. The methods are dispatched via dot syntax as
+// type-attached methods (ADR-0031 amendment), not general UFCS.
 
 test fn string_len() -> Unit {
     assert_eq("hello".len(), 5);
@@ -94,6 +95,52 @@ test fn string_char_at() -> Unit {
 
     // Non-ASCII: code-point index, not byte index.
     assert_eq("héllo".char_at(1).unwrap_or(""), "é");
+}
+
+// #2123 — `.byte_at()` had no WASM emitter arm at all.
+test fn string_byte_at() -> Unit {
+    assert_eq("hi".byte_at(0).unwrap_or(from_int(0)).to_int(), 104);
+    assert_eq("hi".byte_at(1).unwrap_or(from_int(0)).to_int(), 105);
+
+    match "hi".byte_at(10) {
+        Some(_) => assert_eq(true, false),
+        None => assert_eq(true, true),
+    }
+    match "hi".byte_at(-1) {
+        Some(_) => assert_eq(true, false),
+        None => assert_eq(true, true),
+    }
+}
+
+// #2123 — `String::from_chars()` had no WASM emitter arm at all (a static
+// qualified call, not a `MethodCall` — it built with zero warnings but
+// emitted a call to an undeclared symbol).
+test fn string_from_chars() -> Unit {
+    let s: String = String::from_chars(["a", "b", "c"]);
+    assert_eq(s, "abc");
+
+    let empty: String = String::from_chars([]);
+    assert_eq(empty, "");
+
+    // Non-ASCII chars round-trip too.
+    let unicode: String = String::from_chars(["h", "é", "l", "l", "o"]);
+    assert_eq(unicode, "héllo");
+}
+
+// #2123 — `String::from_bytes()` had no WASM emitter arm at all (same
+// silent-failure shape as `from_chars`).
+test fn string_from_bytes() -> Unit {
+    let bytes: List[Byte] = [from_int(72), from_int(105)];
+    let s: String = String::from_bytes(bytes);
+    assert_eq(s, "Hi");
+
+    let empty: String = String::from_bytes([]);
+    assert_eq(empty, "");
+
+    // byte_at/from_bytes roundtrip for every byte 0..=255 (#1487).
+    let roundtrip: String = String::from_bytes([from_int(0), from_int(255)]);
+    assert_eq(roundtrip.byte_at(0).unwrap_or(from_int(99)).to_int(), 0);
+    assert_eq(roundtrip.byte_at(1).unwrap_or(from_int(99)).to_int(), 255);
 }
 
 // A `.concat()` result returned directly from a fn (no intermediate `let`)
