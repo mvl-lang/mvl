@@ -1,0 +1,31 @@
+// 13_stdlib/random_choice_test.mvl — std.random.choice() on the WASM
+// backend (#2093).
+//
+// `choice(list)` emitted `_mvl_random_choice_index` and returned its bare
+// i64 index directly as if it were the `*MvlOption` pointer `Option[T]`
+// promises — the module assembled but failed `wasm-tools validate` with
+// a type mismatch, and any real use would have read garbage through the
+// wrong pointer type. Pinning both the non-empty (Some) and empty (None)
+// paths here catches a regression on the WASM backend specifically; the
+// Rust-backend equivalents already live in tests/stdlib/random_test.mvl.
+//
+// The `let v: Int = ...` step below is load-bearing, not style: `choice`
+// is generic (`choice[T](List[T]) -> Option[T]`), and inlining
+// `choice(xs).unwrap_or(-1)` straight into `assert_eq(...)` leaves `T`
+// unresolved for the LLVM backend's separate, backend-local checker
+// pass, which then picks the wrong (`String`) `assert_eq` overload and
+// miscompiles — same gap `io_path_test.mvl` documents for `to_string`.
+
+use std.random.{choice}
+
+test fn choice_single_element_returns_that_element() -> Unit ! Random {
+    let xs: List[Int] = [42];
+    let v: Int = choice(xs).unwrap_or(-1);
+    assert_eq(v, 42);
+}
+
+test fn choice_empty_list_returns_none() -> Unit ! Random {
+    let xs: List[Int] = [];
+    let c: Option[Int] = choice(xs);
+    assert_eq(c.is_none(), true);
+}

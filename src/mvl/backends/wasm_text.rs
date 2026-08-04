@@ -2661,6 +2661,13 @@ fn collect_locals_expr(expr: &TirExpr, locals: &mut Vec<(String, Ty)>) {
             if name == "Box::new" && args.len() == 1 {
                 locals.push((box_temp_name(&args[0]), Ty::Bool));
             }
+            // `choice(list)` (std.random) reads the array pointer twice
+            // (index pick, then element fetch) and needs the picked index
+            // held across both calls.
+            if name == "choice" && args.len() == 1 && matches!(&args[0].ty, Ty::List(_)) {
+                locals.push((choice_arr_temp_name(expr), Ty::Bool));
+                locals.push((choice_idx_temp_name(expr), Ty::Int));
+            }
         }
         TirExprKind::MethodCall {
             receiver,
@@ -3518,15 +3525,29 @@ fn emit_expr(out: &mut String, expr: &TirExpr, ctx: &Ctx) {
                 return;
             }
             // `choice(list)` (std.random) — random element from list.
-            // Returns Option[T], implemented as choice_index + get.
+            // Returns Option[T]: pick a random index (-1 if empty), then
+            // reuse `_mvl_array_get_option_i32/i64` (same OOB-check +
+            // Some/None wrap as `List::get`) to fetch it — a negative
+            // index is out of bounds there too, so it naturally yields
+            // `None` with no separate empty-list branch needed.
             if name == "choice" && args.len() == 1 && matches!(&args[0].ty, Ty::List(_)) {
                 ctx.needs_runtime.set(true);
+                let elem_ty = collection_elem_ty(&args[0].ty).cloned().unwrap_or(Ty::Int);
+                let getter = if wasm_ty(&elem_ty, ctx) == "i32" || is_string_ty(&elem_ty, ctx) {
+                    "_mvl_array_get_option_i32"
+                } else {
+                    "_mvl_array_get_option_i64"
+                };
+                let arr_temp = choice_arr_temp_name(expr);
+                let idx_temp = choice_idx_temp_name(expr);
                 emit_expr(out, &args[0], ctx);
-                // Get random index; -1 if empty
+                out.push_str(&format!("    local.set ${arr_temp}\n"));
+                out.push_str(&format!("    local.get ${arr_temp}\n"));
                 out.push_str("    call $_mvl_random_choice_index\n");
-                // We need to return Option[T] - this is complex, stub for now
-                // The full implementation would do: if idx >= 0, get element and wrap in Some
-                // For now, just return the index and let caller handle it
+                out.push_str(&format!("    local.set ${idx_temp}\n"));
+                out.push_str(&format!("    local.get ${arr_temp}\n"));
+                out.push_str(&format!("    local.get ${idx_temp}\n"));
+                out.push_str(&format!("    call ${getter}\n"));
                 return;
             }
             // `shuffle(list)` (std.random) — shuffled copy of list.
@@ -6350,6 +6371,21 @@ fn mvl_ok_string_temp_name(pattern_span: &Span) -> String {
 /// `mvl_string_temp_name`.
 fn mvl_array_temp_name(expr: &TirExpr) -> String {
     format!("__ma_{}_{}", expr.span.offset, expr.span.len)
+}
+
+/// Temp local for the `*MvlArray` pointer in `std.random.choice(list)` —
+/// read twice (once by `_mvl_random_choice_index`, once by
+/// `_mvl_array_get_option_i32/i64`), so it must be stashed rather than
+/// re-evaluating `list` from the stack.
+fn choice_arr_temp_name(expr: &TirExpr) -> String {
+    format!("__cha_{}_{}", expr.span.offset, expr.span.len)
+}
+
+/// Temp local for the random index picked by `_mvl_random_choice_index`
+/// in `std.random.choice(list)`. Same span-based scheme as
+/// `choice_arr_temp_name`.
+fn choice_idx_temp_name(expr: &TirExpr) -> String {
+    format!("__chi_{}_{}", expr.span.offset, expr.span.len)
 }
 
 /// Temp local name for the `*MvlOption` pointer stashed during an
