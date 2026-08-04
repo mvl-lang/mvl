@@ -37,7 +37,6 @@ Small standalone examples — one file each, demonstrating individual MVL featur
 | File | Demonstrates | Requirements |
 |------|--------------|--------------|
 | `auth_handler.mvl` | Result + IFC labels | Req 5, 11 |
-| `password_checker.mvl` | Taint tracking | Req 11 |
 | `safe_division.mvl` | Refinement + IFC | Req 5, 10, 11 |
 
 ### Actors
@@ -52,7 +51,6 @@ Small standalone examples — one file each, demonstrating individual MVL featur
 | File | Demonstrates | Requirements |
 |------|--------------|--------------|
 | `println_non_string_first_arg.mvl` | println type safety | Req 1, 7 |
-| `bridge_ok/` | extern Rust interop | Req 7 |
 | `random_dice/` | Random effect | Req 7 |
 
 ---

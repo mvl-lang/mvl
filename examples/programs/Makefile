@@ -36,13 +36,6 @@ WASM_EXCLUDE := \
 	$(DIR)list_stubs.mvl \
 	$(DIR)random_dice/main.mvl
 
-# password_checker.mvl: intentional negative fixture for Spec 006 Requirement 3
-# (Missing Bridge Error) — `mvl build` on it MUST fail with "bridge.rs not
-# found", per tests/compile_and_run.rs::missing_bridge_exits_nonzero_with_actionable_error.
-# Not a gap to fix; bridge_ok/ and access_control/ cover the working-bridge case.
-SMOKE_EXCLUDE := \
-	$(DIR)password_checker.mvl
-
 help: ## Show this help
 	@grep -E '^[a-zA-Z0-9_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-12s\033[0m %s\n", $$1, $$2}'
 
@@ -160,7 +153,7 @@ assurance: ## Assurance report for all example programs (verbose)
 smoke: ## Smoke-test: build every program (proves compilation without running)
 	@pass=0; fail=0; \
 	OK="\033[32m✓\033[0m"; FAIL="\033[31m✗\033[0m"; \
-	for f in $(filter-out $(SMOKE_EXCLUDE),$(ALL_PROGRAMS)); do \
+	for f in $(ALL_PROGRAMS); do \
 		short=$${f#$(DIR)}; \
 		out=$$($(MVL) build "$$f" 2>&1); rc=$$?; \
 		if [ $$rc -eq 0 ]; then \
