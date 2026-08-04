@@ -397,6 +397,14 @@ const RUNTIME_IMPORTS: &[(&str, &str)] = &[
         "(param i32 i32 i32 i32) (result i32)",
     ),
     ("_mvl_string_find", "(param i32 i32 i32 i32) (result i64)"),
+    // `String::find(self, sub) -> Option[Int]`'s actual codegen target —
+    // wraps `_mvl_string_find`'s raw `-1`-sentinel `i64` as a real
+    // `*MvlOption` (i32), so generic Option consumers (match/if-let/
+    // `.is_some()`) get the heap-pointer shape they expect (#2198).
+    (
+        "_mvl_string_find_option",
+        "(param i32 i32 i32 i32) (result i32)",
+    ),
     // Group B — allocation, returns `*MvlString` (pointer as i32). The
     // emitter unpacks `.ptr` / `.len` via `i32.load` at offsets 0 / 4 so
     // downstream code keeps the same `(ptr, len)` stack shape as literals.
@@ -967,8 +975,19 @@ fn if_stmt_result_ty(then: &TirBlock, else_: &Option<TirElseBranch>, ctx: &Ctx) 
         },
         None => return None,
     };
-    if matches!(t, Ty::Unit) {
+    if matches!(t, Ty::Unit) || matches!(e, Ty::Unit) {
         return None;
+    }
+    // `Never` (a diverging branch — `exit()`, `panic`-style builtins) is a
+    // bottom type: it unifies with the other branch's type without
+    // constraining the result. See `match_arms_result_ty`'s comment for the
+    // failure this avoids (the enclosing `if`/match loses its `(result ..)`
+    // declaration and `wasm-tools validate` rejects the module).
+    match (matches!(t, Ty::Never), matches!(e, Ty::Never)) {
+        (true, true) => return None, // both branches diverge — no value ever produced
+        (true, false) => return Some(e),
+        (false, true) => return Some(t),
+        (false, false) => {}
     }
     // Exact MVL-type match or same WASM type — either is fine for block-typing.
     if t == e || wasm_ty(&t, ctx) == wasm_ty(&e, ctx) {
@@ -1441,9 +1460,20 @@ fn clone_is_supported(ty: &Ty, ctx: &Ctx) -> bool {
     };
     match bare {
         Ty::Int | Ty::UInt | Ty::Float | Ty::Bool | Ty::Byte | Ty::UByte | Ty::Char => true,
-        // Unit-variant enums are a bare i32 discriminant — copyable.
+        // Unit-variant enums are a bare i32 discriminant — copyable. Structs
+        // and payload enums are boxed `i32` pointers, but — same reasoning
+        // as `concat_is_supported` — `_mvl_struct_alloc` never frees its
+        // allocations (#1821, intentionally leaked), so aliasing the pointer
+        // (the emission arm below leaves it untouched on the stack, same as
+        // String) carries no double-free risk: nothing ever frees the
+        // pointee to begin with. Without this, `List[T]::filter` (whose MVL
+        // body in std/lists.mvl calls `x.clone()` before `f(x.clone())`)
+        // stubbed to `unreachable` for every struct element type — e.g.
+        // `List[LogEntry]::filter` in the log_analyzer example (#2198).
         Ty::Named(name, _) => {
             ctx.enum_types.contains(name)
+                || ctx.struct_layouts.contains_key(name.as_str())
+                || ctx.payload_enums.contains_key(name.as_str())
                 || ctx
                     .type_aliases
                     .get(name.as_str())
@@ -4017,10 +4047,34 @@ fn emit_expr(out: &mut String, expr: &TirExpr, ctx: &Ctx) {
                 _ => unreachable!(),
             }
         }
+        // `.find(needle)` on String — `String::find(self, sub) -> Option[Int]`
+        // (std/strings.mvl). Routed through `_mvl_string_find_option`, NOT
+        // the raw `_mvl_string_find` the generic arm below uses for the
+        // other query methods: `_mvl_string_find` returns a bare `i64`
+        // `-1`-sentinel, not a `*MvlOption` i32 pointer, so any generic
+        // Option consumer (`match token.find("=") { Some(i) => .., None =>
+        // .. }`, `if let`, `.is_some()`) that calls `_mvl_option_tag`/
+        // `_mvl_option_value_i64` on the raw sentinel produced a
+        // `wasm-tools validate` "type mismatch: expected i32, found i64" —
+        // e.g. `std/args.mvl`'s `parse_args`, reached from the log_analyzer
+        // example's `main.mvl` (#2198). Every other Option-returning
+        // builtin already returns a real heap `Option` pointer; this makes
+        // `.find()` consistent with them instead of special-casing its
+        // scrutinee at every consumption site.
+        TirExprKind::MethodCall {
+            receiver,
+            method,
+            args,
+        } if peels_to_string(&receiver.ty) && method == "find" && args.len() == 1 => {
+            ctx.needs_runtime.set(true);
+            emit_expr(out, receiver, ctx);
+            emit_expr(out, &args[0], ctx);
+            out.push_str("    call $_mvl_string_find_option\n");
+        }
         // String query methods — route through `runtime/wasm/` ops. Receiver
         // leaves `(ptr, len)` on the stack; unary methods (`.len`,
         // `.is_empty`) leave that plus nothing else. Binary methods
-        // (`.contains`, `.starts_with`, `.ends_with`, `.find`) then eval
+        // (`.contains`, `.starts_with`, `.ends_with`) then eval
         // the arg to append `(np, nl)`. Runtime fn pops all four i32 args
         // and returns the result.
         TirExprKind::MethodCall {
@@ -4030,7 +4084,7 @@ fn emit_expr(out: &mut String, expr: &TirExpr, ctx: &Ctx) {
         } if peels_to_string(&receiver.ty)
             && matches!(
                 method.as_str(),
-                "len" | "is_empty" | "contains" | "starts_with" | "ends_with" | "find"
+                "len" | "is_empty" | "contains" | "starts_with" | "ends_with"
             ) =>
         {
             ctx.needs_runtime.set(true);
@@ -4465,9 +4519,13 @@ fn emit_expr(out: &mut String, expr: &TirExpr, ctx: &Ctx) {
         //   borrow, sound only because a cloned string is consumed by the
         //   callee without being dropped. `_mvl_string_clone` is not usable
         //   here — it takes a `*MvlString`, not the unpacked pair.
-        // - Anything else (Option/Result/struct pointers) falls through to
-        //   `;; unsupported` rather than guessing: those are refcounted boxes
-        //   where an identity "clone" that later gets dropped is a
+        // - Struct / payload-enum pointers: identity, like String — safe
+        //   because `_mvl_struct_alloc` never frees (#1821), so aliasing the
+        //   pointer carries no double-free risk (same reasoning as
+        //   `concat_is_supported`).
+        // - Anything else (Option/Result/Map): falls through to
+        //   `;; unsupported` rather than guessing — those ARE refcounted
+        //   boxes where an identity "clone" that later gets dropped is a
         //   double-free. Stubbing is loud; miscompiling ownership is not.
         TirExprKind::MethodCall {
             receiver,
@@ -6054,18 +6112,55 @@ fn emit_field_access(out: &mut String, recv: &TirExpr, field: &str, ctx: &Ctx) {
 // ── Result propagation (#1821) ───────────────────────────────────────────
 
 /// Emit `inner?` — evaluate `inner`, check the Result tag; if Err return
-/// early, if Ok extract and leave the i64 payload on the stack.
+/// early, if Ok extract and leave the payload on the stack.
+///
+/// The payload's WASM value type must match the Ok type's actual
+/// representation — `_mvl_result_value_i64`/`_i32` and the `if`'s declared
+/// `(result ..)` used to be hardcoded to `i64` unconditionally, which only
+/// happened to validate when the Ok type really was i64-shaped (Int).
+/// Anything i32-shaped (struct/payload-enum pointers, Bool/Byte/Char, unit
+/// enums, nested collections — see `is_i32`) left an i32 on the stack where
+/// the declared `(result i64)` and a later `local.set`/use expected an i64,
+/// and `wasm-tools validate` rejected the module outright ("type mismatch:
+/// expected i32, found i64") — e.g. `parse_raw_entry(...)?` in
+/// log_analyzer's `parser.mvl`, where the Ok type is the `RawEntry` struct
+/// (#2198). A `Float` Ok type has the same problem in the other direction:
+/// its bit pattern is stored in the i64 `ok_value` slot (see
+/// `result_ops_for_ok`'s float callers), so it needs an `f64.reinterpret_i64`
+/// after the i64 getter and an `f64`-typed `if` — without it, `safe_division`
+/// example's `to_nonzero(...)?` failed validation with "expected f64, found
+/// i64" (#2199). Mirrors the type-directed dispatch the `Ok(name)` match-arm
+/// codegen already does via `result_ops_for_ok`/`is_float_ctx`.
+///
+/// `Result[String, E]` propagation is NOT handled here (falls through to the
+/// i64 getter, same as before this fix): a String Ok payload needs the
+/// (ptr, len) pair unpacked onto the stack, not a single value — a
+/// pre-existing gap, not introduced or worsened by this change.
 fn emit_propagate(out: &mut String, inner: &TirExpr, expr: &TirExpr, ctx: &Ctx) {
     ctx.needs_runtime.set(true);
     let temp = propagate_temp_name(expr);
+    let ok_ty = result_ok_ty(&inner.ty).cloned().unwrap_or(Ty::Int);
+    let is_float = is_float_ctx(&ok_ty, ctx);
+    let (_, getter) = result_ops_for_ok(&ok_ty, ctx);
+    let if_result_ty = if is_float {
+        "f64"
+    } else if is_i32(&ok_ty, ctx) {
+        "i32"
+    } else {
+        "i64"
+    };
+
     emit_expr(out, inner, ctx); // leaves *MvlResult (i32) on stack
     out.push_str(&format!("    local.tee ${temp}\n"));
     out.push_str("    call $_mvl_result_tag\n");
     out.push_str("    i32.eqz\n"); // 1 if Ok
-    out.push_str("    if (result i64)\n");
-    // Ok path: extract i64 payload.
+    out.push_str(&format!("    if (result {if_result_ty})\n"));
+    // Ok path: extract the payload as its actual WASM value type.
     out.push_str(&format!("    local.get ${temp}\n"));
-    out.push_str("    call $_mvl_result_value_i64\n");
+    out.push_str(&format!("    call ${getter}\n"));
+    if is_float {
+        out.push_str("    f64.reinterpret_i64\n");
+    }
     out.push_str("    else\n");
     // Err path: re-wrap and early-return the Result.
     // Drop the Ok-path temp; return inner's *MvlResult to caller.
@@ -6073,8 +6168,8 @@ fn emit_propagate(out: &mut String, inner: &TirExpr, expr: &TirExpr, ctx: &Ctx) 
     out.push_str("    return\n");
     // WASM if requires both branches to leave same type. After `return`
     // the else-branch is dead, but the validator still needs the type to
-    // match. Push an unreachable i64 as a type placeholder.
-    out.push_str("    i64.const 0\n");
+    // match. Push an unreachable value of the same type as a placeholder.
+    out.push_str(&format!("    {if_result_ty}.const 0\n"));
     out.push_str("    end\n");
 }
 
@@ -6447,6 +6542,23 @@ fn match_arms_result_ty(arms: &[TirMatchArm], ctx: &Ctx) -> Option<Ty> {
             TirMatchBody::Block(b) => block_trailing_ty(b, ctx)?,
             _ => return None,
         };
+        // `Never` (a diverging arm — `exit()`, `panic`-style builtins, an
+        // infinite `while true` with no `break`) is a bottom type: it
+        // unifies with any other arm's type without constraining the
+        // match's overall result type. Skipping it here — rather than
+        // merging it as a real type below — is what lets a match with one
+        // value-producing arm and one diverging arm still report the real
+        // arm's type. Without this, this loop's merge step bailed to
+        // `return None` for the WHOLE match the moment it saw a `Never` arm
+        // (`wasm_ty(Never)` never equals another arm's `wasm_ty`), the
+        // enclosing `if` lost its `(result ..)` declaration, and
+        // `wasm-tools validate` rejected the module with "values remaining
+        // on stack at end of block" — `std/args.mvl::coerce_arg`'s `Err(_)
+        // => { eprintln(..); exit(1) }` arm, reached from the log_analyzer
+        // example (#2198).
+        if matches!(arm_ty, Ty::Never) {
+            continue;
+        }
         match &ty {
             None => ty = Some(arm_ty),
             // Exact MVL match or same WASM type (handles Ok vs Err type differences).
