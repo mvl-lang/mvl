@@ -2703,6 +2703,16 @@ fn collect_locals_expr(expr: &TirExpr, locals: &mut Vec<(String, Ty)>) {
             collect_locals_expr(inner, locals);
             // Temp i32 to stash the Result pointer for tag check.
             locals.push((propagate_temp_name(expr), Ty::Bool)); // i32 placeholder
+                                                                // `expr?` on a `Result[String, E]` unpacks the Ok `*MvlString`
+                                                                // into the (ptr, len) split every other String value uses
+                                                                // (#2056), same as a match arm's `Ok(s)` binding — needs its
+                                                                // own temp (#2191-adjacent: emit_propagate previously assumed
+                                                                // every Ok payload was a bare i64, which also broke Float).
+            if let Some(ok_ty) = result_ok_ty(&inner.ty) {
+                if peels_to_string(ok_ty) {
+                    locals.push((mvl_string_temp_name(expr), Ty::Bool));
+                }
+            }
         }
         TirExprKind::Block(b) => collect_locals_block(b, locals),
         TirExprKind::Binary { left, right, .. } => {
@@ -6142,19 +6152,51 @@ fn emit_propagate(out: &mut String, inner: &TirExpr, expr: &TirExpr, ctx: &Ctx) 
     out.push_str(&format!("    local.tee ${temp}\n"));
     out.push_str("    call $_mvl_result_tag\n");
     out.push_str("    i32.eqz\n"); // 1 if Ok
-    out.push_str("    if (result i64)\n");
-    // Ok path: extract i64 payload.
+
+    // The Ok payload's WASM shape depends on `ok_ty` — this used to
+    // unconditionally treat it as a bare i64, which is right for Int/UInt
+    // but wrong for Float (needs `f64.reinterpret_i64` after
+    // `_mvl_result_value_i64`, same convention `result_ops_for_ok`
+    // documents, #2038) and wrong for String (`_mvl_result_value_i32`
+    // plus the (ptr, len) unpack every other String value uses, #2056).
+    // Silently correct-looking i64 arithmetic on a misread Float bit
+    // pattern would validate and run — this is a real WASM stack-type
+    // bug (#2191-adjacent), not a stub gap.
+    let ok_ty = result_ok_ty(&inner.ty).cloned().unwrap_or(Ty::Int);
+    let is_string_ok = is_string_ty(&ok_ty, ctx);
+    let block_result_ty = if is_string_ok {
+        "i32 i32".to_string()
+    } else {
+        wasm_ty(&ok_ty, ctx).to_string()
+    };
+    out.push_str(&format!("    if (result {block_result_ty})\n"));
+    // Ok path: extract the payload in `ok_ty`'s actual WASM shape.
     out.push_str(&format!("    local.get ${temp}\n"));
-    out.push_str("    call $_mvl_result_value_i64\n");
+    if is_string_ok {
+        out.push_str("    call $_mvl_result_value_i32\n");
+        emit_unpack_mvl_string(out, expr);
+    } else {
+        let (_, getter) = result_ops_for_ok(&ok_ty, ctx);
+        out.push_str(&format!("    call ${getter}\n"));
+        if is_float_ctx(&ok_ty, ctx) {
+            out.push_str("    f64.reinterpret_i64\n");
+        }
+    }
     out.push_str("    else\n");
     // Err path: re-wrap and early-return the Result.
     // Drop the Ok-path temp; return inner's *MvlResult to caller.
     out.push_str(&format!("    local.get ${temp}\n"));
     out.push_str("    return\n");
-    // WASM if requires both branches to leave same type. After `return`
-    // the else-branch is dead, but the validator still needs the type to
-    // match. Push an unreachable i64 as a type placeholder.
-    out.push_str("    i64.const 0\n");
+    // WASM if requires both branches to leave the same type(s). After
+    // `return` the else-branch is dead, but the validator still needs the
+    // declared type(s) satisfied — push placeholder value(s) matching
+    // `block_result_ty`.
+    match block_result_ty.as_str() {
+        "i32 i32" => out.push_str("    i32.const 0\n    i32.const 0\n"),
+        "f64" => out.push_str("    f64.const 0\n"),
+        "i32" => out.push_str("    i32.const 0\n"),
+        _ => out.push_str("    i64.const 0\n"),
+    }
     out.push_str("    end\n");
 }
 
