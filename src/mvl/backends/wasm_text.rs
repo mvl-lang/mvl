@@ -2733,6 +2733,16 @@ fn collect_locals_expr(expr: &TirExpr, locals: &mut Vec<(String, Ty)>) {
             collect_locals_expr(inner, locals);
             // Temp i32 to stash the Result pointer for tag check.
             locals.push((propagate_temp_name(expr), Ty::Bool)); // i32 placeholder
+                                                                // `expr?` on a `Result[String, E]` unpacks the Ok `*MvlString`
+                                                                // into the (ptr, len) split every other String value uses
+                                                                // (#2056), same as a match arm's `Ok(s)` binding — needs its
+                                                                // own temp (#2191-adjacent: emit_propagate previously assumed
+                                                                // every Ok payload was a bare i64, which also broke Float).
+            if let Some(ok_ty) = result_ok_ty(&inner.ty) {
+                if peels_to_string(ok_ty) {
+                    locals.push((mvl_string_temp_name(expr), Ty::Bool));
+                }
+            }
         }
         TirExprKind::Block(b) => collect_locals_block(b, locals),
         TirExprKind::Binary { left, right, .. } => {
@@ -6266,44 +6276,59 @@ fn emit_field_access(out: &mut String, recv: &TirExpr, field: &str, ctx: &Ctx) {
 /// i64" (#2199). Mirrors the type-directed dispatch the `Ok(name)` match-arm
 /// codegen already does via `result_ops_for_ok`/`is_float_ctx`.
 ///
-/// `Result[String, E]` propagation is NOT handled here (falls through to the
-/// i64 getter, same as before this fix): a String Ok payload needs the
-/// (ptr, len) pair unpacked onto the stack, not a single value — a
-/// pre-existing gap, not introduced or worsened by this change.
+/// `Result[String, E]` propagation extracts the payload via
+/// `_mvl_result_value_i32` and unpacks it into the standard `(ptr, len)`
+/// pair on the stack (`emit_unpack_mvl_string`), same as every other
+/// String value — a single i64 read (the old unconditional path) would
+/// have misread the pointer as a scalar.
 fn emit_propagate(out: &mut String, inner: &TirExpr, expr: &TirExpr, ctx: &Ctx) {
     ctx.needs_runtime.set(true);
     let temp = propagate_temp_name(expr);
     let ok_ty = result_ok_ty(&inner.ty).cloned().unwrap_or(Ty::Int);
     let is_float = is_float_ctx(&ok_ty, ctx);
+    let is_string_ok = is_string_ty(&ok_ty, ctx);
     let (_, getter) = result_ops_for_ok(&ok_ty, ctx);
-    let if_result_ty = if is_float {
-        "f64"
+    let block_result_ty = if is_string_ok {
+        "i32 i32".to_string()
+    } else if is_float {
+        "f64".to_string()
     } else if is_i32(&ok_ty, ctx) {
-        "i32"
+        "i32".to_string()
     } else {
-        "i64"
+        "i64".to_string()
     };
 
     emit_expr(out, inner, ctx); // leaves *MvlResult (i32) on stack
     out.push_str(&format!("    local.tee ${temp}\n"));
     out.push_str("    call $_mvl_result_tag\n");
     out.push_str("    i32.eqz\n"); // 1 if Ok
-    out.push_str(&format!("    if (result {if_result_ty})\n"));
-    // Ok path: extract the payload as its actual WASM value type.
+    out.push_str(&format!("    if (result {block_result_ty})\n"));
+    // Ok path: extract the payload in `ok_ty`'s actual WASM shape.
     out.push_str(&format!("    local.get ${temp}\n"));
-    out.push_str(&format!("    call ${getter}\n"));
-    if is_float {
-        out.push_str("    f64.reinterpret_i64\n");
+    if is_string_ok {
+        out.push_str("    call $_mvl_result_value_i32\n");
+        emit_unpack_mvl_string(out, expr);
+    } else {
+        out.push_str(&format!("    call ${getter}\n"));
+        if is_float {
+            out.push_str("    f64.reinterpret_i64\n");
+        }
     }
     out.push_str("    else\n");
     // Err path: re-wrap and early-return the Result.
     // Drop the Ok-path temp; return inner's *MvlResult to caller.
     out.push_str(&format!("    local.get ${temp}\n"));
     out.push_str("    return\n");
-    // WASM if requires both branches to leave same type. After `return`
-    // the else-branch is dead, but the validator still needs the type to
-    // match. Push an unreachable value of the same type as a placeholder.
-    out.push_str(&format!("    {if_result_ty}.const 0\n"));
+    // WASM if requires both branches to leave the same type(s). After
+    // `return` the else-branch is dead, but the validator still needs the
+    // declared type(s) satisfied — push placeholder value(s) matching
+    // `block_result_ty`.
+    match block_result_ty.as_str() {
+        "i32 i32" => out.push_str("    i32.const 0\n    i32.const 0\n"),
+        "f64" => out.push_str("    f64.const 0\n"),
+        "i32" => out.push_str("    i32.const 0\n"),
+        _ => out.push_str("    i64.const 0\n"),
+    }
     out.push_str("    end\n");
 }
 
