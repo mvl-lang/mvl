@@ -3,8 +3,9 @@
 // Covers the portable subset of `std/strings.mvl` that both backends lower
 // via runtime shims: `.len`, `.concat`, `.substring`, `.to_upper`,
 // `.to_lower`, `.starts_with`, `.ends_with`, `.contains`, `.is_empty`,
-// `.trim`, `.chars`, and `.char_at`. The methods are dispatched via dot
-// syntax as type-attached methods (ADR-0031 amendment), not general UFCS.
+// `.trim`, `.chars`, `.char_at`, and `.byte_at`. The methods are dispatched
+// via dot syntax as type-attached methods (ADR-0031 amendment), not general
+// UFCS.
 
 test fn string_len() -> Unit {
     assert_eq("hello".len(), 5);
@@ -94,6 +95,21 @@ test fn string_char_at() -> Unit {
 
     // Non-ASCII: code-point index, not byte index.
     assert_eq("héllo".char_at(1).unwrap_or(""), "é");
+}
+
+// #2123 — `.byte_at()` had no WASM emitter arm at all.
+test fn string_byte_at() -> Unit {
+    assert_eq("hi".byte_at(0).unwrap_or(from_int(0)).to_int(), 104);
+    assert_eq("hi".byte_at(1).unwrap_or(from_int(0)).to_int(), 105);
+
+    match "hi".byte_at(10) {
+        Some(_) => assert_eq(true, false),
+        None => assert_eq(true, true),
+    }
+    match "hi".byte_at(-1) {
+        Some(_) => assert_eq(true, false),
+        None => assert_eq(true, true),
+    }
 }
 
 // A `.concat()` result returned directly from a fn (no intermediate `let`)

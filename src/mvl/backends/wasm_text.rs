@@ -434,6 +434,10 @@ const RUNTIME_IMPORTS: &[(&str, &str)] = &[
     // call site needs no extra Option-building logic — same as
     // `_mvl_map_get_str`'s call site.
     ("_mvl_string_char_at", "(param i32 i32 i64) (result i32)"),
+    // `.byte_at(i)` — (ptr, len) string + i64 index in, `*MvlOption` wrapping
+    // a raw byte value (i32, 0..=255) out (#2123). Same shape as
+    // `.char_at()` above, but the payload is a scalar, not a `*MvlString`.
+    ("_mvl_string_byte_at", "(param i32 i32 i64) (result i32)"),
     // Group C — MvlArray (List[T] / Array[T, N] / Set[T] backing storage,
     // #1820). Pointer-typed as i32; elements accessed by byte offset with
     // `i32.load` / `i64.load` / `f64.load` on the pointer returned by
@@ -3791,6 +3795,17 @@ fn emit_expr(out: &mut String, expr: &TirExpr, ctx: &Ctx) {
             emit_expr(out, receiver, ctx);
             out.push_str("    i64.trunc_f64_s\n");
         }
+        // `Byte::to_int()` — Byte is an unsigned 0..=255 value stored as i32
+        // (#2123); widen to the i64 `Int` matches the Rust backend's
+        // `receiver as i64` (a `u8 as i64` zero-extend).
+        TirExprKind::MethodCall {
+            receiver,
+            method,
+            args,
+        } if matches!(receiver.ty, Ty::Byte) && method == "to_int" && args.is_empty() => {
+            emit_expr(out, receiver, ctx);
+            out.push_str("    i64.extend_i32_u\n");
+        }
         // Int/UInt/Float::abs/clamp/pow (#2122). WASM has native `f64.abs`/
         // `f64.max`/`f64.min` for Float but no integer min/max/abs opcode and
         // no exponentiation opcode for either family, so Int/UInt route
@@ -3967,6 +3982,20 @@ fn emit_expr(out: &mut String, expr: &TirExpr, ctx: &Ctx) {
             emit_expr(out, receiver, ctx);
             emit_expr(out, &args[0], ctx);
             out.push_str("    call $_mvl_string_char_at\n");
+        }
+        // `String.byte_at(i)` — (ptr, len) string + i64 index in, `*MvlOption`
+        // out (#2123). Same shape as `char_at` above, but the payload the
+        // Option wraps is a raw byte (i32), not a `*MvlString` pointer — the
+        // existing generic `Option[Byte]` machinery handles it from here.
+        TirExprKind::MethodCall {
+            receiver,
+            method,
+            args,
+        } if peels_to_string(&receiver.ty) && method == "byte_at" && args.len() == 1 => {
+            ctx.needs_runtime.set(true);
+            emit_expr(out, receiver, ctx);
+            emit_expr(out, &args[0], ctx);
+            out.push_str("    call $_mvl_string_byte_at\n");
         }
         // `String.parse_int()` — returns a heap-allocated MvlResult pointer
         // (Group H import). Receiver is the raw (ptr, len) string on the stack.
