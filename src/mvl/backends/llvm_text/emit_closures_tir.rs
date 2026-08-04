@@ -257,6 +257,97 @@ impl TextEmitter {
         self.emit_lambda_inner_tir(params, body, &[])
     }
 
+    /// Wrap a `fold` reducer closure so its accumulator always crosses the
+    /// `_mvl_list_fold` runtime boundary as a bare `ptr`.
+    ///
+    /// `_mvl_list_fold` (runtime/llvm) blindly transmutes the closure it is
+    /// given to `fn(*const u8, i64, *const u8) -> i64` and calls through
+    /// that — safe only when the accumulator's real LLVM representation
+    /// already IS a single 8-byte GPR-class value (`ptr` or `i64`), which is
+    /// bit-identical to what the transmuted signature assumes. Anything
+    /// else — a struct (any field count/layout), `Float`/`Bool`/`Byte`/`Char`
+    /// (wrong register class or width), `Option`/`Result`'s `{i8, ptr}` (16
+    /// bytes) — is passed or returned under a *different* ABI classification
+    /// by the natively-compiled closure, so the runtime reads garbage and
+    /// crashes inside `_mvl_list_fold` itself. (Found via `log_analyzer`'s
+    /// `build_report`, which folds a 4-field all-`Int` `Report` struct —
+    /// 32 bytes, passed via a hidden pointer under SysV, not a register.)
+    ///
+    /// Fix: allocate a heap box holding the real accumulator value, seed it
+    /// with `init_val`, and hand the runtime a trampoline closure whose
+    /// `env` is the ORIGINAL closure. Each call: load the accumulator out of
+    /// the box, call through to the original closure, store the result back
+    /// into the (same) box, and return the box pointer unchanged — so the
+    /// value `_mvl_list_fold` shuttles through its `i64` slot is always a
+    /// `ptr`, which is safe. Returns `(wrapped_closure_ptr, box_ptr)`; read
+    /// the final accumulator back out of `box_ptr` once the fold call
+    /// returns (not out of `_mvl_list_fold`'s own return register, which
+    /// only echoes the outer `acc_ptr` slot, never the box).
+    pub(super) fn emit_fold_acc_box_trampoline(
+        &mut self,
+        acc_ty: &str,
+        init_val: &str,
+        orig_closure: &str,
+    ) -> (String, String) {
+        self.ensure_closure_type();
+        self.ensure_extern("declare ptr @_mvl_alloc(i64)");
+
+        // sizeof(acc_ty) via the classic gep-null-1 trick (mirrors the env
+        // struct allocation in `emit_lambda_inner_tir` above).
+        let size_gep = self.next_reg();
+        self.push_instr(&format!(
+            "{size_gep} = getelementptr {acc_ty}, ptr null, i32 1"
+        ));
+        let size_val = self.next_reg();
+        self.push_instr(&format!("{size_val} = ptrtoint ptr {size_gep} to i64"));
+        self.fn_ctx.reg_types.insert(size_val.clone(), "i64".into());
+
+        let box_ptr = self.next_reg();
+        self.push_instr(&format!("{box_ptr} = call ptr @_mvl_alloc(i64 {size_val})"));
+        self.fn_ctx.reg_types.insert(box_ptr.clone(), "ptr".into());
+        self.push_instr(&format!("store {acc_ty} {init_val}, ptr {box_ptr}"));
+
+        let trampoline_name = format!("__fold_box_trampoline_{}", self.module.lambda_counter);
+        self.module.lambda_counter += 1;
+
+        let mut body: Vec<String> = Vec::new();
+        body.push(format!(
+            "define i64 @{trampoline_name}(ptr %__tenv, i64 %__acc_box, ptr %__elem) {{"
+        ));
+        body.push("entry:".into());
+        body.push("  %box = inttoptr i64 %__acc_box to ptr".into());
+        body.push(format!("  %acc_val = load {acc_ty}, ptr %box"));
+        body.push("  %fn_field = getelementptr %__closure_type, ptr %__tenv, i32 0, i32 0".into());
+        body.push("  %fn_ptr = load ptr, ptr %fn_field".into());
+        body.push("  %env_field = getelementptr %__closure_type, ptr %__tenv, i32 0, i32 1".into());
+        body.push("  %env_ptr = load ptr, ptr %env_field".into());
+        body.push(format!(
+            "  %new_val = call {acc_ty} %fn_ptr(ptr %env_ptr, {acc_ty} %acc_val, ptr %__elem)"
+        ));
+        body.push(format!("  store {acc_ty} %new_val, ptr %box"));
+        body.push("  ret i64 %__acc_box".into());
+        body.push("}".into());
+        self.module.fn_bodies.push(body.join("\n"));
+
+        // New closure struct: fn_ptr = trampoline, env_ptr = the ORIGINAL
+        // closure object (so the trampoline can load its real fn_ptr/env_ptr).
+        let wrapped = self.next_reg();
+        self.push_instr(&format!("{wrapped} = call ptr @_mvl_alloc(i64 16)"));
+        self.fn_ctx.reg_types.insert(wrapped.clone(), "ptr".into());
+        let fn_field = self.next_reg();
+        self.push_instr(&format!(
+            "{fn_field} = getelementptr %__closure_type, ptr {wrapped}, i32 0, i32 0"
+        ));
+        self.push_instr(&format!("store ptr @{trampoline_name}, ptr {fn_field}"));
+        let env_field = self.next_reg();
+        self.push_instr(&format!(
+            "{env_field} = getelementptr %__closure_type, ptr {wrapped}, i32 0, i32 1"
+        ));
+        self.push_instr(&format!("store ptr {orig_closure}, ptr {env_field}"));
+
+        (wrapped, box_ptr)
+    }
+
     /// Emit a lambda for use by HOF runtime functions (filter/map/fold/any/all).
     ///
     /// `ptr_param_indices` lists parameter indices that the runtime passes as

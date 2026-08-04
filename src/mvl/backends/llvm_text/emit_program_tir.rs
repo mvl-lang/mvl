@@ -670,6 +670,13 @@ impl TextEmitter {
                 .fns
                 .retain(|f| f.is_test || !excluded.contains(&f.name));
         }
+        // Drop the program's own entrypoint `main`, if the file under test
+        // declares one (e.g. `main.mvl` with embedded `test fn`s). No test
+        // calls it directly, and `emit_test_dispatch_main` synthesizes its
+        // own `@main` to dispatch by name — keeping both emits two `define
+        // @main` in the same module ("invalid redefinition of function
+        // 'main'").
+        test_prog.fns.retain(|f| f.name != "main");
         for f in &mut test_prog.fns {
             f.is_test = false;
         }

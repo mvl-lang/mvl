@@ -4466,19 +4466,43 @@ impl TextEmitter {
                     Some(p) => p,
                     None => return Ok(None),
                 };
-                let slot = self.next_reg();
-                self.push_instr(&format!("{slot} = alloca {init_ty}"));
-                self.push_instr(&format!("store {init_ty} {init_val}, ptr {slot}"));
                 self.ensure_extern("declare ptr @_mvl_list_fold(ptr, ptr, ptr)");
-                let reg = self.next_reg();
-                self.push_instr(&format!(
-                    "{reg} = call ptr @_mvl_list_fold(ptr {val}, ptr {slot}, ptr {closure})"
-                ));
-                self.fn_ctx.reg_types.insert(reg.clone(), "ptr".into());
-                let result = self.next_reg();
-                self.push_instr(&format!("{result} = load {init_ty}, ptr {reg}"));
-                self.fn_ctx.reg_types.insert(result.clone(), init_ty);
-                Ok(Some(result))
+                if init_ty == "ptr" || init_ty == "i64" {
+                    // Safe to pass straight through: `_mvl_list_fold`
+                    // transmutes the accumulator via a single 8-byte
+                    // GPR-class `i64` register, which is exactly how `ptr`
+                    // and `i64` values are already passed under the SysV
+                    // ABI — no boxing needed.
+                    let slot = self.next_reg();
+                    self.push_instr(&format!("{slot} = alloca {init_ty}"));
+                    self.push_instr(&format!("store {init_ty} {init_val}, ptr {slot}"));
+                    let reg = self.next_reg();
+                    self.push_instr(&format!(
+                        "{reg} = call ptr @_mvl_list_fold(ptr {val}, ptr {slot}, ptr {closure})"
+                    ));
+                    self.fn_ctx.reg_types.insert(reg.clone(), "ptr".into());
+                    let result = self.next_reg();
+                    self.push_instr(&format!("{result} = load {init_ty}, ptr {reg}"));
+                    self.fn_ctx.reg_types.insert(result.clone(), init_ty);
+                    Ok(Some(result))
+                } else {
+                    // Any other representation (structs, Float/Bool/Byte/Char,
+                    // Option/Result's `{i8, ptr}`) crashes `_mvl_list_fold`'s
+                    // blind i64 transmute — box it. See
+                    // `emit_fold_acc_box_trampoline` for why.
+                    let (wrapped_closure, box_ptr) =
+                        self.emit_fold_acc_box_trampoline(&init_ty, &init_val, &closure);
+                    let slot = self.next_reg();
+                    self.push_instr(&format!("{slot} = alloca ptr"));
+                    self.push_instr(&format!("store ptr {box_ptr}, ptr {slot}"));
+                    self.push_instr(&format!(
+                        "call ptr @_mvl_list_fold(ptr {val}, ptr {slot}, ptr {wrapped_closure})"
+                    ));
+                    let result = self.next_reg();
+                    self.push_instr(&format!("{result} = load {init_ty}, ptr {box_ptr}"));
+                    self.fn_ctx.reg_types.insert(result.clone(), init_ty);
+                    Ok(Some(result))
+                }
             }
 
             // ── List/Array/Set non-HOF methods ────────────────────────────

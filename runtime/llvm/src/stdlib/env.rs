@@ -51,6 +51,24 @@ pub extern "C" fn _mvl_env_get(name: *const c_char) -> MvlOption {
     }
 }
 
+/// Read an environment variable by name, returning a bare (untainted) string.
+///
+/// Backs `std.env`'s module-private `_env_read` builtin, called from
+/// `get_secret`/`env_var`'s MVL bodies before those wrap the value in
+/// `Secret`/`Tainted` via `relabel`.
+///
+/// Returns `MvlOption { tag=1, payload=*mut c_char }` on success (caller frees),
+/// or `MvlOption { tag=0, payload=null }` when the variable is not set.
+#[no_mangle]
+#[allow(unsafe_code)]
+pub extern "C" fn _mvl_env__env_read(name: *const c_char) -> MvlOption {
+    let key = unsafe { c_to_string(name) };
+    match mvl_runtime::stdlib::env::_env_read(key) {
+        Some(s) => MvlOption::some_str(string_to_c(&s)),
+        None => MvlOption::none(),
+    }
+}
+
 /// Set an environment variable.
 ///
 /// Returns `MvlResult { tag=0 }` on success, `MvlResult { tag=1, err=msg }`
