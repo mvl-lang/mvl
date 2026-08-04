@@ -29,7 +29,10 @@ fn corpus(name: &str) -> String {
 }
 
 fn corpus_14_ffi(name: &str) -> String {
-    format!("{}/tests/fixtures/14_ffi/{name}", env!("CARGO_MANIFEST_DIR"))
+    format!(
+        "{}/tests/fixtures/14_ffi/{name}",
+        env!("CARGO_MANIFEST_DIR")
+    )
 }
 
 // ── helpers ───────────────────────────────────────────────────────────────
