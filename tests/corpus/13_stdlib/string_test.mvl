@@ -2,9 +2,9 @@
 //
 // Covers the portable subset of `std/strings.mvl` that both backends lower
 // via runtime shims: `.len`, `.concat`, `.substring`, `.to_upper`,
-// `.to_lower`, `.starts_with`, `.ends_with`, `.contains`, `.is_empty`, and
-// `.trim`. The methods are dispatched via dot syntax as type-attached methods
-// (ADR-0031 amendment), not general UFCS.
+// `.to_lower`, `.starts_with`, `.ends_with`, `.contains`, `.is_empty`,
+// `.trim`, `.chars`, and `.char_at`. The methods are dispatched via dot
+// syntax as type-attached methods (ADR-0031 amendment), not general UFCS.
 
 test fn string_len() -> Unit {
     assert_eq("hello".len(), 5);
@@ -58,6 +58,42 @@ test fn string_trim() -> Unit {
     assert_eq("hello".trim(), "hello");
     assert_eq("".trim(), "");
     assert_eq("   ".trim(), "");
+}
+
+// #2121 — `.chars()` had no WASM emitter arm at all.
+test fn string_chars() -> Unit {
+    let empty: List[String] = "".chars();
+    assert_eq(empty.len(), 0);
+
+    let cs: List[String] = "abc".chars();
+    assert_eq(cs.len(), 3);
+    assert_eq(cs.get(0).unwrap_or(""), "a");
+    assert_eq(cs.get(1).unwrap_or(""), "b");
+    assert_eq(cs.get(2).unwrap_or(""), "c");
+
+    // Non-ASCII: code-point iteration, not byte iteration (#2121 acceptance).
+    let unicode: List[String] = "héllo".chars();
+    assert_eq(unicode.len(), 5);
+    assert_eq(unicode.get(1).unwrap_or(""), "é");
+}
+
+// #2175 — `.char_at()` had no WASM emitter arm at all.
+test fn string_char_at() -> Unit {
+    assert_eq("abc".char_at(1).unwrap_or(""), "b");
+    assert_eq("abc".char_at(0).unwrap_or(""), "a");
+    assert_eq("abc".char_at(2).unwrap_or(""), "c");
+
+    match "abc".char_at(5) {
+        Some(_) => assert_eq(true, false),
+        None => assert_eq(true, true),
+    }
+    match "abc".char_at(-1) {
+        Some(_) => assert_eq(true, false),
+        None => assert_eq(true, true),
+    }
+
+    // Non-ASCII: code-point index, not byte index.
+    assert_eq("héllo".char_at(1).unwrap_or(""), "é");
 }
 
 // A `.concat()` result returned directly from a fn (no intermediate `let`)
