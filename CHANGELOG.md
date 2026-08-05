@@ -13,6 +13,89 @@
 - **WASM: `expr?` (`emit_propagate`) assumed every `Result` `Ok` payload was a bare i64.** Correct for Int/UInt, wrong for `Float` (needs `f64.reinterpret_i64` after extraction) and `String` (needs the `(ptr, len)` unpack every other String value uses) — `wasm-tools validate` rejected the module wherever a `Float`- or `String`-Ok `Result` was propagated (hit by `examples/programs/safe_division.mvl` and 2 of `examples/log_analyzer`'s 3 validation failures). `emit_propagate` now dispatches on the Result's actual Ok type, mirroring the type-directed logic match-arm `Ok(x)` binding already used.
 - **WASM: `List[String]::concat()`/`List[List[T]]::concat()` were unsupported (stub `unreachable`).** The only runtime primitive, `_mvl_array_concat`, copies elements byte-wise without bumping refcounts — correct for scalars/structs (nothing ever frees the pointee), a double-free for `*MvlString` pointers. Added `_mvl_array_concat_str`, which refcount-clones each element via `_mvl_string_clone` instead; relaxed the `.concat()` dispatch to also allow nested collections, which were never actually unsafe to byte-copy. Closes the last stub gap in `examples/csv_transactions`.
 
+### Fixed — #2207, #2200
+
+- **LLVM/WASM: test-crate assembly could emit a duplicate `fn main`.** A file with inline `test fn`s (or a sibling it legitimately imports from) that also declares `fn main` collided with each backend's own test-dispatch mechanism — LLVM's synthesized dispatch `main` (needed because `lli` only runs a function literally named `main`) crashed with "invalid redefinition of function 'main'"; WASM's upfront duplicate-function-name check hard-failed demanding a file rename, even though `wasmtime --invoke <test_name>` never calls `main`/`_start` at all. Both backends now drop every `fn main` — the entry file's own and any sibling's — when compiling specifically for test-fn dispatch; real `mvl build`/`mvl run` and the `// expect:` corpus runner are unaffected. See ADR-0063.
+- **Rust: the test-crate checker prelude never saw sibling files' own declarations.** `checker_stdlib_progs` only carried the *transitive stdlib imports* a sibling library file pulled in, never the sibling's own struct/enum declarations — those reached the Rust transpile prelude via a separate path but never reached the checker. A struct field accessed on a type declared in a sibling file (not `use`-imported, per MVL's same-directory implicit visibility) resolved to `Ty::Unknown`, and `List[T]::get()`'s dispatch silently took the generic-method fallback instead of the List-indexing path, dropping its `.cloned()` fixup and emitting code that failed to compile. `mvl test`'s two check sites now pass sibling programs as a second checker prelude, matching `mvl build`'s existing (correct) two-prelude call.
+
+### Fixed — #2198, #2199
+
+- **LLVM: three compounding bugs broke `examples/log_analyzer`'s test suite entirely.** (1) The test-crate builder emitted a file's own `fn main` verbatim alongside its synthesized dispatch `main` whenever a file had both — two `@main` definitions, `lli` refused to load the module. (2) `std.env`'s private `_env_read` builtin had no LLVM C-ABI export at all — `get_secret()`/`env_var()` failed to link. (3) `_mvl_list_fold`'s runtime blindly transmutes the fold closure assuming the accumulator is always a single 8-byte GPR-class value — true for `ptr`/`i64`, false for structs, `Float`/`Bool`/`Byte`/`Char`, and `Option`/`Result`, which cross a *different* ABI boundary and corrupted memory (log_analyzer folds a 4-field struct accumulator). Fixed by boxing the accumulator on the heap and routing it through a trampoline whenever it isn't already `ptr`/`i64`-safe.
+- **WASM: three more bugs, same example, plus `examples/programs/safe_division.mvl`.** `clone_is_supported()` excluded struct/payload-enum element types even though aliasing them is safe (`_mvl_struct_alloc` never frees, #1821) — blocked `List[T]::filter`/`sort_by`/`take_while`/`skip_while`/`min_by`/`max_by` for any struct element type. The `?` operator hardcoded the `Result` payload as a single 8-byte `i64`, breaking for struct or `Float` Ok types (the same fix closed `safe_division.mvl`'s independent failure). `match`/`if` result-type inference didn't understand `Never` (a diverging `exit()`/`panic`-style arm) as a bottom type, poisoning the whole match's inferred result type and dropping the enclosing `if`'s `(result ..)` declaration.
+
+### Fixed — #2169
+
+- **LLVM: `std.json.decode` was entirely broken across 5 compounding bugs; WASM across 3 ownership-tracking bugs.** Both backends' JSON decoders corrupted or leaked memory on any non-trivial input — separate, backend-specific root causes in each, closed together since they were discovered investigating the same failing corpus case.
+
+### Fixed — #2188
+
+- **WASM/LLVM: `String`'s kernel methods had gaps across both backends.** `String::chars()`/`char_at()`/`byte_at()`/`from_chars()`/`from_bytes()` either had no emitter arm at all (WASM) or, for `from_bytes`, dereferenced a misaligned pointer (LLVM) — rounding out full parity with the Rust backend's existing implementations.
+
+### Fixed — #2168, #2177, #2163
+
+- **LLVM/WASM: nested payload-enum match patterns crashed or failed to assemble.** `Ok(Variant(x))`/`Some(Variant(x))` nested payload patterns crashed the LLVM backend and failed WASM assembly; a bare `Ok(_)`/`Some(_)`/`Err(_)` wildcard arm sitting alongside a qualified variant arm in the same match was unreachable on LLVM.
+
+### Fixed — #2159, #2118, #2122
+
+- **WASM: several classes of function/closure/numeric-method calls had no emitter arm.** A named function used as an `fn`-value had no funcref table slot; capturing closures (lambdas reading an outer variable) compiled to `unreachable` stubs; `Int`/`UInt`/`Float::abs`/`clamp`/`pow` had no dispatch arm at all.
+
+### Fixed — #2173, #2174
+
+- **WASM: `List[T]::sort()` and `String::parse_float()` had no emitter arm at all.**
+
+### Fixed — #2170
+
+- **CLI: `mvl test <dir>` silently dropped a file's inline `test fn`s when a same-stem `*_test.mvl` sibling existed.** `foo.mvl`'s own inline tests and `foo_test.mvl`'s tests are for entirely different declarations, but the module-name-collapsing logic treated the former as "already covered by" the latter and skipped it — invisible except by comparing against the WASM backend, which has no such collapsing step and discovered every inline test correctly. Found via `examples/log_analyzer`, where `main.mvl`/`parser.mvl`/`utils.mvl` were all silently excluded from `mvl test <dir>` on the Rust backend. Disambiguates instead of skipping — the two module names now just need to be distinct.
+
+### Fixed — #2154, #2155, #2149, #2150, #2147, #2148
+
+- **WASM: several core builtins had no implementation or stubbed instead of lowering.** String literals, `Int::to_string()`, `Bool::to_string()` all broke in a module with no `fn main`; `Option::map`/`Result::map`/`Result::and_then` had no implementation at all; `Ok(())`/`Some(())`/char literals stubbed instead of emitting; `Int::to_float()`/`Float::to_int()` and `Map::new()` had no emitter arm at all.
+
+### Fixed — #2152, #2153
+
+- **LLVM: cross-sibling function calls could see the wrong return type**, a register/emission-ordering bug specific to multi-file (siblings) compilation.
+
+### Fixed — #2151, #2144
+
+- **WASM: `examples/access_control`'s `test-wasm` target used `tools/mvlr`, which can't reach the extern-FFI host-glue path** needed for that example. A standalone WASM harness (spike 007) now exists for inspecting raw `--backend=wasm` output outside the full test pipeline.
+
+### Fixed — #2141, #2143, #2131
+
+- **Checker: mutating collection methods (`.push`, `.insert`, `.remove`, …) didn't require a `ref` receiver**, including through a field access — silently allowed mutating a non-`ref` binding. Separately, `std.io::remove` and `Map`/`Set::remove` collided in the implicit prelude once `collections.mvl` was added to it, and `Set[T]::map`/`::remove` had no LLVM dispatch arm (`::map` didn't dedupe results; `::remove` silently no-op'd).
+
+### Fixed — Rust backend
+
+- **`if` without an `else` silently discarded a non-`Unit` native return value**, and the **stdlib prelude's own functions could shadow a real user or sibling function of the same name.** Neither had a corpus regression before now; both gained Set HOF coverage alongside the fix.
+- **`examples/csv_transactions`: a `ref String` reassignment emitted an unlocalized variable name**, breaking the transpiled output; `log_to_file` gained proper wiring in the same pass.
+
+### Fixed — #2138, #2139
+
+- **WASM/LLVM: `let x: ref List/Set[T] = <var>` deep-copied instead of aliasing** — a `ref`-binding of an existing collection should share the same underlying handle, not clone it.
+
+### Fixed — #2124, #2125, #2134
+
+- **WASM: `Set[T]::remove`/`::map` and several non-generic extension methods on builtin wrappers (`Option`/`Result::is_*`) had no emitter arm**, compiling to `unreachable`.
+
+### Fixed — #2112, #2113, #2114, #2090
+
+- **WASM: several string/list/Fd correctness bugs.** String type aliases and split match scrutinees resolved incorrectly; `List[T]::concat` (including struct-element lists) had no implementation; `Fd` never reached `struct_layouts`, producing a dangling call wherever a file used `stdout()`/`stderr()`/`stdin()`.
+
+### Fixed — #2110
+
+- **WASM/LLVM: `std.io`'s `open()`/`close()` were never wired to either backend's emitter/runtime.**
+
+### Fixed — #2017
+
+- **Checker: `mvl test`'s pre-checks (LLVM/WASM text backends) used an unsound prelude**, reporting false-positive diagnostics unrelated to the actual build. Closed alongside a lambda return-type inference bug (dropped to `Unknown` without an explicit annotation) and a missing `Map::put`/`::without` entry in `map_method_ty`.
+
+### Added — #2049
+
+- **WASM backend gained `extern "rust"` FFI support via an embedded-wasmtime host** — `(import "extern" ...)` declarations, a host-glue generator marshalling `Int`/`Bool`/`String`/struct/unit-enum/refinement-newtype/`Option`/`Result` types, and `mvl test --backend=wasm` wired to run through the host glue automatically. See ADR-0062.
+
+### Changed — examples
+
+- **`log_analyzer`'s JSON pipeline is now native MVL** (no Rust FFI bridge), gained `test-llvm`/`run-wasm` Makefile targets, and had its Makefile's toolchain re-exec bug, a `parser_test.mvl` bare-`String`-vs-`Tainted[String]` type error, and several lint warnings fixed. `mastermind` and `config_server` gained `test-wasm`/`build-wasm` targets. `bzip`, `csv_transactions`, `mastermind` (LLVM only), `snake_game`, and `task_pipeline` are excluded from `test-examples-wasm`/`test-examples-llvm` pending unrelated, pre-existing backend feature gaps (tracked in #2084 and follow-ups); `safe_division.mvl` was un-skipped once #2199 landed.
+
 ### Fixed — #2145, #2146, #2171
 
 - **LLVM: `Option[Unit]` match emitted invalid `load void`.** `Option[Unit]`'s payload slot has no meaningful data — the LLVM type for `Unit` resolves to `void`, valid only as a function *return* type, never a value type. Matching `Some(_)`/`Some(x)` on an `Option[Unit]` unconditionally emitted `load void, ptr %pp`, crashing `lli` at module load. `Result[Unit, E]`'s `Ok` arm already guarded this exact case; `Option`'s `Some` arm now does too.
