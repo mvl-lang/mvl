@@ -34,8 +34,7 @@ WASM_EXCLUDE := \
 	$(DIR)core_types_demo.mvl \
 	$(DIR)hof_lambdas.mvl \
 	$(DIR)list_stubs.mvl \
-	$(DIR)random_dice/main.mvl \
-	$(DIR)safe_division.mvl
+	$(DIR)random_dice/main.mvl
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z0-9_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-12s\033[0m %s\n", $$1, $$2}'
@@ -103,11 +102,6 @@ test-llvm: ## Run all example programs via LLVM backend
 # a wrong equality result on WASM, breaking find_user's linear scan.
 # random_dice/main.mvl: extern "rust" FFI unsupported on --backend=wasm
 # (#2049).
-# safe_division.mvl: `Result[Float, DivError]`'s payload gets type-confused
-# with i64 somewhere in WASM codegen — `wasm-tools` validation fails with
-# "type mismatch: expected f64, found i64". Only surfaces with
-# MVL_NO_REEXEC=1 pointed at a freshly-built compiler; the re-exec'd
-# installed toolchain masked it. Worth its own issue.
 test-wasm: ## Run all example programs via WASM backend
 	@pass=0; fail=0; \
 	OK="\033[32m✓\033[0m"; FAIL="\033[31m✗\033[0m"; \
