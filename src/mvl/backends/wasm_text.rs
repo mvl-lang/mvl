@@ -2799,6 +2799,15 @@ fn collect_locals_expr(expr: &TirExpr, locals: &mut Vec<(String, Ty)>) {
             if matches!(receiver.ty, Ty::Float) && method == "to_string" {
                 locals.push((mvl_string_temp_name(expr), Ty::Bool));
             }
+            // `.get(i)` on a `List[String]`/`List[List[U]]`/`List[Set[U]]`
+            // needs the returned Option's handle held across a
+            // clone-and-rewrap sequence (#2203) — see the emit-side arm.
+            if collection_elem_ty(&receiver.ty).is_some() && method == "get" && args.len() == 1 {
+                let elem_ty = collection_elem_ty(&receiver.ty).cloned().unwrap_or(Ty::Int);
+                if peels_to_string(&elem_ty) || collection_elem_ty(&elem_ty).is_some() {
+                    locals.push((get_clone_temp_name(expr), Ty::Bool));
+                }
+            }
             // `abs`/`clamp` on Int/UInt/Float (#2122) — both need the
             // receiver stashed in a temp so it can be read more than once
             // (a `select`-based abs, or clamp's bounds check); `clamp`
@@ -4674,6 +4683,23 @@ fn emit_expr(out: &mut String, expr: &TirExpr, ctx: &Ctx) {
         // `.get(i)` on List / Array — returns `Option[T]` (heap-allocated
         // MvlOption). Element type comes from the receiver's collection
         // type. Runtime handles the OOB check + Option wrapping.
+        //
+        // `_mvl_array_get_option_i32` hands back the raw element pointer —
+        // fine for Bool/enum/struct/payload-enum elements (`local_drop_fn`
+        // never deep-drops those, so aliasing carries no double-free risk,
+        // same reasoning `concat_is_supported`'s doc comment documents),
+        // but for String and nested-collection (`List[U]`/`Set[U]`)
+        // elements that pointer is still owned by *this* array. A caller
+        // that binds the `Some(...)` payload to a plain name gets a
+        // `List[String]`/`String`-typed local that `local_drop_fn` *does*
+        // deep-drop at scope exit — a double-free against whatever this
+        // array's own eventual drop (or another alias of the same
+        // element) does. Clone the payload before rewrapping it in a
+        // fresh Option, mirroring the LLVM backend's identical fix for
+        // the String case (`emit_exprs_tir.rs`, itself modeled on
+        // `_mvl_map_get_str`, #2047) — extended here to nested
+        // collections, which have the same aliasing shape via
+        // `_mvl_array_clone` (#2203).
         TirExprKind::MethodCall {
             receiver,
             method,
@@ -4685,7 +4711,9 @@ fn emit_expr(out: &mut String, expr: &TirExpr, ctx: &Ctx) {
             // i32 too. Everything else (Int, Float) is i64. Asked via `wasm_ty`
             // so this agrees with `push_op_for`/`list_elem_load_op` by
             // construction rather than by two predicates happening to match.
-            let getter = if wasm_ty(&elem_ty, ctx) == "i32" || is_string_ty(&elem_ty, ctx) {
+            let elem_is_string = peels_to_string(&elem_ty);
+            let elem_is_nested_collection = collection_elem_ty(&elem_ty).is_some();
+            let getter = if wasm_ty(&elem_ty, ctx) == "i32" || elem_is_string {
                 "_mvl_array_get_option_i32"
             } else {
                 "_mvl_array_get_option_i64"
@@ -4693,6 +4721,32 @@ fn emit_expr(out: &mut String, expr: &TirExpr, ctx: &Ctx) {
             emit_expr(out, receiver, ctx);
             emit_expr(out, &args[0], ctx);
             out.push_str(&format!("    call ${getter}\n"));
+            if elem_is_string || elem_is_nested_collection {
+                let temp = get_clone_temp_name(expr);
+                let clone_fn = if elem_is_string {
+                    "_mvl_string_clone"
+                } else {
+                    "_mvl_array_clone"
+                };
+                // The Some branch below builds a *fresh* Option box
+                // (`_mvl_option_some_i32`) around the cloned payload and
+                // never drops `$temp` (the original, uncloned box) — a
+                // small, intentional per-call leak, same tradeoff #1821
+                // already accepts elsewhere ("corpus allocations are
+                // short-lived, leaking is fine") rather than adding a
+                // second temp local just to free 16 bytes here.
+                out.push_str(&format!("    local.tee ${temp}\n"));
+                out.push_str("    call $_mvl_option_tag\n");
+                out.push_str("    i32.eqz\n");
+                out.push_str("    if (result i32)\n");
+                out.push_str(&format!("    local.get ${temp}\n"));
+                out.push_str("    call $_mvl_option_value_i32\n");
+                out.push_str(&format!("    call ${clone_fn}\n"));
+                out.push_str("    call $_mvl_option_some_i32\n");
+                out.push_str("    else\n");
+                out.push_str(&format!("    local.get ${temp}\n"));
+                out.push_str("    end\n");
+            }
         }
         // `.unwrap_or(default)` on `Option[T]`. Emits an inline
         // `if tag == 0 (result T) then <value> else <default> end`.
@@ -6731,6 +6785,13 @@ fn choice_idx_temp_name(expr: &TirExpr) -> String {
 /// again inside the `else` branch that wraps it in `Some` (#2191).
 fn string_find_temp_name(expr: &TirExpr) -> String {
     format!("__sf_{}_{}", expr.span.offset, expr.span.len)
+}
+
+/// Temp local for the `*MvlOption` handle `.get(i)` gets back from
+/// `_mvl_array_get_option_i32`, held across the clone-and-rewrap sequence
+/// String/nested-collection elements need (#2203).
+fn get_clone_temp_name(expr: &TirExpr) -> String {
+    format!("__gc_{}_{}", expr.span.offset, expr.span.len)
 }
 
 /// Temp local name for the `*MvlOption` pointer stashed during an
