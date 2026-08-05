@@ -488,6 +488,7 @@ const RUNTIME_IMPORTS: &[(&str, &str)] = &[
     // same caveat as `slice`: correct for scalar/pointer arrays, not
     // refcount-aware for `List[String]` elements.
     ("_mvl_array_concat", "(param i32 i32) (result i32)"),
+    ("_mvl_array_concat_str", "(param i32 i32) (result i32)"),
     ("_mvl_array_drop", "(param i32)"),
     ("_mvl_string_ptr_array_drop", "(param i32)"),
     ("_mvl_string_ptr_array_dedup", "(param i32)"),
@@ -1379,14 +1380,33 @@ fn slice_is_supported(ty: &Ty, ctx: &Ctx) -> bool {
     }
 }
 
-/// Whether `.concat(other)` can be lowered for this receiver (#2114).
+/// Whether `.concat(other)` can be lowered for this receiver (#2114,
+/// #2195: String elements and nested collections).
 ///
 /// Same underlying mechanism as [`slice_is_supported`] — `_mvl_array_concat`
 /// copies both arrays' elements byte-wise at `elem_size` granularity into a
-/// fresh array — so it excludes the same refcounted-box element types for
-/// the same reason (String, nested collections, Map, Option, Result: a
-/// byte-wise copy aliases the pointee without bumping its refcount, and
-/// `local_drop_fn` would then double-drop it).
+/// fresh array — so it excludes refcounted-box element types where that
+/// aliasing is unsafe (a byte-wise copy doesn't bump the pointee's refcount,
+/// and `local_drop_fn` would then double-drop it): Map, Option, Result.
+///
+/// String and nested collections (`List[List[T]]`, `List[Set[T]]`, …) are
+/// *not* excluded, for two different reasons:
+/// - String: [`_mvl_array_concat_str`] refcount-clones each element instead
+///   of byte-copying, so it never has the aliasing problem to begin with.
+/// - Nested collections: `local_drop_fn` maps any non-String collection —
+///   struct/payload-enum elements *and* collection elements alike — to the
+///   shallow `_mvl_array_drop` (frees the buffer, not the elements), so an
+///   inner `List[String]`'s own refcount is never touched by dropping the
+///   outer list. Byte-copying its handle via plain `_mvl_array_concat`
+///   carries no double-free risk today, by the exact same "nothing ever
+///   frees the pointee" reasoning that already exempts structs and payload
+///   enums below.
+///
+/// Both used to fall to the `;; unsupported expr` catch-all and stub the
+/// whole calling function — never a double-free risk in practice (nothing
+/// ever executed it), just a total feature gap
+/// (`examples/csv_transactions`' `parse_row`/`parse_rows_with` never built
+/// under `--backend=wasm` at all).
 ///
 /// Unlike `slice_is_supported`, this does *not* exclude structs and
 /// payload enums. Those are boxed pointers too, but `_mvl_struct_alloc`
@@ -1401,9 +1421,7 @@ fn concat_is_supported(ty: &Ty, ctx: &Ctx) -> bool {
         None => false,
         Some(elem) => {
             let elem = resolve_ty_param(elem, ctx.type_subst);
-            !(peels_to_string(&elem)
-                || collection_elem_ty(&elem).is_some()
-                || map_key_val_ty(&elem).is_some()
+            !(map_key_val_ty(&elem).is_some()
                 || option_inner_ty(&elem).is_some()
                 || result_ok_ty(&elem).is_some())
         }
@@ -4665,7 +4683,10 @@ fn emit_expr(out: &mut String, expr: &TirExpr, ctx: &Ctx) {
         // std/lists.mvl with no WASM runtime function at all until now —
         // there was no native arm here for *any* element type, scalar or
         // struct, so any `List[T]::concat` call fell to the `;; unsupported
-        // expr` catch-all and stubbed the whole calling function.
+        // expr` catch-all and stubbed the whole calling function. String
+        // elements get their own refcount-cloning runtime fn (#2195) —
+        // see `concat_is_supported`'s doc comment for why the plain
+        // byte-copy one is unsafe for them.
         TirExprKind::MethodCall {
             receiver,
             method,
@@ -4675,9 +4696,16 @@ fn emit_expr(out: &mut String, expr: &TirExpr, ctx: &Ctx) {
             && concat_is_supported(&resolve_ty_param(&receiver.ty, ctx.type_subst), ctx) =>
         {
             ctx.needs_runtime.set(true);
+            let elem_ty = collection_elem_ty(&resolve_ty_param(&receiver.ty, ctx.type_subst))
+                .map(|e| resolve_ty_param(e, ctx.type_subst));
+            let concat_fn = if elem_ty.as_ref().is_some_and(peels_to_string) {
+                "_mvl_array_concat_str"
+            } else {
+                "_mvl_array_concat"
+            };
             emit_expr(out, receiver, ctx);
             emit_expr(out, &args[0], ctx);
-            out.push_str("    call $_mvl_array_concat\n");
+            out.push_str(&format!("    call ${concat_fn}\n"));
         }
         // `.sort()` on List — natural ordering, no comparator (#2173). A
         // `builtin fn` in std/lists.mvl (no MVL body to monomorphize, unlike
@@ -12176,13 +12204,16 @@ mod validated_module_tests {
         assert!(wat.contains("call $_mvl_array_concat"), "{wat}");
     }
 
-    /// `List[String]::concat` must still stub — `_mvl_array_concat` copies
-    /// `*MvlString` pointers byte-wise without bumping their refcount, and
-    /// both the original and the concatenated list would then double-drop
-    /// each shared string, same reasoning as `slice_on_string_list_stubs_
-    /// instead_of_double_freeing`.
+    /// `List[String]::concat` lowers via the dedicated `_mvl_array_concat_str`
+    /// (#2195), not the plain `_mvl_array_concat` — that one copies
+    /// `*MvlString` pointers byte-wise without bumping their refcount, which
+    /// would let the original and the concatenated list double-drop each
+    /// shared string (same reasoning `slice_on_string_list_stubs_instead_
+    /// of_double_freeing` documents for `.slice()`, which has no cloning
+    /// variant yet). `_mvl_array_concat_str` refcount-clones each element
+    /// instead, so no double-free risk and no stub needed.
     #[test]
-    fn concat_on_string_list_stubs_instead_of_double_freeing() {
+    fn concat_on_string_list_uses_cloning_variant() {
         let (wat, stubbed) = emit(
             "test fn t() -> Unit {\n\
                  let xs: List[String] = [\"a\", \"b\"];\n\
@@ -12191,11 +12222,8 @@ mod validated_module_tests {
              }\n",
         );
         validate(&wat);
-        assert_eq!(stubbed, vec!["t".to_string()], "the caller must stub");
-        assert!(
-            !wat.contains("call $_mvl_array_concat"),
-            "a String-element concat must not be lowered: {wat}"
-        );
+        assert!(stubbed.is_empty(), "unexpected stubs: {stubbed:?}");
+        assert!(wat.contains("call $_mvl_array_concat_str"), "{wat}");
     }
 
     /// Reassigning a `ref String` local (`out = out.concat(x)`) used to emit
