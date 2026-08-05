@@ -8,6 +8,17 @@
 //! `(import "runtime" "_mvl_string_*" ...)` declarations resolve to the
 //! symbols exported here.
 //!
+//! This crate *also* compiles to `wasm32-unknown-unknown` for the browser
+//! target (#2093 Phase 2, ADR-0063) — every symbol here is either OS-free
+//! (all string/array/option heap machinery) or gated by `target_os =
+//! "wasi"`, with a `wasm32-unknown-unknown` counterpart backed by a couple
+//! of host-supplied JS primitives (`_mvl_js_now_ms`) instead of `std::env`/
+//! `std::time`/`std::fs`. `std.env`/`std.io` have no browser counterpart at
+//! all and simply aren't compiled in outside `wasi` — a program calling
+//! them under the browser target fails to link with a clear "unknown
+//! import" error rather than a silent stub. See `runtime/wasm-browser/`
+//! for the JS shim that supplies the browser-side host imports.
+//!
 //! ## Scope today
 //!
 //! Group A — no allocation, `(ptr, len)` in, primitive out:
@@ -451,6 +462,7 @@ pub unsafe extern "C" fn _mvl_string_split(sp: i32, sl: i32, sepp: i32, sepl: i3
 /// 4, matching `_mvl_string_split` — so `local_drop_fn` already maps the
 /// result to `_mvl_string_ptr_array_drop`.
 #[unsafe(no_mangle)]
+#[cfg(target_os = "wasi")]
 pub extern "C" fn _mvl_env_args() -> i32 {
     let arr = _mvl_array_new(4, 0);
     for a in std::env::args() {
@@ -468,6 +480,7 @@ pub extern "C" fn _mvl_env_args() -> i32 {
 /// # Safety
 /// `(ptr, len)` must describe a valid range or be `(0, 0)`.
 #[unsafe(no_mangle)]
+#[cfg(target_os = "wasi")]
 pub unsafe extern "C" fn _mvl_env_get(ptr: i32, len: i32) -> i32 {
     let name = match core::str::from_utf8(unsafe { slice_or_empty(ptr, len) }) {
         Ok(s) if !s.is_empty() => s,
@@ -914,6 +927,43 @@ pub unsafe extern "C" fn _mvl_array_concat(a: i32, b: i32) -> i32 {
         }
     }
     dst.len = total;
+    out
+}
+
+/// `_mvl_array_concat_str(a, b) -> *MvlArray` — like [`_mvl_array_concat`],
+/// but for `List[String]` (`elem_size` 4, each element a `*MvlString`
+/// handle). Every element is refcount-cloned into the new array instead of
+/// byte-copied — [`_mvl_array_concat`]'s raw `copy_nonoverlapping` would
+/// leave the new array's strings double-owned by both the source array(s)
+/// and the result, a double-free/use-after-free the moment either side
+/// drops (same reasoning as [`_mvl_map_get_str`], #2047). This is why
+/// `concat_is_supported` (`wasm_text.rs`) excludes String elements from
+/// the plain arm and routes them here instead.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn _mvl_array_concat_str(a: i32, b: i32) -> i32 {
+    let la = if a == 0 {
+        0
+    } else {
+        unsafe { &*(a as usize as *const MvlArray) }.len
+    };
+    let lb = if b == 0 {
+        0
+    } else {
+        unsafe { &*(b as usize as *const MvlArray) }.len
+    };
+    let out = _mvl_array_new(4, la + lb);
+    for (arr_ptr, len) in [(a, la), (b, lb)] {
+        if arr_ptr == 0 {
+            continue;
+        }
+        let arr = unsafe { &*(arr_ptr as usize as *const MvlArray) };
+        for i in 0..len {
+            let elem =
+                unsafe { core::ptr::read((arr.ptr as usize + (i as usize) * 4) as *const i32) };
+            let cloned = unsafe { _mvl_string_clone(elem) };
+            unsafe { _mvl_array_push_i32(out, cloned) };
+        }
+    }
     out
 }
 
@@ -1979,6 +2029,63 @@ pub unsafe extern "C" fn _mvl_map_contains_key_si64(m: i32, k_ptr: i32, k_len: i
     0
 }
 
+/// `_mvl_map_keys_str(m) -> *MvlArray` — all keys as a `List[String]`
+/// (`*MvlArray` of `*MvlString`, `elem_size` 4 — same convention
+/// `_mvl_string_split` uses). Keys are refcount-cloned, so the returned
+/// list is independently owned and safe to drop without touching this
+/// map's own entries (same reasoning as `_mvl_map_get_str`, #2047).
+///
+/// Backs `Map[String, V]::keys()` for every `V` — the key side of a
+/// `Map[String, V]` is always `String` regardless of the value type.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn _mvl_map_keys_str(m: i32) -> i32 {
+    let arr = _mvl_array_new(4, 0);
+    if m == 0 {
+        return arr;
+    }
+    let map = &*(m as usize as *const MvlMap);
+    for entry in &map.entries {
+        let cloned = _mvl_string_clone(entry.key);
+        _mvl_array_push_i32(arr, cloned);
+    }
+    arr
+}
+
+/// `_mvl_map_values_si64(m) -> *MvlArray` — all values as a `List[V]`
+/// (`*MvlArray` of i64, `elem_size` 8) for `Map[String, V]` where `V` is a
+/// plain scalar. Values are handed back verbatim — same restriction
+/// `_mvl_map_get_si64` documents; use [`_mvl_map_values_str`] for
+/// `Map[String, String]`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn _mvl_map_values_si64(m: i32) -> i32 {
+    let arr = _mvl_array_new(8, 0);
+    if m == 0 {
+        return arr;
+    }
+    let map = &*(m as usize as *const MvlMap);
+    for entry in &map.entries {
+        _mvl_array_push_i64(arr, entry.val);
+    }
+    arr
+}
+
+/// `_mvl_map_values_str(m) -> *MvlArray` — all values as a `List[String]`
+/// for `Map[String, String]`. Each value is refcount-cloned before being
+/// pushed, same reasoning as `_mvl_map_get_str` (#2047).
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn _mvl_map_values_str(m: i32) -> i32 {
+    let arr = _mvl_array_new(4, 0);
+    if m == 0 {
+        return arr;
+    }
+    let map = &*(m as usize as *const MvlMap);
+    for entry in &map.entries {
+        let cloned = _mvl_string_clone(entry.val as i32);
+        _mvl_array_push_i32(arr, cloned);
+    }
+    arr
+}
+
 /// `_mvl_map_drop_si64(m)` — decrement refcount; free when it reaches zero.
 /// Each key `*MvlString` handle is explicitly dropped before the map is freed.
 #[unsafe(no_mangle)]
@@ -2071,8 +2178,14 @@ pub unsafe extern "C" fn _mvl_format(tmpl_ptr: i32, tmpl_len: i32, values: i32) 
 // `enumerate()` — and the existing `IO_ERR_*` constants in
 // `runtime/llvm/src/stdlib/io.rs`.
 
+// Only `IO_ERR_OTHER` is reachable on the browser target — its siblings
+// come from `io_error_from_std`'s `ErrorKind` mapping, which only the
+// WASI-backed functions call.
+#[cfg_attr(not(target_os = "wasi"), allow(dead_code))]
 const IO_ERR_NOT_FOUND: i32 = 0;
+#[cfg_attr(not(target_os = "wasi"), allow(dead_code))]
 const IO_ERR_PERMISSION_DENIED: i32 = 1;
+#[cfg_attr(not(target_os = "wasi"), allow(dead_code))]
 const IO_ERR_ALREADY_EXISTS: i32 = 2;
 const IO_ERR_OTHER: i32 = 3;
 
@@ -2114,6 +2227,7 @@ fn alloc_io_error(disc: i32, msg: Option<&[u8]>) -> i32 {
 /// Map a `std::io::Error` to an allocated `IoError` header, mirroring
 /// `runtime/rust/src/stdlib/io.rs::sanitize_io_error`'s NotFound /
 /// PermissionDenied / AlreadyExists / Other(kind-string) cases.
+#[cfg(target_os = "wasi")]
 fn io_error_from_std(e: &std::io::Error) -> i32 {
     match e.kind() {
         std::io::ErrorKind::NotFound => alloc_io_error(IO_ERR_NOT_FOUND, None),
@@ -2136,6 +2250,7 @@ fn io_error_from_std(e: &std::io::Error) -> i32 {
 /// # Safety
 /// `path_ptr..path_ptr+path_len` must be valid readable memory.
 #[unsafe(no_mangle)]
+#[cfg(target_os = "wasi")]
 pub unsafe extern "C" fn _mvl_io_read_file(path_ptr: i32, path_len: i32) -> i32 {
     let path_bytes = unsafe { slice_or_empty(path_ptr, path_len) };
     let path = match core::str::from_utf8(path_bytes) {
@@ -2161,6 +2276,7 @@ pub unsafe extern "C" fn _mvl_io_read_file(path_ptr: i32, path_len: i32) -> i32 
 /// `env.set(name, value)` — set an environment variable.
 /// Returns a `*MvlResult`: Ok(()) on success, Err(String) on failure.
 #[unsafe(no_mangle)]
+#[cfg(target_os = "wasi")]
 pub unsafe extern "C" fn _mvl_env_set(
     name_ptr: i32,
     name_len: i32,
@@ -2182,6 +2298,7 @@ pub unsafe extern "C" fn _mvl_env_set(
 
 /// `env.remove_var(name)` — unset an environment variable.
 #[unsafe(no_mangle)]
+#[cfg(target_os = "wasi")]
 pub unsafe extern "C" fn _mvl_env_remove_var(name_ptr: i32, name_len: i32) {
     if let Ok(name) = core::str::from_utf8(unsafe { slice_or_empty(name_ptr, name_len) }) {
         std::env::remove_var(name);
@@ -2191,6 +2308,7 @@ pub unsafe extern "C" fn _mvl_env_remove_var(name_ptr: i32, name_len: i32) {
 /// `env.current_dir()` — get the current working directory.
 /// Returns a `*MvlResult`: Ok(*MvlString) on success, Err(*IoError) on failure.
 #[unsafe(no_mangle)]
+#[cfg(target_os = "wasi")]
 pub extern "C" fn _mvl_env_current_dir() -> i32 {
     match std::env::current_dir() {
         Ok(path) => {
@@ -2204,6 +2322,7 @@ pub extern "C" fn _mvl_env_current_dir() -> i32 {
 /// `env.chdir(path)` — change the current working directory.
 /// Returns a `*MvlResult`: Ok(()) on success, Err(*IoError) on failure.
 #[unsafe(no_mangle)]
+#[cfg(target_os = "wasi")]
 pub unsafe extern "C" fn _mvl_env_chdir(path_ptr: i32, path_len: i32) -> i32 {
     let path = match core::str::from_utf8(unsafe { slice_or_empty(path_ptr, path_len) }) {
         Ok(s) => s,
@@ -2222,25 +2341,30 @@ pub unsafe extern "C" fn _mvl_env_chdir(path_ptr: i32, path_len: i32) -> i32 {
 
 /// `env.exit(code)` — terminate the process with the given exit code.
 #[unsafe(no_mangle)]
+#[cfg(target_os = "wasi")]
 pub extern "C" fn _mvl_env_exit(code: i64) -> ! {
     std::process::exit(code as i32)
 }
 
-/// `env.getuid()` — effective user ID. Returns 0 on WASI (no Unix UIDs).
+/// `env.getuid()` — effective user ID. Always 0 — no Unix UIDs on WASI or
+/// in a browser. No OS dependency, so unlike its `std.env` siblings this
+/// needs no `wasm-browser` counterpart.
 #[unsafe(no_mangle)]
 pub extern "C" fn _mvl_env_getuid() -> i64 {
-    0 // WASI doesn't expose Unix UIDs
+    0
 }
 
-/// `env.getgid()` — effective group ID. Returns 0 on WASI (no Unix GIDs).
+/// `env.getgid()` — effective group ID. Always 0, same reasoning as
+/// `_mvl_env_getuid`.
 #[unsafe(no_mangle)]
 pub extern "C" fn _mvl_env_getgid() -> i64 {
-    0 // WASI doesn't expose Unix GIDs
+    0
 }
 
 /// `env.all()` — return all environment variables as a List of (name, value) pairs.
 /// Returns a `*MvlArray` of struct pointers (each struct has two *MvlString fields).
 #[unsafe(no_mangle)]
+#[cfg(target_os = "wasi")]
 pub extern "C" fn _mvl_env_all() -> i32 {
     // Each entry is a struct { name: *MvlString, value: *MvlString } = 8 bytes
     let arr = _mvl_array_new(8, 0);
@@ -2264,6 +2388,7 @@ pub extern "C" fn _mvl_env_all() -> i32 {
 
 /// `io.write_file(path, content)` — write content to a file, creating or truncating.
 #[unsafe(no_mangle)]
+#[cfg(target_os = "wasi")]
 pub unsafe extern "C" fn _mvl_io_write_file(
     path_ptr: i32,
     path_len: i32,
@@ -2288,6 +2413,7 @@ pub unsafe extern "C" fn _mvl_io_write_file(
 
 /// `io.append(path, content)` — append content to a file.
 #[unsafe(no_mangle)]
+#[cfg(target_os = "wasi")]
 pub unsafe extern "C" fn _mvl_io_append(
     path_ptr: i32,
     path_len: i32,
@@ -2322,6 +2448,7 @@ pub unsafe extern "C" fn _mvl_io_append(
 
 /// `io.path_exists(path)` — check if a path exists.
 #[unsafe(no_mangle)]
+#[cfg(target_os = "wasi")]
 pub unsafe extern "C" fn _mvl_io_exists(path_ptr: i32, path_len: i32) -> i32 {
     let path = match core::str::from_utf8(unsafe { slice_or_empty(path_ptr, path_len) }) {
         Ok(s) => s,
@@ -2332,6 +2459,7 @@ pub unsafe extern "C" fn _mvl_io_exists(path_ptr: i32, path_len: i32) -> i32 {
 
 /// `io.is_file(path)` — check if path is a file.
 #[unsafe(no_mangle)]
+#[cfg(target_os = "wasi")]
 pub unsafe extern "C" fn _mvl_io_is_file(path_ptr: i32, path_len: i32) -> i32 {
     let path = match core::str::from_utf8(unsafe { slice_or_empty(path_ptr, path_len) }) {
         Ok(s) => s,
@@ -2342,6 +2470,7 @@ pub unsafe extern "C" fn _mvl_io_is_file(path_ptr: i32, path_len: i32) -> i32 {
 
 /// `io.is_dir(path)` — check if path is a directory.
 #[unsafe(no_mangle)]
+#[cfg(target_os = "wasi")]
 pub unsafe extern "C" fn _mvl_io_is_dir(path_ptr: i32, path_len: i32) -> i32 {
     let path = match core::str::from_utf8(unsafe { slice_or_empty(path_ptr, path_len) }) {
         Ok(s) => s,
@@ -2352,6 +2481,7 @@ pub unsafe extern "C" fn _mvl_io_is_dir(path_ptr: i32, path_len: i32) -> i32 {
 
 /// `io.create_dir_all(path)` — create a directory and all parent directories.
 #[unsafe(no_mangle)]
+#[cfg(target_os = "wasi")]
 pub unsafe extern "C" fn _mvl_io_create_dir_all(path_ptr: i32, path_len: i32) -> i32 {
     let path = match core::str::from_utf8(unsafe { slice_or_empty(path_ptr, path_len) }) {
         Ok(s) => s,
@@ -2370,6 +2500,7 @@ pub unsafe extern "C" fn _mvl_io_create_dir_all(path_ptr: i32, path_len: i32) ->
 
 /// `io.remove(path)` — remove a file or empty directory.
 #[unsafe(no_mangle)]
+#[cfg(target_os = "wasi")]
 pub unsafe extern "C" fn _mvl_io_remove(path_ptr: i32, path_len: i32) -> i32 {
     let path = match core::str::from_utf8(unsafe { slice_or_empty(path_ptr, path_len) }) {
         Ok(s) => s,
@@ -2400,6 +2531,7 @@ pub unsafe extern "C" fn _mvl_io_remove(path_ptr: i32, path_len: i32) -> i32 {
 /// the fd stored as i64 at offset 0. Returns a `*MvlResult`: Ok(*Fd) on
 /// success, Err(*IoError) on failure (#2110).
 #[unsafe(no_mangle)]
+#[cfg(target_os = "wasi")]
 pub unsafe extern "C" fn _mvl_io_open(path_ptr: i32, path_len: i32) -> i32 {
     use std::os::wasi::io::IntoRawFd as _;
     let path = match core::str::from_utf8(unsafe { slice_or_empty(path_ptr, path_len) }) {
@@ -2437,23 +2569,168 @@ pub unsafe extern "C" fn _mvl_io_open(path_ptr: i32, path_len: i32) -> i32 {
 /// `fd` must be a raw WASI file descriptor previously returned by
 /// `_mvl_io_open` and not already closed.
 #[unsafe(no_mangle)]
+#[cfg(target_os = "wasi")]
 pub unsafe extern "C" fn _mvl_io_close(fd: i32) {
     use std::os::wasi::io::FromRawFd as _;
     drop(unsafe { std::fs::File::from_raw_fd(fd) });
 }
 
+// ── std.env / std.io on the browser target ────────────────────────────────
+//
+// No filesystem, process, or env-var access in a browser sandbox. These
+// exist only because the emitter's `(import "runtime" ...)` declarations
+// are a fixed table covering every stdlib builtin, independent of what a
+// given program actually calls (#2093 Phase 2) — every name in that table
+// must resolve for the module to instantiate at all, so these can't simply
+// be absent the way a target-specific omission would suggest. Each
+// mirrors its WASI sibling's error/empty shape rather than trapping, so a
+// program that happens to reach one of these (directly, or transitively
+// through a stdlib helper) degrades to an ordinary `Err`/`None`/no-op
+// instead of an instantiation failure.
+#[unsafe(no_mangle)]
+#[cfg(not(target_os = "wasi"))]
+pub extern "C" fn _mvl_env_args() -> i32 {
+    _mvl_array_new(4, 0)
+}
+#[unsafe(no_mangle)]
+#[cfg(not(target_os = "wasi"))]
+pub unsafe extern "C" fn _mvl_env_get(_ptr: i32, _len: i32) -> i32 {
+    _mvl_option_none()
+}
+#[unsafe(no_mangle)]
+#[cfg(not(target_os = "wasi"))]
+pub unsafe extern "C" fn _mvl_io_read_file(_path_ptr: i32, _path_len: i32) -> i32 {
+    _mvl_result_err_i32(alloc_io_error(
+        IO_ERR_OTHER,
+        Some(b"unsupported on wasm-browser"),
+    ))
+}
+#[unsafe(no_mangle)]
+#[cfg(not(target_os = "wasi"))]
+pub unsafe extern "C" fn _mvl_env_set(_np: i32, _nl: i32, _vp: i32, _vl: i32) -> i32 {
+    _mvl_result_err_i32(alloc_mvl_string(b"unsupported on wasm-browser"))
+}
+#[unsafe(no_mangle)]
+#[cfg(not(target_os = "wasi"))]
+pub unsafe extern "C" fn _mvl_env_remove_var(_name_ptr: i32, _name_len: i32) {}
+#[unsafe(no_mangle)]
+#[cfg(not(target_os = "wasi"))]
+pub extern "C" fn _mvl_env_current_dir() -> i32 {
+    _mvl_result_err_i32(alloc_io_error(
+        IO_ERR_OTHER,
+        Some(b"unsupported on wasm-browser"),
+    ))
+}
+#[unsafe(no_mangle)]
+#[cfg(not(target_os = "wasi"))]
+pub unsafe extern "C" fn _mvl_env_chdir(_path_ptr: i32, _path_len: i32) -> i32 {
+    _mvl_result_err_i32(alloc_io_error(
+        IO_ERR_OTHER,
+        Some(b"unsupported on wasm-browser"),
+    ))
+}
+#[unsafe(no_mangle)]
+#[cfg(not(target_os = "wasi"))]
+pub extern "C" fn _mvl_env_exit(_code: i64) -> ! {
+    unreachable!("std.env.exit is not supported on wasm-browser")
+}
+#[unsafe(no_mangle)]
+#[cfg(not(target_os = "wasi"))]
+pub extern "C" fn _mvl_env_all() -> i32 {
+    _mvl_array_new(8, 0)
+}
+#[unsafe(no_mangle)]
+#[cfg(not(target_os = "wasi"))]
+pub unsafe extern "C" fn _mvl_io_write_file(_pp: i32, _pl: i32, _cp: i32, _cl: i32) -> i32 {
+    _mvl_result_err_i32(alloc_io_error(
+        IO_ERR_OTHER,
+        Some(b"unsupported on wasm-browser"),
+    ))
+}
+#[unsafe(no_mangle)]
+#[cfg(not(target_os = "wasi"))]
+pub unsafe extern "C" fn _mvl_io_append(_pp: i32, _pl: i32, _cp: i32, _cl: i32) -> i32 {
+    _mvl_result_err_i32(alloc_io_error(
+        IO_ERR_OTHER,
+        Some(b"unsupported on wasm-browser"),
+    ))
+}
+#[unsafe(no_mangle)]
+#[cfg(not(target_os = "wasi"))]
+pub unsafe extern "C" fn _mvl_io_exists(_path_ptr: i32, _path_len: i32) -> i32 {
+    0
+}
+#[unsafe(no_mangle)]
+#[cfg(not(target_os = "wasi"))]
+pub unsafe extern "C" fn _mvl_io_is_file(_path_ptr: i32, _path_len: i32) -> i32 {
+    0
+}
+#[unsafe(no_mangle)]
+#[cfg(not(target_os = "wasi"))]
+pub unsafe extern "C" fn _mvl_io_is_dir(_path_ptr: i32, _path_len: i32) -> i32 {
+    0
+}
+#[unsafe(no_mangle)]
+#[cfg(not(target_os = "wasi"))]
+pub unsafe extern "C" fn _mvl_io_create_dir_all(_path_ptr: i32, _path_len: i32) -> i32 {
+    _mvl_result_err_i32(alloc_io_error(
+        IO_ERR_OTHER,
+        Some(b"unsupported on wasm-browser"),
+    ))
+}
+#[unsafe(no_mangle)]
+#[cfg(not(target_os = "wasi"))]
+pub unsafe extern "C" fn _mvl_io_remove(_path_ptr: i32, _path_len: i32) -> i32 {
+    _mvl_result_err_i32(alloc_io_error(
+        IO_ERR_OTHER,
+        Some(b"unsupported on wasm-browser"),
+    ))
+}
+#[unsafe(no_mangle)]
+#[cfg(not(target_os = "wasi"))]
+pub unsafe extern "C" fn _mvl_io_open(_path_ptr: i32, _path_len: i32) -> i32 {
+    _mvl_result_err_i32(alloc_io_error(
+        IO_ERR_OTHER,
+        Some(b"unsupported on wasm-browser"),
+    ))
+}
+#[unsafe(no_mangle)]
+#[cfg(not(target_os = "wasi"))]
+pub extern "C" fn _mvl_io_close(_fd: i32) {}
+
 // ── std.time — time and duration ─────────────────────────────────────────
 //
-// WASI provides wall-clock time via `std::time::SystemTime`.
+// WASI provides wall-clock time via `std::time::SystemTime`. The
+// `wasm32-unknown-unknown` browser target has no OS clock to read at all —
+// `epoch_nanos_now` reaches out to a host-supplied `Date.now()` instead
+// (see `runtime/wasm-browser/`'s JS shim, ADR-0063).
+
+#[cfg(target_os = "wasi")]
+fn epoch_nanos_now() -> u128 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos()
+}
+
+#[cfg(not(target_os = "wasi"))]
+unsafe extern "C" {
+    /// Host `Date.now()` in milliseconds since the Unix epoch, supplied by
+    /// `runtime/wasm-browser/`'s JS shim under the `env` import module.
+    fn _mvl_js_now_ms() -> f64;
+}
+
+#[cfg(not(target_os = "wasi"))]
+fn epoch_nanos_now() -> u128 {
+    let ms = unsafe { _mvl_js_now_ms() };
+    (ms.max(0.0) * 1_000_000.0) as u128
+}
 
 /// `time.now()` — current time as epoch seconds (i64).
 /// Returns a boxed i64 handle that can be passed to `_instant_epoch_seconds`.
 #[unsafe(no_mangle)]
 pub extern "C" fn _mvl_time_now() -> i32 {
-    let secs = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs() as i64;
+    let secs = (epoch_nanos_now() / 1_000_000_000) as i64;
     let boxed = Box::new(secs);
     Box::into_raw(boxed) as usize as i32
 }
@@ -2469,10 +2746,18 @@ pub unsafe extern "C" fn _mvl_time_instant_epoch_seconds(handle: i32) -> i64 {
 
 /// `time.sleep(secs, nanos)` — sleep for the specified duration.
 #[unsafe(no_mangle)]
+#[cfg(target_os = "wasi")]
 pub extern "C" fn _mvl_time_thread_sleep(secs: i64, nanos: i64) {
     let duration = std::time::Duration::new(secs.max(0) as u64, nanos.max(0) as u32);
     std::thread::sleep(duration);
 }
+
+/// `time.sleep(secs, nanos)` on the browser target — a documented no-op.
+/// A real blocking sleep needs `SharedArrayBuffer` + `Atomics.wait`, which
+/// only works cross-origin-isolated; out of scope here (ADR-0063).
+#[unsafe(no_mangle)]
+#[cfg(not(target_os = "wasi"))]
+pub extern "C" fn _mvl_time_thread_sleep(_secs: i64, _nanos: i64) {}
 
 // ── std.random — pseudo-random number generation ─────────────────────────
 //
@@ -2483,11 +2768,10 @@ static RANDOM_STATE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64
 fn ensure_seeded() {
     use std::sync::atomic::Ordering;
     if RANDOM_STATE.load(Ordering::Relaxed) == 0 {
-        // Seed from system time + address entropy
-        let seed = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos() as u64;
+        // Seed from wall-clock time (WASI's SystemTime, or the browser's
+        // Date.now() via epoch_nanos_now — see std.time above) + address
+        // entropy.
+        let seed = epoch_nanos_now() as u64;
         let seed = seed ^ ((&RANDOM_STATE as *const _ as u64).wrapping_mul(0x517cc1b727220a95));
         RANDOM_STATE.store(seed | 1, Ordering::Relaxed); // Ensure non-zero
     }

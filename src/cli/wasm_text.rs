@@ -361,7 +361,16 @@ fn pull_in_missing_prelude_items(
         );
 
         let mut newly_added: Vec<TirFn> = Vec::new();
-        for name in collector.fn_calls {
+        // Sorted, not iterated straight off the `HashSet` — `fn_calls`'
+        // iteration order is randomized per-process (Rust's default
+        // hasher), and that order directly becomes `merged.fns`' final
+        // append order below, i.e. the emitted module's function order.
+        // Two builds of the identical source could pull in the same
+        // functions in a different relative order, which is nondeterminism
+        // a WASM build has no business having (#2191).
+        let mut sorted_fn_calls: Vec<String> = collector.fn_calls.into_iter().collect();
+        sorted_fn_calls.sort();
+        for name in sorted_fn_calls {
             if known_fns.contains(&name) {
                 continue;
             }
@@ -952,8 +961,15 @@ fn resolve_entry_path(path: &str) -> String {
 }
 
 /// `mvl build --backend=wasm <file>` — write `<stem>.wat`.
-pub(super) fn build_project_wasm(path: &str, assert_mode: AssertMode, target: &str) {
-    exit_if_wasm_browser_unimplemented(target);
+///
+/// `target` doesn't currently branch the emitted WAT at all — the browser
+/// target (#2093 Phase 2, ADR-0063) differs only in which *runtime* module
+/// gets linked in at instantiation time: `runtime/wasm-browser/`'s JS shim
+/// and an `mvl_runtime_wasm.wasm` built for `wasm32-unknown-unknown`,
+/// versus the existing `wasm32-wasip1` build under `wasi`. That's outside
+/// the compiler's control. Kept as a parameter for parity with
+/// `cmd_test_wasm` and in case a real codegen difference shows up later.
+pub(super) fn build_project_wasm(path: &str, assert_mode: AssertMode, _target: &str) {
     let file_path = resolve_entry_path(path);
     let (prog, _src) = super::parse_or_exit(&file_path);
     let module_name = loader::stem(&file_path);
@@ -1517,12 +1533,17 @@ fn test_fn_names(prog: &Program) -> Vec<String> {
         .collect()
 }
 
-/// Bail out with a clear message until the `wasm-browser` target's JS-host
-/// runtime and emitter path exist (tracked in #2093). `wasi` is a no-op here.
+/// Bail out of `mvl test --backend=wasm --target=wasm-browser` — `cmd_test_wasm`
+/// runs everything through `wasmtime`, which has no browser/JS host to
+/// speak of. `mvl build --backend=wasm --target=wasm-browser` works today
+/// (#2093 Phase 2, ADR-0063: same WAT output, linked against
+/// `runtime/wasm-browser/`'s JS shim instead of wasmtime's WASI preload) —
+/// only `test`'s wasmtime-based harness remains unimplemented for this
+/// target. `wasi` is a no-op here.
 fn exit_if_wasm_browser_unimplemented(target: &str) {
     if target == "wasm-browser" {
         eprintln!(
-            "error: --target=wasm-browser is not yet implemented (tracked in #2093) — use --target=wasi (default)"
+            "error: `mvl test --backend=wasm --target=wasm-browser` is not yet implemented (tracked in #2093) — `mvl build --backend=wasm --target=wasm-browser` works; use `make test-runtime-wasm-browser` to smoke-test the runtime module itself"
         );
         process::exit(1);
     }
