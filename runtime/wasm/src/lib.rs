@@ -135,6 +135,9 @@ pub unsafe extern "C" fn _mvl_string_ends_with(sp: i32, sl: i32, pp: i32, pl: i3
 /// `s.find(needle)` — character index of the first occurrence of `needle`
 /// in `s`, or `-1` when not found. Returns character index, not byte index,
 /// matching `runtime/rust/src/stdlib/primitives.rs::str_find`.
+///
+/// Raw i64 sentinel, not an `Option` — `_mvl_string_find_option` below is
+/// what backs MVL's `String::find(self, sub: String) -> Option[Int]`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn _mvl_string_find(sp: i32, sl: i32, np: i32, nl: i32) -> i64 {
     let s = unsafe { slice_or_empty(sp, sl) };
@@ -147,6 +150,26 @@ pub unsafe extern "C" fn _mvl_string_find(sp: i32, sl: i32, np: i32, nl: i32) ->
             text[..byte_idx].chars().count() as i64
         }
         None => -1,
+    }
+}
+
+/// `s.find(needle)` wrapped as `Option[Int]` (`*MvlOption`, i32) — what
+/// `String::find`'s declared `-> Option[Int]` signature actually needs.
+///
+/// `_mvl_string_find`'s raw `-1`-sentinel `i64` doesn't type-check as an
+/// `Option[Int]` anywhere a generic Option consumer (`match`, `if let`,
+/// `.is_some()`) expects the usual `*MvlOption` heap pointer — those call
+/// `_mvl_option_tag`/`_mvl_option_value_i64` on whatever the scrutinee
+/// produced, and dereferencing a raw `-1`/index as a pointer is exactly the
+/// i32-vs-i64 stack type wasm-tools rejects at validation. Same wrap-a-
+/// sentinel-as-Option pattern as `_mvl_array_get_option_i64` above.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn _mvl_string_find_option(sp: i32, sl: i32, np: i32, nl: i32) -> i32 {
+    let idx = unsafe { _mvl_string_find(sp, sl, np, nl) };
+    if idx < 0 {
+        _mvl_option_none()
+    } else {
+        _mvl_option_some_i64(idx)
     }
 }
 

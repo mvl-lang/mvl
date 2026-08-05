@@ -34,6 +34,28 @@ test fn list_fold_computes_product() -> Unit {
     assert_eq(p, 24);
 }
 
+// LLVM backend regression: a multi-field struct accumulator doesn't fit in
+// the single 8-byte register `_mvl_list_fold`'s runtime assumes, and
+// previously corrupted memory / crashed (found via the log_analyzer example).
+type Tally = struct {
+    count: Int,
+    even: Int,
+}
+
+test fn list_fold_struct_accumulator() -> Unit {
+    let xs: List[Int] = [1, 2, 3, 4, 5];
+    let t: Tally = xs.fold(
+        Tally { count: 0, even: 0 },
+        |acc: Tally, x: Int| if x % 2 == 0 {
+            Tally { count: acc.count + 1, even: acc.even + 1 }
+        } else {
+            Tally { count: acc.count + 1, even: acc.even }
+        }
+    );
+    assert_eq(t.count, 5);
+    assert_eq(t.even, 2);
+}
+
 test fn list_any() -> Unit {
     let xs: List[Int] = [1, 2, 3, 4];
     assert_eq(xs.any(|x: Int| x > 3), true);
