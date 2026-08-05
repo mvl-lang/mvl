@@ -1614,10 +1614,8 @@ pub unsafe extern "C" fn _mvl_audit_emit_relabel(
     let location = read(loc_ptr, loc_len);
 
     let ts = {
-        let dur = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default();
-        let (y, mo, d, h, mi, s) = epoch_to_ymd_hms(dur.as_secs());
+        let secs = (epoch_nanos_now() / 1_000_000_000) as u64;
+        let (y, mo, d, h, mi, s) = epoch_to_ymd_hms(secs);
         format!("{y:04}-{mo:02}-{d:02}T{h:02}:{mi:02}:{s:02}Z")
     };
     let line = format!(

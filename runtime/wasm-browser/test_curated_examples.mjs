@@ -44,15 +44,7 @@ const CURATED_EXAMPLES = [
   { name: "actor_pingpong", entry: "examples/actor_pingpong/main.mvl" },
   { name: "flight_fuel_planning", entry: "examples/flight_fuel_planning/main.mvl" },
   { name: "etcs_move_authority", entry: "examples/etcs_move_authority/main.mvl" },
-  {
-    name: "pci_payment",
-    entry: "examples/pci_payment/main.mvl",
-    // NOT #2192 (Map[Str,Str]::keys() self-recursion) — that's fixed; this
-    // is a separate ptr::copy_nonoverlapping UB panic somewhere under
-    // std.log's field-formatting path, found once #2192's fix let this
-    // example progress past its original blocker.
-    knownIssue: 2194,
-  },
+  { name: "pci_payment", entry: "examples/pci_payment/main.mvl" },
   { name: "medical_triage", entry: "examples/medical_triage/main.mvl" },
 ];
 
