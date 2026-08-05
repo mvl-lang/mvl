@@ -1,0 +1,32 @@
+// 05_collections/list_get_field_receiver.mvl — regression for #2200: the
+// Rust backend's `List[T]::get(i).unwrap_or(default)` emission loses its
+// bounds-check/`.cloned()` fixup (and fails to compile) when the receiver
+// is a *field access* on a struct parameter declared in a sibling file,
+// AND this file also declares a `test fn`.
+//
+// Two things are essential to reproducing this, both confirmed by
+// bisection — remove either one and this compiles fine:
+//
+//   1. `Item`/`Wrapper` live in list_get_field_receiver_types.mvl, a
+//      sibling file, not this one. The identical `List[T]::get(i)`
+//      pattern on a direct `List[T]` parameter (not a field access) is
+//      unaffected regardless of where its type is declared.
+//   2. This file declares an inline `test fn` (deliberately unrelated in
+//      content — moving it to its own file, or removing it, makes the
+//      bug disappear). This is the CLI's "inline tests" pattern (the same
+//      one that lets a real project's `main.mvl` carry its own tests) —
+//      it is NOT a `*_test.mvl` file, so it may declare production `fn`s
+//      per this repo's test-file conventions.
+//
+// `find_or_default` is intentionally never called by the test below;
+// calling it would change the shape of the regression this file exists
+// to catch.
+
+/// Returns the first item in `w`, or a default `Item` if `w.items` is empty.
+pub total fn find_or_default(w: Wrapper) -> Item {
+    w.items.get(0).unwrap_or(Item { visible: false, name: "" })
+}
+
+test fn unrelated_noop_test() -> Unit {
+    assert_eq(1, 1)
+}
