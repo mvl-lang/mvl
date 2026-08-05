@@ -1011,8 +1011,13 @@ fn build_and_assemble(
         return Err(fail(format!("  FAIL (parse): {file_str}\n")));
     }
 
-    let (wat, tir) =
-        compile_wat_multi(&prog, &file_str, &module_name, AssertMode::Always, for_test_dispatch);
+    let (wat, tir) = compile_wat_multi(
+        &prog,
+        &file_str,
+        &module_name,
+        AssertMode::Always,
+        for_test_dispatch,
+    );
 
     let wat_tmp = tempfile::NamedTempFile::with_suffix(".wat")
         .map_err(|e| fail(format!("  FAIL (tempfile): {file_str}: {e}\n")))?;
@@ -1658,14 +1663,14 @@ pub(super) fn cmd_test_wasm(path: &str, quiet: bool, verbose: bool, target: &str
 
         for (file, test_names) in &testfn_cases {
             let file_str = file.display().to_string();
-            let (wasm_tmp, tir, _wat) = match build_and_assemble(file, wasm_tools_ref, verbose, true)
-            {
-                Ok(built) => built,
-                Err(cr) => {
-                    results.push(cr);
-                    continue;
-                }
-            };
+            let (wasm_tmp, tir, _wat) =
+                match build_and_assemble(file, wasm_tools_ref, verbose, true) {
+                    Ok(built) => built,
+                    Err(cr) => {
+                        results.push(cr);
+                        continue;
+                    }
+                };
             for test_name in test_names {
                 results.push(run_one_testfn_case(
                     &file_str,
