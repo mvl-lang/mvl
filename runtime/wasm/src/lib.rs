@@ -907,6 +907,43 @@ pub unsafe extern "C" fn _mvl_array_concat(a: i32, b: i32) -> i32 {
     out
 }
 
+/// `_mvl_array_concat_str(a, b) -> *MvlArray` — like [`_mvl_array_concat`],
+/// but for `List[String]` (`elem_size` 4, each element a `*MvlString`
+/// handle). Every element is refcount-cloned into the new array instead of
+/// byte-copied — [`_mvl_array_concat`]'s raw `copy_nonoverlapping` would
+/// leave the new array's strings double-owned by both the source array(s)
+/// and the result, a double-free/use-after-free the moment either side
+/// drops (same reasoning as [`_mvl_map_get_str`], #2047). This is why
+/// `concat_is_supported` (`wasm_text.rs`) excludes String elements from
+/// the plain arm and routes them here instead.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn _mvl_array_concat_str(a: i32, b: i32) -> i32 {
+    let la = if a == 0 {
+        0
+    } else {
+        unsafe { &*(a as usize as *const MvlArray) }.len
+    };
+    let lb = if b == 0 {
+        0
+    } else {
+        unsafe { &*(b as usize as *const MvlArray) }.len
+    };
+    let out = _mvl_array_new(4, la + lb);
+    for (arr_ptr, len) in [(a, la), (b, lb)] {
+        if arr_ptr == 0 {
+            continue;
+        }
+        let arr = unsafe { &*(arr_ptr as usize as *const MvlArray) };
+        for i in 0..len {
+            let elem =
+                unsafe { core::ptr::read((arr.ptr as usize + (i as usize) * 4) as *const i32) };
+            let cloned = unsafe { _mvl_string_clone(elem) };
+            unsafe { _mvl_array_push_i32(out, cloned) };
+        }
+    }
+    out
+}
+
 /// `_mvl_string_ptr_array_drop(a)` — refcount decrement for a `List[String]`
 /// array. When the refcount hits zero each element `*MvlString` is dropped
 /// via `_mvl_string_drop`, then the backing buffer and struct are freed.
