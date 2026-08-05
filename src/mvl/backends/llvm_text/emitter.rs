@@ -193,9 +193,24 @@ impl LlvmTextCompiler {
         //   materializes the whole module at once; unresolvable externs cause
         //   all tests to fail even when the test never calls the impure function.
         //   Pure helpers (e.g. parse_level) are emitted so tests can call them.
+        //
+        // A sibling that declares its own `fn main` (e.g. testing
+        // `roundtrip_test.mvl` alongside a project's `main.mvl`) is dropped
+        // the same way `emit_program_tir_test_crate` drops the entry file's
+        // own `main` below — no test calls it, and it would otherwise
+        // collide with the synthesized dispatch `@main` (#2198-class bug,
+        // this time via a sibling instead of the entry file itself).
         for sib in siblings {
             let has_rust_extern = sib.externs.iter().any(|ed| ed.abi == "rust");
-            if has_rust_extern {
+            if sib.fns.iter().any(|f| f.name == "main") {
+                let mut sib = sib.clone();
+                sib.fns.retain(|f| f.name != "main");
+                if has_rust_extern {
+                    emitter.emit_program_tir_without_extern_rust_callers(&sib)?;
+                } else {
+                    emitter.emit_program_tir(&sib)?;
+                }
+            } else if has_rust_extern {
                 emitter.emit_program_tir_without_extern_rust_callers(sib)?;
             } else {
                 emitter.emit_program_tir(sib)?;

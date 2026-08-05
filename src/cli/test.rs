@@ -209,6 +209,20 @@ pub fn run(path: &str, quiet: bool, verbose: bool, coverage: bool, bdd: bool, us
     let mut prelude_stems: Vec<Option<String>> = vec![None; stdlib_prelude_progs.len()];
     // Stems of sibling library files discovered next to test files.
     let mut sibling_stems: Vec<String> = Vec::new();
+    // Parsed sibling library files themselves (not just their stems) — passed
+    // to the checker as a second prelude alongside `checker_stdlib_progs` so
+    // struct/enum declarations living in a sibling file (not `use`-imported,
+    // per MVL's same-directory implicit visibility) are visible to field-access
+    // type inference. `checker_stdlib_progs` only carries the *transitive
+    // stdlib imports* siblings pull in (via `load_full_prelude`), never the
+    // siblings' own declarations — those reach the Rust transpile prelude
+    // (`stdlib_prelude_progs`) via a direct `.push()` below, but never reached
+    // the checker prelude at all before this fix (#2200): a struct field
+    // accessed on a sibling-declared type resolved to `Ty::Unknown` in the
+    // checker's `expr_types`, which the Rust backend's `List[T]::get()`
+    // dispatch then read as "not a List", silently dropping its `.cloned()`
+    // fixup and emitting code that failed to compile.
+    let mut sibling_progs: Vec<mvl::mvl::parser::ast::Program> = Vec::new();
     // Split index between universal prelude entries (always emitted into every
     // file's transpile) and stdlib extras (per-file filtered).  Set inside the
     // pre-scan block below.
@@ -314,7 +328,6 @@ pub fn run(path: &str, quiet: bool, verbose: bool, coverage: bool, bdd: bool, us
         // directory don't add the same library file multiple times.
         let mut loaded_prelude_paths: std::collections::HashSet<std::path::PathBuf> =
             std::collections::HashSet::new();
-        let mut sibling_progs: Vec<mvl::mvl::parser::ast::Program> = Vec::new();
         for f in &test_files {
             let dir = f.parent().unwrap_or_else(|| std::path::Path::new("."));
             // Scan src/ and src/internal/ (package convention per ADR-0012).
@@ -496,6 +509,10 @@ pub fn run(path: &str, quiet: bool, verbose: bool, coverage: bool, bdd: bool, us
     // phase 3).
     let n_universal_prelude = n_universal_prelude_outer;
     let checker_stdlib_progs = checker_stdlib_progs_outer;
+    // Second checker prelude: sibling library files' own declarations, not
+    // just their transitive stdlib imports (#2200) — see `sibling_progs`'s
+    // declaration comment above.
+    let sibling_prog_refs: Vec<&mvl::mvl::parser::ast::Program> = sibling_progs.iter().collect();
 
     // Collect native Cargo deps and bridge.rs from the full pkg.* closure so
     // that the test crate's Cargo.toml mirrors what `mvl build` would emit (#1481).
@@ -584,7 +601,8 @@ pub fn run(path: &str, quiet: bool, verbose: bool, coverage: bool, bdd: bool, us
         // of unrelated false positives remain (generic-substitution and totality
         // artifacts specific to a few stdlib builtins), tracked on #2017. Making
         // this strict needs those closed too.
-        let check_result = checker::check_with_prelude(&checker_stdlib_progs, &prog);
+        let check_result =
+            checker::check_with_two_preludes(&checker_stdlib_progs, &sibling_prog_refs, &prog);
         if check_result.has_errors() {
             eprintln!(
                 "warning: {} checker diagnostic(s) in {file_str} \
@@ -768,7 +786,8 @@ pub fn run(path: &str, quiet: bool, verbose: bool, coverage: bool, bdd: bool, us
         // of unrelated false positives remain (generic-substitution and totality
         // artifacts specific to a few stdlib builtins), tracked on #2017. Making
         // this strict needs those closed too.
-        let check_result = checker::check_with_prelude(&checker_stdlib_progs, &prog);
+        let check_result =
+            checker::check_with_two_preludes(&checker_stdlib_progs, &sibling_prog_refs, &prog);
         if check_result.has_errors() {
             eprintln!(
                 "warning: {} checker diagnostic(s) in {file_str} \

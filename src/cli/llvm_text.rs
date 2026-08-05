@@ -100,6 +100,7 @@ fn compile_ir(prog: &Program, module_name: &str) -> Result<String, String> {
 fn prepare_llvm_text_tir_multi(
     prog: &Program,
     path: &str,
+    for_test_dispatch: bool,
 ) -> (
     Vec<TirProgram>,
     TirProgram,
@@ -119,7 +120,21 @@ fn prepare_llvm_text_tir_multi(
         .iter()
         .map(|(_, sib_path, p)| (sib_path.as_str(), p))
         .collect();
-    let dups = loader::find_duplicate_free_fn_names((path, prog), &dup_labeled_siblings);
+    // `main` is exempted from this check when compiling for test-fn
+    // dispatch: the synthesized test-dispatch `main` (see
+    // `emit_test_dispatch_main`) always replaces whatever `fn main`s the
+    // entry/siblings declared (dropped before emission — see
+    // `emit_program_tir_test_crate` and the sibling-filtering in
+    // `compile_to_ir_test_crate_with_siblings`), so two unrelated files each
+    // declaring their own `fn main` isn't a real naming conflict here, just
+    // an artifact of this backend's flat symbol space (#2198-class bug).
+    // Real builds (`mvl build`/`mvl run`) do NOT set `for_test_dispatch` and
+    // keep the strict check — there, a genuine second `fn main` would be a
+    // real conflict since the program actually needs to run *a* main.
+    let mut dups = loader::find_duplicate_free_fn_names((path, prog), &dup_labeled_siblings);
+    if for_test_dispatch {
+        dups.retain(|(name, ..)| name != "main");
+    }
     if !dups.is_empty() {
         for (name, (first_file, first_span), (second_file, second_span)) in &dups {
             eprintln!(
@@ -271,7 +286,8 @@ fn prepare_llvm_text_tir_multi(
 
 /// Compile `prog` (and any sibling modules in the same directory) to LLVM IR (#1879).
 fn compile_ir_multi(prog: &Program, path: &str, module_name: &str) -> Result<String, String> {
-    let (prelude_tirs, entry_tir, sibling_tirs, compiler) = prepare_llvm_text_tir_multi(prog, path);
+    let (prelude_tirs, entry_tir, sibling_tirs, compiler) =
+        prepare_llvm_text_tir_multi(prog, path, false);
     compiler.compile_to_ir_with_siblings_tir(&prelude_tirs, &sibling_tirs, &entry_tir, module_name)
 }
 
@@ -681,7 +697,7 @@ pub(super) fn cmd_test_llvm_text(path: &str, quiet: bool, verbose: bool) {
             let module_name = loader::stem(&file_str);
             let (prog, _) = super::parse_or_exit(&file_str);
             let (prelude_tirs, entry_tir, sibling_tirs, compiler) =
-                prepare_llvm_text_tir_multi(&prog, &file_str);
+                prepare_llvm_text_tir_multi(&prog, &file_str, true);
             match compiler.compile_to_ir_test_crate_with_siblings(
                 &prelude_tirs,
                 &sibling_tirs,
@@ -943,7 +959,7 @@ mod tests {
         );
 
         let (prog, _) = super::super::parse_or_exit(&main_path);
-        let (_, _, sibling_tirs, _) = prepare_llvm_text_tir_multi(&prog, &main_path);
+        let (_, _, sibling_tirs, _) = prepare_llvm_text_tir_multi(&prog, &main_path, false);
 
         assert_eq!(
             sibling_tirs.len(),
@@ -1073,7 +1089,7 @@ test fn test_combo() -> Unit {\n\
 
         let (prog, _) = super::super::parse_or_exit(&test_path);
         let (prelude_tirs, entry_tir, sibling_tirs, compiler) =
-            prepare_llvm_text_tir_multi(&prog, &test_path);
+            prepare_llvm_text_tir_multi(&prog, &test_path, true);
         assert_eq!(sibling_tirs.len(), 1, "expected 1 sibling TIR (helper)");
 
         let (ir, _names) = compiler
@@ -1088,5 +1104,94 @@ test fn test_combo() -> Unit {\n\
             ir.contains("define i64 @add("),
             "sibling @add not in test-crate IR:\n{ir}"
         );
+    }
+
+    // Regression (#2207, ADR-0063): a sibling's own `fn main` must not
+    // survive into the test crate. `roundtrip_test.mvl`-style files
+    // legitimately `use main.{...}` for production helpers; before this
+    // fix, `main.mvl`'s `fn main` rode along and collided with the
+    // synthesized dispatch `main`, crashing `lli` with "invalid
+    // redefinition of function 'main'".
+    #[test]
+    fn test_crate_drops_sibling_fn_main() {
+        let dir = TempDir::new().unwrap();
+        write_file(
+            &dir,
+            "lib.mvl",
+            "pub fn add(a: Int, b: Int) -> Int { a + b }\n\
+             fn main() -> Unit ! Console { println(add(1, 2).to_string()) }",
+        );
+        let test_path = write_file(
+            &dir,
+            "entry_test.mvl",
+            "use lib::add;\ntest fn test_add() -> Unit { assert_eq(add(1, 2), 3) }",
+        );
+
+        let (prog, _) = super::super::parse_or_exit(&test_path);
+        let (prelude_tirs, entry_tir, sibling_tirs, compiler) =
+            prepare_llvm_text_tir_multi(&prog, &test_path, true);
+        assert_eq!(sibling_tirs.len(), 1, "expected 1 sibling TIR (lib)");
+
+        let (ir, names) = compiler
+            .compile_to_ir_test_crate_with_siblings(
+                &prelude_tirs,
+                &sibling_tirs,
+                &entry_tir,
+                "entry_test",
+            )
+            .expect("IR generation failed");
+        assert!(
+            ir.contains("define i64 @add("),
+            "sibling @add not in test-crate IR:\n{ir}"
+        );
+        assert_eq!(
+            ir.matches("@main(").count(),
+            1,
+            "expected exactly one @main (the synthesized dispatch main) — \
+             the sibling's own fn main must have been dropped:\n{ir}"
+        );
+        assert_eq!(names, vec!["test_add".to_string()]);
+    }
+
+    // Regression (#2207, ADR-0063): the entry file's own `fn main` AND a
+    // sibling's unrelated `fn main` together — both must be dropped, and
+    // neither collides with the other nor with the synthesized dispatch
+    // main.
+    #[test]
+    fn test_crate_drops_entry_and_sibling_fn_main() {
+        let dir = TempDir::new().unwrap();
+        write_file(
+            &dir,
+            "lib.mvl",
+            "pub fn helper() -> Int { 42 }\n\
+             fn main() -> Unit ! Console { println(\"lib main\") }",
+        );
+        let test_path = write_file(
+            &dir,
+            "entry.mvl",
+            "use lib::helper;\n\
+             fn main() -> Unit ! Console { println(\"entry main\") }\n\
+             test fn helper_works() -> Unit { assert_eq(helper(), 42) }",
+        );
+
+        let (prog, _) = super::super::parse_or_exit(&test_path);
+        let (prelude_tirs, entry_tir, sibling_tirs, compiler) =
+            prepare_llvm_text_tir_multi(&prog, &test_path, true);
+
+        let (ir, names) = compiler
+            .compile_to_ir_test_crate_with_siblings(
+                &prelude_tirs,
+                &sibling_tirs,
+                &entry_tir,
+                "entry",
+            )
+            .expect("IR generation failed");
+        assert_eq!(
+            ir.matches("@main(").count(),
+            1,
+            "expected exactly one @main (the synthesized dispatch main) — \
+             both fn mains must have been dropped:\n{ir}"
+        );
+        assert_eq!(names, vec!["helper_works".to_string()]);
     }
 }

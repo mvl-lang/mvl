@@ -773,6 +773,7 @@ fn compile_wat_multi(
     path: &str,
     module_name: &str,
     assert_mode: AssertMode,
+    for_test_dispatch: bool,
 ) -> (String, TirProgram) {
     let entry_dir = Path::new(path).parent().unwrap_or_else(|| Path::new("."));
     let sibling_modules = loader::load_sibling_modules_transitive(prog, entry_dir);
@@ -782,11 +783,27 @@ fn compile_wat_multi(
     // from one flat `TirProgram`, so a collision here would otherwise only
     // surface as an opaque `wasm-tools parse` "duplicate func identifier"
     // error at assembly time (#2036).
+    //
+    // `main` is exempted when compiling for test-fn dispatch
+    // (`for_test_dispatch`): `--invoke <test_name>` never calls `main`/
+    // `_start`, so two unrelated files each declaring their own `fn main`
+    // (one needed only for its *other* functions, pulled in as a sibling —
+    // e.g. `roundtrip_test.mvl` importing `compress_bytes` etc. from
+    // `main.mvl`) isn't a real naming conflict, just an artifact of this
+    // backend's flat symbol space. Both `main`s are dropped below before
+    // emission; a name-collision error here would incorrectly block
+    // otherwise-valid test compilation. Real builds (`mvl build`/`mvl run`,
+    // and the `// expect:` corpus runner, which actually executes `main`)
+    // do NOT set `for_test_dispatch` and keep the strict check (#2198-class
+    // bug, WASM side).
     let dup_labeled_siblings: Vec<(&str, &Program)> = sibling_modules
         .iter()
         .map(|(_, sib_path, p)| (sib_path.as_str(), p))
         .collect();
-    let dups = loader::find_duplicate_free_fn_names((path, prog), &dup_labeled_siblings);
+    let mut dups = loader::find_duplicate_free_fn_names((path, prog), &dup_labeled_siblings);
+    if for_test_dispatch {
+        dups.retain(|(name, ..)| name != "main");
+    }
     if !dups.is_empty() {
         for (name, (first_file, first_span), (second_file, second_span)) in &dups {
             eprintln!(
@@ -860,11 +877,11 @@ fn compile_wat_multi(
             .chain(prelude.iter()),
     );
     let mono = mvl::mvl::passes::mono::monomorphize(prog, &all_fns, &expr_types);
-    let entry_tir = mvl::mvl::ir::lower::lower(prog, &mono, &expr_types);
+    let mut entry_tir = mvl::mvl::ir::lower::lower(prog, &mono, &expr_types);
 
     // Each sibling is checked with the entry + all OTHER siblings as its
     // prelude, then lowered with its own expr_types.
-    let sibling_tirs: Vec<TirProgram> = sibling_modules
+    let mut sibling_tirs: Vec<TirProgram> = sibling_modules
         .iter()
         .enumerate()
         .map(|(i, (_, _, sibling))| {
@@ -885,6 +902,19 @@ fn compile_wat_multi(
             mvl::mvl::ir::lower::lower(sibling, &sib_mono, &sib_types)
         })
         .collect();
+
+    // Drop every `fn main` — entry's own or any sibling's — when compiling
+    // for test-fn dispatch. `--invoke <test_name>` never calls `main`, so
+    // it's always dead weight here; keeping it risks the flat-namespace
+    // collision the dup-check above just exempted `main` from (#2198-class
+    // bug, WASM side — mirrors the LLVM backend's
+    // `emit_program_tir_test_crate` / sibling-main fix).
+    if for_test_dispatch {
+        entry_tir.fns.retain(|f| f.name != "main");
+        for sib in &mut sibling_tirs {
+            sib.fns.retain(|f| f.name != "main");
+        }
+    }
 
     let mut merged = merge_tir_programs(
         &std::iter::once(entry_tir)
@@ -927,7 +957,7 @@ pub(super) fn build_project_wasm(path: &str, assert_mode: AssertMode, target: &s
     let file_path = resolve_entry_path(path);
     let (prog, _src) = super::parse_or_exit(&file_path);
     let module_name = loader::stem(&file_path);
-    let (wat, _tir) = compile_wat_multi(&prog, &file_path, &module_name, assert_mode);
+    let (wat, _tir) = compile_wat_multi(&prog, &file_path, &module_name, assert_mode, false);
     let out_path = format!("{module_name}.wat");
     fs::write(&out_path, &wat).unwrap_or_else(|e| {
         eprintln!("error: cannot write {out_path}: {e}");
@@ -959,6 +989,7 @@ fn build_and_assemble(
     file: &Path,
     wasm_tools_bin: &Path,
     verbose: bool,
+    for_test_dispatch: bool,
 ) -> Result<(tempfile::NamedTempFile, TirProgram, String), CaseResult> {
     let file_str = file.display().to_string();
     let module_name = loader::stem(&file_str);
@@ -980,7 +1011,13 @@ fn build_and_assemble(
         return Err(fail(format!("  FAIL (parse): {file_str}\n")));
     }
 
-    let (wat, tir) = compile_wat_multi(&prog, &file_str, &module_name, AssertMode::Always);
+    let (wat, tir) = compile_wat_multi(
+        &prog,
+        &file_str,
+        &module_name,
+        AssertMode::Always,
+        for_test_dispatch,
+    );
 
     let wat_tmp = tempfile::NamedTempFile::with_suffix(".wat")
         .map_err(|e| fail(format!("  FAIL (tempfile): {file_str}: {e}\n")))?;
@@ -1079,7 +1116,7 @@ fn run_one_case(
 ) -> CaseResult {
     let file_str = file.display().to_string();
 
-    let (wasm_tmp, tir, wat) = match build_and_assemble(file, wasm_tools_bin, verbose) {
+    let (wasm_tmp, tir, wat) = match build_and_assemble(file, wasm_tools_bin, verbose, false) {
         Ok(built) => built,
         Err(cr) => return cr,
     };
@@ -1242,7 +1279,7 @@ fn directory_type_decls_if_rust_externs(tir: &TirProgram, file: &Path) -> Vec<Ti
         }
         let module_name = loader::stem(&file_str);
         let (_wat, sibling_tir) =
-            compile_wat_multi(&prog, &file_str, &module_name, AssertMode::Always);
+            compile_wat_multi(&prog, &file_str, &module_name, AssertMode::Always, false);
         for td in sibling_tir.types {
             by_name.entry(td.name.clone()).or_insert(td);
         }
@@ -1626,13 +1663,14 @@ pub(super) fn cmd_test_wasm(path: &str, quiet: bool, verbose: bool, target: &str
 
         for (file, test_names) in &testfn_cases {
             let file_str = file.display().to_string();
-            let (wasm_tmp, tir, _wat) = match build_and_assemble(file, wasm_tools_ref, verbose) {
-                Ok(built) => built,
-                Err(cr) => {
-                    results.push(cr);
-                    continue;
-                }
-            };
+            let (wasm_tmp, tir, _wat) =
+                match build_and_assemble(file, wasm_tools_ref, verbose, true) {
+                    Ok(built) => built,
+                    Err(cr) => {
+                        results.push(cr);
+                        continue;
+                    }
+                };
             for test_name in test_names {
                 results.push(run_one_testfn_case(
                     &file_str,
@@ -1857,6 +1895,95 @@ mod string_static_ctor_tests {
                  let s: String = String::from_bytes(bytes);\n\
                  assert_eq(s, \"Hi\");\n\
              }\n",
+        );
+    }
+}
+
+/// Regression tests for #2207 (ADR-0063): a sibling's own `fn main` (or the
+/// entry file's own `fn main` alongside a sibling's unrelated one) must not
+/// survive into test-fn dispatch compilation. `roundtrip_test.mvl`-style
+/// files legitimately `use main.{...}` for production helpers; before this
+/// fix, the sibling's `fn main` either got renamed to `_start` alongside the
+/// entry's own (a WASI-symbol collision) or tripped the upfront
+/// duplicate-function-name check with an unhelpful "rename one of the
+/// above" error — neither of which is a real naming conflict once
+/// `for_test_dispatch` drops both.
+#[cfg(test)]
+mod test_dispatch_main_exclusion_tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    fn write_file(dir: &TempDir, name: &str, content: &str) -> std::path::PathBuf {
+        let path = dir.path().join(name);
+        fs::write(&path, content).unwrap();
+        path
+    }
+
+    #[test]
+    fn sibling_fn_main_is_dropped_for_test_dispatch() {
+        let dir = TempDir::new().unwrap();
+        write_file(
+            &dir,
+            "lib.mvl",
+            "pub fn add(a: Int, b: Int) -> Int { a + b }\n\
+             fn main() -> Unit ! Console { println(add(1, 2).to_string()) }",
+        );
+        let test_path = write_file(
+            &dir,
+            "entry_test.mvl",
+            "use lib.{add}\ntest fn test_add() -> Unit { assert_eq(add(1, 2), 3) }",
+        );
+
+        let (prog, _src) = super::super::parse_or_exit(&test_path.display().to_string());
+        let (wat, tir) = compile_wat_multi(
+            &prog,
+            &test_path.display().to_string(),
+            "entry_test",
+            AssertMode::Always,
+            true,
+        );
+        assert!(
+            tir.fns.iter().any(|f| f.name == "add"),
+            "sibling `add` missing from merged TIR"
+        );
+        assert!(
+            !tir.fns.iter().any(|f| f.name == "main"),
+            "sibling's fn main must be dropped for test-fn dispatch"
+        );
+        assert!(wat.contains("$add"), "sibling $add not in WAT:\n{wat}");
+    }
+
+    #[test]
+    fn entry_and_sibling_fn_main_both_dropped_no_duplicate_error() {
+        let dir = TempDir::new().unwrap();
+        write_file(
+            &dir,
+            "lib.mvl",
+            "pub fn helper() -> Int { 42 }\n\
+             fn main() -> Unit ! Console { println(\"lib main\") }",
+        );
+        let entry_path = write_file(
+            &dir,
+            "entry.mvl",
+            "use lib.{helper}\n\
+             fn main() -> Unit ! Console { println(\"entry main\") }\n\
+             test fn helper_works() -> Unit { assert_eq(helper(), 42) }",
+        );
+
+        let (prog, _src) = super::super::parse_or_exit(&entry_path.display().to_string());
+        // Would `process::exit(1)` before returning if the duplicate-`main`
+        // check weren't exempted for test dispatch — reaching this point at
+        // all is the regression signal.
+        let (_wat, tir) = compile_wat_multi(
+            &prog,
+            &entry_path.display().to_string(),
+            "entry",
+            AssertMode::Always,
+            true,
+        );
+        assert!(
+            !tir.fns.iter().any(|f| f.name == "main"),
+            "both fn mains must be dropped for test-fn dispatch"
         );
     }
 }
