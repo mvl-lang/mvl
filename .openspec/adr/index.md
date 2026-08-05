@@ -64,3 +64,4 @@
 | ~~0060~~ | ~~Reserved for #2050 (declared source of truth must be executable and falsifiable)~~ | Not yet written |
 | [0061](0061-assurance-vocabulary.md) | Assurance vocabulary — the case and three levels below it (traceability, verification, evidence) | Accepted |
 | [0062](0062-wasm-extern-rust-ffi-embedded-wasmtime-host.md) | WASM `extern "rust"` FFI via an embedded-wasmtime host — real bridge.rs execution under `--backend=wasm` | Accepted |
+| [0063](0063-test-crate-main-exclusion-backend-parity.md) | Test-crate `fn main` exclusion — LLVM/WASM parity, entry file and sibling files both dropped before emission | Accepted |

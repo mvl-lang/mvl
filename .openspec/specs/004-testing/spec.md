@@ -1,8 +1,8 @@
 ---
 domain: language
-version: 0.4.0
+version: 0.5.0
 status: draft
-date: 2026-06-24
+date: 2026-08-05
 ---
 
 # 004 — Testing
@@ -348,3 +348,128 @@ pub fn get_count(&self) -> i64 {
 `tests/transpiler.rs::actor_pub_test_fn_emits_cfg_test_infrastructure`,
 `tests/transpiler.rs::actor_pub_test_fn_with_params_emits_fields_in_variant`,
 `tests/type_checker.rs::actor_pub_test_fn_non_unit_return_accepted`
+
+---
+
+### Requirement 9: Sibling Module Inclusion for `mvl test` [MUST]
+
+`mvl test <file>` compiles the file under test together with every module
+it transitively `use`-imports in the same directory (its "siblings"),
+resolved via a fixed-point walk of `use` declarations
+(`loader::load_sibling_modules_transitive`). Inclusion is **import-scoped**,
+not directory-scoped: a `.mvl` file in the same directory that the file
+under test does not import from is not pulled in.
+
+A `test fn` MAY live inline in a non-`_test.mvl` file alongside its
+production code (Requirement 1), including a file that also declares the
+project's `fn main` (see Requirement 10 for what happens to that `fn main`
+during test compilation). A standalone `_test.mvl` file (Requirement 2)
+tests its corresponding module via the same import mechanism — nothing
+distinguishes an inline `test fn`'s sibling from a standalone
+`_test.mvl`'s sibling.
+
+Each backend dispatches individual tests differently once compiled:
+
+| Backend | Compilation shape | Per-test dispatch |
+|---|---|---|
+| Rust (default) | `src/lib.rs`, always a library crate | `#[test]` attribute + `cargo test` |
+| LLVM (`--backend=llvm`) | one flat, single-namespace LLVM IR module | synthesized dispatch `main` reads `argv[1]`, calls the named test fn (`lli <module.ll> <test_name>`) |
+| WASM (`--backend=wasm`) | one flat, single-namespace WAT module | `wasmtime run --invoke <test_name> <module.wasm>` calls the named export directly |
+
+**Implementation:** `src/mvl/loader.rs::load_sibling_modules_transitive`,
+`src/cli/llvm_text.rs::prepare_llvm_text_tir_multi`,
+`src/cli/wasm_text.rs::compile_wat_multi`, `src/cli/test.rs`
+
+#### Scenario: sibling import pulls in a needed module
+
+- GIVEN `entry_test.mvl` with `use helper.{add}` and `helper.mvl` in the same directory
+- WHEN `mvl test entry_test.mvl` is run on any backend
+- THEN `helper.mvl` is compiled alongside `entry_test.mvl` and `add` is callable
+
+#### Scenario: unrelated file in the same directory is not pulled in
+
+- GIVEN `entry_test.mvl` (no `use` of `unrelated.mvl`) and `unrelated.mvl` in the same directory
+- WHEN `mvl test entry_test.mvl` is run
+- THEN `unrelated.mvl` is not compiled into the test crate, even though it sits in the same directory
+
+**Tests:** `src/cli/llvm_text.rs::tests::multi_file_sibling_fn_appears_in_ir`,
+`src/cli/llvm_text.rs::tests::test_crate_includes_sibling_fns`
+
+---
+
+### Requirement 10: Test-Crate `fn main` Exclusion — Backend Parity [MUST]
+
+`fn main` is not special MVL syntax — it is an ordinary function that
+happens to be the whole program's entry point. A file that declares `fn
+main` MAY still be a legitimate sibling (Requirement 9) of some other file
+under test, because MVL compiles whole modules, not individual functions:
+importing any one function from a file necessarily includes that file's
+`fn main` too, if it has one.
+
+The LLVM and WASM backends emit one flat, single-namespace module per test
+compilation (Requirement 9's table) and MUST NOT let an incidentally
+included `fn main` — the entry file's own, or a sibling's — reach emission
+in a test crate:
+
+- LLVM MUST drop every `fn main` from the entry file and every sibling
+  before emitting the test crate, and before synthesizing its own
+  dispatch `main` (Requirement 9). Nothing in a test ever calls `main()`
+  by name, so no test can be broken by its absence; keeping it would
+  produce two `@main` definitions in the same module.
+- WASM MUST drop every `fn main` from the entry file and every sibling
+  before emission, and MUST exempt `main` specifically from the
+  duplicate-free-function-name check that otherwise runs across
+  entry+siblings before compilation. `wasmtime run --invoke <test_name>`
+  never calls `main`/`_start`, so two files each declaring their own
+  unrelated `fn main` is not a real naming conflict once both are
+  dropped — a genuine duplicate of any *other* function name MUST still
+  be rejected with the existing diagnostic.
+- Rust needs no equivalent exclusion: `mvl test`'s Rust-backend path
+  always compiles the test crate as a library crate (`src/lib.rs`), where
+  `fn main` is an ordinary, module-scoped function name with no special
+  meaning to `rustc`/`cargo test`. Multiple sibling files may each freely
+  declare their own `fn main` with no collision.
+
+This exclusion applies **only** to test-crate compilation. `mvl
+build`/`mvl run` (a real program) and the `// expect:` corpus-style test
+runner (which executes `main` and compares its stdout) MUST keep every
+`fn main` exactly as declared — dropping it there would be a correctness
+bug, not a fix.
+
+**Implementation:** `src/cli/llvm_text.rs::prepare_llvm_text_tir_multi`
+(`for_test_dispatch` parameter),
+`src/mvl/backends/llvm_text/emitter.rs::compile_to_ir_test_crate_with_siblings`,
+`src/mvl/backends/llvm_text/emit_program_tir.rs::emit_program_tir_test_crate`,
+`src/cli/wasm_text.rs::compile_wat_multi`/`build_and_assemble`
+(`for_test_dispatch` parameter)
+
+**ADR:** [ADR-0063 — Test-crate `fn main` exclusion, LLVM/WASM parity](../../adr/0063-test-crate-main-exclusion-backend-parity.md)
+
+#### Scenario: entry file declares both test fns and its own fn main
+
+- GIVEN a file with `test fn foo() -> Unit { ... }` and `fn main() -> Unit ! Console { ... }` declared in the same file
+- WHEN `mvl test <file> --backend=llvm` (or `--backend=wasm`) is run
+- THEN the file's own `fn main` is dropped from the test crate, and `foo` runs and reports its result normally
+
+#### Scenario: a sibling (not the entry file) declares fn main
+
+- GIVEN `entry_test.mvl` (no `fn main`) with `use lib.{helper}`, and `lib.mvl` (a sibling) declaring both `pub fn helper()` and `fn main()`
+- WHEN `mvl test entry_test.mvl --backend=llvm` (or `--backend=wasm`) is run
+- THEN `lib.mvl`'s `fn main` is dropped from the test crate, `helper` remains callable, and no "duplicate"/"redefinition of main" error occurs
+
+#### Scenario: entry file and a sibling each declare their own unrelated fn main
+
+- GIVEN `entry.mvl` with its own `fn main()` and a `test fn`, and a sibling `lib.mvl` also declaring an unrelated `fn main()`
+- WHEN `mvl test entry.mvl --backend=wasm` is run
+- THEN WASM's duplicate-function-name check does NOT reject the build on account of `main` (both are dropped before emission), and the test fn runs normally
+
+#### Scenario: real builds keep fn main untouched
+
+- GIVEN a project's real entry file with `fn main() -> Unit ! Console { println("hi") }`
+- WHEN `mvl build <file> --backend=llvm` (or `--backend=wasm`, or `mvl test <file> --backend=llvm` on an `// expect:`-annotated file) is run
+- THEN `fn main` is preserved and actually executes — the test-crate exclusion in this requirement does not apply
+
+**Tests:** `src/cli/llvm_text.rs::tests::test_crate_drops_sibling_fn_main`,
+`src/cli/llvm_text.rs::tests::test_crate_drops_entry_and_sibling_fn_main`,
+`src/cli/wasm_text.rs::test_dispatch_main_exclusion_tests::sibling_fn_main_is_dropped_for_test_dispatch`,
+`src/cli/wasm_text.rs::test_dispatch_main_exclusion_tests::entry_and_sibling_fn_main_both_dropped_no_duplicate_error`
