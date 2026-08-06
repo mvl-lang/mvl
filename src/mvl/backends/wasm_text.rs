@@ -2147,7 +2147,35 @@ fn emit_fn(out: &mut String, f: &TirFn, ctx: &Ctx) {
     collect_let_inits_block(&f.body, &mut let_inits);
     *ctx.fn_let_inits.borrow_mut() = let_inits;
 
-    emit_block(&mut body, &f.body, ctx);
+    // A bare-variable implicit-return tail (`... ; acc` with no trailing
+    // `;`) whose variable's *declared* type is a still-generic param (`U`)
+    // monomorphized to `Unit` (e.g. `List[T]::fold[U]`'s `acc` in the
+    // `U = Unit` instantiation) reads a local that `wasm_ty` had no choice
+    // but to give a placeholder `i64` width — `local.get $acc` always
+    // pushes that placeholder, even though the function's own signature
+    // (above) correctly has no `(result ...)` for a `Unit`-returning fn.
+    // Drop the tail statement itself in that one case: a bare `Var` read
+    // has no side effect to preserve, so simply not emitting it is enough
+    // to keep the function body's stack balanced (#2195).
+    let skip_tail = matches!(f.ret_ty, Ty::Unit)
+        && matches!(
+            f.body.stmts.last(),
+            Some(TirStmt::Expr { expr, .. })
+                if matches!(expr.kind, TirExprKind::Var(_))
+                    && matches!(resolve_ty_param(&expr.ty, &ctx.type_subst), Ty::Unit)
+        );
+    if skip_tail {
+        emit_block(
+            &mut body,
+            &TirBlock {
+                stmts: f.body.stmts[..f.body.stmts.len() - 1].to_vec(),
+                span: f.body.span,
+            },
+            ctx,
+        );
+    } else {
+        emit_block(&mut body, &f.body, ctx);
+    }
 
     // Emit `ensures` / return_refinement checks before implicit return (#1822).
     // We save the implicit-return expression into $__result_CONTRACT, run the
@@ -3128,7 +3156,17 @@ fn emit_stmt(out: &mut String, stmt: &TirStmt, ctx: &Ctx) {
         TirStmt::Assign { target, value, .. } => match target {
             LValue::Ident(name, _) => {
                 emit_expr(out, value, ctx);
-                if is_string_ty(&value.ty, ctx) {
+                if matches!(resolve_ty_param(&value.ty, &ctx.type_subst), Ty::Unit) {
+                    // `acc = f(acc, x);` where `f` returns `Unit` (e.g.
+                    // `List[T]::fold[U]`'s `acc = f(acc, x)` monomorphized
+                    // with `U = Unit`, the side-effecting-iteration-via-fold
+                    // pattern) — a Unit-returning call leaves nothing on the
+                    // stack, same as the `TirStmt::Let` arm above. `value.ty`
+                    // is still the unresolved generic param (`U`) here, not
+                    // `Ty::Unit` directly — has to go through `ctx.type_subst`
+                    // like `wasm_ty` does. A bare `local.set $name` here
+                    // underflows the stack (#2195).
+                } else if is_string_ty(&value.ty, ctx) {
                     // `ref String` reassignment (`out = out.concat(...)`) —
                     // `value` leaves (ptr, len) on the stack, not one value.
                     // `name` itself was never declared as a local — the
@@ -5231,7 +5269,7 @@ fn emit_expr(out: &mut String, expr: &TirExpr, ctx: &Ctx) {
         )
         .is_some() =>
         {
-            let (_, _, mangled) = resolve_generic_method_call(
+            let (gm, subst, mangled) = resolve_generic_method_call(
                 receiver,
                 method,
                 args,
@@ -5240,8 +5278,24 @@ fn emit_expr(out: &mut String, expr: &TirExpr, ctx: &Ctx) {
             )
             .expect("guarded above");
             emit_expr(out, receiver, ctx);
-            for a in args {
+            // `gm.params` includes `self` at index 0; `args` lines up with
+            // `gm.params[1..]` (matches `resolve_generic_method_call`'s own
+            // `formals.next()` skip above).
+            for (formal, a) in gm.params.iter().skip(1).zip(args.iter()) {
                 emit_expr(out, a, ctx);
+                if matches!(resolve_ty_param(&formal.ty, &subst), Ty::Unit) {
+                    // A `Unit`-typed argument (e.g. `fold`'s `init: U` in the
+                    // `U = Unit` instantiation, called as `.fold((), ...)`)
+                    // pushes nothing — Unit values are zero-width everywhere
+                    // else in this emitter. But `emit_generic_fn` always
+                    // declares a real param slot for every formal, Unit
+                    // included (`wasm_ty`'s `Ty::Unit` fallback is `i64`,
+                    // never zero params) — the callee expects one i64 to
+                    // pop regardless. Supply the placeholder the callee
+                    // requires; its value is never inspected since a `Unit`
+                    // has none (#2195).
+                    out.push_str("    i64.const 0\n");
+                }
             }
             out.push_str(&format!("    call ${mangled}\n"));
         }
@@ -9110,8 +9164,37 @@ fn emit_generic_fn(
     *mono_ctx.self_type.borrow_mut() = f.receiver_type.clone();
 
     // Emit body.
+    //
+    // A bare-variable implicit-return tail (`... ; acc`, no trailing `;`)
+    // whose *declared* type is a still-generic type param (e.g.
+    // `List[T]::fold[U]`'s `acc` in the `U = Unit` instantiation) reads a
+    // local that `wasm_ty` had no choice but to give a placeholder `i64`
+    // width — `local.get $acc` always pushes that placeholder, even though
+    // this instantiation's own signature (above) correctly has no
+    // `(result ...)` for a `Unit`-returning fn. Drop the tail statement
+    // itself in that one case: a bare `Var` read has no side effect to
+    // preserve, so simply not emitting it keeps the body's stack balanced
+    // (#2195).
+    let skip_tail = matches!(concrete_ret, Ty::Unit)
+        && matches!(
+            f.body.stmts.last(),
+            Some(TirStmt::Expr { expr, .. })
+                if matches!(expr.kind, TirExprKind::Var(_))
+                    && matches!(resolve_ty_param(&expr.ty, type_subst), Ty::Unit)
+        );
     let mut body_buf = String::new();
-    emit_block(&mut body_buf, &f.body, &mono_ctx);
+    if skip_tail {
+        emit_block(
+            &mut body_buf,
+            &TirBlock {
+                stmts: f.body.stmts[..f.body.stmts.len() - 1].to_vec(),
+                span: f.body.span,
+            },
+            &mono_ctx,
+        );
+    } else {
+        emit_block(&mut body_buf, &f.body, &mono_ctx);
+    }
 
     if body_buf.contains(UNSUPPORTED_MARKER) {
         emit_stub_body(out, mangled_name, ctx);
@@ -9198,8 +9281,39 @@ fn resolve_ty_param(ty: &Ty, subst: &HashMap<String, Ty>) -> Ty {
 /// actual `List[Int]`. Wrappers (`ref`, refinement, label) are peeled on both
 /// sides independently so a `ref List[Int]` receiver still binds `T → Int`.
 ///
-/// Existing bindings win — the first occurrence of a param decides it, so a
-/// mismatched later occurrence cannot silently overwrite an earlier one.
+/// Existing *concrete* bindings win — the first fully-resolved occurrence of
+/// a param decides it, so a mismatched later occurrence cannot silently
+/// overwrite an earlier one. An occurrence that only manages to bind an
+/// `Unknown`-tainted type (e.g. `fold`'s `init: U` from a bare `[]` literal,
+/// whose own recorded expr type is `List[Unknown]` even when the element
+/// type is unambiguous from surrounding context) does *not* count as
+/// deciding it — a later, concrete occurrence (e.g. the same call's
+/// fully-annotated callback parameter) still overwrites it (#2195).
+/// True if `Ty::Unknown` appears anywhere in `ty`'s structure — a checker
+/// placeholder for a locally-under-constrained expression (e.g. a bare `[]`
+/// literal's element type before context propagation), never a genuine MVL
+/// type. Used to decide whether a generic-param binding is trustworthy
+/// enough to resist being overwritten by a later, more concrete occurrence.
+fn ty_contains_unknown(ty: &Ty) -> bool {
+    match ty {
+        Ty::Unknown => true,
+        Ty::List(inner)
+        | Ty::Set(inner)
+        | Ty::Array(inner, _)
+        | Ty::Ptr(inner)
+        | Ty::Option(inner)
+        | Ty::Ref(_, inner)
+        | Ty::Refined(inner, _)
+        | Ty::Labeled(_, inner) => ty_contains_unknown(inner),
+        Ty::Map(k, v) | Ty::Result(k, v) => ty_contains_unknown(k) || ty_contains_unknown(v),
+        Ty::Named(_, args) => args.iter().any(ty_contains_unknown),
+        Ty::Fn(params, ret, _, _) => {
+            params.iter().any(ty_contains_unknown) || ty_contains_unknown(ret)
+        }
+        _ => false,
+    }
+}
+
 fn unify_ty_params(
     declared: &Ty,
     actual: &Ty,
@@ -9252,7 +9366,25 @@ fn unify_ty_params(
 
     if let Ty::Named(name, args) = declared {
         if args.is_empty() && param_names.contains(name.as_str()) {
-            subst.entry(name.clone()).or_insert_with(|| actual.clone());
+            // First-wins would let an under-constrained arg processed earlier
+            // (e.g. `fold`'s `init: U` bound from a bare `[]` literal, whose
+            // *own* recorded expr type is `List[Unknown]` even when the
+            // element type is unambiguous from context — the callback
+            // `|acc: List[Record], r: Record| ...` unifies the very same `U`
+            // moments later from a fully-annotated, always-concrete lambda
+            // param) permanently poison the substitution with `Unknown`
+            // before the concrete binding ever gets a chance — mangling to a
+            // dead-looking `List_Unknown` instantiation that's actually live
+            // and has the wrong (bit-incompatible in general) monomorphized
+            // shape (#2195). Once a concrete (non-`Unknown`) binding exists,
+            // keep it; only an `Unknown`-tainted (or absent) existing binding
+            // yields to a later candidate.
+            let should_replace = subst
+                .get(name.as_str())
+                .is_none_or(|existing| ty_contains_unknown(existing));
+            if should_replace {
+                subst.insert(name.clone(), actual.clone());
+            }
             return;
         }
     }
@@ -11841,6 +11973,32 @@ mod validated_module_tests {
              test fn t() -> Unit {{\n\
                  let w: Widget = Widget {{ items: [1, 2, 3] }};\n\
                  assert_eq(w.doubled().len(), 3);\n\
+             }}\n"
+        ));
+        assert!(stubbed.is_empty(), "unexpected stubs: {stubbed:?}");
+    }
+
+    /// A generic HOF called with a `Unit`-typed accumulator (the
+    /// side-effecting-iteration-via-fold pattern) hit three compounding
+    /// gaps: the call site pushed nothing for the `Unit`-typed `init` arg
+    /// even though the callee's declared param always reserves a real
+    /// slot (`wasm_ty`'s `Ty::Unit` fallback is `i64`, never zero params);
+    /// `acc = f(acc, x)` inside the body unconditionally stored the
+    /// (non-existent) call result; and the fn's own tail expression
+    /// (`acc`) always read the placeholder local even though the fn's
+    /// signature has no result for a `Unit` return (#2195).
+    #[test]
+    fn generic_fold_with_unit_accumulator_validates() {
+        const MYFOLD: &str = "pub fn List[T]::myfold[U](self, init: U, f: fn(U, T) -> U) -> U {\n\
+                                  let acc: ref U = init;\n\
+                                  for x in self { acc = f(acc, x) };\n\
+                                  acc\n\
+                              }\n";
+        let stubbed = emit_and_validate(&format!(
+            "{MYFOLD}\
+             test fn t() -> Unit {{\n\
+                 let xs: List[Int] = [1, 2, 3];\n\
+                 let _: Unit = xs.myfold((), |_acc: Unit, x: Int| {{ let _: Int = x; () }});\n\
              }}\n"
         ));
         assert!(stubbed.is_empty(), "unexpected stubs: {stubbed:?}");
