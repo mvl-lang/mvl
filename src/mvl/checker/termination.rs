@@ -3,7 +3,7 @@
 
 //! Structural recursion checker for Req 8 (Termination).
 //!
-//! **Spec:** `docs/specs/007-termination.md`
+//! **Spec:** `.openspec/specs/013-termination/spec.md`
 //!
 //! For every `total fn` (explicit or implicit), this pass verifies that all
 //! self-recursive calls operate on provably smaller arguments.  Two decrease
@@ -11,21 +11,21 @@
 //!
 //! - **Integer decrement** — the recursive argument is `param - N` where `N`
 //!   is a positive integer literal and `param` is any function parameter.
-//!   (spec 007 §Req 2)
+//!   (spec 013 §Req 2)
 //! - **Integer division** — the recursive argument is `param / N` where `N`
 //!   is an integer literal greater than 1 and `param` is any function
 //!   parameter.  Catches binary search, merge sort, and other logarithmic
-//!   algorithms.  (spec 007 §Req 2)
+//!   algorithms.  (spec 013 §Req 2)
 //! - **Structural subterm** — the recursive argument is a variable that was
 //!   pattern-bound from a *sub-pattern* of a function parameter (e.g. the
 //!   `tail` in `match list { Cons(_, tail) => … }`), where the match
-//!   scrutinee is a *bare parameter identifier*.  (spec 007 §Req 3)
+//!   scrutinee is a *bare parameter identifier*.  (spec 013 §Req 3)
 //! - **Method accessor** — the recursive argument is `param.tail()` or
 //!   `param.rest()` (or the same applied to a known structural subterm),
-//!   which yields a strict substructure of the receiver.  (spec 007 §Req 3)
+//!   which yields a strict substructure of the receiver.  (spec 013 §Req 3)
 //! - **Subterm length** — the recursive argument is `subterm.len()` where
 //!   `subterm` is a known structural subterm; its length is provably smaller
-//!   than the original.  (spec 007 §Req 3)
+//!   than the original.  (spec 013 §Req 3)
 //!
 //! Mutual recursion is checked separately by [`check_mutual_recursion`] below
 //! (reachability-based: any call-graph cycle through a total function is
@@ -36,7 +36,7 @@
 //!
 //! **Precondition:** `TypeChecker::check_program` MUST have run before this
 //! pass so that `while` loops in total functions are already flagged as
-//! `UnboundedLoopInTotal`.  (spec 007 §Req 5)
+//! `UnboundedLoopInTotal`.  (spec 013 §Req 5)
 
 use std::collections::HashSet;
 
@@ -54,7 +54,7 @@ use crate::mvl::parser::ast::{
 /// proven terminating.  Errors are appended to `errors`.
 ///
 /// Functions with `Totality::None` are implicitly total — checked by default.
-/// Only `Some(Totality::Partial)` is exempt.  (spec 007 §Scope and Defaults)
+/// Only `Some(Totality::Partial)` is exempt.  (spec 013 §Scope and Defaults)
 pub fn check_structural_recursion(prog: &Program, errors: &mut Vec<CheckError>) {
     for decl in &prog.declarations {
         if let Decl::Fn(fd) = decl {
@@ -122,7 +122,7 @@ fn check_fn(fd: &FnDecl, errors: &mut Vec<CheckError>) {
 /// `smaller` is the set of local variable names that are known to be
 /// structurally smaller than at least one function parameter because they
 /// were bound from a sub-pattern of that parameter in a surrounding `match`.
-/// (spec 007 §Req 3)
+/// (spec 013 §Req 3)
 #[derive(Clone)]
 struct TermCtx<'a> {
     fn_name: &'a str,
@@ -168,13 +168,13 @@ fn check_stmt(stmt: &Stmt, ctx: &TermCtx<'_>, errors: &mut Vec<CheckError>) {
         } => check_match_arms(scrutinee, arms, ctx, errors),
         Stmt::For { iter, body, .. } => {
             // `for` loops over finite iterators are trivially terminating.
-            // Recursive calls inside the body are still checked. (spec 007 §Req 5)
+            // Recursive calls inside the body are still checked. (spec 013 §Req 5)
             check_expr(iter, ctx, errors);
             check_block(body, ctx, errors);
         }
         Stmt::While { .. } => {
             // `while` in total functions is already rejected by the type checker
-            // as UnboundedLoopInTotal — nothing to do here. (spec 007 §Req 5)
+            // as UnboundedLoopInTotal — nothing to do here. (spec 013 §Req 5)
         }
     }
 }
@@ -266,7 +266,7 @@ fn check_expr(expr: &Expr, ctx: &TermCtx<'_>, errors: &mut Vec<CheckError>) {
         Expr::Lambda { .. } => {
             // Don't recurse into lambdas: they have their own scope and are
             // not self-recursive with respect to the enclosing function.
-            // (spec 007 §Req 4)
+            // (spec 013 §Req 4)
         }
 
         Expr::Spawn { fields, .. } => {
@@ -291,7 +291,7 @@ fn check_expr(expr: &Expr, ctx: &TermCtx<'_>, errors: &mut Vec<CheckError>) {
 
 /// Walk `scrutinee` and each arm body, extending the subterm context for arms
 /// whose pattern binds sub-components of a direct function parameter.
-/// (spec 007 §Req 3)
+/// (spec 013 §Req 3)
 fn check_match_arms(
     scrutinee: &Expr,
     arms: &[MatchArm],
@@ -303,7 +303,7 @@ fn check_match_arms(
     for arm in arms {
         // Only extend `smaller` when the scrutinee is a bare parameter;
         // matching on a local or expression does not establish the subterm
-        // relation. (spec 007 §Req 3, Scenario: Match on non-parameter)
+        // relation. (spec 013 §Req 3, Scenario: Match on non-parameter)
         let arm_ctx;
         let effective_ctx: &TermCtx<'_> = if on_param {
             arm_ctx = ctx.with_smaller(subterm_vars(&arm.pattern));
@@ -334,7 +334,7 @@ fn is_decreasing(args: &[Expr], ctx: &TermCtx<'_>) -> bool {
 /// Return `true` if `arg` is provably smaller than any parameter or is a
 /// known structural subterm.
 ///
-/// Recognised measures (spec 007 §Req 2 and §Req 3):
+/// Recognised measures (spec 013 §Req 2 and §Req 3):
 /// - Structural subterm: `arg` is a variable in `smaller`.
 /// - Integer decrement: `arg` is `param - N` where `param` names any
 ///   function parameter and `N > 0`.
@@ -345,13 +345,13 @@ fn is_decreasing(args: &[Expr], ctx: &TermCtx<'_>) -> bool {
 ///   structural subterm — its length is strictly smaller.
 fn arg_decreases(arg: &Expr, params: &[&str], smaller: &HashSet<String>) -> bool {
     match arg {
-        // A variable known to be a structural subterm. (spec 007 §Req 3)
+        // A variable known to be a structural subterm. (spec 013 §Req 3)
         Expr::Ident(name, _) if smaller.contains(name.as_str()) => true,
 
         // `*subterm` — dereferencing a Box<T> subterm yields T, which is also
         // structurally smaller (Box is a thin indirection layer for recursive ADTs).
         // Required for recursive enums where a match arm binds `tail: Box<T>`
-        // and the recursive call passes `*tail`. (spec 007 §Req 3)
+        // and the recursive call passes `*tail`. (spec 013 §Req 3)
         Expr::Unary {
             op: UnaryOp::Deref,
             expr: inner,
@@ -360,7 +360,7 @@ fn arg_decreases(arg: &Expr, params: &[&str], smaller: &HashSet<String>) -> bool
 
         // `param - N` where N is a positive integer literal and `param` is
         // any function parameter (not restricted to positional match).
-        // (spec 007 §Req 2)
+        // (spec 013 §Req 2)
         Expr::Binary {
             op: BinaryOp::Sub,
             left,
@@ -378,7 +378,7 @@ fn arg_decreases(arg: &Expr, params: &[&str], smaller: &HashSet<String>) -> bool
 
         // `param / N` where N > 1 and `param` is any function parameter.
         // Catches binary search, merge sort, and other logarithmic algorithms.
-        // (spec 007 §Req 2)
+        // (spec 013 §Req 2)
         Expr::Binary {
             op: BinaryOp::Div,
             left,
@@ -397,7 +397,7 @@ fn arg_decreases(arg: &Expr, params: &[&str], smaller: &HashSet<String>) -> bool
         // `param.tail()` or `param.rest()` — zero-argument accessor methods
         // that return a strict substructure of their receiver.  Also accepted
         // when the receiver is already a known structural subterm.
-        // (spec 007 §Req 3)
+        // (spec 013 §Req 3)
         Expr::MethodCall {
             receiver,
             method,
@@ -417,7 +417,7 @@ fn arg_decreases(arg: &Expr, params: &[&str], smaller: &HashSet<String>) -> bool
         // parameter is not smaller than itself.  Only variables already in `smaller`
         // (i.e. bound as structural subterms via pattern match) qualify.
         // This is intentionally asymmetric with the `.tail()`/`.rest()` arm above,
-        // which does accept bare parameters.  (spec 007 §Req 3)
+        // which does accept bare parameters.  (spec 013 §Req 3)
         Expr::MethodCall {
             receiver,
             method,
@@ -449,7 +449,7 @@ fn as_param<'a>(expr: &Expr, params: &[&'a str]) -> Option<&'a str> {
 
 /// Collect all variable names introduced by `pattern` at the *immediate*
 /// sub-level (one level down from the matched value).  These are structurally
-/// smaller than whatever was matched.  (spec 007 §Req 3)
+/// smaller than whatever was matched.  (spec 013 §Req 3)
 fn subterm_vars(pattern: &Pattern) -> Vec<String> {
     match pattern {
         // Binding the whole value is not smaller — skip.

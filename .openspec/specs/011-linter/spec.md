@@ -272,3 +272,52 @@ Config parsing order:
 - GIVEN `.mvllintrc` containing `line_length = 60` on line 1 and `style = true` on line 2
 - WHEN `LintConfig::load` runs
 - THEN `line_length = 60` (earlier individual key still wins over later style toggle)
+
+---
+
+### Requirement 8: Missing Totality Annotation [SHOULD]
+
+The `missing-totality` rule SHOULD warn (at **Warning** severity) when a `pub fn`
+declares neither `total` nor `partial`, so the termination contract of every public
+function is visible at its declaration rather than only implied by the Req 8 default
+(`.openspec/specs/013-termination/spec.md`).
+
+The rule checks only `pub fn` declarations; private helpers, `test fn`, and `builtin fn`
+are excluded — private helpers are an implementation detail, tests exist to exercise
+production code rather than declare a contract of their own, and `builtin fn` has no
+MVL body to infer from. The diagnostic suggests `partial` when the body contains a bare
+`while` (no `decreases`) or a direct recursive self-call, `total` otherwise — a
+heuristic for the fix, not a proof; the checker's own Req 8 pass is the actual
+authority on whether the suggested keyword is correct.
+
+Unlike `missing-annotation` (Requirement 4), `missing-totality` is **on by default**
+(`require_explicit_totality = true`) — an unannotated `pub fn` is implicitly total
+either way, so the rule's cost is purely stylistic (add the keyword), not a source of
+false positives the way effect inference is.
+
+**Implementation:** `src/mvl/linter/rules/semantic.rs::missing_totality`
+
+**Config field:** `LintConfig::require_explicit_totality` (default: `true`)
+
+**Tests:** `src/mvl/linter/rules/semantic.rs` (inline tests:
+`missing_totality_fires_on_unannotated_pub_fn`, `missing_totality_silent_on_private_fn`)
+
+#### Scenario: Rule fires on an unannotated pub fn
+
+- GIVEN `pub fn add(a: Int, b: Int) -> Int { a + b }`
+- WHEN `missing_totality` runs with the default config
+- THEN a `Warning`-severity `missing-totality` diagnostic is emitted suggesting `total`
+
+#### Scenario: Rule suggests partial for an unbounded loop or self-recursion
+
+- GIVEN `pub fn poll_forever() -> Unit { while true { } }`
+- WHEN `missing_totality` runs
+- THEN the diagnostic suggests `partial`
+
+#### Scenario: Rule is silent on private, test, builtin, or already-annotated fns
+
+- GIVEN `fn helper() -> Unit { }`, `test fn check() -> Unit { }`,
+  `pub builtin fn panic(message: String) -> Never`, and
+  `pub total fn add(a: Int, b: Int) -> Int { a + b }`
+- WHEN `missing_totality` runs
+- THEN no `missing-totality` diagnostic is emitted for any of the four

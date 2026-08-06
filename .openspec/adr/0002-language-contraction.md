@@ -48,7 +48,7 @@ If your data has meaning, give it a name. Stdlib pairs (enumerate, zip, partitio
 
 ### Design note: `while` and termination
 
-`while` is the only loop form in MVL (there is no `for` — iteration uses higher-order functions like `map`/`fold`). It is restricted to `partial fn` because an unbounded loop cannot, in general, be proven to terminate. In `total fn`, all recursion must use a structurally decreasing argument or an explicit `decreases` clause that the checker can verify. Allowing `while` in total functions would require the programmer to supply a loop invariant and termination measure — complexity that adds no value when an LLM can emit tail-recursive or higher-order equivalents. See Spec 013 (Termination) for the enforcement details.
+MVL has both `while` and `for` (see "What survives" below and Spec 001 Req 11/13) — `for` iterates a finite `Iterator`, `while` is the general-purpose loop. A bare `while` (no measure) is restricted to `partial fn` because an unbounded loop cannot, in general, be proven to terminate. In `total fn`, a loop must either be a `for` over a finite iterator, use structurally-decreasing recursion, or carry an explicit `decreases` clause on the `while` that the checker can verify. See Spec 013 (Termination) for the enforcement details, and its Amendment below (#2218) for the correction to this note.
 
 ## What survives
 
@@ -76,3 +76,17 @@ Compress through vocabulary (library functions the compiler understands), not th
 - LLM interpolation improves (fewer patterns to learn).
 - Verification density increases (fewer constructs to check).
 - Human developers will find it verbose — that's the point. The LLM writes it.
+
+## Amendment: `for` shipped; `while` in `total fn` is conditionally allowed (#2218, 2026-08-06)
+
+The original "Design note: `while` and termination" above claimed `while` was
+the only loop form and was unconditionally restricted to `partial fn`. Both
+claims went stale without the ADR being updated: `for` shipped as a
+first-class construct (Spec 001 Req 11/13, `grammar.ebnf`) — the "What
+survives" list two sections below this ADR's own decision already listed it
+— and `while … decreases m` became legal in `total fn` once the checker
+gained a per-iteration measure-verification pass (#628; enforced in
+`src/mvl/checker/stmts.rs` and `src/mvl/checker/contracts/loop_and_field.rs`,
+specified in `.openspec/specs/013-termination/spec.md`). The design note
+above has been corrected in place; this amendment exists so the drift is
+traceable.

@@ -50,24 +50,38 @@ partial fn repl() -> Never ! Console {
 - Event loops
 - Any intentionally non-terminating computation
 
-`while` is only permitted in `partial` functions. In `total` functions, use `for` over a finite iterator.
+A bare `while` (no measure) is only permitted in `partial` functions. In `total` functions, either use `for` over a finite iterator, or give the `while` a `decreases` measure — see §9.4.
 
 ## 9.4 The Totality Budget
 
 | Construct | Permitted in `total` | Permitted in `partial` |
 |-----------|---------------------|----------------------|
 | `for x in iter` | Yes (bounded) | Yes |
-| `while condition` | No | Yes |
+| `while condition` (bare) | No | Yes |
+| `while condition decreases m` | Yes, if the measure is proved to strictly decrease | Yes |
 | Structural recursion | Yes (decreasing) | Yes |
 | General recursion | No | Yes |
 | `loop` | Does not exist | — |
+
+`while … decreases m` in a total function is checked the same way structural recursion is: the compiler must prove `m` is bounded below and strictly decreases every iteration, or it rejects the function (`decreases` measures the checker cannot analyse are rejected, not silently accepted — see #2211).
+
+```mvl
+fn count_down(n: Int where self >= 0) -> Int {
+    let i: ref Int = n;
+    while i > 0 decreases i {
+        i = i - 1;
+    }
+    i
+}
+```
 
 ## 9.5 Why This Matters
 
 A total function that type-checks is guaranteed to:
 - Never hang
-- Never consume unbounded resources
 - Either return a value or terminate by aborting (e.g. via `panic`) — it never runs forever
+
+It is **not** guaranteed to run in bounded time or bounded memory: `total` means *terminates eventually*, not *terminates quickly*. `fn fib(n: Int where self >= 0) -> Int { if n <= 1 { n } else { fib(n - 1) + fib(n - 2) } }` is total and provably terminating, and `fib(60)` will not finish in practice — no pass in the compiler checks allocation or step count. If a bound on resource use matters, it has to be argued separately (e.g. via a refinement on the input size); Req 8 only rules out *never* finishing.
 
 `total` is a claim about *termination*, not about *always producing a value by falling off the end of the body*. `panic` (and `exit`, `assert`, `assert_eq`, `assert_ne`) terminate — they abort rather than hang — so they are implicitly total and callable from any total function:
 

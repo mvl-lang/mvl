@@ -60,12 +60,12 @@ Every requirement is a category of tests you never write. Well-formedness reduce
 | 5 | Error visibility (Result) | ✓ | ✓ | — | Unused Result rejected, `?` propagation parsed |
 | 6 | Ownership (linearity) | ✓ | ✓ | — | Immutability enforced. Linear resource consumption (LinearTypeBareBind) enforced — bare assignment of linear type without consume() rejected. |
 | 7 | Effect tracking | ✓ | ✓ | — | Undeclared effects rejected, propagation enforced |
-| 8 | Termination | ✓ | ✓ partial | — | `while` in total rejected. No structural recursion proof yet. |
+| 8 | Termination | ✓ | ✓ | — | Structural recursion proof, `decreases`-measure verification for `while`, and mutual-recursion detection all shipped (#2218). Extending mutual-recursion detection to accept provably-terminating cycles is tracked separately (#2216(b)). |
 | 9 | Data race freedom | ✓ | ✓ partial | — | ref/tag capabilities parsed. Full actor-boundary checking Phase 2. |
 | 10 | Refinement types | ✓ | ✓ | — | Static call-site check (RefinementViolated). Phase 2 adds SMT solver. |
 | 11 | Information flow control | ✓ | ✓ | — | Lattice enforced, declassify/sanitize required. Phase 2 adds full flow analysis. |
 
-**Summary:** All 11 requirements are fully represented in the grammar and enforced in the type checker. Reqs 2, 8, 9 are partial — core violations caught, deeper analysis deferred to Phase 2. Req 6 is fully proven at Phase 1.
+**Summary:** All 11 requirements are fully represented in the grammar and enforced in the type checker. Reqs 2, 9 are partial — core violations caught, deeper analysis deferred to Phase 2. Reqs 6, 8 are fully proven at Phase 1.
 
 ### Readiness targets
 

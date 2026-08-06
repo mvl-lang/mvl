@@ -251,10 +251,12 @@ module_path    = IDENT { "." IDENT } [ "." "{" IDENT { "," IDENT } "}" ] ;
 
 (* === Declarations (no leading "pub" — hoisted to declaration) === *)
 type_decl      = "type" IDENT [ type_params ] "=" type_body ;
-fn_decl        = [ totality ] [ security ] "fn" IDENT [ type_params ]
+fn_decl        = [ "test" ] [ totality | "builtin" ] "fn" IDENT [ type_params ]
                  "(" [ param_list ] ")" "->" return_type
                  [ "!" effect_list ] [ "where" constraints ]
                  block ;
+(* #2218: dropped a stale `[ security ]` slot — no such fn-level modifier
+   exists; IFC labels (Tainted/Secret) attach to types, not declarations. *)
 const_decl     = "const" IDENT ":" type_expr "=" expr ";" ;
 ```
 
