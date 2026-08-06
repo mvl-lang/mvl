@@ -44,7 +44,7 @@ partial fn contains_ir(instrs: List[String], needle: String) -> Bool {
 
 // ── emit_stmt: Expr statement ───────────────────────────────────────────────
 
-test fn expr_stmt_forwards_literal_to_tail_reg() -> Unit {
+test partial fn expr_stmt_forwards_literal_to_tail_reg() -> Unit {
     // `Expr` stmt evaluates the inner expr and surfaces its reg as the
     // stmt's `tail_reg` — the fn-return value when the stmt is trailing.
     let stmt: Value = parse(
@@ -57,7 +57,7 @@ test fn expr_stmt_forwards_literal_to_tail_reg() -> Unit {
     assert_eq(out.instrs.len(), 0)
 }
 
-test fn expr_stmt_bumps_next_reg_on_binary() -> Unit {
+test partial fn expr_stmt_bumps_next_reg_on_binary() -> Unit {
     // Binary emits one instruction and consumes one fresh register.
     let stmt: Value = parse(
         "{\"tag\":\"Expr\",\"expr\":{\"kind\":{\"tag\":\"Binary\",\"op\":\"Add\","
@@ -75,7 +75,7 @@ test fn expr_stmt_bumps_next_reg_on_binary() -> Unit {
 
 // ── emit_stmt: Let (immutable) ──────────────────────────────────────────────
 
-test fn let_binding_stores_reg_in_locals() -> Unit {
+test partial fn let_binding_stores_reg_in_locals() -> Unit {
     // `let x: Int = 42;` binds `x` → LocalRef{ reg: "42", ty: "i64" }.
     // The RHS is a literal, so `reg` is the immediate.
     let stmt: Value = parse(
@@ -98,7 +98,7 @@ test fn let_binding_stores_reg_in_locals() -> Unit {
 
 // ── emit_body: empty body ───────────────────────────────────────────────────
 
-test fn empty_body_produces_no_instrs() -> Unit {
+test partial fn empty_body_produces_no_instrs() -> Unit {
     // A body with zero stmts emits no instructions and has "" tail_reg.
     let body: Value = parse("{\"stmts\":[]}");
     let out: StmtOut = empty_ctx().emit_body(body);
@@ -109,7 +109,7 @@ test fn empty_body_produces_no_instrs() -> Unit {
 
 // ── emit_body: single Expr stmt ─────────────────────────────────────────────
 
-test fn body_with_single_expr_forwards_tail() -> Unit {
+test partial fn body_with_single_expr_forwards_tail() -> Unit {
     // `{ 5 }` → tail_reg = "5", no instrs.
     let body: Value = parse(
         "{\"stmts\":[{\"tag\":\"Expr\",\"expr\":{\"kind\":{\"tag\":\"Literal\",\"lit\":{\"tag\":\"Integer\",\"value\":\"5\"}},\"ty\":{\"tag\":\"Int\"}}}]}"
@@ -121,7 +121,7 @@ test fn body_with_single_expr_forwards_tail() -> Unit {
 
 // ── emit_body: let then use ─────────────────────────────────────────────────
 
-test fn body_let_then_use_reads_bound_reg() -> Unit {
+test partial fn body_let_then_use_reads_bound_reg() -> Unit {
     // `{ let x: Int = 3; x }` → last expr resolves the local, tail_reg = "3".
     let body: Value = parse(
         "{\"stmts\":["
@@ -136,7 +136,7 @@ test fn body_let_then_use_reads_bound_reg() -> Unit {
 
 // ── emit_body: multiple stmts accumulate instrs ─────────────────────────────
 
-test fn body_multiple_binaries_accumulate_instrs() -> Unit {
+test partial fn body_multiple_binaries_accumulate_instrs() -> Unit {
     // Two Add stmts → two `add i64` lines in the accumulated instrs.
     let body: Value = parse(
         "{\"stmts\":["
@@ -159,7 +159,7 @@ test fn body_multiple_binaries_accumulate_instrs() -> Unit {
 
 // ── emit_stmt: If (statement form) ──────────────────────────────────────────
 
-test fn if_stmt_emits_branch_labels() -> Unit {
+test partial fn if_stmt_emits_branch_labels() -> Unit {
     // `if true { 10 } else { 20 }` in stmt position still lowers to
     // `br i1 %cond, label %then, label %else` + phi.
     let stmt: Value = parse(
@@ -176,7 +176,7 @@ test fn if_stmt_emits_branch_labels() -> Unit {
 
 // ── Ref-let: alloca + store ─────────────────────────────────────────────────
 
-test fn ref_let_emits_alloca_and_store() -> Unit {
+test partial fn ref_let_emits_alloca_and_store() -> Unit {
     // `let x: ref Int = 5;` — a Ref-typed Let allocates and stores so a
     // later Assign can `store` into the same address.  The bound reg is
     // the `%x.addr` pointer.
@@ -200,7 +200,7 @@ test fn ref_let_emits_alloca_and_store() -> Unit {
 
 // ── Assign to Ident (ref-let target) ────────────────────────────────────────
 
-test fn assign_to_ident_emits_store_to_bound_ptr() -> Unit {
+test partial fn assign_to_ident_emits_store_to_bound_ptr() -> Unit {
     // Set up a locals map with `x` bound to a ref (its alloca ptr).
     // Then `x = 42` emits `store i64 42, ptr %x.addr`.
     let locals: ref Map[String, LocalRef] = Map::new();
@@ -225,7 +225,7 @@ test fn assign_to_ident_emits_store_to_bound_ptr() -> Unit {
     assert_eq(out.tail_reg, "")
 }
 
-test fn assign_to_unbound_ident_still_lowers_rhs() -> Unit {
+test partial fn assign_to_unbound_ident_still_lowers_rhs() -> Unit {
     // If the target isn't in ctx.locals we drop the store (the Match arm
     // returns just the rhs instrs).  Regression against the `None` branch
     // in the Assign path.
@@ -244,7 +244,7 @@ test fn assign_to_unbound_ident_still_lowers_rhs() -> Unit {
 
 // ── While loop ──────────────────────────────────────────────────────────────
 
-test fn while_loop_emits_head_body_exit_labels() -> Unit {
+test partial fn while_loop_emits_head_body_exit_labels() -> Unit {
     // `while false { }` — minimal shape: br to head, condition check,
     // br i1 to body/exit, unconditional back-edge from body to head.
     let stmt: Value = parse(
@@ -260,7 +260,7 @@ test fn while_loop_emits_head_body_exit_labels() -> Unit {
 
 // ── emit_body: last_label propagation from control flow ─────────────────────
 
-test fn body_captures_last_label_from_if() -> Unit {
+test partial fn body_captures_last_label_from_if() -> Unit {
     // A body ending in an If statement should carry the If's exit label
     // as last_label — needed so a trailing phi in the enclosing scope
     // names the correct predecessor block.
@@ -280,7 +280,7 @@ test fn body_captures_last_label_from_if() -> Unit {
 
 // ── For (range) loop ────────────────────────────────────────────────────────
 
-test fn for_range_emits_counter_loop_labels() -> Unit {
+test partial fn for_range_emits_counter_loop_labels() -> Unit {
     // `for i in range(0, 3) { }` — counter-based lowering with head /
     // body / exit labels and an incrementing loop var.
     let stmt: Value = parse(
@@ -298,7 +298,7 @@ test fn for_range_emits_counter_loop_labels() -> Unit {
     assert_eq(contains_ir(out.instrs, "3"), true)
 }
 
-test fn for_unsupported_iter_shape_returns_no_instrs() -> Unit {
+test partial fn for_unsupported_iter_shape_returns_no_instrs() -> Unit {
     // Iterator kind that isn't `range()` and isn't List-typed → swallow
     // silently.  Guard against regressions in the early-return path.
     let stmt: Value = parse(
@@ -313,7 +313,7 @@ test fn for_unsupported_iter_shape_returns_no_instrs() -> Unit {
 
 // ── Match statement forwarding ──────────────────────────────────────────────
 
-test fn match_stmt_forwards_to_emit_match() -> Unit {
+test partial fn match_stmt_forwards_to_emit_match() -> Unit {
     // Stmt-form match dispatches through EmitCtx::emit_match; verify
     // via the same phi/icmp signature as the expression-form.
     let stmt: Value = parse(

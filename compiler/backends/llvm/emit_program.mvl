@@ -217,7 +217,7 @@ partial fn emit_main_def(
 // returns a fresh List which callers concat — no shared-ref mutation
 // (Rust transpiler ergonomics; ref-param passing is not currently
 // supported cleanly across recursive calls).
-partial fn build_string_registry(fns: List[Value]) -> Map[String, String] {
+pub partial fn build_string_registry(fns: List[Value]) -> Map[String, String] {
     let all: ref List[String] = [];
     for f in fns {
         let body: Value = jget(f, "body");

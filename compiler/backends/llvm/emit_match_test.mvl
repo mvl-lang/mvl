@@ -47,7 +47,7 @@ partial fn contains_ir(instrs: List[String], needle: String) -> Bool {
 
 // ── Literal Integer arms + Wildcard fallback ────────────────────────────────
 
-test fn match_int_literal_emits_icmp_eq() -> Unit {
+test partial fn match_int_literal_emits_icmp_eq() -> Unit {
     // `match 42 { 42 => 100, _ => 999 }`.  The scrutinee is a Literal
     // Integer immediate, so no scrutinee instrs; the arm dispatch is
     // `icmp eq i64 42, 42` + branch, and the fallback arm is an
@@ -75,7 +75,7 @@ test fn match_int_literal_emits_icmp_eq() -> Unit {
 
 // ── Multi-arm dispatch ───────────────────────────────────────────────────────
 
-test fn match_multiple_literal_arms_emit_cascaded_cmps() -> Unit {
+test partial fn match_multiple_literal_arms_emit_cascaded_cmps() -> Unit {
     // Three arms: 0, 1, wildcard.  Each literal arm emits its own icmp,
     // and the fallback is one unconditional br.
     let scrutinee: Value = parse(
@@ -105,7 +105,7 @@ test fn match_multiple_literal_arms_emit_cascaded_cmps() -> Unit {
 
 // ── Ident-binding fallback ──────────────────────────────────────────────────
 
-test fn match_ident_binding_is_fallback_and_reads_scrutinee() -> Unit {
+test partial fn match_ident_binding_is_fallback_and_reads_scrutinee() -> Unit {
     // `match 7 { x => x }` — Ident pattern with no enum-variant name is
     // treated as an unconditional fallback that binds `x` to the
     // scrutinee reg (here the immediate "7").
@@ -129,7 +129,7 @@ test fn match_ident_binding_is_fallback_and_reads_scrutinee() -> Unit {
 
 // ── emit_match_body: Expr body ──────────────────────────────────────────────
 
-test fn match_body_expr_forwards_reg() -> Unit {
+test partial fn match_body_expr_forwards_reg() -> Unit {
     // `{tag: "Expr", expr: <lit>}` — the body's tail reg is the expr's reg.
     let body: Value = parse(
         "{\"tag\":\"Expr\",\"expr\":{\"kind\":{\"tag\":\"Literal\",\"lit\":{\"tag\":\"Integer\",\"value\":\"5\"}},\"ty\":{\"tag\":\"Int\"}}}"
@@ -142,7 +142,7 @@ test fn match_body_expr_forwards_reg() -> Unit {
 
 // ── emit_match_body: Block body ─────────────────────────────────────────────
 
-test fn match_body_block_evaluates_stmts() -> Unit {
+test partial fn match_body_block_evaluates_stmts() -> Unit {
     // `{tag: "Block", block: {stmts: [...]}}` — walk stmts via emit_body,
     // surface tail_reg as the arm's reg.
     let body: Value = parse(
@@ -157,7 +157,7 @@ test fn match_body_block_evaluates_stmts() -> Unit {
 
 // ── Literal Bool pattern ────────────────────────────────────────────────────
 
-test fn match_bool_literal_pattern_emits_i1_cmp() -> Unit {
+test partial fn match_bool_literal_pattern_emits_i1_cmp() -> Unit {
     // `match true { true => 1, _ => 0 }` — Bool scrutinee, Bool literal
     // pattern.  literal_pattern_value returns "1" for true; the cmp uses
     // the scrutinee's i1 type.
@@ -181,7 +181,7 @@ test fn match_bool_literal_pattern_emits_i1_cmp() -> Unit {
 
 // ── Some / None patterns on Option scrutinee ────────────────────────────────
 
-test fn match_some_variant_dispatches_on_tag_one() -> Unit {
+test partial fn match_some_variant_dispatches_on_tag_one() -> Unit {
     // `match Some(4) { Some(_) => 1, None => 0 }` — `Some` = tag 1.
     // The Option value is a `{i8, i64}` aggregate; extractvalue pulls the
     // tag byte for cmp.
@@ -210,7 +210,7 @@ test fn match_some_variant_dispatches_on_tag_one() -> Unit {
 
 // ── Ok / Err on Result scrutinee ────────────────────────────────────────────
 
-test fn match_ok_err_dispatches_via_tag_byte() -> Unit {
+test partial fn match_ok_err_dispatches_via_tag_byte() -> Unit {
     // `match Ok(1) { Ok(_) => 10, Err(_) => 20 }` — Ok=0, Err=1.
     let scrutinee: Value = parse(
         "{\"kind\":{\"tag\":\"FnCall\",\"name\":\"Ok\",\"args\":["
@@ -235,7 +235,7 @@ test fn match_ok_err_dispatches_via_tag_byte() -> Unit {
 
 // ── User-defined enum variant pattern ───────────────────────────────────────
 
-test fn match_user_variant_pattern_uses_registered_tag() -> Unit {
+test partial fn match_user_variant_pattern_uses_registered_tag() -> Unit {
     // Pre-populate ctx with a Color enum registered as {Red=0, Green=1, Blue=2}.
     // `match c { Color::Green => 1, _ => 0 }` should dispatch on tag byte 1.
     let enums: ref Map[String, Int] = Map::new();

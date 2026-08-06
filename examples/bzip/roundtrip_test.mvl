@@ -23,7 +23,7 @@ fn roundtrip_b(xs: List[Int]) -> List[Byte] {
 
 // ── Roundtrip helper ────────────────────────────────────────────────────
 
-fn run_roundtrip(input: List[Byte]) -> Bool {
+partial fn run_roundtrip(input: List[Byte]) -> Bool {
     let rle_out: List[Byte] = rle_encode(input);
     let bwt_out: BwtResult = bwt_encode(rle_out);
     let mtf_out: List[Int] = mtf_encode(bwt_out.data);
@@ -40,7 +40,7 @@ fn run_roundtrip(input: List[Byte]) -> Bool {
 
 // ── Tests ───────────────────────────────────────────────────────────────
 
-test fn compress_empty_is_error() -> Unit {
+test partial fn compress_empty_is_error() -> Unit {
     let empty: List[Byte] = [];
     let result: Result[List[Byte], CompressError] = compress_bytes(empty);
     let is_err: Bool = match result {
@@ -50,7 +50,7 @@ test fn compress_empty_is_error() -> Unit {
     assert_eq(is_err, true)
 }
 
-test fn compress_produces_output() -> Unit {
+test partial fn compress_produces_output() -> Unit {
     let input: List[Byte] = roundtrip_b([65, 65, 65, 65, 65, 65, 65, 65]);
     let result: Result[List[Byte], CompressError] = compress_bytes(input);
     let ok: Bool = match result {
@@ -60,19 +60,19 @@ test fn compress_produces_output() -> Unit {
     assert_eq(ok, true)
 }
 
-test fn roundtrip_single_byte() -> Unit {
+test partial fn roundtrip_single_byte() -> Unit {
     assert_eq(run_roundtrip(roundtrip_b([42])), true)
 }
 
-test fn roundtrip_all_same_bytes() -> Unit {
+test partial fn roundtrip_all_same_bytes() -> Unit {
     assert_eq(run_roundtrip(roundtrip_b([65, 65, 65, 65, 65, 65, 65, 65])), true)
 }
 
-test fn roundtrip_no_repetition() -> Unit {
+test partial fn roundtrip_no_repetition() -> Unit {
     assert_eq(run_roundtrip(roundtrip_b([1, 2, 3, 4, 5, 6, 7, 8])), true)
 }
 
-test fn roundtrip_mixed_runs_and_random() -> Unit {
+test partial fn roundtrip_mixed_runs_and_random() -> Unit {
     let input: List[Byte] = roundtrip_b([
         70, 70, 70, 70, 70,
         71, 72, 73, 74, 75, 76,
@@ -81,11 +81,11 @@ test fn roundtrip_mixed_runs_and_random() -> Unit {
     assert_eq(run_roundtrip(input), true)
 }
 
-test fn roundtrip_two_byte_alphabet() -> Unit {
+test partial fn roundtrip_two_byte_alphabet() -> Unit {
     assert_eq(run_roundtrip(roundtrip_b([0, 1, 0, 1, 0, 0, 1, 1, 0, 1])), true)
 }
 
-test fn roundtrip_ascending_sequence() -> Unit {
+test partial fn roundtrip_ascending_sequence() -> Unit {
     assert_eq(run_roundtrip(roundtrip_b([10, 20, 30, 40, 50, 60, 70, 80, 90, 100])), true)
 }
 
@@ -93,14 +93,14 @@ test fn roundtrip_ascending_sequence() -> Unit {
 // 8 bytes alternating between 2 symbols → 1-bit Huffman codes → 8 bits = 1 byte
 // flush_writer sees bit_pos = 0 (no partial byte), covering the "full byte" branch.
 
-test fn roundtrip_8byte_alternating_flush_aligned() -> Unit {
+test partial fn roundtrip_8byte_alternating_flush_aligned() -> Unit {
     assert_eq(run_roundtrip(roundtrip_b([65, 66, 65, 66, 65, 66, 65, 66])), true)
 }
 
 // ── decompress_bytes: HuffmanFailed branch ────────────────────────────────
 // All-zero frequencies → build_tree returns None → Err(HuffmanFailed).
 
-test fn decompress_empty_freqs_returns_error() -> Unit {
+test partial fn decompress_empty_freqs_returns_error() -> Unit {
     let freqs: List[Int] = range(0, 256).map(zero_int);
     let result: Result[List[Byte], CompressError] = decompress_bytes([], 0, freqs);
     let is_err: Bool = match result {
@@ -113,7 +113,7 @@ test fn decompress_empty_freqs_returns_error() -> Unit {
 // ── read_bits_loop: pos >= bytes.len() branch ─────────────────────────────
 // Decode more symbols than were encoded → reader runs out of bytes mid-stream.
 
-test fn decode_more_symbols_than_encoded() -> Unit {
+test partial fn decode_more_symbols_than_encoded() -> Unit {
     let freqs: ref List[Int] = range(0, 256).map(zero_int);
     freqs = int_list_set(freqs, 0, 4);
     freqs = int_list_set(freqs, 1, 4);
@@ -138,7 +138,7 @@ test fn decode_more_symbols_than_encoded() -> Unit {
 // ── run_roundtrip: compress Err branch ───────────────────────────────────
 // Empty input → compress_bytes returns Err(EmptyInput) → run_roundtrip returns false.
 
-test fn run_roundtrip_empty_input_is_false() -> Unit {
+test partial fn run_roundtrip_empty_input_is_false() -> Unit {
     assert_eq(run_roundtrip(roundtrip_b([])), false)
 }
 
@@ -146,7 +146,7 @@ test fn run_roundtrip_empty_input_is_false() -> Unit {
 // All-empty codes table → encode_symbol returns None → encode_symbols returns
 // Err(SymbolNotInTree) → huffman_encode_stream propagates Err.
 
-test fn huffman_encode_stream_missing_symbol_is_error() -> Unit {
+test partial fn huffman_encode_stream_missing_symbol_is_error() -> Unit {
     let codes: List[List[Int]] = range(0, 256).map(empty_code);
     let result: Result[List[Byte], CompressError] = huffman_encode_stream([65], codes);
     let is_err: Bool = match result {

@@ -51,7 +51,7 @@ partial fn contains_ir(instrs: List[String], needle: String) -> Bool {
 
 // ── Literal Integer ─────────────────────────────────────────────────────────
 
-test fn integer_literal_returns_immediate_reg() -> Unit {
+test partial fn integer_literal_returns_immediate_reg() -> Unit {
     // Integer literals lower to an immediate string in `reg` — no icmp,
     // no add, no allocations.  The `next_reg` counter is unchanged.
     let expr: Value = parse(
@@ -65,7 +65,7 @@ test fn integer_literal_returns_immediate_reg() -> Unit {
 
 // ── Literal Bool ────────────────────────────────────────────────────────────
 
-test fn bool_literal_true_is_i1_one() -> Unit {
+test partial fn bool_literal_true_is_i1_one() -> Unit {
     let expr: Value = parse(
         "{\"kind\":{\"tag\":\"Literal\",\"lit\":{\"tag\":\"Bool\",\"value\":true}},\"ty\":{\"tag\":\"Bool\"}}"
     );
@@ -74,7 +74,7 @@ test fn bool_literal_true_is_i1_one() -> Unit {
     assert_eq(e.ty, "i1")
 }
 
-test fn bool_literal_false_is_i1_zero() -> Unit {
+test partial fn bool_literal_false_is_i1_zero() -> Unit {
     let expr: Value = parse(
         "{\"kind\":{\"tag\":\"Literal\",\"lit\":{\"tag\":\"Bool\",\"value\":false}},\"ty\":{\"tag\":\"Bool\"}}"
     );
@@ -85,7 +85,7 @@ test fn bool_literal_false_is_i1_zero() -> Unit {
 
 // ── Var lookup ──────────────────────────────────────────────────────────────
 
-test fn var_reads_local_reg() -> Unit {
+test partial fn var_reads_local_reg() -> Unit {
     // Var TIR reads back the LocalRef.reg — no instrs, no counter change.
     let locals: ref Map[String, LocalRef] = Map::new();
     locals.insert("x", LocalRef { reg: "%x", ty: "i64", is_ref: false });
@@ -111,7 +111,7 @@ test fn var_reads_local_reg() -> Unit {
 
 // ── Binary arithmetic ───────────────────────────────────────────────────────
 
-test fn binary_add_emits_add_i64() -> Unit {
+test partial fn binary_add_emits_add_i64() -> Unit {
     // `1 + 2` → `%t0 = add i64 1, 2`.  Both operands lower to immediates,
     // the result lands in `%t{next_reg}` and `next_reg` is bumped once.
     let expr: Value = parse(
@@ -127,7 +127,7 @@ test fn binary_add_emits_add_i64() -> Unit {
     assert_eq(e.reg, "%t0")
 }
 
-test fn binary_sub_emits_sub_i64() -> Unit {
+test partial fn binary_sub_emits_sub_i64() -> Unit {
     let expr: Value = parse(
         "{\"kind\":{\"tag\":\"Binary\",\"op\":\"Sub\","
         .concat("\"left\":{\"kind\":{\"tag\":\"Literal\",\"lit\":{\"tag\":\"Integer\",\"value\":\"10\"}},\"ty\":{\"tag\":\"Int\"}},")
@@ -138,7 +138,7 @@ test fn binary_sub_emits_sub_i64() -> Unit {
     assert_eq(contains_ir(e.instrs, "= sub i64 10, 3"), true)
 }
 
-test fn binary_mul_emits_mul_i64() -> Unit {
+test partial fn binary_mul_emits_mul_i64() -> Unit {
     let expr: Value = parse(
         "{\"kind\":{\"tag\":\"Binary\",\"op\":\"Mul\","
         .concat("\"left\":{\"kind\":{\"tag\":\"Literal\",\"lit\":{\"tag\":\"Integer\",\"value\":\"7\"}},\"ty\":{\"tag\":\"Int\"}},")
@@ -151,7 +151,7 @@ test fn binary_mul_emits_mul_i64() -> Unit {
 
 // ── Binary comparisons ──────────────────────────────────────────────────────
 
-test fn binary_eq_emits_icmp_eq_and_returns_i1() -> Unit {
+test partial fn binary_eq_emits_icmp_eq_and_returns_i1() -> Unit {
     // A1c: comparison operators produce `i1`.  The result reg is a `%t`
     // and the emitted instruction is `icmp eq`.
     let expr: Value = parse(
@@ -165,7 +165,7 @@ test fn binary_eq_emits_icmp_eq_and_returns_i1() -> Unit {
     assert_eq(contains_ir(e.instrs, "icmp eq i64 1, 1"), true)
 }
 
-test fn binary_lt_emits_icmp_slt() -> Unit {
+test partial fn binary_lt_emits_icmp_slt() -> Unit {
     let expr: Value = parse(
         "{\"kind\":{\"tag\":\"Binary\",\"op\":\"Lt\","
         .concat("\"left\":{\"kind\":{\"tag\":\"Literal\",\"lit\":{\"tag\":\"Integer\",\"value\":\"1\"}},\"ty\":{\"tag\":\"Int\"}},")
@@ -179,7 +179,7 @@ test fn binary_lt_emits_icmp_slt() -> Unit {
 
 // ── If expression: branch + phi ─────────────────────────────────────────────
 
-test fn if_expr_emits_branch_and_phi_merge() -> Unit {
+test partial fn if_expr_emits_branch_and_phi_merge() -> Unit {
     // `if true { 10 } else { 20 }` → br i1 + two labels + phi merging
     // both arms into a single i64 register.
     let expr: Value = parse(
@@ -199,7 +199,7 @@ test fn if_expr_emits_branch_and_phi_merge() -> Unit {
 
 // ── Float and Str literals ──────────────────────────────────────────────────
 
-test fn float_literal_returns_double_imm() -> Unit {
+test partial fn float_literal_returns_double_imm() -> Unit {
     // A1r: Float literals lower to LLVM double immediates verbatim.
     let expr: Value = parse(
         "{\"kind\":{\"tag\":\"Literal\",\"lit\":{\"tag\":\"Float\",\"value\":\"7.5\"}},\"ty\":{\"tag\":\"Float\"}}"
@@ -210,7 +210,7 @@ test fn float_literal_returns_double_imm() -> Unit {
     assert_eq(e.instrs.len(), 0)
 }
 
-test fn str_literal_builds_i64_ptr_aggregate() -> Unit {
+test partial fn str_literal_builds_i64_ptr_aggregate() -> Unit {
     // A1m: String literal → `{i64, ptr}` via two insertvalue instrs.
     // The ptr operand comes from ctx.strings via string_global_of; if
     // unregistered we get "@.str.missing" (still a valid IR ptr).
@@ -238,7 +238,7 @@ test fn str_literal_builds_i64_ptr_aggregate() -> Unit {
 
 // ── Remaining Binary ops ────────────────────────────────────────────────────
 
-test fn binary_div_emits_sdiv_i64() -> Unit {
+test partial fn binary_div_emits_sdiv_i64() -> Unit {
     let expr: Value = parse(
         "{\"kind\":{\"tag\":\"Binary\",\"op\":\"Div\","
         .concat("\"left\":{\"kind\":{\"tag\":\"Literal\",\"lit\":{\"tag\":\"Integer\",\"value\":\"10\"}},\"ty\":{\"tag\":\"Int\"}},")
@@ -249,7 +249,7 @@ test fn binary_div_emits_sdiv_i64() -> Unit {
     assert_eq(contains_ir(e.instrs, "= sdiv i64 10, 2"), true)
 }
 
-test fn binary_rem_emits_srem_i64() -> Unit {
+test partial fn binary_rem_emits_srem_i64() -> Unit {
     let expr: Value = parse(
         "{\"kind\":{\"tag\":\"Binary\",\"op\":\"Rem\","
         .concat("\"left\":{\"kind\":{\"tag\":\"Literal\",\"lit\":{\"tag\":\"Integer\",\"value\":\"10\"}},\"ty\":{\"tag\":\"Int\"}},")
@@ -260,7 +260,7 @@ test fn binary_rem_emits_srem_i64() -> Unit {
     assert_eq(contains_ir(e.instrs, "= srem i64 10, 3"), true)
 }
 
-test fn binary_ne_emits_icmp_ne_i1_result() -> Unit {
+test partial fn binary_ne_emits_icmp_ne_i1_result() -> Unit {
     let expr: Value = parse(
         "{\"kind\":{\"tag\":\"Binary\",\"op\":\"Ne\","
         .concat("\"left\":{\"kind\":{\"tag\":\"Literal\",\"lit\":{\"tag\":\"Integer\",\"value\":\"1\"}},\"ty\":{\"tag\":\"Int\"}},")
@@ -272,7 +272,7 @@ test fn binary_ne_emits_icmp_ne_i1_result() -> Unit {
     assert_eq(contains_ir(e.instrs, "icmp ne i64 1, 2"), true)
 }
 
-test fn binary_le_emits_icmp_sle_i1_result() -> Unit {
+test partial fn binary_le_emits_icmp_sle_i1_result() -> Unit {
     let expr: Value = parse(
         "{\"kind\":{\"tag\":\"Binary\",\"op\":\"Le\","
         .concat("\"left\":{\"kind\":{\"tag\":\"Literal\",\"lit\":{\"tag\":\"Integer\",\"value\":\"1\"}},\"ty\":{\"tag\":\"Int\"}},")
@@ -284,7 +284,7 @@ test fn binary_le_emits_icmp_sle_i1_result() -> Unit {
     assert_eq(contains_ir(e.instrs, "icmp sle i64 1, 1"), true)
 }
 
-test fn binary_gt_emits_icmp_sgt_i1_result() -> Unit {
+test partial fn binary_gt_emits_icmp_sgt_i1_result() -> Unit {
     let expr: Value = parse(
         "{\"kind\":{\"tag\":\"Binary\",\"op\":\"Gt\","
         .concat("\"left\":{\"kind\":{\"tag\":\"Literal\",\"lit\":{\"tag\":\"Integer\",\"value\":\"3\"}},\"ty\":{\"tag\":\"Int\"}},")
@@ -295,7 +295,7 @@ test fn binary_gt_emits_icmp_sgt_i1_result() -> Unit {
     assert_eq(contains_ir(e.instrs, "icmp sgt i64 3, 1"), true)
 }
 
-test fn binary_ge_emits_icmp_sge_i1_result() -> Unit {
+test partial fn binary_ge_emits_icmp_sge_i1_result() -> Unit {
     let expr: Value = parse(
         "{\"kind\":{\"tag\":\"Binary\",\"op\":\"Ge\","
         .concat("\"left\":{\"kind\":{\"tag\":\"Literal\",\"lit\":{\"tag\":\"Integer\",\"value\":\"2\"}},\"ty\":{\"tag\":\"Int\"}},")
@@ -308,7 +308,7 @@ test fn binary_ge_emits_icmp_sge_i1_result() -> Unit {
 
 // ── Unary ───────────────────────────────────────────────────────────────────
 
-test fn unary_neg_emits_sub_i64_zero() -> Unit {
+test partial fn unary_neg_emits_sub_i64_zero() -> Unit {
     // `-x` lowers to `sub i64 0, x`.
     let expr: Value = parse(
         "{\"kind\":{\"tag\":\"Unary\",\"op\":\"Neg\","
@@ -320,7 +320,7 @@ test fn unary_neg_emits_sub_i64_zero() -> Unit {
     assert_eq(contains_ir(e.instrs, "= sub i64 0, 7"), true)
 }
 
-test fn unary_not_emits_xor_i1_one() -> Unit {
+test partial fn unary_not_emits_xor_i1_one() -> Unit {
     // `!b` lowers to `xor i1 b, 1`.
     let expr: Value = parse(
         "{\"kind\":{\"tag\":\"Unary\",\"op\":\"Not\","
@@ -334,7 +334,7 @@ test fn unary_not_emits_xor_i1_one() -> Unit {
 
 // ── Block expression ────────────────────────────────────────────────────────
 
-test fn block_expr_forwards_tail_reg() -> Unit {
+test partial fn block_expr_forwards_tail_reg() -> Unit {
     // `{ 9 }` lowers to emit_body on the inner block; tail_reg surfaces
     // as the Block expr's reg.
     let expr: Value = parse(
@@ -347,7 +347,7 @@ test fn block_expr_forwards_tail_reg() -> Unit {
     assert_eq(e.ty, "i64")
 }
 
-test fn block_expr_empty_body_falls_back_to_zero() -> Unit {
+test partial fn block_expr_empty_body_falls_back_to_zero() -> Unit {
     // Empty block → tail_reg is "" → Block wrapper coerces to "0".
     let expr: Value = parse(
         "{\"kind\":{\"tag\":\"Block\",\"block\":{\"stmts\":[]}},\"ty\":{\"tag\":\"Int\"}}"
@@ -358,7 +358,7 @@ test fn block_expr_empty_body_falls_back_to_zero() -> Unit {
 
 // ── FnCall: None / Some / Ok / Err ──────────────────────────────────────────
 
-test fn fn_call_none_builds_zero_tagged_aggregate() -> Unit {
+test partial fn fn_call_none_builds_zero_tagged_aggregate() -> Unit {
     // `None` → `{i8, i64}` with tag=0, single insertvalue (no payload).
     let expr: Value = parse(
         "{\"kind\":{\"tag\":\"FnCall\",\"name\":\"None\",\"args\":[]},\"ty\":{\"tag\":\"Option\"}}"
@@ -368,7 +368,7 @@ test fn fn_call_none_builds_zero_tagged_aggregate() -> Unit {
     assert_eq(contains_ir(e.instrs, "insertvalue {i8, i64} undef, i8 0, 0"), true)
 }
 
-test fn fn_call_some_builds_one_tagged_aggregate_with_payload() -> Unit {
+test partial fn fn_call_some_builds_one_tagged_aggregate_with_payload() -> Unit {
     // `Some(42)` → two insertvalue: tag=1 at [0], payload=42 at [1].
     let expr: Value = parse(
         "{\"kind\":{\"tag\":\"FnCall\",\"name\":\"Some\",\"args\":["
@@ -381,7 +381,7 @@ test fn fn_call_some_builds_one_tagged_aggregate_with_payload() -> Unit {
     assert_eq(contains_ir(e.instrs, "i64 42, 1"), true)
 }
 
-test fn fn_call_ok_uses_tag_zero() -> Unit {
+test partial fn fn_call_ok_uses_tag_zero() -> Unit {
     // `Ok(x)` = tag 0 (unlike Some which is tag 1).
     let expr: Value = parse(
         "{\"kind\":{\"tag\":\"FnCall\",\"name\":\"Ok\",\"args\":["
@@ -393,7 +393,7 @@ test fn fn_call_ok_uses_tag_zero() -> Unit {
     assert_eq(contains_ir(e.instrs, "i64 7, 1"), true)
 }
 
-test fn fn_call_err_uses_tag_one() -> Unit {
+test partial fn fn_call_err_uses_tag_one() -> Unit {
     let expr: Value = parse(
         "{\"kind\":{\"tag\":\"FnCall\",\"name\":\"Err\",\"args\":["
         .concat("{\"kind\":{\"tag\":\"Literal\",\"lit\":{\"tag\":\"Integer\",\"value\":\"3\"}},\"ty\":{\"tag\":\"Int\"}}")
@@ -405,7 +405,7 @@ test fn fn_call_err_uses_tag_one() -> Unit {
 
 // ── FnCall: println ─────────────────────────────────────────────────────────
 
-test fn fn_call_println_int_uses_fmt_int() -> Unit {
+test partial fn fn_call_println_int_uses_fmt_int() -> Unit {
     // `println(5)` — Int arg → `printf(@.fmt_int, i64 5)`.
     let expr: Value = parse(
         "{\"kind\":{\"tag\":\"FnCall\",\"name\":\"println\",\"args\":["
@@ -416,7 +416,7 @@ test fn fn_call_println_int_uses_fmt_int() -> Unit {
     assert_eq(contains_ir(e.instrs, "call i32 (ptr, ...) @printf(ptr @.fmt_int, i64 5)"), true)
 }
 
-test fn fn_call_println_str_uses_fmt_str_and_extracts_ptr() -> Unit {
+test partial fn fn_call_println_str_uses_fmt_str_and_extracts_ptr() -> Unit {
     // `println("hi")` — Str arg → extractvalue then printf(@.fmt_str, ptr).
     let strings: ref Map[String, String] = Map::new();
     strings.insert("hi", "@.str.0");
@@ -464,7 +464,7 @@ partial fn ctx_with_point() -> EmitCtx {
 
 // ── Construct: struct aggregate ─────────────────────────────────────────────
 
-test fn construct_struct_emits_insertvalue_chain() -> Unit {
+test partial fn construct_struct_emits_insertvalue_chain() -> Unit {
     // `Point { x: 3, y: 12 }` → two chained insertvalue's into `%Point`.
     let expr: Value = parse(
         "{\"kind\":{\"tag\":\"Construct\",\"name\":\"Point\",\"fields\":["
@@ -481,7 +481,7 @@ test fn construct_struct_emits_insertvalue_chain() -> Unit {
 
 // ── FieldAccess ─────────────────────────────────────────────────────────────
 
-test fn field_access_emits_extractvalue_at_declared_index() -> Unit {
+test partial fn field_access_emits_extractvalue_at_declared_index() -> Unit {
     // `p.y` on a bound `%p: %Point` → extractvalue %Point %p, 1.
     let locals: ref Map[String, LocalRef] = Map::new();
     locals.insert("p", LocalRef { reg: "%p", ty: "%Point", is_ref: false });
@@ -515,7 +515,7 @@ test fn field_access_emits_extractvalue_at_declared_index() -> Unit {
 
 // ── ListLit ─────────────────────────────────────────────────────────────────
 
-test fn list_lit_allocates_array_and_wraps_in_i64_ptr() -> Unit {
+test partial fn list_lit_allocates_array_and_wraps_in_i64_ptr() -> Unit {
     // `[1, 2, 3]` — alloca [3 x i64], three GEP+store, then two
     // insertvalue's wrapping length + data ptr into `{i64, ptr}`.
     let expr: Value = parse(
@@ -537,7 +537,7 @@ test fn list_lit_allocates_array_and_wraps_in_i64_ptr() -> Unit {
 
 // ── Var: user-defined enum variant reference ────────────────────────────────
 
-test fn var_referring_to_enum_variant_returns_i8_tag() -> Unit {
+test partial fn var_referring_to_enum_variant_returns_i8_tag() -> Unit {
     // `Color::Red` when Red is registered as tag 0 → lowered as an
     // `i8 0` immediate (no instrs).
     let enums: ref Map[String, Int] = Map::new();
@@ -564,7 +564,7 @@ test fn var_referring_to_enum_variant_returns_i8_tag() -> Unit {
 
 // ── MethodCall: list.len ────────────────────────────────────────────────────
 
-test fn method_call_list_len_emits_extractvalue_at_zero() -> Unit {
+test partial fn method_call_list_len_emits_extractvalue_at_zero() -> Unit {
     // `xs.len()` on List[Int] → extractvalue {i64, ptr} <xs>, 0.
     // The recv reg is the tail of the ListLit lowering.
     let expr: Value = parse(
@@ -583,7 +583,7 @@ test fn method_call_list_len_emits_extractvalue_at_zero() -> Unit {
 
 // ── emit_variant_construction directly ──────────────────────────────────────
 
-test fn variant_construction_builds_i8_i64_aggregate_with_tag() -> Unit {
+test partial fn variant_construction_builds_i8_i64_aggregate_with_tag() -> Unit {
     // Pre-populate ctx with a single-slot variant registry:
     //   Value::Num  → tag 0, one i64 slot.
     let enums: ref Map[String, Int] = Map::new();

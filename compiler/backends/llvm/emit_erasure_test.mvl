@@ -53,7 +53,7 @@ partial fn tir(src: String) -> Value {
 
 // ── Erasure: fn-level solver metadata ────────────────────────────────────────
 
-test fn erasure_fn_requires_ensures_return_refinement_totality() -> Unit {
+test partial fn erasure_fn_requires_ensures_return_refinement_totality() -> Unit {
     // Baseline: `fn main() -> Int { 42 }` — no solver fields.
     let baseline: String = emit_program(tir(
         "{\"types\":[],\"fns\":[{\"name\":\"main\",\"params\":[],\"ret_ty\":{\"tag\":\"Int\"},\"body\":{\"stmts\":[{\"tag\":\"Expr\",\"expr\":{\"kind\":{\"tag\":\"Literal\",\"lit\":{\"tag\":\"Integer\",\"value\":\"42\"}},\"ty\":{\"tag\":\"Int\"}}}]}}]}"
@@ -75,7 +75,7 @@ test fn erasure_fn_requires_ensures_return_refinement_totality() -> Unit {
 
 // ── Erasure: parameter refinement ────────────────────────────────────────────
 
-test fn erasure_param_refinement() -> Unit {
+test partial fn erasure_param_refinement() -> Unit {
     // Baseline: `fn f(x: Int) -> Int { x }` — plain param, no refinement.
     let baseline: String = emit_program(tir(
         "{\"types\":[],\"fns\":[{\"name\":\"f\",\"params\":[{\"name\":\"x\",\"ty\":{\"tag\":\"Int\"}}],\"ret_ty\":{\"tag\":\"Int\"},\"body\":{\"stmts\":[{\"tag\":\"Expr\",\"expr\":{\"kind\":{\"tag\":\"Var\",\"name\":\"x\"},\"ty\":{\"tag\":\"Int\"}}}]}}]}"
@@ -89,7 +89,7 @@ test fn erasure_param_refinement() -> Unit {
 
 // ── Erasure: while-loop invariant + decreases ────────────────────────────────
 
-test fn erasure_while_invariant_and_decreases() -> Unit {
+test partial fn erasure_while_invariant_and_decreases() -> Unit {
     // Baseline: minimal while(false) loop with an empty body.  Cond is
     // never true so the emitter still lays out the header / latch blocks.
     let baseline: String = emit_program(tir(
@@ -104,7 +104,7 @@ test fn erasure_while_invariant_and_decreases() -> Unit {
 
 // ── Erasure: for-loop invariants ─────────────────────────────────────────────
 
-test fn erasure_for_invariants() -> Unit {
+test partial fn erasure_for_invariants() -> Unit {
     // Baseline: `for _ in [] {}` — empty list iteration, empty body.
     let baseline: String = emit_program(tir(
         "{\"types\":[],\"fns\":[{\"name\":\"main\",\"params\":[],\"ret_ty\":{\"tag\":\"Unit\"},\"body\":{\"stmts\":[{\"tag\":\"For\",\"var\":\"_\",\"iter\":{\"kind\":{\"tag\":\"ListLit\",\"elems\":[]},\"ty\":{\"tag\":\"List\",\"elem\":{\"tag\":\"Int\"}}},\"body\":{\"stmts\":[]}}]}}]}"
@@ -118,7 +118,7 @@ test fn erasure_for_invariants() -> Unit {
 
 // ── Erasure: struct field refinement + `with invariant` ──────────────────────
 
-test fn erasure_struct_invariant_and_field_refinement() -> Unit {
+test partial fn erasure_struct_invariant_and_field_refinement() -> Unit {
     // Baseline: a `Point { x: Int, y: Int }` type registration with no
     // struct-level invariant and no field refinement.
     let baseline: String = emit_program(tir(

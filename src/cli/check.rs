@@ -100,7 +100,15 @@ pub fn run(path: &str, req_filter: Option<u8>, opts: CheckOptions) {
     if verbose {
         eprintln!("stdlib profile: {stdlib_profile}");
     }
-    let files = loader::mvl_files(path, false);
+    // `mvl check` verifies every .mvl file, including `*_test.mvl` — a
+    // directory (or single file) of only test files must not silently read
+    // as empty (#2214). `test.rs`'s own file discovery stays test-only by
+    // design; this command's job is to check everything.
+    let mut files: Vec<_> = loader::mvl_files(path, true)
+        .into_iter()
+        .chain(loader::mvl_files(path, false))
+        .collect();
+    files.sort();
     if files.is_empty() {
         if format_json {
             println!(

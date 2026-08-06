@@ -12,7 +12,7 @@ use std.csv.{CsvError, parse_rows, encode_rows}
 
 // ── Round-trip tests (real std.csv API) ──────────────────────────────────
 
-test fn round_trip_description_with_comma() -> Unit {
+test partial fn round_trip_description_with_comma() -> Unit {
     // Descriptions containing commas must survive CSV round-trip.
     let rows: List[List[String]] = [["2024-01-17", "Groceries, weekly", "-8420"]];
     let csv: String = encode_rows(rows);
@@ -27,7 +27,7 @@ test fn round_trip_description_with_comma() -> Unit {
     }
 }
 
-test fn round_trip_negative_amount() -> Unit {
+test partial fn round_trip_negative_amount() -> Unit {
     let rows: List[List[String]] = [["2024-01-15", "Coffee", "-350"]];
     let csv: String = encode_rows(rows);
     match parse_rows(csv) {

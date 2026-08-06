@@ -30,7 +30,6 @@ use backends.llvm.emit_helpers::jstr;
 use backends.llvm.emit_stmts::emit_body;
 use backends.llvm.emit_program::build_string_registry;
 use backends.llvm.emit_helpers::jarr;
-use backends.llvm.emitter::main;
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -47,7 +46,7 @@ partial fn contains(ir: String, needle: String) -> Bool {
 
 // ── build_string_registry ────────────────────────────────────────────────────
 
-test fn distinct_string_literals_get_own_globals() -> Unit {
+test partial fn distinct_string_literals_get_own_globals() -> Unit {
     // A1m: two distinct literals → @.str.0 and @.str.1 (order of first-seen).
     let fns: List[Value] = jarr(tir(
         "{\"fns\":[{\"name\":\"main\",\"body\":{\"stmts\":[{\"tag\":\"Expr\",\"expr\":{\"kind\":{\"tag\":\"Literal\",\"lit\":{\"tag\":\"Str\",\"value\":\"alpha\"}}}},{\"tag\":\"Expr\",\"expr\":{\"kind\":{\"tag\":\"Literal\",\"lit\":{\"tag\":\"Str\",\"value\":\"beta\"}}}}]}}]}"
@@ -57,7 +56,7 @@ test fn distinct_string_literals_get_own_globals() -> Unit {
     assert_eq(m.get("beta").unwrap_or(""),  "@.str.1")
 }
 
-test fn duplicate_string_literals_share_one_global() -> Unit {
+test partial fn duplicate_string_literals_share_one_global() -> Unit {
     // A1m: same literal used twice → single global.  Registry size = 1.
     let fns: List[Value] = jarr(tir(
         "{\"fns\":[{\"name\":\"main\",\"body\":{\"stmts\":[{\"tag\":\"Expr\",\"expr\":{\"kind\":{\"tag\":\"Literal\",\"lit\":{\"tag\":\"Str\",\"value\":\"alpha\"}}}},{\"tag\":\"Expr\",\"expr\":{\"kind\":{\"tag\":\"Literal\",\"lit\":{\"tag\":\"Str\",\"value\":\"alpha\"}}}}]}}]}"
@@ -67,7 +66,7 @@ test fn duplicate_string_literals_share_one_global() -> Unit {
     assert_eq(m.get("alpha").unwrap_or(""), "@.str.0")
 }
 
-test fn empty_fn_list_has_empty_registry() -> Unit {
+test partial fn empty_fn_list_has_empty_registry() -> Unit {
     let fns: List[Value] = jarr(tir("{\"fns\":[]}"), "fns");
     let m: Map[String, String] = build_string_registry(fns);
     assert_eq(m.len(), 0)
@@ -75,7 +74,7 @@ test fn empty_fn_list_has_empty_registry() -> Unit {
 
 // ── emit_program: module preamble ────────────────────────────────────────────
 
-test fn emit_program_carries_module_header() -> Unit {
+test partial fn emit_program_carries_module_header() -> Unit {
     // Every emitted module carries the ModuleID + PIC/PIE flags + printf.
     // Target triple is omitted so llc uses the host default.
     let ir: String = emit_program(tir(
@@ -91,14 +90,14 @@ test fn emit_program_carries_module_header() -> Unit {
     assert_eq(contains(ir, "@.fmt_str"),               true)
 }
 
-test fn emit_program_uses_default_module_name_when_absent() -> Unit {
+test partial fn emit_program_uses_default_module_name_when_absent() -> Unit {
     let ir: String = emit_program(tir("{\"types\":[],\"fns\":[]}"));
     assert_eq(contains(ir, "ModuleID = 'mvl_module'"), true)
 }
 
 // ── emit_program: Int-returning main ────────────────────────────────────────
 
-test fn emit_program_int_main_prints_via_fmt_int() -> Unit {
+test partial fn emit_program_int_main_prints_via_fmt_int() -> Unit {
     // Int-returning main triggers the trailing printf on the return value
     // with the %ld formatter — see emit_main_def.
     let ir: String = emit_program(tir(
@@ -110,7 +109,7 @@ test fn emit_program_int_main_prints_via_fmt_int() -> Unit {
     assert_eq(contains(ir, "ret i32 0"),                     true)
 }
 
-test fn emit_program_unit_main_skips_terminal_printf() -> Unit {
+test partial fn emit_program_unit_main_skips_terminal_printf() -> Unit {
     // Unit-returning main runs its own println side-effects and returns i32 0
     // without a final printf on a scalar value.
     let ir: String = emit_program(tir(
@@ -125,7 +124,7 @@ test fn emit_program_unit_main_skips_terminal_printf() -> Unit {
 
 // ── emit_program: struct declarations ────────────────────────────────────────
 
-test fn emit_program_declares_struct_types() -> Unit {
+test partial fn emit_program_declares_struct_types() -> Unit {
     // A1n: struct types get a `%Name = type { ... }` decl at module top.
     let ir: String = emit_program(tir(
         "{\"types\":[{\"name\":\"Point\",\"body\":{\"tag\":\"Struct\",\"fields\":[{\"name\":\"x\",\"ty\":{\"tag\":\"Int\"}},{\"name\":\"y\",\"ty\":{\"tag\":\"Int\"}}]}}],\"fns\":[]}"
@@ -135,7 +134,7 @@ test fn emit_program_declares_struct_types() -> Unit {
 
 // ── emit_program: string globals ─────────────────────────────────────────────
 
-test fn emit_program_emits_string_globals() -> Unit {
+test partial fn emit_program_emits_string_globals() -> Unit {
     // A1m: string literals materialize as @.str.N private globals with
     // NUL-terminated byte contents.
     let ir: String = emit_program(tir(
@@ -149,7 +148,7 @@ test fn emit_program_emits_string_globals() -> Unit {
 
 // ── initial_ctx_from_params ──────────────────────────────────────────────────
 
-test fn initial_ctx_binds_params_as_ssa_refs() -> Unit {
+test partial fn initial_ctx_binds_params_as_ssa_refs() -> Unit {
     // Every param becomes a LocalRef with reg=`%<name>`, ty from the TIR ty,
     // is_ref=false.  Verify by round-trip: fn with two Int params should
     // emit `define ... @f(i64 %x, i64 %y)` in emit_program's output.
@@ -165,7 +164,7 @@ test fn initial_ctx_binds_params_as_ssa_refs() -> Unit {
 // Each shape below hits a distinct branch in the collectors, verified
 // via the presence of the string literal in the emitted module header.
 
-test fn string_lit_in_let_init_gets_globalised() -> Unit {
+test partial fn string_lit_in_let_init_gets_globalised() -> Unit {
     // `let s: String = "let-init"` — collect_strings_in_stmt.Let branch.
     let ir: String = emit_program(tir(
         "{\"types\":[],\"fns\":[{\"name\":\"main\",\"params\":[],\"ret_ty\":{\"tag\":\"Int\"},\"body\":{\"stmts\":["
@@ -177,7 +176,7 @@ test fn string_lit_in_let_init_gets_globalised() -> Unit {
     assert_eq(contains(ir, "@.str."), true)
 }
 
-test fn string_lit_in_assign_rhs_gets_globalised() -> Unit {
+test partial fn string_lit_in_assign_rhs_gets_globalised() -> Unit {
     // Assign branch of collect_strings_in_stmt.
     let ir: String = emit_program(tir(
         "{\"types\":[],\"fns\":[{\"name\":\"main\",\"params\":[],\"ret_ty\":{\"tag\":\"Int\"},\"body\":{\"stmts\":["
@@ -188,7 +187,7 @@ test fn string_lit_in_assign_rhs_gets_globalised() -> Unit {
     assert_eq(contains(ir, "assign-rhs"), true)
 }
 
-test fn string_lit_in_while_body_gets_globalised() -> Unit {
+test partial fn string_lit_in_while_body_gets_globalised() -> Unit {
     // While branch: cond + body get walked.
     let ir: String = emit_program(tir(
         "{\"types\":[],\"fns\":[{\"name\":\"main\",\"params\":[],\"ret_ty\":{\"tag\":\"Int\"},\"body\":{\"stmts\":["
@@ -200,7 +199,7 @@ test fn string_lit_in_while_body_gets_globalised() -> Unit {
     assert_eq(contains(ir, "while-body"), true)
 }
 
-test fn string_lit_in_for_iter_gets_globalised() -> Unit {
+test partial fn string_lit_in_for_iter_gets_globalised() -> Unit {
     // For branch: iter is walked (body too, but iter is the interesting arm).
     // Iter is a ListLit containing a Str literal.
     let ir: String = emit_program(tir(
@@ -215,7 +214,7 @@ test fn string_lit_in_for_iter_gets_globalised() -> Unit {
     assert_eq(contains(ir, "for-iter"), true)
 }
 
-test fn string_lit_in_return_gets_globalised() -> Unit {
+test partial fn string_lit_in_return_gets_globalised() -> Unit {
     // Return branch (falls through to Expr in collect_strings_in_stmt).
     let ir: String = emit_program(tir(
         "{\"types\":[],\"fns\":[{\"name\":\"main\",\"params\":[],\"ret_ty\":{\"tag\":\"Str\"},\"body\":{\"stmts\":["
@@ -225,7 +224,7 @@ test fn string_lit_in_return_gets_globalised() -> Unit {
     assert_eq(contains(ir, "returned"), true)
 }
 
-test fn string_lit_inside_binary_lhs_or_rhs_gets_globalised() -> Unit {
+test partial fn string_lit_inside_binary_lhs_or_rhs_gets_globalised() -> Unit {
     // collect_strings_in_expr.Binary walks lhs and rhs.
     let ir: String = emit_program(tir(
         "{\"types\":[],\"fns\":[{\"name\":\"main\",\"params\":[],\"ret_ty\":{\"tag\":\"Int\"},\"body\":{\"stmts\":["
@@ -238,7 +237,7 @@ test fn string_lit_inside_binary_lhs_or_rhs_gets_globalised() -> Unit {
     assert_eq(contains(ir, "bin-lhs"), true)
 }
 
-test fn string_lit_inside_unary_gets_globalised() -> Unit {
+test partial fn string_lit_inside_unary_gets_globalised() -> Unit {
     // collect_strings_in_expr.Unary walks the inner expr.
     let ir: String = emit_program(tir(
         "{\"types\":[],\"fns\":[{\"name\":\"main\",\"params\":[],\"ret_ty\":{\"tag\":\"Int\"},\"body\":{\"stmts\":["
@@ -250,7 +249,7 @@ test fn string_lit_inside_unary_gets_globalised() -> Unit {
     assert_eq(contains(ir, "unary-inner"), true)
 }
 
-test fn string_lit_inside_match_arm_gets_globalised() -> Unit {
+test partial fn string_lit_inside_match_arm_gets_globalised() -> Unit {
     // collect_strings_in_expr.Match walks the scrutinee and each arm body.
     let ir: String = emit_program(tir(
         "{\"types\":[],\"fns\":[{\"name\":\"main\",\"params\":[],\"ret_ty\":{\"tag\":\"Int\"},\"body\":{\"stmts\":["
@@ -265,7 +264,7 @@ test fn string_lit_inside_match_arm_gets_globalised() -> Unit {
     assert_eq(contains(ir, "match-arm-str"), true)
 }
 
-test fn string_lit_in_list_lit_element_gets_globalised() -> Unit {
+test partial fn string_lit_in_list_lit_element_gets_globalised() -> Unit {
     // collect_strings_in_expr.ListLit walks each element expr.
     let ir: String = emit_program(tir(
         "{\"types\":[],\"fns\":[{\"name\":\"main\",\"params\":[],\"ret_ty\":{\"tag\":\"Int\"},\"body\":{\"stmts\":["
