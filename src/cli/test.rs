@@ -68,6 +68,58 @@ fn qualified_module_name(path: &str) -> String {
     name
 }
 
+/// Requirement numbers enforced fatally by `mvl test` (#2214).
+///
+/// Everything else stays a warning: a class of checker false positives on
+/// Rust-backed builtins invisible to the checker prelude (`is_some`,
+/// `is_none`, and similar — tracked on #2017) still lives under Req 1, and
+/// making the whole checker fatal today would fail on those, not on real
+/// bugs. Req 7 (Effects) and Req 8 (Termination) were audited clean across
+/// the entire corpus (#2215) before this enforcement flip landed, so there
+/// is no equivalent false-positive class to gate on for these two.
+const FATAL_REQUIREMENTS: &[u8] = &[7, 8];
+
+/// Print `check_result`'s diagnostics for `file_str`, split by whether their
+/// requirement is in [`FATAL_REQUIREMENTS`]. Non-fatal diagnostics print as
+/// warnings, same as before #2214. Fatal diagnostics print as errors and are
+/// added to `checker_error_total`, which the caller must check before
+/// invoking the backend.
+fn report_checker_diagnostics(
+    check_result: &checker::CheckResult,
+    file_str: &str,
+    src: &str,
+    checker_error_total: &mut usize,
+) {
+    if !check_result.has_errors() {
+        return;
+    }
+    let (fatal, warn): (Vec<_>, Vec<_>) = check_result
+        .errors
+        .iter()
+        .partition(|e| FATAL_REQUIREMENTS.contains(&e.requirement_number()));
+    if !warn.is_empty() {
+        eprintln!(
+            "warning: {} checker diagnostic(s) in {file_str} \
+             (some may be prelude-filtering artifacts; if the build below \
+             fails, start here):",
+            warn.len()
+        );
+        for err in &warn {
+            super::render_diagnostic(file_str, src, err);
+        }
+    }
+    if !fatal.is_empty() {
+        eprintln!(
+            "error: {} checker diagnostic(s) in {file_str} (Req 7/8 — fatal, #2214):",
+            fatal.len()
+        );
+        for err in &fatal {
+            super::render_diagnostic(file_str, src, err);
+        }
+        *checker_error_total += fatal.len();
+    }
+}
+
 /// Returns true if the file contains the `// corpus:expect-fail` annotation.
 ///
 /// These files are negative test cases for `mvl check` — they intentionally
@@ -556,6 +608,13 @@ pub fn run(path: &str, quiet: bool, verbose: bool, coverage: bool, bdd: bool, us
         std::collections::HashSet::new();
     let mut unpaired_emitted = false;
 
+    // Checker diagnostics across every test file are fatal (#2214): a REQ8
+    // violation like an unproven-terminating recursive test fn is exactly
+    // the defect Req 8 exists to catch, and letting it reach the backend
+    // anyway (previously just a warning) has crashed the test process
+    // outright (stack overflow) instead of failing cleanly at check time.
+    let mut checker_error_total: usize = 0;
+
     // Build a combined Rust test file from all test modules.
     // Each entry: (module_name, display_label, content)
     let mut modules: Vec<(String, String, String)> = Vec::new();
@@ -594,26 +653,16 @@ pub fn run(path: &str, quiet: bool, verbose: bool, coverage: bool, bdd: bool, us
         // and surfaced as a raw rustc error pointing into generated code, with
         // the real MVL diagnostic never printed at all (#2017).
         //
-        // These are warnings, not failures: checking against `checker_stdlib_progs`
-        // (see its declaration comment above) closes the Rust-backed-module gap
-        // that used to make this false-positive on `path`/`open`/`close`/etc.,
-        // but the checker result here is still not fully trustworthy — a handful
-        // of unrelated false positives remain (generic-substitution and totality
-        // artifacts specific to a few stdlib builtins), tracked on #2017. Making
-        // this strict needs those closed too.
+        // Checking against `checker_stdlib_progs` (see its declaration comment
+        // above) closes the Rust-backed-module gap that used to make this
+        // false-positive on `path`/`open`/`close`/etc., but the checker result
+        // here is still not fully trustworthy for every requirement — a
+        // handful of Req 1 false positives remain on other Rust-backed
+        // builtins (tracked on #2017), so most diagnostics stay warnings.
+        // Req 7/8 are fatal — see `report_checker_diagnostics` (#2214).
         let check_result =
             checker::check_with_two_preludes(&checker_stdlib_progs, &sibling_prog_refs, &prog);
-        if check_result.has_errors() {
-            eprintln!(
-                "warning: {} checker diagnostic(s) in {file_str} \
-                 (some may be prelude-filtering artifacts; if the build below \
-                 fails, start here):",
-                check_result.errors.len()
-            );
-            for err in &check_result.errors {
-                super::render_diagnostic(&file_str, &src, err);
-            }
-        }
+        report_checker_diagnostics(&check_result, &file_str, &src, &mut checker_error_total);
         expr_types.extend(check_result.expr_types);
         let all_fns = mvl::mvl::passes::mono::collect_fns([&prog]);
         let mono = mvl::mvl::passes::mono::monomorphize(&prog, &all_fns, &expr_types);
@@ -779,26 +828,16 @@ pub fn run(path: &str, quiet: bool, verbose: bool, coverage: bool, bdd: bool, us
         // and surfaced as a raw rustc error pointing into generated code, with
         // the real MVL diagnostic never printed at all (#2017).
         //
-        // These are warnings, not failures: checking against `checker_stdlib_progs`
-        // (see its declaration comment above) closes the Rust-backed-module gap
-        // that used to make this false-positive on `path`/`open`/`close`/etc.,
-        // but the checker result here is still not fully trustworthy — a handful
-        // of unrelated false positives remain (generic-substitution and totality
-        // artifacts specific to a few stdlib builtins), tracked on #2017. Making
-        // this strict needs those closed too.
+        // Checking against `checker_stdlib_progs` (see its declaration comment
+        // above) closes the Rust-backed-module gap that used to make this
+        // false-positive on `path`/`open`/`close`/etc., but the checker result
+        // here is still not fully trustworthy for every requirement — a
+        // handful of Req 1 false positives remain on other Rust-backed
+        // builtins (tracked on #2017), so most diagnostics stay warnings.
+        // Req 7/8 are fatal — see `report_checker_diagnostics` (#2214).
         let check_result =
             checker::check_with_two_preludes(&checker_stdlib_progs, &sibling_prog_refs, &prog);
-        if check_result.has_errors() {
-            eprintln!(
-                "warning: {} checker diagnostic(s) in {file_str} \
-                 (some may be prelude-filtering artifacts; if the build below \
-                 fails, start here):",
-                check_result.errors.len()
-            );
-            for err in &check_result.errors {
-                super::render_diagnostic(&file_str, &src, err);
-            }
-        }
+        report_checker_diagnostics(&check_result, &file_str, &src, &mut checker_error_total);
         expr_types.extend(check_result.expr_types);
         let all_fns = mvl::mvl::passes::mono::collect_fns([&prog]);
         let mono = mvl::mvl::passes::mono::monomorphize(&prog, &all_fns, &expr_types);
@@ -1018,6 +1057,17 @@ pub fn run(path: &str, quiet: bool, verbose: bool, coverage: bool, bdd: bool, us
         eprintln!("Cannot write lib.rs: {e}");
         process::exit(1);
     });
+
+    // Req 7/8 checker errors are fatal (#2214): fail here, before invoking
+    // cargo, rather than letting a genuine defect (e.g. an unproven-terminating
+    // recursive test fn) reach the compiled backend and crash the process
+    // outright instead of failing cleanly.
+    if checker_error_total > 0 {
+        eprintln!(
+            "error: {checker_error_total} fatal checker diagnostic(s) (Req 7/8) found across the test corpus — not running cargo test"
+        );
+        process::exit(1);
+    }
 
     if verbose {
         println!("Transpiled tests to: {}", tmp_dir.display());

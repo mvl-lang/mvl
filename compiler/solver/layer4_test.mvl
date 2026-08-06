@@ -157,14 +157,14 @@ test fn le_with_variable_is_not_trivial() -> Unit {
 
 // ── try_cooper — literal arguments ────────────────────────────────────────────
 
-test fn cooper_literal_satisfies_gt_pred() -> Unit {
+test partial fn cooper_literal_satisfies_gt_pred() -> Unit {
     // arg=5, pred: self > 0  — FM proves ¬(5 > 0) = (5 ≤ 0) UNSAT
     let pred: RefExpr = self_cmp_ref(CmpOp::Gt, 0);
     let result: Option[RefResult] = try_cooper(pred, int_expr(5), empty_var_refs());
     assert_eq(match result { Some(RefResult::Proven) => true, _ => false }, true)
 }
 
-test fn cooper_literal_refutes_gt_pred() -> Unit {
+test partial fn cooper_literal_refutes_gt_pred() -> Unit {
     // arg=0, pred: self > 0  — 0 does not satisfy; ¬pred (0 ≤ 0) is SAT
     let pred: RefExpr = self_cmp_ref(CmpOp::Gt, 0);
     let result: Option[RefResult] = try_cooper(pred, int_expr(0), empty_var_refs());
@@ -175,7 +175,7 @@ test fn cooper_literal_refutes_gt_pred() -> Unit {
 
 // ── try_cooper — variable + hypothesis ───────────────────────────────────────
 
-test fn cooper_var_with_hyp_proves_pred() -> Unit {
+test partial fn cooper_var_with_hyp_proves_pred() -> Unit {
     // hyp: x > 5;  pred: x > 0
     // Negation: x <= 0. Combined with x > 5: x > 5 && x <= 0 is UNSAT → Proven
     let hyp: Map[String, Option[RefExpr]] = single_hyp("x", self_cmp_ref(CmpOp::Gt, 5));
@@ -184,7 +184,7 @@ test fn cooper_var_with_hyp_proves_pred() -> Unit {
     assert_eq(match result { Some(RefResult::Proven) => true, _ => false }, true)
 }
 
-test fn cooper_var_no_hyp_returns_none_for_unbounded() -> Unit {
+test partial fn cooper_var_no_hyp_returns_none_for_unbounded() -> Unit {
     // x has no hypothesis → interval is (−∞, ∞); cannot prove x > 0
     let pred: RefExpr = self_cmp_ref(CmpOp::Gt, 0);
     let result: Option[RefResult] = try_cooper(pred, ident_expr("x"), empty_var_refs());
@@ -194,7 +194,7 @@ test fn cooper_var_no_hyp_returns_none_for_unbounded() -> Unit {
 
 // ── try_cooper — linear expressions ──────────────────────────────────────────
 
-test fn cooper_binary_add_expr_proven() -> Unit {
+test partial fn cooper_binary_add_expr_proven() -> Unit {
     // arg = 3 + 4 = 7; pred: self > 0
     let arg: Expr = Expr::Binary(AstBinaryExpr {
         op: BinaryOp::Add,

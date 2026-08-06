@@ -73,7 +73,7 @@ test fn effective_max_exclusive_n_is_n_minus_1() -> Unit {
 
 // ── interval_from_ref_expr ────────────────────────────────────────────────────
 
-test fn from_ref_gt_gives_exclusive_lo() -> Unit {
+test partial fn from_ref_gt_gives_exclusive_lo() -> Unit {
     // self > 3  →  lo: Exclusive(3), hi: Unbounded
     let iv: Interval = match interval_from_ref_expr(self_cmp(CmpOp::Gt, 3)) {
         Some(v) => v,
@@ -83,7 +83,7 @@ test fn from_ref_gt_gives_exclusive_lo() -> Unit {
     assert_eq(match iv.hi { Bound::Unbounded => true, _ => false }, true)
 }
 
-test fn from_ref_ge_gives_inclusive_lo() -> Unit {
+test partial fn from_ref_ge_gives_inclusive_lo() -> Unit {
     // self >= 0  →  lo: Inclusive(0), hi: Unbounded
     let iv: Interval = match interval_from_ref_expr(self_cmp(CmpOp::Ge, 0)) {
         Some(v) => v,
@@ -92,7 +92,7 @@ test fn from_ref_ge_gives_inclusive_lo() -> Unit {
     assert_eq(match iv.lo { Bound::Inclusive(n) => n, _ => -99 }, 0)
 }
 
-test fn from_ref_lt_gives_exclusive_hi() -> Unit {
+test partial fn from_ref_lt_gives_exclusive_hi() -> Unit {
     // self < 10  →  lo: Unbounded, hi: Exclusive(10)
     let iv: Interval = match interval_from_ref_expr(self_cmp(CmpOp::Lt, 10)) {
         Some(v) => v,
@@ -101,7 +101,7 @@ test fn from_ref_lt_gives_exclusive_hi() -> Unit {
     assert_eq(match iv.hi { Bound::Exclusive(n) => n, _ => -99 }, 10)
 }
 
-test fn from_ref_le_gives_inclusive_hi() -> Unit {
+test partial fn from_ref_le_gives_inclusive_hi() -> Unit {
     // self <= 7  →  lo: Unbounded, hi: Inclusive(7)
     let iv: Interval = match interval_from_ref_expr(self_cmp(CmpOp::Le, 7)) {
         Some(v) => v,
@@ -110,7 +110,7 @@ test fn from_ref_le_gives_inclusive_hi() -> Unit {
     assert_eq(match iv.hi { Bound::Inclusive(n) => n, _ => -99 }, 7)
 }
 
-test fn from_ref_eq_gives_point_interval() -> Unit {
+test partial fn from_ref_eq_gives_point_interval() -> Unit {
     // self == 4  →  lo: Inclusive(4), hi: Inclusive(4)
     let iv: Interval = match interval_from_ref_expr(self_cmp(CmpOp::Eq, 4)) {
         Some(v) => v,
@@ -120,7 +120,7 @@ test fn from_ref_eq_gives_point_interval() -> Unit {
     assert_eq(match iv.lo { Bound::Inclusive(n) => n, _ => -99 }, 4)
 }
 
-test fn from_ref_and_intersects_bounds() -> Unit {
+test partial fn from_ref_and_intersects_bounds() -> Unit {
     // self > 2 && self < 8  →  lo: Exclusive(2), hi: Exclusive(8)
     let pred: RefExpr = and_ref(self_cmp(CmpOp::Gt, 2), self_cmp(CmpOp::Lt, 8));
     let iv: Interval = match interval_from_ref_expr(pred) {
@@ -131,7 +131,7 @@ test fn from_ref_and_intersects_bounds() -> Unit {
     assert_eq(match iv.hi { Bound::Exclusive(n) => n, _ => -99 }, 8)
 }
 
-test fn from_ref_ne_returns_none() -> Unit {
+test partial fn from_ref_ne_returns_none() -> Unit {
     // Ne cannot be expressed as a contiguous interval
     assert_eq(interval_from_ref_expr(self_cmp(CmpOp::Ne, 0)).is_none(), true)
 }
@@ -149,7 +149,7 @@ total fn empty_expr_l2(name: String) -> Expr {
     Expr::Ident(name, SourceLoc { line: 0, col: 0 })
 }
 
-test fn try_interval_proves_when_interval_satisfies() -> Unit {
+test partial fn try_interval_proves_when_interval_satisfies() -> Unit {
     // var x where x > 5; pred: x > 0 — interval [6,∞) proves x > 0
     let var_refs: Map[String, Option[RefExpr]] = single_ref("x", self_cmp(CmpOp::Gt, 5));
     let pred: RefExpr = self_cmp(CmpOp::Gt, 0);
@@ -157,7 +157,7 @@ test fn try_interval_proves_when_interval_satisfies() -> Unit {
     assert_eq(match result { Some(RefResult::Proven) => true, _ => false }, true)
 }
 
-test fn try_interval_returns_none_for_non_ident_arg() -> Unit {
+test partial fn try_interval_returns_none_for_non_ident_arg() -> Unit {
     // Arg is a literal, not a variable — L2 cannot apply
     let var_refs: Map[String, Option[RefExpr]] = Map::new();
     let pred: RefExpr = self_cmp(CmpOp::Gt, 0);
@@ -166,7 +166,7 @@ test fn try_interval_returns_none_for_non_ident_arg() -> Unit {
     assert_eq(result.is_none(), true)
 }
 
-test fn try_interval_returns_none_when_no_hypothesis() -> Unit {
+test partial fn try_interval_returns_none_when_no_hypothesis() -> Unit {
     // Variable exists but has no hypothesis — cannot extract interval
     let m: ref Map[String, Option[RefExpr]] = Map::new();
     m.insert("x", None);
@@ -175,7 +175,7 @@ test fn try_interval_returns_none_when_no_hypothesis() -> Unit {
     assert_eq(result.is_none(), true)
 }
 
-test fn try_interval_fails_when_interval_violates() -> Unit {
+test partial fn try_interval_fails_when_interval_violates() -> Unit {
     // var x where x < 0 (i.e. x <= -1); pred: x > 0 — interval (−∞, -1] fails
     let var_refs: Map[String, Option[RefExpr]] = single_ref("x", self_cmp(CmpOp::Le, 0));
     let pred: RefExpr = self_cmp(CmpOp::Gt, 0);
@@ -183,7 +183,7 @@ test fn try_interval_fails_when_interval_violates() -> Unit {
     assert_eq(match result { Some(RefResult::Failed(_)) => true, _ => false }, true)
 }
 
-test fn try_interval_returns_none_for_partial_overlap() -> Unit {
+test partial fn try_interval_returns_none_for_partial_overlap() -> Unit {
     // var x where x > 0 (unbounded above); pred: x < 5 — partial overlap
     let var_refs: Map[String, Option[RefExpr]] = single_ref("x", self_cmp(CmpOp::Gt, 0));
     let pred: RefExpr = self_cmp(CmpOp::Lt, 5);

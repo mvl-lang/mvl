@@ -58,7 +58,7 @@ total fn kind_name(k: TokenKind) -> String {
 }
 
 // Return the n-th token from lexing src (0-indexed); Eof on out-of-bounds.
-total fn get_tok(src: String, n: Int) -> Token {
+partial fn get_tok(src: String, n: Int) -> Token {
     match lex(src).get(n) {
         None    => Token { kind: TokenKind::Eof, span: Span { start: 0, end: 0 }, loc: SourceLoc { line: 0, col: 0 } },
         Some(t) => t
@@ -66,49 +66,49 @@ total fn get_tok(src: String, n: Int) -> Token {
 }
 
 // Extract text of token n from src.
-total fn tok_text(src: String, n: Int) -> String {
+partial fn tok_text(src: String, n: Int) -> String {
     get_tok(src, n).span.text(src)
 }
 
 // Number of tokens before the trailing Eof.
-total fn tok_count(src: String) -> Int {
+partial fn tok_count(src: String) -> Int {
     lex(src).len() - 1
 }
 
 // ── Empty / whitespace ────────────────────────────────────────────────────────
 
-test fn empty_source_produces_only_eof() -> Unit {
+test partial fn empty_source_produces_only_eof() -> Unit {
     let toks: List[Token] = lex("");
     assert_eq(toks.len(), 1);
     assert_eq(kind_name(get_tok("", 0).kind), "Eof")
 }
 
-test fn whitespace_only_produces_no_real_tokens() -> Unit {
+test partial fn whitespace_only_produces_no_real_tokens() -> Unit {
     assert_eq(tok_count("   \t  "), 0);
     assert_eq(tok_count("\n\n\r\n"), 0)
 }
 
 // ── Identifiers ───────────────────────────────────────────────────────────────
 
-test fn simple_identifier() -> Unit {
+test partial fn simple_identifier() -> Unit {
     let t: Token = get_tok("foo", 0);
     assert_eq(kind_name(t.kind), "Ident");
     assert_eq(tok_text("foo", 0), "foo")
 }
 
-test fn identifier_with_underscore() -> Unit {
+test partial fn identifier_with_underscore() -> Unit {
     let t: Token = get_tok("_internal", 0);
     assert_eq(kind_name(t.kind), "Ident");
     assert_eq(tok_text("_internal", 0), "_internal")
 }
 
-test fn identifier_with_digit_suffix() -> Unit {
+test partial fn identifier_with_digit_suffix() -> Unit {
     let t: Token = get_tok("x42", 0);
     assert_eq(kind_name(t.kind), "Ident");
     assert_eq(tok_text("x42", 0), "x42")
 }
 
-test fn uppercase_non_keyword_is_ident() -> Unit {
+test partial fn uppercase_non_keyword_is_ident() -> Unit {
     let t: Token = get_tok("MyType", 0);
     assert_eq(kind_name(t.kind), "Ident");
     assert_eq(tok_text("MyType", 0), "MyType")
@@ -116,19 +116,19 @@ test fn uppercase_non_keyword_is_ident() -> Unit {
 
 // ── Number literals ───────────────────────────────────────────────────────────
 
-test fn integer_literal() -> Unit {
+test partial fn integer_literal() -> Unit {
     let t: Token = get_tok("42", 0);
     assert_eq(kind_name(t.kind), "IntLit");
     assert_eq(tok_text("42", 0), "42")
 }
 
-test fn float_literal() -> Unit {
+test partial fn float_literal() -> Unit {
     let t: Token = get_tok("3.14", 0);
     assert_eq(kind_name(t.kind), "FloatLit");
     assert_eq(tok_text("3.14", 0), "3.14")
 }
 
-test fn integer_dot_non_digit_is_not_float() -> Unit {
+test partial fn integer_dot_non_digit_is_not_float() -> Unit {
     // "1." — the dot is not followed by a digit, so "1" → IntLit, "." → Punct
     assert_eq(tok_count("1."), 2);
     assert_eq(kind_name(get_tok("1.", 0).kind), "IntLit");
@@ -137,51 +137,51 @@ test fn integer_dot_non_digit_is_not_float() -> Unit {
 
 // ── Keywords ──────────────────────────────────────────────────────────────────
 
-test fn keyword_fn() -> Unit {
+test partial fn keyword_fn() -> Unit {
     assert_eq(kind_name(get_tok("fn", 0).kind), "KwFn")
 }
 
-test fn keyword_let_match_if_else() -> Unit {
+test partial fn keyword_let_match_if_else() -> Unit {
     assert_eq(kind_name(get_tok("let",   0).kind), "KwLet");
     assert_eq(kind_name(get_tok("match", 0).kind), "KwMatch");
     assert_eq(kind_name(get_tok("if",    0).kind), "KwIf");
     assert_eq(kind_name(get_tok("else",  0).kind), "KwElse")
 }
 
-test fn keyword_total_partial() -> Unit {
+test partial fn keyword_total_partial() -> Unit {
     assert_eq(kind_name(get_tok("total",   0).kind), "KwTotal");
     assert_eq(kind_name(get_tok("partial", 0).kind), "KwPartial")
 }
 
-test fn keyword_pub_use_type() -> Unit {
+test partial fn keyword_pub_use_type() -> Unit {
     assert_eq(kind_name(get_tok("pub",  0).kind), "KwPub");
     assert_eq(kind_name(get_tok("use",  0).kind), "KwUse");
     assert_eq(kind_name(get_tok("type", 0).kind), "KwType")
 }
 
-test fn keyword_true_false() -> Unit {
+test partial fn keyword_true_false() -> Unit {
     assert_eq(kind_name(get_tok("true",  0).kind), "KwTrue");
     assert_eq(kind_name(get_tok("false", 0).kind), "KwFalse")
 }
 
-test fn keyword_test_impl() -> Unit {
+test partial fn keyword_test_impl() -> Unit {
     assert_eq(kind_name(get_tok("test",        0).kind), "KwTest");
     assert_eq(kind_name(get_tok("impl",        0).kind), "KwImpl")
 }
 
-test fn ifc_label_keywords() -> Unit {
+test partial fn ifc_label_keywords() -> Unit {
     assert_eq(kind_name(get_tok("label",   0).kind), "KwLabel");
     assert_eq(kind_name(get_tok("relabel", 0).kind), "KwRelabel")
 }
 
-test fn ifc_label_type_names_are_idents() -> Unit {
+test partial fn ifc_label_type_names_are_idents() -> Unit {
     // Tainted/Secret/Public are type names (identifiers), not keywords
     assert_eq(kind_name(get_tok("Tainted", 0).kind), "Ident");
     assert_eq(kind_name(get_tok("Secret",  0).kind), "Ident");
     assert_eq(kind_name(get_tok("Public",  0).kind), "Ident")
 }
 
-test fn capability_keywords() -> Unit {
+test partial fn capability_keywords() -> Unit {
     assert_eq(kind_name(get_tok("ref", 0).kind), "KwRef");
     assert_eq(kind_name(get_tok("val", 0).kind), "KwVal");
     assert_eq(kind_name(get_tok("iso", 0).kind), "KwIso");
@@ -189,7 +189,7 @@ test fn capability_keywords() -> Unit {
 }
 
 // keyword prefix that is not itself a keyword
-test fn keyword_prefix_ident_not_keyword() -> Unit {
+test partial fn keyword_prefix_ident_not_keyword() -> Unit {
     // "total" is a keyword; "totals" is not
     assert_eq(kind_name(get_tok("totals", 0).kind), "Ident");
     assert_eq(tok_text("totals", 0), "totals")
@@ -197,42 +197,42 @@ test fn keyword_prefix_ident_not_keyword() -> Unit {
 
 // ── Two-character operators ───────────────────────────────────────────────────
 
-test fn arrow_operator() -> Unit {
+test partial fn arrow_operator() -> Unit {
     let t: Token = get_tok("->", 0);
     assert_eq(kind_name(t.kind), "Punct");
     assert_eq(tok_text("->", 0), "->")
 }
 
-test fn fat_arrow_operator() -> Unit {
+test partial fn fat_arrow_operator() -> Unit {
     let t: Token = get_tok("=>", 0);
     assert_eq(kind_name(t.kind), "Punct");
     assert_eq(tok_text("=>", 0), "=>")
 }
 
-test fn double_colon_operator() -> Unit {
+test partial fn double_colon_operator() -> Unit {
     let t: Token = get_tok("::", 0);
     assert_eq(kind_name(t.kind), "Punct");
     assert_eq(tok_text("::", 0), "::")
 }
 
-test fn equality_operators() -> Unit {
+test partial fn equality_operators() -> Unit {
     assert_eq(tok_text("==", 0), "==");
     assert_eq(tok_text("!=", 0), "!=");
     assert_eq(tok_text("<=", 0), "<=");
     assert_eq(tok_text(">=", 0), ">=")
 }
 
-test fn logical_operators() -> Unit {
+test partial fn logical_operators() -> Unit {
     assert_eq(tok_text("&&", 0), "&&");
     assert_eq(tok_text("||", 0), "||")
 }
 
-test fn two_char_consumes_both_chars() -> Unit {
+test partial fn two_char_consumes_both_chars() -> Unit {
     // "->" is one token, not two
     assert_eq(tok_count("->"), 1)
 }
 
-test fn single_char_punct_not_eaten_as_two_char() -> Unit {
+test partial fn single_char_punct_not_eaten_as_two_char() -> Unit {
     // "-" alone is Punct("-"), not consumed as part of two-char
     let t: Token = get_tok("-", 0);
     assert_eq(kind_name(t.kind), "Punct");
@@ -241,26 +241,26 @@ test fn single_char_punct_not_eaten_as_two_char() -> Unit {
 
 // ── String literals ───────────────────────────────────────────────────────────
 
-test fn string_literal_simple() -> Unit {
+test partial fn string_literal_simple() -> Unit {
     let t: Token = get_tok("\"hello\"", 0);
     assert_eq(kind_name(t.kind), "StrLit");
     assert_eq(tok_text("\"hello\"", 0), "hello")
 }
 
-test fn string_literal_empty() -> Unit {
+test partial fn string_literal_empty() -> Unit {
     let t: Token = get_tok("\"\"", 0);
     assert_eq(kind_name(t.kind), "StrLit");
     assert_eq(tok_text("\"\"", 0), "")
 }
 
-test fn string_with_escaped_quote_is_one_token() -> Unit {
+test partial fn string_with_escaped_quote_is_one_token() -> Unit {
     // Source: "say \"hi\""  — the \" inside does not close the string
     let t: Token = get_tok("\"say \\\"hi\\\"\"", 0);
     assert_eq(kind_name(t.kind), "StrLit");
     assert_eq(tok_count("\"say \\\"hi\\\"\""), 1)
 }
 
-test fn string_with_backslash_n() -> Unit {
+test partial fn string_with_backslash_n() -> Unit {
     let t: Token = get_tok("\"line1\\nline2\"", 0);
     assert_eq(kind_name(t.kind), "StrLit");
     assert_eq(tok_text("\"line1\\nline2\"", 0), "line1\\nline2")
@@ -268,12 +268,12 @@ test fn string_with_backslash_n() -> Unit {
 
 // ── Comments ──────────────────────────────────────────────────────────────────
 
-test fn line_comment_produces_comment_token() -> Unit {
+test partial fn line_comment_produces_comment_token() -> Unit {
     let t: Token = get_tok("// hello world", 0);
     assert_eq(kind_name(t.kind), "Comment")
 }
 
-test fn comment_followed_by_identifier() -> Unit {
+test partial fn comment_followed_by_identifier() -> Unit {
     // "// ignore\nfoo" → Comment, Ident("foo"), Eof
     assert_eq(tok_count("// ignore\nfoo"), 2);
     assert_eq(kind_name(get_tok("// ignore\nfoo", 0).kind), "Comment");
@@ -282,19 +282,19 @@ test fn comment_followed_by_identifier() -> Unit {
 
 // ── Span tracking ─────────────────────────────────────────────────────────────
 
-test fn first_token_at_line_1_col_1() -> Unit {
+test partial fn first_token_at_line_1_col_1() -> Unit {
     let t: Token = get_tok("fn", 0);
     assert_eq(t.loc.line, 1);
     assert_eq(t.loc.col, 1)
 }
 
-test fn second_line_token_has_line_2() -> Unit {
+test partial fn second_line_token_has_line_2() -> Unit {
     // "x\ny" — y is on line 2
     let t: Token = get_tok("x\ny", 1);
     assert_eq(t.loc.line, 2)
 }
 
-test fn column_advances_within_line() -> Unit {
+test partial fn column_advances_within_line() -> Unit {
     // "fn foo" — "foo" starts at col 4
     let t: Token = get_tok("fn foo", 1);
     assert_eq(t.loc.col, 4)
@@ -302,7 +302,7 @@ test fn column_advances_within_line() -> Unit {
 
 // ── Multi-token integration ───────────────────────────────────────────────────
 
-test fn fn_signature_token_sequence() -> Unit {
+test partial fn fn_signature_token_sequence() -> Unit {
     // "fn foo() -> Unit" → KwFn Ident("foo") Punct("(") Punct(")") Punct("->") Ident("Unit") Eof
     let toks: List[Token] = lex("fn foo() -> Unit");
     assert_eq(tok_count("fn foo() -> Unit"), 6);

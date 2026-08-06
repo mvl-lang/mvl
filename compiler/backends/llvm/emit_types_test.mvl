@@ -64,48 +64,48 @@ partial fn named(name: String) -> Value {
 
 // ── tir_ty_to_llvm (scalars) ─────────────────────────────────────────────────
 
-test fn tir_ty_to_llvm_int_is_i64() -> Unit {
+test partial fn tir_ty_to_llvm_int_is_i64() -> Unit {
     assert_eq(tir_ty_to_llvm(mk_ty("Int")), "i64")
 }
 
-test fn tir_ty_to_llvm_bool_is_i1() -> Unit {
+test partial fn tir_ty_to_llvm_bool_is_i1() -> Unit {
     assert_eq(tir_ty_to_llvm(mk_ty("Bool")), "i1")
 }
 
-test fn tir_ty_to_llvm_unit_is_void() -> Unit {
+test partial fn tir_ty_to_llvm_unit_is_void() -> Unit {
     assert_eq(tir_ty_to_llvm(mk_ty("Unit")), "void")
 }
 
-test fn tir_ty_to_llvm_float_is_double() -> Unit {
+test partial fn tir_ty_to_llvm_float_is_double() -> Unit {
     assert_eq(tir_ty_to_llvm(mk_ty("Float")), "double")
 }
 
-test fn tir_ty_to_llvm_str_is_struct_pair() -> Unit {
+test partial fn tir_ty_to_llvm_str_is_struct_pair() -> Unit {
     // A1m: `{i64, ptr}` = length + data pointer.
     assert_eq(tir_ty_to_llvm(mk_ty("Str")), "{i64, ptr}")
 }
 
-test fn tir_ty_to_llvm_list_is_struct_pair() -> Unit {
+test partial fn tir_ty_to_llvm_list_is_struct_pair() -> Unit {
     // A1k: same shape as Str — length + data pointer.
     assert_eq(tir_ty_to_llvm(mk_ty("List")), "{i64, ptr}")
 }
 
-test fn tir_ty_to_llvm_option_is_tagged_i64() -> Unit {
+test partial fn tir_ty_to_llvm_option_is_tagged_i64() -> Unit {
     assert_eq(tir_ty_to_llvm(mk_ty("Option")), "{i8, i64}")
 }
 
-test fn tir_ty_to_llvm_result_is_tagged_i64() -> Unit {
+test partial fn tir_ty_to_llvm_result_is_tagged_i64() -> Unit {
     assert_eq(tir_ty_to_llvm(mk_ty("Result")), "{i8, i64}")
 }
 
-test fn tir_ty_to_llvm_unknown_falls_through_to_i64() -> Unit {
+test partial fn tir_ty_to_llvm_unknown_falls_through_to_i64() -> Unit {
     // Explicit fallthrough — matches build_variant_slot_types slot lowering.
     assert_eq(tir_ty_to_llvm(mk_ty("Never")), "i64")
 }
 
 // ── tir_ty_to_llvm_ctx (struct-aware Named) ─────────────────────────────────
 
-test fn ctx_named_resolves_struct_to_pct_name() -> Unit {
+test partial fn ctx_named_resolves_struct_to_pct_name() -> Unit {
     // If the struct is registered, Named "Point" → "%Point".
     let types: List[Value] = jarr(parse(
         "{\"types\":[{\"name\":\"Point\",\"body\":{\"tag\":\"Struct\",\"fields\":[{\"name\":\"x\",\"ty\":{\"tag\":\"Int\"}}]}}]}"
@@ -114,7 +114,7 @@ test fn ctx_named_resolves_struct_to_pct_name() -> Unit {
     assert_eq(tir_ty_to_llvm_ctx(named("Point"), structs), "%Point")
 }
 
-test fn ctx_named_unregistered_falls_through_to_i8() -> Unit {
+test partial fn ctx_named_unregistered_falls_through_to_i8() -> Unit {
     // Named that isn't registered as a struct → i8 (unit-enum default).
     let empty: Map[String, StructInfo] = Map::new();
     assert_eq(tir_ty_to_llvm_ctx(named("Absent"), empty), "i8")
@@ -122,7 +122,7 @@ test fn ctx_named_unregistered_falls_through_to_i8() -> Unit {
 
 // ── tir_ty_to_llvm_full (enum-aware Named) ──────────────────────────────────
 
-test fn full_named_enum_resolves_to_declared_shape() -> Unit {
+test partial fn full_named_enum_resolves_to_declared_shape() -> Unit {
     // With no struct match, look up in enum_types.
     let structs: Map[String, StructInfo] = Map::new();
     let enums: ref Map[String, String] = Map::new();
@@ -130,7 +130,7 @@ test fn full_named_enum_resolves_to_declared_shape() -> Unit {
     assert_eq(tir_ty_to_llvm_full(named("Color"), structs, enums), "i8")
 }
 
-test fn full_struct_wins_over_enum() -> Unit {
+test partial fn full_struct_wins_over_enum() -> Unit {
     // Struct registration wins even if a same-named entry exists in enum_types.
     let types: List[Value] = jarr(parse(
         "{\"types\":[{\"name\":\"Shape\",\"body\":{\"tag\":\"Struct\",\"fields\":[{\"name\":\"kind\",\"ty\":{\"tag\":\"Int\"}}]}}]}"
@@ -160,12 +160,12 @@ test fn is_aggregate_ty_false_for_empty() -> Unit {
 
 // ── build_struct_registry ───────────────────────────────────────────────────
 
-test fn build_struct_registry_empty_types_returns_empty_map() -> Unit {
+test partial fn build_struct_registry_empty_types_returns_empty_map() -> Unit {
     let m: Map[String, StructInfo] = build_struct_registry([]);
     assert_eq(m.len(), 0)
 }
 
-test fn build_struct_registry_records_field_indices() -> Unit {
+test partial fn build_struct_registry_records_field_indices() -> Unit {
     // `Point { x, y }` → field_index["x"] = 0, field_index["y"] = 1.
     let types: List[Value] = jarr(parse(
         "{\"types\":[{\"name\":\"Point\",\"body\":{\"tag\":\"Struct\",\"fields\":[{\"name\":\"x\",\"ty\":{\"tag\":\"Int\"}},{\"name\":\"y\",\"ty\":{\"tag\":\"Int\"}}]}}]}"
@@ -180,7 +180,7 @@ test fn build_struct_registry_records_field_indices() -> Unit {
     assert_eq(info.field_types.len(), 2)
 }
 
-test fn build_struct_registry_ignores_non_struct_bodies() -> Unit {
+test partial fn build_struct_registry_ignores_non_struct_bodies() -> Unit {
     // An enum-bodied type in the list must not register a struct.
     let types: List[Value] = jarr(parse(
         "{\"types\":[{\"name\":\"Color\",\"body\":{\"tag\":\"Enum\",\"variants\":[{\"name\":\"Red\",\"fields\":{\"tag\":\"Unit\"}}]}}]}"
@@ -191,7 +191,7 @@ test fn build_struct_registry_ignores_non_struct_bodies() -> Unit {
 
 // ── build_enum_registry ─────────────────────────────────────────────────────
 
-test fn build_enum_registry_assigns_declaration_order_tags() -> Unit {
+test partial fn build_enum_registry_assigns_declaration_order_tags() -> Unit {
     // `Color { Red, Green, Blue }` → Red=0, Green=1, Blue=2.
     let types: List[Value] = jarr(parse(
         "{\"types\":[{\"name\":\"Color\",\"body\":{\"tag\":\"Enum\",\"variants\":[{\"name\":\"Red\",\"fields\":{\"tag\":\"Unit\"}},{\"name\":\"Green\",\"fields\":{\"tag\":\"Unit\"}},{\"name\":\"Blue\",\"fields\":{\"tag\":\"Unit\"}}]}}]}"
@@ -202,7 +202,7 @@ test fn build_enum_registry_assigns_declaration_order_tags() -> Unit {
     assert_eq(m.get("Color::Blue").unwrap_or(-1),  2)
 }
 
-test fn build_enum_registry_ignores_struct_bodies() -> Unit {
+test partial fn build_enum_registry_ignores_struct_bodies() -> Unit {
     let types: List[Value] = jarr(parse(
         "{\"types\":[{\"name\":\"Point\",\"body\":{\"tag\":\"Struct\",\"fields\":[{\"name\":\"x\",\"ty\":{\"tag\":\"Int\"}}]}}]}"
     ), "types");
@@ -212,7 +212,7 @@ test fn build_enum_registry_ignores_struct_bodies() -> Unit {
 
 // ── build_enum_types ────────────────────────────────────────────────────────
 
-test fn build_enum_types_all_unit_variants_get_i8() -> Unit {
+test partial fn build_enum_types_all_unit_variants_get_i8() -> Unit {
     let types: List[Value] = jarr(parse(
         "{\"types\":[{\"name\":\"Color\",\"body\":{\"tag\":\"Enum\",\"variants\":[{\"name\":\"Red\",\"fields\":{\"tag\":\"Unit\"}},{\"name\":\"Green\",\"fields\":{\"tag\":\"Unit\"}}]}}]}"
     ), "types");
@@ -220,7 +220,7 @@ test fn build_enum_types_all_unit_variants_get_i8() -> Unit {
     assert_eq(m.get("Color").unwrap_or(""), "i8")
 }
 
-test fn build_enum_types_single_payload_gets_i8_i64() -> Unit {
+test partial fn build_enum_types_single_payload_gets_i8_i64() -> Unit {
     // A1o: any single-slot payload variant → `{i8, i64}` shape.
     let types: List[Value] = jarr(parse(
         "{\"types\":[{\"name\":\"Shape\",\"body\":{\"tag\":\"Enum\",\"variants\":[{\"name\":\"Point\",\"fields\":{\"tag\":\"Tuple\",\"tys\":[{\"tag\":\"Int\"}]}},{\"name\":\"Empty\",\"fields\":{\"tag\":\"Unit\"}}]}}]}"
@@ -229,7 +229,7 @@ test fn build_enum_types_single_payload_gets_i8_i64() -> Unit {
     assert_eq(m.get("Shape").unwrap_or(""), "{i8, i64}")
 }
 
-test fn build_enum_types_multi_payload_widens_to_max_slot_count() -> Unit {
+test partial fn build_enum_types_multi_payload_widens_to_max_slot_count() -> Unit {
     // A1q: widest variant has 2 slots → `{i8, i64, i64}`.
     let types: List[Value] = jarr(parse(
         "{\"types\":[{\"name\":\"Rect\",\"body\":{\"tag\":\"Enum\",\"variants\":[{\"name\":\"WH\",\"fields\":{\"tag\":\"Tuple\",\"tys\":[{\"tag\":\"Int\"},{\"tag\":\"Int\"}]}},{\"name\":\"Zero\",\"fields\":{\"tag\":\"Unit\"}}]}}]}"
@@ -240,7 +240,7 @@ test fn build_enum_types_multi_payload_widens_to_max_slot_count() -> Unit {
 
 // ── build_variant_payloads ──────────────────────────────────────────────────
 
-test fn build_variant_payloads_unit_is_zero() -> Unit {
+test partial fn build_variant_payloads_unit_is_zero() -> Unit {
     let types: List[Value] = jarr(parse(
         "{\"types\":[{\"name\":\"Color\",\"body\":{\"tag\":\"Enum\",\"variants\":[{\"name\":\"Red\",\"fields\":{\"tag\":\"Unit\"}}]}}]}"
     ), "types");
@@ -248,7 +248,7 @@ test fn build_variant_payloads_unit_is_zero() -> Unit {
     assert_eq(m.get("Color::Red").unwrap_or(-1), 0)
 }
 
-test fn build_variant_payloads_tuple_counts_positions() -> Unit {
+test partial fn build_variant_payloads_tuple_counts_positions() -> Unit {
     let types: List[Value] = jarr(parse(
         "{\"types\":[{\"name\":\"Pair\",\"body\":{\"tag\":\"Enum\",\"variants\":[{\"name\":\"Two\",\"fields\":{\"tag\":\"Tuple\",\"tys\":[{\"tag\":\"Int\"},{\"tag\":\"Int\"}]}}]}}]}"
     ), "types");
@@ -256,7 +256,7 @@ test fn build_variant_payloads_tuple_counts_positions() -> Unit {
     assert_eq(m.get("Pair::Two").unwrap_or(-1), 2)
 }
 
-test fn build_variant_payloads_struct_counts_named_fields() -> Unit {
+test partial fn build_variant_payloads_struct_counts_named_fields() -> Unit {
     // A1q: struct-shaped variant has one slot per named field.
     let types: List[Value] = jarr(parse(
         "{\"types\":[{\"name\":\"Shape\",\"body\":{\"tag\":\"Enum\",\"variants\":[{\"name\":\"Rect\",\"fields\":{\"tag\":\"Struct\",\"fields\":[{\"name\":\"w\",\"ty\":{\"tag\":\"Int\"}},{\"name\":\"h\",\"ty\":{\"tag\":\"Int\"}}]}}]}}]}"
@@ -267,7 +267,7 @@ test fn build_variant_payloads_struct_counts_named_fields() -> Unit {
 
 // ── build_variant_slot_maps ─────────────────────────────────────────────────
 
-test fn build_variant_slot_maps_tuple_uses_positional_keys() -> Unit {
+test partial fn build_variant_slot_maps_tuple_uses_positional_keys() -> Unit {
     // Tuple variants get "0", "1", ... keys.
     let types: List[Value] = jarr(parse(
         "{\"types\":[{\"name\":\"Pair\",\"body\":{\"tag\":\"Enum\",\"variants\":[{\"name\":\"Two\",\"fields\":{\"tag\":\"Tuple\",\"tys\":[{\"tag\":\"Int\"},{\"tag\":\"Int\"}]}}]}}]}"
@@ -282,7 +282,7 @@ test fn build_variant_slot_maps_tuple_uses_positional_keys() -> Unit {
     }
 }
 
-test fn build_variant_slot_maps_struct_uses_field_names() -> Unit {
+test partial fn build_variant_slot_maps_struct_uses_field_names() -> Unit {
     let types: List[Value] = jarr(parse(
         "{\"types\":[{\"name\":\"Shape\",\"body\":{\"tag\":\"Enum\",\"variants\":[{\"name\":\"Rect\",\"fields\":{\"tag\":\"Struct\",\"fields\":[{\"name\":\"w\",\"ty\":{\"tag\":\"Int\"}},{\"name\":\"h\",\"ty\":{\"tag\":\"Int\"}}]}}]}}]}"
     ), "types");
@@ -298,7 +298,7 @@ test fn build_variant_slot_maps_struct_uses_field_names() -> Unit {
 
 // ── build_variant_slot_types ────────────────────────────────────────────────
 
-test fn build_variant_slot_types_tuple_lowers_each_slot() -> Unit {
+test partial fn build_variant_slot_types_tuple_lowers_each_slot() -> Unit {
     // Both slots lower via tir_ty_to_llvm → "i64", "i64".
     let types: List[Value] = jarr(parse(
         "{\"types\":[{\"name\":\"Pair\",\"body\":{\"tag\":\"Enum\",\"variants\":[{\"name\":\"Two\",\"fields\":{\"tag\":\"Tuple\",\"tys\":[{\"tag\":\"Int\"},{\"tag\":\"Int\"}]}}]}}]}"
@@ -314,7 +314,7 @@ test fn build_variant_slot_types_tuple_lowers_each_slot() -> Unit {
     }
 }
 
-test fn build_variant_slot_types_unit_is_empty() -> Unit {
+test partial fn build_variant_slot_types_unit_is_empty() -> Unit {
     let types: List[Value] = jarr(parse(
         "{\"types\":[{\"name\":\"Color\",\"body\":{\"tag\":\"Enum\",\"variants\":[{\"name\":\"Red\",\"fields\":{\"tag\":\"Unit\"}}]}}]}"
     ), "types");

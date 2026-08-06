@@ -1,0 +1,17 @@
+// grows_test.mvl — regression fixture for #2214.
+//
+// `grows` is `total fn` but its recursive call does not structurally
+// decrease (the argument grows, not shrinks) — a genuine REQ8 violation.
+// Used to verify:
+//   - `mvl check` reads and reports on `*_test.mvl` files (previously
+//     skipped entirely — a directory of only test files read as empty).
+//   - `mvl test` treats this as fatal and never reaches `cargo test`,
+//     instead of letting the recursion actually run and stack-overflow.
+
+total fn grows(n: Int) -> Int {
+    if n > 1000000 { 0 } else { grows(n + 1) }
+}
+
+test fn grows_terminates() -> Unit {
+    assert_eq(grows(0), 0);
+}

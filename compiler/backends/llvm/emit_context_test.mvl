@@ -121,7 +121,7 @@ partial fn ctx_with_slot_types(vst: Map[String, List[String]]) -> EmitCtx {
 
 // ── EmitCtx::string_global_of ────────────────────────────────────────────────
 
-test fn string_global_of_returns_registered_symbol() -> Unit {
+test partial fn string_global_of_returns_registered_symbol() -> Unit {
     // A registered literal returns its `@.str.N` symbol.
     let s: ref Map[String, String] = Map::new();
     s.insert("alpha", "@.str.0");
@@ -130,7 +130,7 @@ test fn string_global_of_returns_registered_symbol() -> Unit {
     assert_eq(ctx.string_global_of("alpha"), "@.str.0")
 }
 
-test fn string_global_of_returns_second_symbol() -> Unit {
+test partial fn string_global_of_returns_second_symbol() -> Unit {
     let s: ref Map[String, String] = Map::new();
     s.insert("alpha", "@.str.0");
     s.insert("beta",  "@.str.1");
@@ -138,7 +138,7 @@ test fn string_global_of_returns_second_symbol() -> Unit {
     assert_eq(ctx.string_global_of("beta"), "@.str.1")
 }
 
-test fn string_global_of_missing_returns_sentinel() -> Unit {
+test partial fn string_global_of_missing_returns_sentinel() -> Unit {
     // An unregistered literal returns "@.str.missing" — never emitted by
     // `build_string_registry`, so a miss surfaces as an invalid IR symbol
     // at link time instead of a silent empty string.
@@ -148,13 +148,13 @@ test fn string_global_of_missing_returns_sentinel() -> Unit {
     assert_eq(ctx.string_global_of("beta"), "@.str.missing")
 }
 
-test fn string_global_of_empty_registry_returns_sentinel() -> Unit {
+test partial fn string_global_of_empty_registry_returns_sentinel() -> Unit {
     // Empty program (no string literals) — every lookup misses.
     let ctx: EmitCtx = ctx_with_strings(Map[String, String]::new());
     assert_eq(ctx.string_global_of("anything"), "@.str.missing")
 }
 
-test fn string_global_of_multi_use_on_same_ctx() -> Unit {
+test partial fn string_global_of_multi_use_on_same_ctx() -> Unit {
     // Regression: EmitCtx accessor method called multiple times on the
     // same ctx binding.  Before ADR-0054 landed, MVL emitted bare
     // `ctx.method(...)` at each call site, move-consuming ctx after the
@@ -171,7 +171,7 @@ test fn string_global_of_multi_use_on_same_ctx() -> Unit {
 
 // ── EmitCtx::has_enum_variant / enum_tag_of ─────────────────────────────────
 
-test fn has_enum_variant_true_for_registered() -> Unit {
+test partial fn has_enum_variant_true_for_registered() -> Unit {
     let e: ref Map[String, Int] = Map::new();
     e.insert("Color::Red", 0);
     e.insert("Color::Green", 1);
@@ -180,12 +180,12 @@ test fn has_enum_variant_true_for_registered() -> Unit {
     assert_eq(ctx.has_enum_variant("Color::Green"), true)
 }
 
-test fn has_enum_variant_false_for_unregistered() -> Unit {
+test partial fn has_enum_variant_false_for_unregistered() -> Unit {
     let ctx: EmitCtx = empty_ctx();
     assert_eq(ctx.has_enum_variant("Nonexistent::X"), false)
 }
 
-test fn enum_tag_of_returns_index() -> Unit {
+test partial fn enum_tag_of_returns_index() -> Unit {
     let e: ref Map[String, Int] = Map::new();
     e.insert("Color::Red",   0);
     e.insert("Color::Green", 1);
@@ -196,14 +196,14 @@ test fn enum_tag_of_returns_index() -> Unit {
     assert_eq(ctx.enum_tag_of("Color::Blue"),  2)
 }
 
-test fn enum_tag_of_missing_returns_zero() -> Unit {
+test partial fn enum_tag_of_missing_returns_zero() -> Unit {
     let ctx: EmitCtx = empty_ctx();
     assert_eq(ctx.enum_tag_of("Nonexistent::X"), 0)
 }
 
 // ── EmitCtx::enum_type_of ───────────────────────────────────────────────────
 
-test fn enum_type_of_returns_registered_shape() -> Unit {
+test partial fn enum_type_of_returns_registered_shape() -> Unit {
     // A1o: enum LLVM shape lookup.  All-unit enums use "i8"; payload
     // enums use "{i8, i64, ...}".
     let et: ref Map[String, String] = Map::new();
@@ -216,7 +216,7 @@ test fn enum_type_of_returns_registered_shape() -> Unit {
     assert_eq(ctx.enum_type_of("Session").unwrap_or(""),     "{i8, i64, i64}")
 }
 
-test fn enum_type_of_missing_is_none() -> Unit {
+test partial fn enum_type_of_missing_is_none() -> Unit {
     let ctx: EmitCtx = empty_ctx();
     let opt: Option[String] = ctx.enum_type_of("Nonexistent");
     let is_none: Bool = match opt { Some(_) => false, None => true };
@@ -225,7 +225,7 @@ test fn enum_type_of_missing_is_none() -> Unit {
 
 // ── EmitCtx::variant_payload_count ──────────────────────────────────────────
 
-test fn variant_payload_count_returns_slot_count() -> Unit {
+test partial fn variant_payload_count_returns_slot_count() -> Unit {
     // A1q: unit variants have 0 slots, tuple/struct variants have their
     // field count.
     let vp: ref Map[String, Int] = Map::new();
@@ -240,14 +240,14 @@ test fn variant_payload_count_returns_slot_count() -> Unit {
     assert_eq(ctx.variant_payload_count("Box::Cube"),       3)
 }
 
-test fn variant_payload_count_missing_returns_zero() -> Unit {
+test partial fn variant_payload_count_missing_returns_zero() -> Unit {
     let ctx: EmitCtx = empty_ctx();
     assert_eq(ctx.variant_payload_count("Nonexistent::X"), 0)
 }
 
 // ── EmitCtx::variant_slot_types_of ──────────────────────────────────────────
 
-test fn variant_slot_types_of_returns_registered_types() -> Unit {
+test partial fn variant_slot_types_of_returns_registered_types() -> Unit {
     // A1r: Circle(Float) has a single "double" slot; Rect(Int, Int) has two.
     let vst: ref Map[String, List[String]] = Map::new();
     vst.insert("Shape::Circle", ["double"]);
@@ -262,7 +262,7 @@ test fn variant_slot_types_of_returns_registered_types() -> Unit {
     assert_eq(rect.get(1).unwrap_or(""),   "i64")
 }
 
-test fn variant_slot_types_of_missing_returns_empty() -> Unit {
+test partial fn variant_slot_types_of_missing_returns_empty() -> Unit {
     let ctx: EmitCtx = empty_ctx();
     let slots: List[String] = ctx.variant_slot_types_of("Nonexistent::X");
     assert_eq(slots.len(), 0)
@@ -273,21 +273,21 @@ test fn variant_slot_types_of_missing_returns_empty() -> Unit {
 // These accessors return `Option[T]` — the caller pattern-matches to
 // distinguish present-and-empty from absent.  Basic presence tests below.
 
-test fn local_of_missing_is_none() -> Unit {
+test partial fn local_of_missing_is_none() -> Unit {
     let ctx: EmitCtx = empty_ctx();
     let opt: Option[LocalRef] = ctx.local_of("nonexistent");
     let is_none: Bool = match opt { Some(_) => false, None => true };
     assert_eq(is_none, true)
 }
 
-test fn struct_info_of_missing_is_none() -> Unit {
+test partial fn struct_info_of_missing_is_none() -> Unit {
     let ctx: EmitCtx = empty_ctx();
     let opt: Option[StructInfo] = ctx.struct_info_of("Nonexistent");
     let is_none: Bool = match opt { Some(_) => false, None => true };
     assert_eq(is_none, true)
 }
 
-test fn variant_slot_map_missing_is_none() -> Unit {
+test partial fn variant_slot_map_missing_is_none() -> Unit {
     let ctx: EmitCtx = empty_ctx();
     let opt: Option[Map[String, Int]] = ctx.variant_slot_map("Nonexistent::X");
     let is_none: Bool = match opt { Some(_) => false, None => true };
@@ -315,7 +315,7 @@ test fn emitted_bool_sets_reg_and_i1_ty() -> Unit {
 
 // ── extend_locals ───────────────────────────────────────────────────────────
 
-test fn extend_locals_adds_new_binding_and_preserves_existing() -> Unit {
+test partial fn extend_locals_adds_new_binding_and_preserves_existing() -> Unit {
     // Insert "a"→r1, then extend with "b"→r2; both must be present in
     // the returned map without mutating the original.
     let r1: LocalRef = LocalRef { reg: "%a", ty: "i64", is_ref: false };
@@ -333,7 +333,7 @@ test fn extend_locals_adds_new_binding_and_preserves_existing() -> Unit {
     }
 }
 
-test fn extend_locals_empty_base_still_binds() -> Unit {
+test partial fn extend_locals_empty_base_still_binds() -> Unit {
     let r: LocalRef = LocalRef { reg: "%x", ty: "i64", is_ref: false };
     let m: Map[String, LocalRef] = extend_locals(Map[String, LocalRef]::new(), "x", r);
     assert_eq(m.contains_key("x"), true)
@@ -341,7 +341,7 @@ test fn extend_locals_empty_base_still_binds() -> Unit {
 
 // ── clone_locals ────────────────────────────────────────────────────────────
 
-test fn clone_locals_copies_all_entries() -> Unit {
+test partial fn clone_locals_copies_all_entries() -> Unit {
     let r: LocalRef = LocalRef { reg: "%y", ty: "i64", is_ref: false };
     let base: ref Map[String, LocalRef] = Map::new();
     base.insert("y", r);
@@ -352,14 +352,14 @@ test fn clone_locals_copies_all_entries() -> Unit {
     }
 }
 
-test fn clone_locals_empty_returns_empty() -> Unit {
+test partial fn clone_locals_empty_returns_empty() -> Unit {
     let m: Map[String, LocalRef] = clone_locals(Map[String, LocalRef]::new());
     assert_eq(m.contains_key("anything"), false)
 }
 
 // ── clone_enums / clone_strings ─────────────────────────────────────────────
 
-test fn clone_enums_copies_int_registry() -> Unit {
+test partial fn clone_enums_copies_int_registry() -> Unit {
     let base: ref Map[String, Int] = Map::new();
     base.insert("Color::Red", 0);
     base.insert("Color::Blue", 2);
@@ -368,7 +368,7 @@ test fn clone_enums_copies_int_registry() -> Unit {
     assert_eq(m.get("Color::Blue").unwrap_or(-1), 2)
 }
 
-test fn clone_strings_copies_string_registry() -> Unit {
+test partial fn clone_strings_copies_string_registry() -> Unit {
     let base: ref Map[String, String] = Map::new();
     base.insert("hello", "@.str.0");
     let m: Map[String, String] = clone_strings(base);
@@ -377,7 +377,7 @@ test fn clone_strings_copies_string_registry() -> Unit {
 
 // ── clone_structs ───────────────────────────────────────────────────────────
 
-test fn clone_structs_copies_struct_registry() -> Unit {
+test partial fn clone_structs_copies_struct_registry() -> Unit {
     let idx: ref Map[String, Int] = Map::new();
     idx.insert("x", 0);
     let base: ref Map[String, StructInfo] = Map::new();
@@ -394,7 +394,7 @@ test fn clone_structs_copies_struct_registry() -> Unit {
 
 // ── clone_variant_slots / clone_variant_slot_types ──────────────────────────
 
-test fn clone_variant_slots_copies_nested_map() -> Unit {
+test partial fn clone_variant_slots_copies_nested_map() -> Unit {
     let inner: ref Map[String, Int] = Map::new();
     inner.insert("0", 0);
     inner.insert("1", 1);
@@ -410,7 +410,7 @@ test fn clone_variant_slots_copies_nested_map() -> Unit {
     }
 }
 
-test fn clone_variant_slot_types_copies_list_of_types() -> Unit {
+test partial fn clone_variant_slot_types_copies_list_of_types() -> Unit {
     let base: ref Map[String, List[String]] = Map::new();
     base.insert("Shape::Rect", ["i64", "i64"]);
     let m: Map[String, List[String]] = clone_variant_slot_types(base);

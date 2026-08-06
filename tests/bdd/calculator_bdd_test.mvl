@@ -74,7 +74,7 @@ fn when_subtracted(ctx: CalcCtx) -> CalcCtx {
     CalcCtx { a: ctx.a, b: ctx.b, result: r, error: "", ok: true }
 }
 
-fn when_divided(ctx: CalcCtx) -> CalcCtx {
+partial fn when_divided(ctx: CalcCtx) -> CalcCtx {
     match divide(ctx.a, ctx.b) {
         Result::Ok(r) => CalcCtx { a: ctx.a, b: ctx.b, result: r, error: "", ok: true },
         Result::Err(e) => CalcCtx { a: ctx.a, b: ctx.b, result: 0, error: e, ok: false },
@@ -124,14 +124,14 @@ test fn scenario_subtracting_numbers() -> Unit {
 }
 
 // Scenario: dividing two numbers evenly
-test fn scenario_dividing_evenly() -> Unit {
+test partial fn scenario_dividing_evenly() -> Unit {
     let ctx: CalcCtx = given_two_numbers(12, 4);
     let ctx: CalcCtx = when_divided(ctx);
     then_result_equals(ctx, 3);
 }
 
 // Scenario: dividing by zero returns an error
-test fn scenario_dividing_by_zero_returns_error() -> Unit {
+test partial fn scenario_dividing_by_zero_returns_error() -> Unit {
     let ctx: CalcCtx = given_a_zero_divisor(10);
     let ctx: CalcCtx = when_divided(ctx);
     then_operation_failed(ctx);

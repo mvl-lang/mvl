@@ -35,6 +35,13 @@ fn corpus_14_ffi(name: &str) -> String {
     )
 }
 
+fn fixture_10_termination(name: &str) -> String {
+    format!(
+        "{}/tests/fixtures/10_termination/{name}",
+        env!("CARGO_MANIFEST_DIR")
+    )
+}
+
 // ── helpers ───────────────────────────────────────────────────────────────
 
 fn run_check(file: &str) -> std::process::Output {
@@ -56,6 +63,13 @@ fn run_mvl_build(path: &str) -> std::process::Output {
         .args(["build", path])
         .output()
         .expect("failed to run mvl build")
+}
+
+fn run_mvl_test(path: &str) -> std::process::Output {
+    Command::new(mvl_bin())
+        .args(["test", path])
+        .output()
+        .expect("failed to run mvl test")
 }
 
 /// Assert check passes and return combined stdout.
@@ -273,6 +287,58 @@ fn auth_handler_check_passes() {
     assert!(
         stdout.contains("OK"),
         "expected 'OK' in check output:\n{stdout}"
+    );
+}
+
+// ── REQ8 enforcement (#2214) ───────────────────────────────────────────────
+
+/// `mvl check` on a single `*_test.mvl` file must read and report on it —
+/// it used to be skipped entirely (`loader::mvl_files` excluded test files
+/// for the `check`/`assurance` family of commands), so a directory of only
+/// test files read as "No .mvl files found" and a genuine REQ8 violation
+/// confined to a test fn went unreported by `mvl check`.
+#[test]
+fn check_reads_and_reports_on_test_files() {
+    let out = run_check(&fixture_10_termination("grows_test.mvl"));
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !stderr.contains("No .mvl files found"),
+        "mvl check must not skip a *_test.mvl file, got stderr:\n{stderr}"
+    );
+    assert!(
+        !out.status.success(),
+        "mvl check must reject grows_test.mvl's REQ8 violation; stdout: {stdout}\nstderr: {stderr}"
+    );
+    assert!(
+        stdout.contains("REQ8") || stderr.contains("REQ8"),
+        "expected a REQ8 diagnostic, got stdout:\n{stdout}\nstderr:\n{stderr}"
+    );
+}
+
+/// `grows` is `total fn` but its recursive call grows instead of shrinking —
+/// a genuine, non-false-positive REQ8 violation. `mvl test` must fail before
+/// invoking `cargo test`, not let the checker error reach the backend as a
+/// warning and then crash the process with a stack overflow when the
+/// (actually non-terminating in practice) recursion runs.
+#[test]
+fn test_command_fails_fast_on_req8_violation_without_reaching_cargo() {
+    let out = run_mvl_test(&fixture_10_termination("grows_test.mvl"));
+    assert!(
+        !out.status.success(),
+        "mvl test must exit non-zero on a REQ8 violation; stdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr),
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("REQ8"),
+        "expected a REQ8 diagnostic in stderr, got:\n{stderr}"
+    );
+    assert!(
+        !stdout.contains("Running: cargo test"),
+        "mvl test must fail before invoking cargo, got stdout:\n{stdout}"
     );
 }
 
