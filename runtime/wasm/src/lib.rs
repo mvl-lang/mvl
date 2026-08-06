@@ -2703,7 +2703,7 @@ pub extern "C" fn _mvl_io_close(_fd: i32) {}
 // `epoch_nanos_now` reaches out to a host-supplied `Date.now()` instead
 // (see `runtime/wasm-browser/`'s JS shim, ADR-0063).
 
-#[cfg(target_os = "wasi")]
+#[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
 fn epoch_nanos_now() -> u128 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -2711,14 +2711,18 @@ fn epoch_nanos_now() -> u128 {
         .as_nanos()
 }
 
-#[cfg(not(target_os = "wasi"))]
+// Only the browser target (`wasm32-unknown-unknown`) lacks an OS clock —
+// non-wasi *and* non-wasm32 hosts (e.g. building this crate natively as a
+// `cargo build --workspace` member, see mvl-lang/homebrew-mvl) still have
+// `std::time::SystemTime` and must not be routed through the JS import.
+#[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
 unsafe extern "C" {
     /// Host `Date.now()` in milliseconds since the Unix epoch, supplied by
     /// `runtime/wasm-browser/`'s JS shim under the `env` import module.
     fn _mvl_js_now_ms() -> f64;
 }
 
-#[cfg(not(target_os = "wasi"))]
+#[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
 fn epoch_nanos_now() -> u128 {
     let ms = unsafe { _mvl_js_now_ms() };
     (ms.max(0.0) * 1_000_000.0) as u128
