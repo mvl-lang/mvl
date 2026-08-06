@@ -1,9 +1,10 @@
 // 03_functions/total_partial_test.mvl — totality modifiers.
 //
 // MVL distinguishes provably-terminating (`total`) from potentially-diverging
-// (`partial`) functions. Plain `fn` sits in between: totality is left implicit
-// and inferred. Recursive functions must be either `total` (with a decreasing
-// argument the checker verifies) or `partial`.
+// (`partial`) functions. Plain `fn` is simply total — the keyword is optional,
+// not inferred; there is no third state and no pass that computes one.
+// Recursive functions must be either `total` (with a decreasing argument the
+// checker verifies) or `partial`.
 
 total fn factorial(n: Int) -> Int {
     if n <= 1 { 1 } else { n * factorial(n - 1) }

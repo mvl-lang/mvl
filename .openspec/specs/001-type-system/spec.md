@@ -634,9 +634,9 @@ The language MUST provide exactly one construct for each control-flow category:
 - **Pattern dispatch:** `match`
 - **Error propagation:** `Result[T, E]` with `?` propagation (see Requirement 3)
 
-No other iteration, conditional, or error-propagation constructs are permitted. The parser MUST reject `throw`, `try`, `catch`, and `goto`. The type checker MUST reject `while` in `total` functions.
+No other iteration, conditional, or error-propagation constructs are permitted. The parser MUST reject `throw`, `try`, `catch`, and `goto`. The type checker MUST reject a bare `while` (no `decreases` measure) in `total` functions; a `while … decreases m` is accepted if the measure is proved to strictly decrease (spec 013 §Requirement 2; #628).
 
-This is Design Principle 2 ("One way to do each thing"). Cross-references: Requirement 3 (Result), Requirement 8 (no throw/catch/try), Spec 002 Requirement 5 (total/partial distinction).
+This is Design Principle 2 ("One way to do each thing"). Cross-references: Requirement 3 (Result), Requirement 8 (no throw/catch/try), spec 013 (Termination — total/partial distinction; superseded the totality material spec 002 originally carried, per ADR-0035 §5).
 
 **Implementation:** `src/mvl/parser/statements.rs`, `src/mvl/checker.rs`
 

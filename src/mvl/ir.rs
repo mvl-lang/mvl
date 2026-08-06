@@ -271,7 +271,9 @@ pub struct TirFn {
     pub type_params: Vec<GenericParam>,
     /// Where-clause constraints (`where T: Eq`).
     pub constraints: Vec<Constraint>,
-    /// Totality annotation: `None` = unknown/partial, `Some(Total)` = proved terminating.
+    /// Totality annotation: `None` = implicitly total (the default; checked
+    /// the same as `Some(Total)`), `Some(Partial)` = exempt from Req 8.
+    /// (#2218 — this comment previously had the polarity backwards.)
     pub totality: Option<Totality>,
     pub params: Vec<TirParam>,
     pub ret_ty: Ty,

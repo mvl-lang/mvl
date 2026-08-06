@@ -19,9 +19,11 @@ locally correct while diverging for a large class of inputs. The compiler is the
 the pipeline that can close this gap without manual review. Because LLMs write all the code, the
 annotation burden that made termination checking impractical for human developers drops to zero.
 
-**Origin:** Martin-Löf (1972) for structural recursion. Idris 2 (Brady, 2021) for the `total`
-keyword and the checker architecture. The integer-decrement measure extends the structural measure
-to primitive-recursive functions over integers without requiring dependent types.
+**Origin:** Turner (2004) for the `total`/`partial` distinction itself — "all case analysis must be
+complete" and the data/codata split separating *terminating* from merely *productive*. Martin-Löf
+(1972) for structural recursion. Idris 2 (Brady, 2021) for the `total` keyword and the checker
+architecture. The integer-decrement measure extends the structural measure to primitive-recursive
+functions over integers without requiring dependent types.
 
 ## Scope and Defaults
 
@@ -246,12 +248,15 @@ function named the same as the enclosing `total fn` inside a lambda MUST NOT pro
 without additional proof. Recursive calls inside a `for` loop body are subject to the same
 decrease-measure rules as recursive calls anywhere else in the function.
 
-`while` loops in total functions are already rejected by the type checker as
-`CheckError::UnboundedLoopInTotal` before the termination pass runs. The termination pass
-therefore treats `while` as a no-op (the error has already been emitted).
+A bare `while` (no `decreases` measure) in a total function is rejected by the type checker as
+`CheckError::UnboundedLoopInTotal` before the termination pass runs; `check_structural_recursion`
+treats `while` as a no-op since that error has already been emitted. A `while … decreases m` is
+NOT rejected here — it is verified by a separate pass, `checker::contracts::loop_and_field`, which
+proves `m` is bounded below and strictly decreases every iteration (or rejects the function; an
+unanalysable measure is rejected, not silently accepted — see #2211). See Requirement 6.
 
 **Precondition:** `TypeChecker::check_program` MUST have run before `check_structural_recursion`
-is called, so that any `while` loop in a total function is already flagged.
+is called, so that any bare `while` loop in a total function is already flagged.
 
 **Implementation:** `src/mvl/checker/termination.rs::check_stmt` (`Stmt::For` and `Stmt::While` arms)
 
@@ -260,21 +265,161 @@ is called, so that any `while` loop in a total function is already flagged.
 
 ---
 
+### Requirement 6: While-Loop Decreasing Measure [MUST]
+
+A `while` loop in a `total` function MUST carry a `decreases m` clause, where `m` is an integer
+expression the checker proves (a) bounded below (`m >= 0` at loop entry) and (b) strictly
+decreasing across one iteration, by extracting the loop body's per-iteration effect on each
+variable `m` references and re-checking `m` under that effect. If either proof fails — including
+when the loop body's control flow (an `if`/`match` statement, not expression) is beyond what the
+per-iteration effect extractor can analyse — the compiler MUST reject with
+`CheckError::DecreasesNotBounded` or `CheckError::DecreasesNotDecreasing` respectively. An
+unanalysable measure is rejected, not silently accepted: before #2211, the extractor's "too
+complex" case returned with no diagnostic, making an unproven measure indistinguishable from a
+proven one.
+
+**Implementation:** `src/mvl/checker/contracts/loop_and_field.rs::check_decreases_at_entry`,
+`check_decreases_across_iteration`, `extract_simple_assignments`
+
+**Tests:** `tests/type_checker.rs::while_with_decreases_allowed_in_total_fn`,
+`tests/type_checker.rs::decreases_not_decreasing_detected`,
+`tests/type_checker.rs::decreases_over_complex_body_rejected_not_silently_accepted`,
+`tests/type_checker.rs::decreases_effect_irrelevant_to_measure_does_not_sink_proof`
+
+#### Scenario: Decreasing measure accepted
+
+- GIVEN `fn f(n: Int where self >= 0) -> Int { let i: ref Int = n; while i > 0 decreases i { i = i - 1; }; i }`
+- THEN the compiler MUST accept (`i` is bounded below by the loop guard and strictly decreases)
+
+**Tests:** `tests/type_checker.rs::while_with_decreases_allowed_in_total_fn`
+
+#### Scenario: Non-decreasing measure rejected even when the loop body is simple
+
+- GIVEN `total fn f(n: Int) -> Int { let i: ref Int = 0; while i < n decreases n { i = i + 1; }; i }`
+  (the measure `n` is never reassigned)
+- THEN the compiler MUST reject with `DecreasesNotDecreasing`
+
+**Tests:** `tests/type_checker.rs::decreases_not_decreasing_detected`
+
+#### Scenario: Unanalysable measure rejected, not silently accepted
+
+- GIVEN the same non-decreasing measure `decreases n` as above, but with an `if`/`else` inside the
+  loop body (beyond what the per-iteration effect extractor can analyse)
+- THEN the compiler MUST still reject with `DecreasesNotDecreasing` — an unanalysable body must not
+  be treated as a proof
+
+**Tests:** `tests/type_checker.rs::decreases_over_complex_body_rejected_not_silently_accepted`
+
+---
+
+### Requirement 7: Mutual Recursion Cycles Are Rejected [MUST]
+
+For every `total` function `f`, if any callee `g` (`g != f`) reachable from `f` in the call graph
+can itself reach back to `f`, `f` participates in a mutual-recursion cycle and the compiler MUST
+reject with `CheckError::MutualRecursionInTotal`, naming one function on the cycle. The check is
+reachability-based: it does not attempt to find a cross-function decrease measure across the
+cycle, so a cycle that is in fact provably terminating (e.g. `is_even`/`is_odd`, where the shared
+argument strictly decreases on every call) is rejected too. The diagnostic's only suggested fix is
+`partial` — there is no function-level `decreases` to suggest instead (`decreases` is only a
+`while`-loop clause). Extending the check to accept provably-terminating cycles is tracked
+separately (#2216(b); needs monomorphization per ADR-0034) and is NOT part of this requirement.
+
+**Implementation:** `src/mvl/checker/termination.rs::check_mutual_recursion`
+
+**Tests:** `tests/type_checker.rs::mutual_recursion_in_total_functions_detected`,
+`tests/type_checker.rs::mutual_recursion_in_partial_functions_ok`,
+`tests/type_checker.rs::mutual_recursion_diagnostic_does_not_suggest_nonexistent_decreases`
+
+#### Scenario: Mutual recursion cycle rejected
+
+- GIVEN `fn ping(n: Int) -> Int { pong(n) }` and `fn pong(n: Int) -> Int { ping(n) }`
+- THEN the compiler MUST reject with `MutualRecursionInTotal`
+
+**Tests:** `tests/type_checker.rs::mutual_recursion_in_total_functions_detected`
+
+#### Scenario: Provably-terminating cycle still rejected (conservative by design)
+
+- GIVEN `total fn is_even(n: Int) -> Bool { if n <= 0 { true } else { is_odd(n - 1) } }` and
+  `total fn is_odd(n: Int) -> Bool { if n <= 0 { false } else { is_even(n - 1) } }`
+- THEN the compiler MUST reject with `MutualRecursionInTotal`, suggesting `partial` only (not a
+  nonexistent function-level `decreases`)
+
+**Tests:** `tests/type_checker.rs::mutual_recursion_diagnostic_does_not_suggest_nonexistent_decreases`
+
+#### Scenario: Mutual recursion between partial functions is exempt
+
+- GIVEN `partial fn ping(n: Int) -> Int { pong(n) }` and `partial fn pong(n: Int) -> Int { ping(n) }`
+- THEN the compiler MUST accept (neither function is total)
+
+**Tests:** `tests/type_checker.rs::mutual_recursion_in_partial_functions_ok`
+
+---
+
+### Requirement 8: Partial-Call Contagion [MUST]
+
+A `total` function MUST NOT call a `partial` function, directly or as a higher-order value. The
+compiler MUST reject with `CheckError::PartialCallInTotal`, naming the partial callee. This is
+Req 8's most-hit rule in practice — real corpora have far more calls into already-partial helpers
+than they have genuinely-unprovable recursion or loops. The rule is contagious: marking any
+function `partial` requires every `total`-by-default caller to either also become `partial` or
+stop calling it, which is why fixing a Req 8 violation deep in a call graph can require marking
+several layers of callers (#2214, #2215).
+
+The rule applies at four call-site kinds: a direct function call, a call through a higher-order
+function value, a method call, and a call to a trait-style dispatched method — all four route
+through the same `PartialCallInTotal` check.
+
+**`main`'s totality contract:** an entry-point `fn main()` follows the same default as any other
+function — implicitly total unless marked `partial`. A `main` that runs an accept loop, a REPL, or
+otherwise needs unbounded `while` MUST be `partial fn main()`. This interacts with ADR-0037's
+actor-join injection: the compiler appends an implicit `_mvl_join_actors()` call at the end of a
+default (total) `main` to wait for spawned actors before the process exits; a `partial fn main()`
+that never returns (a genuine server loop) does not receive this injection, since it never reaches
+the point where it would run.
+
+**Implementation:** `src/mvl/checker/calls.rs` (four call sites checking `fn_info.totality` /
+`method_info.totality` against the caller's `fn_context().totality`)
+
+**Tests:** `tests/type_checker.rs::partial_call_in_total_function_rejected`,
+`tests/negative/req08/partial_call_in_total.mvl`
+
+#### Scenario: Total function calling a partial function is rejected
+
+- GIVEN `partial fn infinite() -> Unit { while true { } }` and
+  `total fn caller() -> Unit { infinite() }`
+- THEN the compiler MUST reject with `PartialCallInTotal { callee: "infinite", .. }`
+
+**Tests:** `tests/type_checker.rs::partial_call_in_total_function_rejected`
+
+#### Scenario: A partial main is not implicitly total
+
+- GIVEN `partial fn main() -> Unit ! Net { while true { accept_and_handle() } }`
+- THEN the compiler MUST accept (an entry point may opt into `partial` like any other function)
+  and the implicit `_mvl_join_actors()` injection (ADR-0037) does NOT apply
+
 ## Known Limitations (Phase 1)
 
 The following are recognised limitations of the Phase 1 termination checker. They do not
 constitute spec violations — they are design boundaries, tracked for Phase 2.
 
-### L1: Mutual recursion is not checked
+### L1: Mutual recursion is checked, but conservatively (superseded)
 
-Functions that are not self-recursive but form a call-graph cycle (e.g. `f` calls `g`, `g` calls
-`f`) are not detected. The compiler will accept them even if the cycle has no decreasing measure.
-Tracked in #142.
+~~Functions that are not self-recursive but form a call-graph cycle... are not detected.~~ This
+shipped (#1068 Gap 4; Requirement 7 above) and is checked reachability-only: any cycle through a
+`total` function is rejected, even a provably-terminating one like `is_even`/`is_odd`. Extending
+the check to accept such cycles via a cross-function decrease measure is tracked as #2216(b),
+gated on monomorphization (ADR-0034) — not yet done, but distinct from "not checked at all."
 
-### L2: While-loop decreasing measures are not supported
+### L2: While-loop decreasing measures are supported (superseded)
 
-`while` loops with an explicit decreasing measure annotation (as in Lean 4 or Dafny) are not yet
-supported. `while` in total functions is unconditionally rejected in Phase 1. Tracked in #142.
+~~`while` loops with an explicit decreasing measure annotation... are not yet supported. `while`
+in total functions is unconditionally rejected in Phase 1.~~ This shipped (#628; Requirement 6
+above). A bare `while` is still rejected in `total fn`; `while … decreases m` is accepted when the
+measure is proved. The real remaining limitation is the proof's power, not its existence: the
+per-iteration effect extractor only handles straight-line assignments, so a `decreases` measure
+over a loop body with `if`/`match` control flow is rejected as unanalysable even when the measure
+genuinely holds (#2211's `format_datetime` fallout in `std/time.mvl` is a worked example of
+restructuring a loop to avoid this rather than accepting the rejection).
 
 ### L3: Integer-decrement measure assumes non-negative input
 
@@ -301,8 +446,9 @@ shadowing a subterm variable in an arm body is unusual style.
 
 | Item | Tracking |
 |------|----------|
-| Mutual recursion (call-graph cycle detection) | #142 |
-| `while` loop with decreasing measure annotation | #142 |
+| Mutual recursion across a decreasing measure (accept `is_even`/`is_odd`-shaped cycles instead of rejecting every cycle) | #2216(b), gated on ADR-0034 monomorphization |
+| Per-iteration effect extractor handling `if`/`match` control flow in `decreases`-measure loop bodies | future |
+| Actor-method `partial`/`total` marker (actor behaviors currently have no way to opt out of Req 8's while-loop requirement at all) | #2232 |
 | Non-negative precondition check for integer-decrement and integer-division measures | future |
 | Subterm shadowing tracking in match arm bodies | future |
 | Per-function Req 8 status in assurance report | future |
