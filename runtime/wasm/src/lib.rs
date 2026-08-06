@@ -2027,14 +2027,12 @@ pub unsafe extern "C" fn _mvl_map_contains_key_si64(m: i32, k_ptr: i32, k_len: i
     0
 }
 
-/// `_mvl_map_keys_str(m) -> *MvlArray` — all keys as a `List[String]`
-/// (`*MvlArray` of `*MvlString`, `elem_size` 4 — same convention
-/// `_mvl_string_split` uses). Keys are refcount-cloned, so the returned
-/// list is independently owned and safe to drop without touching this
-/// map's own entries (same reasoning as `_mvl_map_get_str`, #2047).
-///
-/// Backs `Map[String, V]::keys()` for every `V` — the key side of a
-/// `Map[String, V]` is always `String` regardless of the value type.
+/// `_mvl_map_keys_str(m) -> *MvlArray` — all keys as a `List[String]`. Each
+/// key handle is refcount-cloned (same reasoning as [`_mvl_map_get_str`]):
+/// the map still owns its own copy, so the returned list is independently
+/// droppable via `_mvl_string_ptr_array_drop`. `elem_size` 4 matches
+/// `_mvl_string_split`/`_mvl_env_args` — a `*MvlString` is an i32 address on
+/// wasm32.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn _mvl_map_keys_str(m: i32) -> i32 {
     let arr = _mvl_array_new(4, 0);
@@ -2043,17 +2041,14 @@ pub unsafe extern "C" fn _mvl_map_keys_str(m: i32) -> i32 {
     }
     let map = &*(m as usize as *const MvlMap);
     for entry in &map.entries {
-        let cloned = _mvl_string_clone(entry.key);
-        _mvl_array_push_i32(arr, cloned);
+        _mvl_array_push_i32(arr, _mvl_string_clone(entry.key));
     }
     arr
 }
 
-/// `_mvl_map_values_si64(m) -> *MvlArray` — all values as a `List[V]`
-/// (`*MvlArray` of i64, `elem_size` 8) for `Map[String, V]` where `V` is a
-/// plain scalar. Values are handed back verbatim — same restriction
-/// `_mvl_map_get_si64` documents; use [`_mvl_map_values_str`] for
-/// `Map[String, String]`.
+/// `_mvl_map_values_si64(m) -> *MvlArray` — all values as a `List[Int]`.
+/// Used for `Map[String, Int].values()`. Values are plain scalars, copied
+/// verbatim — no ownership to share.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn _mvl_map_values_si64(m: i32) -> i32 {
     let arr = _mvl_array_new(8, 0);
@@ -2067,9 +2062,10 @@ pub unsafe extern "C" fn _mvl_map_values_si64(m: i32) -> i32 {
     arr
 }
 
-/// `_mvl_map_values_str(m) -> *MvlArray` — all values as a `List[String]`
-/// for `Map[String, String]`. Each value is refcount-cloned before being
-/// pushed, same reasoning as `_mvl_map_get_str` (#2047).
+/// `_mvl_map_values_str(m) -> *MvlArray` — all values as a `List[String]`.
+/// Used for `Map[String, String].values()`. Each value handle is
+/// refcount-cloned, mirroring [`_mvl_map_get_str`] (#2047) — the map keeps
+/// its own copy.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn _mvl_map_values_str(m: i32) -> i32 {
     let arr = _mvl_array_new(4, 0);
@@ -2078,10 +2074,53 @@ pub unsafe extern "C" fn _mvl_map_values_str(m: i32) -> i32 {
     }
     let map = &*(m as usize as *const MvlMap);
     for entry in &map.entries {
-        let cloned = _mvl_string_clone(entry.val as i32);
-        _mvl_array_push_i32(arr, cloned);
+        _mvl_array_push_i32(arr, _mvl_string_clone(entry.val as i32));
     }
     arr
+}
+
+/// `_mvl_map_remove_si64(m, k_ptr, k_len) -> *MvlOption` — remove the entry
+/// for `key` if present and return its value as `Some(val)`, or `None` if
+/// absent. Used for `Map[String, Int].remove(key)`. The key's `*MvlString`
+/// handle is dropped — the map no longer references it.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn _mvl_map_remove_si64(m: i32, k_ptr: i32, k_len: i32) -> i32 {
+    if m == 0 {
+        return _mvl_option_none();
+    }
+    let map = &mut *(m as usize as *mut MvlMap);
+    if let Some(idx) = map
+        .entries
+        .iter()
+        .position(|e| ms_handle_eq_bytes(e.key, k_ptr, k_len))
+    {
+        let entry = map.entries.remove(idx);
+        _mvl_string_drop(entry.key);
+        return _mvl_option_some_i64(entry.val);
+    }
+    _mvl_option_none()
+}
+
+/// `_mvl_map_remove_str(m, k_ptr, k_len) -> *MvlOption` — same as
+/// [`_mvl_map_remove_si64`] for `Map[String, String].remove(key)`. The
+/// removed value's `*MvlString` handle is handed back verbatim (the map is
+/// giving up ownership, so no clone is needed — unlike `_mvl_map_get_str`).
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn _mvl_map_remove_str(m: i32, k_ptr: i32, k_len: i32) -> i32 {
+    if m == 0 {
+        return _mvl_option_none();
+    }
+    let map = &mut *(m as usize as *mut MvlMap);
+    if let Some(idx) = map
+        .entries
+        .iter()
+        .position(|e| ms_handle_eq_bytes(e.key, k_ptr, k_len))
+    {
+        let entry = map.entries.remove(idx);
+        _mvl_string_drop(entry.key);
+        return _mvl_option_some_i32(entry.val as i32);
+    }
+    _mvl_option_none()
 }
 
 /// `_mvl_map_drop_si64(m)` — decrement refcount; free when it reaches zero.
