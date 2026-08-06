@@ -883,7 +883,7 @@ impl CheckError {
                 "recursive call in total function `{fn_name}` cannot be proven terminating — argument does not structurally decrease"
             ),
             CheckError::MutualRecursionInTotal { fn_name, cycle_with, .. } => format!(
-                "total function `{fn_name}` participates in mutual recursion with `{cycle_with}` — mark as `partial` or add `decreases` measure"
+                "total function `{fn_name}` participates in mutual recursion with `{cycle_with}` — mark as `partial` (there is no function-level `decreases`; `decreases` is only a `while`-loop clause)"
             ),
             CheckError::CapabilityViolation {
                 param, capability, ..

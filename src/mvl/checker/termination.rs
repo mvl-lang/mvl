@@ -27,8 +27,12 @@
 //!   `subterm` is a known structural subterm; its length is provably smaller
 //!   than the original.  (spec 007 §Req 3)
 //!
-//! Mutual recursion and `while`-loop decreasing-measure annotations are not
-//! yet analysed (tracked in #142; spec 007 §Known Limitations L1/L2).
+//! Mutual recursion is checked separately by [`check_mutual_recursion`] below
+//! (reachability-based: any call-graph cycle through a total function is
+//! rejected outright — it does not attempt a cross-function decrease measure,
+//! so provably-terminating cycles like `is_even`/`is_odd` are conservatively
+//! rejected too; see #2216). `while`-loop decreasing-measure annotations are
+//! analysed separately in `checker::contracts::loop_and_field`.
 //!
 //! **Precondition:** `TypeChecker::check_program` MUST have run before this
 //! pass so that `while` loops in total functions are already flagged as
@@ -66,8 +70,10 @@ pub fn check_structural_recursion(prog: &Program, errors: &mut Vec<CheckError>) 
 ///
 /// For each total function `f`, check every callee `g` (where `g != f`) to see
 /// if `g` can reach back to `f` via the call graph.  If so, `f` participates in
-/// a mutual recursion cycle and must be marked `partial` or provide a `decreases`
-/// measure across the cycle.
+/// a mutual recursion cycle and must be marked `partial` — there is no
+/// function-level `decreases` to provide instead (`decreases` is only a
+/// `while`-loop clause), and this check does not attempt a cross-function
+/// measure across the cycle even if one would exist (#2216).
 pub fn check_mutual_recursion(
     prog: &Program,
     call_graph: &CallGraph,
