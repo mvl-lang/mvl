@@ -227,7 +227,13 @@ fn pull_in_types(
     all_type_decls: &HashMap<String, TypeDecl>,
     expr_types: &HashMap<Span, Ty>,
 ) {
+    // Sorted, not iterated straight off the `HashSet` — same nondeterminism
+    // class as `fn_calls` below: `seed`'s iteration order is randomized
+    // per-process, and that order becomes `merged.types`' final append
+    // order, i.e. the emitted module's type/struct-layout registration
+    // order (#2193).
     let mut worklist: Vec<String> = seed.into_iter().collect();
+    worklist.sort();
     while let Some(name) = worklist.pop() {
         if known_types.contains(&name) {
             continue;
@@ -245,10 +251,12 @@ fn pull_in_types(
             mvl::mvl::passes::mono::monomorphize(&synthetic, &HashMap::new(), expr_types);
         let syn_tir = mvl::mvl::ir::lower::lower(&synthetic, &syn_mono, expr_types);
 
-        let mut field_refs = HashSet::new();
+        let mut field_refs_set = HashSet::new();
         for new_td in &syn_tir.types {
-            type_decl_field_refs(new_td, &mut field_refs);
+            type_decl_field_refs(new_td, &mut field_refs_set);
         }
+        let mut field_refs: Vec<String> = field_refs_set.into_iter().collect();
+        field_refs.sort();
         for r in field_refs {
             if !known_types.contains(&r) {
                 worklist.push(r);
