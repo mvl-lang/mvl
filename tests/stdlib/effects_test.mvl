@@ -20,7 +20,7 @@ fn greet(name: String) -> String ! Console {
     "Hello, ".concat(name)
 }
 
-test fn console_effect_in_signature() -> Unit {
+test fn console_effect_in_signature() -> Unit ! Console {
     // Just verify it compiles and runs
     let msg: String = greet("World");
     assert_eq(msg.len() > 0, true);
@@ -31,7 +31,7 @@ fn read_and_log(path: String) -> String ! FileRead + Console {
     path.concat(" (would be read)")
 }
 
-test fn multiple_effects_in_signature() -> Unit {
+test fn multiple_effects_in_signature() -> Unit ! FileRead + Console {
     let result: String = read_and_log("/tmp/test");
     assert_eq(result.contains("would be read"), true);
 }
@@ -43,7 +43,7 @@ fn log_message(msg: String) -> String ! Log {
     "[LOG] ".concat(msg)
 }
 
-test fn log_effect_subsumes_clock_console() -> Unit {
+test fn log_effect_subsumes_clock_console() -> Unit ! Log {
     let result: String = log_message("test");
     assert_eq(result.starts_with("[LOG]"), true);
 }
@@ -58,7 +58,7 @@ fn Counter::display(self) -> String ! Console {
     "Counter: ".concat(self.value.to_string())
 }
 
-test fn effect_on_method() -> Unit {
+test fn effect_on_method() -> Unit ! Console {
     let c: Counter = Counter { value: 42 };
     let s: String = c.display();
     assert_eq(s, "Counter: 42");
@@ -74,7 +74,7 @@ fn outer() -> Int ! Console {
     inner()
 }
 
-test fn effect_propagates_to_caller() -> Unit {
+test fn effect_propagates_to_caller() -> Unit ! Console {
     assert_eq(outer(), 42);
 }
 
@@ -84,7 +84,7 @@ fn do_io(x: Int) -> Int ! IO {
     x + 1
 }
 
-test fn io_composite_effect() -> Unit {
+test fn io_composite_effect() -> Unit ! IO {
     assert_eq(do_io(10), 11);
 }
 
@@ -94,6 +94,6 @@ fn do_actor_stuff(x: Int) -> Int ! Actor {
     x * 2
 }
 
-test fn actor_composite_effect() -> Unit {
+test fn actor_composite_effect() -> Unit ! Actor {
     assert_eq(do_actor_stuff(5), 10);
 }
