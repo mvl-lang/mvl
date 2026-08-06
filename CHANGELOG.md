@@ -1,5 +1,11 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixed — #2225
+
+- **`cargo build --release --workspace` failed to link `mvl_runtime_wasm` on native hosts** (e.g. `brew install mvl` on macOS/Linux). #2093 Phase 2's `epoch_nanos_now()` cfg-gate, `not(target_os = "wasi")`, was meant to select only the browser (`wasm32-unknown-unknown`) target for the JS-host `_mvl_js_now_ms` import, but also matched every native host target — main CI never caught it since it never builds `mvl_runtime_wasm` via `--workspace`. Narrowed to `all(target_arch = "wasm32", not(target_os = "wasi"))`; native hosts fall back to `std::time::SystemTime`, matching pre-#2093 behavior.
+
 ## [1.7.4] - 2026-07-31
 
 ### Added — #2093 (Phase 2)
