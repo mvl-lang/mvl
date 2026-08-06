@@ -10418,12 +10418,15 @@ fn emit_wasi_runtime_common(
     out.push_str("  (data (i32.const 20) \"\\n\")\n");
 
     // Emit string literals in ascending-offset order so the WAT is stable
-    // across runs — HashMap iteration order isn't.
+    // across runs — HashMap iteration order isn't. Distinct literals can
+    // share an offset (e.g. two empty-string literals both reuse the same
+    // zero-length slot), so a sort on offset alone is a stable sort over
+    // HashMap-iteration-order ties — break ties on content too (#2193).
     let mut entries: Vec<(&String, u32, u32)> = literals
         .iter()
         .map(|(s, (off, len))| (s, *off, *len))
         .collect();
-    entries.sort_by_key(|(_, off, _)| *off);
+    entries.sort_by(|(a, off_a, _), (b, off_b, _)| off_a.cmp(off_b).then_with(|| a.cmp(b)));
     for (content, offset, _len) in entries {
         out.push_str(&format!(
             "  (data (i32.const {offset}) \"{}\")\n",
