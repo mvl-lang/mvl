@@ -339,6 +339,19 @@ impl RustEmitter {
         // parameter borrow flags into capability_params_map.
         // #1467: also resolve named fn-type aliases (`type Dispatcher = fn(val T) -> U`)
         // so the HOF param's inner signature is visible through the alias.
+        //
+        // Always insert an overlay entry for every HOF-typed parameter, even when
+        // its own inner signature has no explicit ref markers (`flags` all `None`).
+        // `capability_params_map` is one flat, program-wide `HashMap<String, _>`
+        // shared between real global function names and these local overlay
+        // entries — skipping the insert here left a HOF param's name (`f`, the
+        // universal `std/lists.mvl` convention: `List[T]::any(self, f: fn(T) ->
+        // Bool)`) with nothing shadowing whatever a same-named *global* function
+        // happened to register. A user's own top-level `fn f(xs: ref List[Int],
+        // ...)` then leaked its `&mut`-borrow flags into every generic-prelude
+        // HOF body that also names its closure parameter `f`, mangling `f(x)`
+        // into `f(&mut x)` inside `any`'s dead (but still compiled) monomorphized
+        // copy (#2137) — a stack-type mismatch `rustc` rejects outright.
         let mut hof_param_entries: Vec<(String, Option<Vec<Option<bool>>>)> = Vec::new();
         for param in &fd.params {
             let resolved = self.resolve_fn_alias(&param.ty).unwrap_or(&param.ty);
@@ -353,10 +366,8 @@ impl RustEmitter {
                         }
                     })
                     .collect();
-                if flags.iter().any(|b| b.is_some()) {
-                    let previous = self.capability_params_map.insert(param.name.clone(), flags);
-                    hof_param_entries.push((param.name.clone(), previous));
-                }
+                let previous = self.capability_params_map.insert(param.name.clone(), flags);
+                hof_param_entries.push((param.name.clone(), previous));
             }
         }
 
