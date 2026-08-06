@@ -456,15 +456,25 @@ impl TypeEnv {
                 ..Default::default()
             },
         );
-        // panic — unconditional termination; return type is Never (the bottom type)
-        // so it is compatible with any expected type in match arms, if-branches, etc.
-        // Marked partial because it aborts rather than returning a value.
+        // panic — return type is Never (the bottom type, #2217): a branch
+        // that calls panic never actually produces a value, so it unifies
+        // with whatever type the other branch of a match arm/if-expression
+        // has, rather than forcing that branch to also be Never.
+        //
+        // Deliberately NOT `Totality::Partial` (#2213 decision): Req 8
+        // ("total") means "terminates", not "always returns normally" —
+        // panic terminates (it aborts), so a `total fn` calling it is sound.
+        // Domain partiality (division by zero, out-of-bounds indexing) is
+        // Req 10's job via refinements, not Req 8's. This used to disagree
+        // with `std/core.mvl`'s unannotated (implicitly total) `panic`
+        // declaration, which always won because the prelude loads after
+        // this table and overwrites it outright — so the `Partial` here was
+        // silently dead code. Matching it here removes that trap.
         self.fns.insert(
             "panic".into(),
             FnInfo {
                 params: vec![Ty::String],
                 ret: Ty::Never,
-                totality: Some(Totality::Partial),
                 ..Default::default()
             },
         );

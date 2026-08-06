@@ -1,6 +1,6 @@
 # 9. Totality and Termination
 
-Functions are total by default ([Req 8](../requirements.md#req-8)). The compiler verifies that total functions always terminate and return a value.
+Functions are total by default ([Req 8](../requirements.md#req-8)). The compiler verifies that total functions always terminate — `total` means *terminates*, not *always returns a value by reaching the end of its body normally*. A total function may still call `panic` and abort; see §9.5.
 
 ## 9.1 Total Functions (Default)
 
@@ -65,10 +65,31 @@ partial fn repl() -> Never ! Console {
 ## 9.5 Why This Matters
 
 A total function that type-checks is guaranteed to:
-- Always return a value
 - Never hang
 - Never consume unbounded resources
+- Either return a value or terminate by aborting (e.g. via `panic`) — it never runs forever
 
-This makes total functions safe to call in any context — including refinement type checking, compile-time evaluation, and safety-critical systems where non-termination is a defect.
+`total` is a claim about *termination*, not about *always producing a value by falling off the end of the body*. `panic` (and `exit`, `assert`, `assert_eq`, `assert_ne`) terminate — they abort rather than hang — so they are implicitly total and callable from any total function:
+
+```mvl
+fn unreachable_branch() -> Never {
+    panic("this should never happen");
+}
+```
+
+This is intentional, not a loophole: Req 8 exists to rule out non-termination, and an abort is not non-termination. Domain partiality — division by zero, out-of-bounds indexing, and similar runtime failure modes — is [Req 10](../requirements.md#req-10)'s job, enforced through refinement types (e.g. `fn safe_divide(a: Float, b: Float where b != 0.0) -> Float`), not Req 8's.
+
+`Never` (the return type of `panic` and similar always-aborting functions) is the *bottom type*: it has no values and is compatible with any expected type. In a branch (`if`/`match`), an arm typed `Never` contributes nothing to the branches' combined type — the other arm's type wins, regardless of which arm is written first:
+
+```mvl
+fn unwrap_or_die(x: Option[Int]) -> Int {
+    match x {
+        None => panic("expected a value"),  // Never — contributes nothing
+        Some(v) => v,                        // Int — this is the match's type
+    }
+}
+```
+
+This makes total functions safe to call in any context — including refinement type checking, compile-time evaluation, and safety-critical systems where *hanging* is a defect. (An explicit `panic` is not silent: it is a deliberate abort, visible in the source and, at runtime, in the failure message.)
 
 The irony: the MVL parser itself had an infinite loop during development. A language that enforces termination on user code cannot guarantee the same for its own tooling — unless the compiler is itself written in MVL (Phase 3: self-hosting).

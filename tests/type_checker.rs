@@ -6312,6 +6312,82 @@ fn panic_in_match_arm_unifies_with_any_type() {
     );
 }
 
+/// #2217: unlike `panic_in_match_arm_unifies_with_any_type` above (where the
+/// concrete-typed arm comes FIRST, so the old "first non-Unknown arm wins"
+/// logic happened to pick it by accident of ordering), this puts the
+/// `panic`-typed arm first. Before the bottom-type fix, `check_match_arms`
+/// would have picked `Never` as the match's overall type and left the real
+/// `Int` arm unchecked against it.
+#[test]
+fn panic_in_first_match_arm_still_unifies_with_later_concrete_arm() {
+    let src = r#"
+        pub builtin fn panic(message: String) -> Never
+        fn unwrap_int(x: Option[Int]) -> Int {
+            match x {
+                None => panic("unwrap on None"),
+                Some(v) => v,
+            }
+        }
+    "#;
+    let errors = errors_for(src);
+    assert!(
+        !errors
+            .iter()
+            .any(|e| matches!(e, CheckError::TypeMismatch { .. })),
+        "panic() in the first match arm should not force the match's type to Never, got: {errors:?}"
+    );
+}
+
+/// #2217: `if c { panic(...) } else { v }` — the issue's exact repro. Before
+/// the fix, the `then` branch's `Never` type was used as the "expected" type
+/// for the `else` branch, rejecting any concrete `else` value outright.
+#[test]
+fn panic_in_if_then_branch_unifies_with_else_branch() {
+    let src = r#"
+        pub builtin fn panic(message: String) -> Never
+        total fn f(x: Int) -> Int { if x < 0 { panic("neg") } else { x } }
+    "#;
+    let errors = errors_for(src);
+    assert!(
+        !errors
+            .iter()
+            .any(|e| matches!(e, CheckError::TypeMismatch { .. })),
+        "panic() in the if-branch should not force the if-expr's type to Never, got: {errors:?}"
+    );
+}
+
+/// #2217: the reverse ordering of the above — `if c { v } else { panic(...) }`.
+/// Both orderings must type-check identically; bottom-type unification must
+/// not depend on which branch is written first.
+#[test]
+fn panic_in_if_else_branch_unifies_with_then_branch() {
+    let src = r#"
+        pub builtin fn panic(message: String) -> Never
+        total fn f(x: Int) -> Int { if x < 0 { x } else { panic("neg") } }
+    "#;
+    let errors = errors_for(src);
+    assert!(
+        !errors
+            .iter()
+            .any(|e| matches!(e, CheckError::TypeMismatch { .. })),
+        "panic() in the else-branch should not force the if-expr's type to Never, got: {errors:?}"
+    );
+}
+
+/// #2213: `panic`/`exit`/`assert*` are implicitly total (Req 8 means
+/// "terminates", not "always returns a value") — a `total fn` may call
+/// `panic` directly, including as its entire body with a `Never` return type.
+#[test]
+fn total_fn_returning_never_via_panic_accepted() {
+    let src = r#"total fn always_dies() -> Never { panic("dead") }"#;
+    let errors = errors_for(src);
+    assert!(
+        errors.is_empty(),
+        "a total fn calling panic() should not be rejected — panic terminates \
+         (Req 8), it just doesn't return a value, got: {errors:?}"
+    );
+}
+
 /// An early `return` inside a for-loop body is type-checked against the
 /// function's declared return type, not against Unit.
 #[test]
