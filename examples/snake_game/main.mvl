@@ -31,13 +31,13 @@ use input::key_to_direction;
 // ── Trust boundary: terminal lifecycle, input, clock, random ──────────────────
 
 extern "rust" {
-    fn tui_init() -> Int;
-    fn tui_drop() -> Unit;
-    fn tui_read_key_timeout(millis: Int) -> String;
-    fn tui_set_cursor(row: Int, col: Int) -> Unit;
-    fn tui_print(text: String, bold: Bool, underline: Bool, fg_color: Int) -> Unit;
-    fn clock_ms() -> Int;
-    fn rand_next(seed: Int) -> Int;
+    total fn tui_init() -> Int;
+    total fn tui_drop() -> Unit;
+    total fn tui_read_key_timeout(millis: Int) -> String;
+    total fn tui_set_cursor(row: Int, col: Int) -> Unit;
+    total fn tui_print(text: String, bold: Bool, underline: Bool, fg_color: Int) -> Unit;
+    total fn clock_ms() -> Int;
+    total fn rand_next(seed: Int) -> Int;
 }
 
 // ── Random food placement ─────────────────────────────────────────────────────

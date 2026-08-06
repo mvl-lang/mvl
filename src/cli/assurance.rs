@@ -669,10 +669,13 @@ pub fn run(path: &str, json: bool, verbose: bool) {
                 } else {
                     "fn"
                 };
-                let totality = match &fd.totality {
-                    Some(Totality::Total) => "total",
-                    Some(Totality::Partial) => "partial",
-                    None => "total*",
+                let totality = match (&fd.totality, fd.is_extern) {
+                    (Some(Totality::Total), _) => "total",
+                    (Some(Totality::Partial), _) => "partial",
+                    // Extern fns default to `partial` (trust boundary, #2212);
+                    // MVL fns default to `total` (implicitly total).
+                    (None, true) => "partial*",
+                    (None, false) => "total*",
                 };
                 let effects = if fd.effects.is_empty() {
                     "-".to_string()
@@ -695,7 +698,7 @@ pub fn run(path: &str, json: bool, verbose: bool) {
                     fd.name, kind, totality, effects, caps, refs
                 );
             }
-            println!("  * implicit total (no explicit keyword)");
+            println!("  * implicit default (no explicit keyword): total for fn, partial for extern");
         }
     }
 
@@ -961,5 +964,49 @@ mod assurance_tests {
             .find(|d| d.name == "check_it")
             .unwrap();
         assert!(test.is_test);
+    }
+
+    #[test]
+    fn extern_fn_totality_distinguishable_from_mvl_fn() {
+        // #2212: extern fns are a trust boundary, not verified code — their
+        // totality (and unannotated default) must be visible separately from
+        // an MVL `total fn`/`partial fn`, both in the counts and per-fn detail.
+        let src = r#"
+extern "rust" {
+    fn unannotated_extern() -> Int;
+    total fn vouched_total_extern() -> Int;
+    partial fn explicit_partial_extern() -> Int;
+}
+total fn proven_total_mvl_fn() -> Int { 1 }
+"#;
+        let prog = parse_prog(src);
+        let stats = collect_assurance_stats(&prog, true);
+
+        // Extern fns are never folded into the MVL total/partial buckets.
+        assert_eq!(stats.extern_fn_count, 3);
+        assert_eq!(stats.total_fn_count, 1);
+        assert_eq!(stats.explicit_total_fn_count, 1);
+        assert_eq!(stats.partial_fn_count, 0);
+
+        let detail = |name: &str| stats.fn_details.iter().find(|d| d.name == name).unwrap();
+
+        assert!(detail("unannotated_extern").is_extern);
+        assert_eq!(detail("unannotated_extern").totality, None);
+
+        assert!(detail("vouched_total_extern").is_extern);
+        assert_eq!(
+            detail("vouched_total_extern").totality,
+            Some(Totality::Total)
+        );
+
+        assert!(detail("explicit_partial_extern").is_extern);
+        assert_eq!(
+            detail("explicit_partial_extern").totality,
+            Some(Totality::Partial)
+        );
+
+        let mvl_fn = detail("proven_total_mvl_fn");
+        assert!(!mvl_fn.is_extern);
+        assert_eq!(mvl_fn.totality, Some(Totality::Total));
     }
 }

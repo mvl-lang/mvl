@@ -19,9 +19,9 @@ use game::Pos;
 // ── Terminal output primitives ────────────────────────────────────────────────
 
 extern "rust" {
-    fn tui_clear() -> Unit;
-    fn tui_set_cursor(row: Int, col: Int) -> Unit;
-    fn tui_print(text: String, bold: Bool, underline: Bool, fg_color: Int) -> Unit;
+    total fn tui_clear() -> Unit;
+    total fn tui_set_cursor(row: Int, col: Int) -> Unit;
+    total fn tui_print(text: String, bold: Bool, underline: Bool, fg_color: Int) -> Unit;
 }
 
 // ── Internal helpers ──────────────────────────────────────────────────────────

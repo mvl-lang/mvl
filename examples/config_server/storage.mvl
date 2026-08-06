@@ -32,21 +32,21 @@ extern "rust" {
     // Attempting to log it before this call:
     //   log_info("key", {"api_key": api_key})   ← COMPILE ERROR (Secret[String])
     //   println(api_key)                          ← COMPILE ERROR (Secret[String])
-    fn init_auth_store(api_key: Secret[String]) -> Unit;
+    total fn init_auth_store(api_key: Secret[String]) -> Unit;
 
     // Verify a request's Authorization header against the stored api_key.
     // The stored Secret[String] is consumed entirely within Rust — it never
     // crosses back into MVL code, preventing any accidental leak.
-    fn verify_request_auth(provided: Tainted[String]) -> Result[Unit, HandlerError];
+    total fn verify_request_auth(provided: Tainted[String]) -> Result[Unit, HandlerError];
 
     // Read a non-secret config value by key.
-    fn store_get(key: String) -> Result[String, HandlerError];
+    total fn store_get(key: String) -> Result[String, HandlerError];
 
     // Write a validated config value; value must be String (caller sanitizes).
-    fn store_put(key: String, value: String) -> Result[String, HandlerError];
+    total fn store_put(key: String, value: String) -> Result[String, HandlerError];
 
     // Reset a config key to its default value.
-    fn store_reset(key: String) -> Result[String, HandlerError];
+    total fn store_reset(key: String) -> Result[String, HandlerError];
 }
 
 // ── Store access API ──────────────────────────────────────────────────────

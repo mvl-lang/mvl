@@ -4,7 +4,7 @@
 // A sibling bridge.rs is present; `mvl build` must succeed and copy it into src/.
 
 extern "rust" {
-    fn bridge_add(n: Int) -> Int;
+    total fn bridge_add(n: Int) -> Int;
 }
 
 fn main() -> Unit ! Console {

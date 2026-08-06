@@ -912,6 +912,63 @@ fn partial_call_in_total_function_rejected() {
     );
 }
 
+// ── #2212: Extern fn totality defaults to partial (trust boundary) ──────────
+
+#[test]
+fn unannotated_extern_call_in_total_fn_rejected() {
+    // GIVEN: total fn calls an unannotated extern fn
+    // THEN: PartialCallInTotal reported — the compiler cannot inspect the FFI
+    // body, so an unannotated extern is a trust boundary, not a proof (#2212).
+    let src = r#"
+        extern "rust" {
+            fn ffi_call() -> Int;
+        }
+        total fn caller() -> Int { ffi_call() }
+    "#;
+    let errors = errors_for(src);
+    assert!(
+        errors.iter().any(
+            |e| matches!(e, CheckError::PartialCallInTotal { callee, .. }
+                if callee == "ffi_call")
+        ),
+        "expected PartialCallInTotal(ffi_call), got: {errors:?}"
+    );
+}
+
+#[test]
+fn partial_fn_accepted_inside_extern_block() {
+    // GIVEN: an extern block with an explicit `partial fn`
+    // THEN: it parses and checks with no errors (partial is expressible, #2212)
+    let src = r#"
+        extern "rust" {
+            partial fn ffi_call() -> Int;
+        }
+        partial fn caller() -> Int { ffi_call() }
+    "#;
+    let errors = errors_for(src);
+    assert!(
+        errors.is_empty(),
+        "partial fn should be accepted inside an extern block, got: {errors:?}"
+    );
+}
+
+#[test]
+fn explicit_total_extern_vouched_call_accepted() {
+    // GIVEN: total fn calls an extern fn explicitly marked `total`
+    // THEN: no PartialCallInTotal — the author has explicitly vouched for it.
+    let src = r#"
+        extern "rust" {
+            total fn ffi_call() -> Int;
+        }
+        total fn caller() -> Int { ffi_call() }
+    "#;
+    let errors = errors_for(src);
+    assert!(
+        errors.is_empty(),
+        "explicitly-total extern should be callable from a total fn, got: {errors:?}"
+    );
+}
+
 // ── #135: Structural recursion (Req 8) ───────────────────────────────────────
 
 #[test]
@@ -2670,9 +2727,12 @@ fn extern_rust_deprecation_warning_suppressible() {
 #[test]
 fn extern_fn_callable_from_mvl_code() {
     // extern-declared functions must be resolvable in MVL call expressions.
+    // `total` is required here (#2212): unannotated externs default to
+    // `partial` (a trust boundary), so an implicitly-total caller needs an
+    // explicit vouch to call one without a PartialCallInTotal diagnostic.
     let errors = errors_for(
         r#"extern "rust" {
-    fn add_numbers(a: Int, b: Int) -> Int;
+    total fn add_numbers(a: Int, b: Int) -> Int;
 }
 fn use_extern(x: Int) -> Int {
     add_numbers(x, x)

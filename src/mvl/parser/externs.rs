@@ -105,10 +105,28 @@ impl Parser {
                         self.advance();
                     }
                 }
+                TokenKind::Partial => {
+                    self.advance(); // consume `partial`
+                    if matches!(self.peek_kind(), TokenKind::Fn) {
+                        if let Ok(f) = self.parse_extern_fn_decl(Some(Totality::Partial)) {
+                            fns.push(f);
+                        }
+                    } else {
+                        let err = ParseError {
+                            message: format!(
+                                "expected `fn` after `partial` inside extern block, found `{}`",
+                                self.peek_kind()
+                            ),
+                            span: self.peek_span(),
+                        };
+                        self.push_recover(err);
+                        self.advance();
+                    }
+                }
                 _ => {
                     let err = ParseError {
                         message: format!(
-                            "expected `fn` or `total fn` inside extern block, found `{}`",
+                            "expected `fn`, `total fn`, or `partial fn` inside extern block, found `{}`",
                             self.peek_kind()
                         ),
                         span: self.peek_span(),

@@ -12,7 +12,8 @@ use crate::mvl::checker::context::{
 use crate::mvl::checker::errors::CheckError;
 use crate::mvl::checker::types::{resolve, Ty};
 use crate::mvl::parser::ast::{
-    ActorDecl, Capability, ConstDecl, Decl, ExternDecl, FnDecl, ImplDecl, TypeBody, TypeDecl,
+    ActorDecl, Capability, ConstDecl, Decl, ExternDecl, FnDecl, ImplDecl, Totality, TypeBody,
+    TypeDecl,
 };
 use crate::mvl::parser::lexer::Span;
 use std::collections::{HashMap, HashSet};
@@ -204,8 +205,12 @@ impl TypeChecker {
                     params,
                     ret,
                     effects: f.effects.clone(),
-                    totality: None,
-                    type_params: vec![], // extern fns may or may not terminate
+                    // Extern fns are a trust boundary: the compiler cannot inspect the
+                    // FFI body, so an unannotated extern defaults to `partial` rather
+                    // than the implicitly-total default used for MVL fns. `total` on
+                    // an extern is then an explicit, auditable assumption. (#2212)
+                    totality: Some(f.totality.clone().unwrap_or(Totality::Partial)),
+                    type_params: vec![],
                 },
             );
         }

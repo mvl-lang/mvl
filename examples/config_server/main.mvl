@@ -76,30 +76,30 @@ type HandlerError = enum {
 extern "rust" {
     // Parse sample_config.json, validate all refinement constraints, and return
     // a Config. Returns Err if the file is missing or any value is out of range.
-    fn load_config(path: String) -> Result[Config, ConfigError] ! FileRead;
+    total fn load_config(path: String) -> Result[Config, ConfigError] ! FileRead;
 
     // Consume the api_key and store it securely inside Rust state.
     // After this call, config.api_key is moved — it cannot be accessed again.
     // IFC: attempting to log or print api_key before this call is a compile error.
-    fn init_auth_store(api_key: Secret[String]) -> Unit;
+    total fn init_auth_store(api_key: Secret[String]) -> Unit;
 
     // Return a pre-scripted demo request by index (simulates TCP accept + parse).
     // Returns None when the demo sequence is exhausted.
     // ! Net: in production this would block on a real TCP listener.
-    fn server_recv(index: Int) -> Option[Request] ! Net;
+    total fn server_recv(index: Int) -> Option[Request] ! Net;
 
     // Emit a response (demo: prints to stdout; production: TCP send).
     // ! Net + Console: network send + local display in the demo.
-    fn server_send(status: Int, body: String) -> Unit ! Net + Console;
+    total fn server_send(status: Int, body: String) -> Unit ! Net + Console;
 }
 
 // ── Dispatch bindings ─────────────────────────────────────────────────────
 
 extern "rust" {
-    fn verify_request_auth(provided: Tainted[String]) -> Result[Unit, HandlerError];
-    fn get_config_value(path: String) -> Result[String, HandlerError];
-    fn put_config_value(path: String, value: String) -> Result[String, HandlerError];
-    fn reset_config_value(path: String) -> Result[String, HandlerError];
+    total fn verify_request_auth(provided: Tainted[String]) -> Result[Unit, HandlerError];
+    total fn get_config_value(path: String) -> Result[String, HandlerError];
+    total fn put_config_value(path: String, value: String) -> Result[String, HandlerError];
+    total fn reset_config_value(path: String) -> Result[String, HandlerError];
 }
 
 fn dispatch(req: Request) -> Result[Response, HandlerError] {

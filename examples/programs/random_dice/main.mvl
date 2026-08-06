@@ -5,7 +5,7 @@
 // expect-pattern: rolled: ?
 
 extern "rust" {
-    fn roll_dice() -> Int;
+    total fn roll_dice() -> Int;
 }
 
 fn main() -> Unit ! Random + Console {
