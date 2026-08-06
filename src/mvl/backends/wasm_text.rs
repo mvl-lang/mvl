@@ -541,9 +541,15 @@ const RUNTIME_IMPORTS: &[(&str, &str)] = &[
         "_mvl_map_contains_key_si64",
         "(param i32 i32 i32) (result i32)",
     ),
+    // `.keys()` / `.values()` / `.remove(key)` (#2192) — dead-code-by-name
+    // shape in `std/collections.mvl`, matching `get`/`insert`/`contains_key`
+    // above: the emitter dispatches these natively instead of monomorphizing
+    // the self-recursive stdlib body.
     ("_mvl_map_keys_str", "(param i32) (result i32)"),
     ("_mvl_map_values_si64", "(param i32) (result i32)"),
     ("_mvl_map_values_str", "(param i32) (result i32)"),
+    ("_mvl_map_remove_si64", "(param i32 i32 i32) (result i32)"),
+    ("_mvl_map_remove_str", "(param i32 i32 i32) (result i32)"),
     ("_mvl_map_drop_si64", "(param i32)"),
     // Group G — Result ops (#1821 extension). i32 pointer to heap-allocated
     // MvlResult. Ok = tag 0, Err = tag 1. Corpus scope: Result[Int, String].
@@ -4531,6 +4537,24 @@ fn emit_expr(out: &mut String, expr: &TirExpr, ctx: &Ctx) {
             };
             emit_expr(out, receiver, ctx); // map ptr
             out.push_str(&format!("    call ${getter}\n"));
+        }
+        // `Map[K, V].remove(key)` — native arm (#2192), same self-recursion
+        // shape as `keys()`/`values()` above.
+        TirExprKind::MethodCall {
+            receiver,
+            method,
+            args,
+        } if map_key_val_ty(&receiver.ty).is_some() && method == "remove" && args.len() == 1 => {
+            ctx.needs_runtime.set(true);
+            let val_ty = map_key_val_ty(&receiver.ty).map(|(_, v)| v.clone());
+            let remover = if val_ty.as_ref().is_some_and(|v| is_string_ty(v, ctx)) {
+                "_mvl_map_remove_str"
+            } else {
+                "_mvl_map_remove_si64"
+            };
+            emit_expr(out, receiver, ctx); // map ptr
+            emit_expr(out, &args[0], ctx); // key → (ptr, len)
+            out.push_str(&format!("    call ${remover}\n"));
         }
         // Set[T].contains(val) / List[T].contains(val) — backed by MvlArray, so
         // the same linear scan serves both. `contains` returns Bool (i32).
@@ -8549,7 +8573,7 @@ pub fn emitter_handles_method_natively(receiver_ty: &Ty, method: &str) -> bool {
     if map_key_val_ty(receiver_ty).is_some() {
         return matches!(
             method,
-            "len" | "is_empty" | "get" | "insert" | "contains_key"
+            "len" | "is_empty" | "get" | "insert" | "contains_key" | "keys" | "values" | "remove"
         );
     }
     // `Set[T]::map` gets a dedicated native arm (#2124) — unlike
