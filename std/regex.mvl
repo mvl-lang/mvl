@@ -59,11 +59,13 @@ pub builtin fn compile(pattern: String) -> Result[Regex, RegexError]
 pub builtin fn find(re: Regex, s: String) -> Option[Match]
 
 /// Returns all non-overlapping matches of re in s.
-pub fn find_all(re: Regex, s: String) -> List[Match] {
+/// `partial`: the match-arm branching in the loop body is beyond what the
+/// checker's per-iteration `decreases` extractor can analyse (#2211).
+pub partial fn find_all(re: Regex, s: String) -> List[Match] {
     let result: ref List[Match] = [];
     let n: Int = s.len();
     let pos: ref Int = 0;
-    while pos <= n decreases n + 1 - pos {
+    while pos <= n {
         match find(re, s.substring(pos, n)) {
             None => { pos = n + 1 },
             Some(m) => {
@@ -76,7 +78,8 @@ pub fn find_all(re: Regex, s: String) -> List[Match] {
 }
 
 /// Replaces all matches of re in s with replacement.
-pub fn replace(re: Regex, s: String, replacement: String) -> String {
+/// `partial`: calls the now-`partial` `find_all` (#2211).
+pub partial fn replace(re: Regex, s: String, replacement: String) -> String {
     let matches: List[Match] = find_all(re, s);
     let result: ref String = "";
     let pos: ref Int = 0;

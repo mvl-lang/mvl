@@ -12,7 +12,7 @@
 //! `build_param_var_refs`, `build_fn_decls_for_solver`) are accessed via
 //! `super::`; visibility is `pub(super)` on the parent definitions.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::mvl::checker::errors::CheckError;
 use crate::mvl::checker::refinements::{
@@ -21,7 +21,7 @@ use crate::mvl::checker::refinements::{
 use crate::mvl::checker::solver::{RefResult, SolverMode};
 use crate::mvl::parser::ast::{
     expr_to_ref_expr_ext, ActorDecl, ArithOp, Block, CmpOp, Decl, ElseBranch, Expr, FieldDecl,
-    LValue, LetKind, Literal, LogicOp, MatchBody, Program, RefExpr, Stmt, TypeBody, UnaryOp,
+    LValue, Literal, LogicOp, MatchBody, Program, RefExpr, Stmt, TypeBody, UnaryOp,
     VariantFields,
 };
 use crate::mvl::parser::lexer::Span;
@@ -232,13 +232,14 @@ fn extract_simple_assignments(body: &Block) -> Option<HashMap<String, Expr>> {
             } => {
                 effects.insert(name.clone(), value.clone());
             }
-            // Ghost bindings and bare expression statements have no effect on
-            // the variables tracked in invariants / decreases measures.
-            Stmt::Let {
-                kind: LetKind::Ghost,
-                ..
-            }
-            | Stmt::Expr { .. } => {}
+            // `let` bindings (ghost or not) introduce a new local name — they
+            // never mutate an outer `ref` variable, so they can't affect the
+            // tracked measure regardless of kind (#2211: this used to only
+            // tolerate `Ghost` lets, bailing on every ordinary temporary
+            // binding — e.g. `let c: String = pattern.char_at(i)...;` —
+            // even though such a binding is provably irrelevant to decrease).
+            // Bare expression statements are likewise no-effect.
+            Stmt::Let { .. } | Stmt::Expr { .. } => {}
             // Any control flow makes static analysis too complex → RuntimeCheck.
             _ => return None,
         }
@@ -424,18 +425,45 @@ fn check_decreases_across_iteration(
     loop_span: Span,
     ctx: &mut ContractCheckCtx<'_>,
 ) {
+    // A `decreases` measure the extractor cannot analyse is indistinguishable,
+    // to a reader, from one that was proven — so treat "too complex to
+    // analyse" the same as "proven not to decrease" rather than silently
+    // accepting it (#2211). The annotation must never claim more than the
+    // checker actually verified.
     let Some(effects_exprs) = extract_simple_assignments(body) else {
-        return; // Too complex — RuntimeCheck (no error at compile time).
+        ctx.errors.push(CheckError::DecreasesNotDecreasing {
+            fn_name: fn_name.to_string(),
+            measure: display_pred(decreases_expr),
+            span: loop_span,
+        });
+        return;
     };
 
-    // Convert Expr effects to RefExpr effects.
+    // Convert Expr effects to RefExpr effects — only for variables the
+    // decreases measure actually references. An effect on a variable the
+    // measure never mentions can't affect whether the measure decreases, so
+    // it must not sink an otherwise-analysable proof (e.g. `decreases fuel`
+    // with a sibling `result = result.concat(fill)` effect in the body).
+    let measure_vars: HashSet<String> = collect_ident_names(decreases_expr).into_iter().collect();
     let mut effects_ref: HashMap<String, RefExpr> = HashMap::new();
     for (var, expr) in &effects_exprs {
+        if !measure_vars.contains(var) {
+            continue;
+        }
         match expr_to_ref_expr_ext(expr, loop_span) {
             Some(ref_e) => {
                 effects_ref.insert(var.clone(), ref_e);
             }
-            None => return, // Can't convert — RuntimeCheck.
+            None => {
+                // Same reasoning as above: an effect we can't model is an
+                // unproven measure, not a silently-accepted one.
+                ctx.errors.push(CheckError::DecreasesNotDecreasing {
+                    fn_name: fn_name.to_string(),
+                    measure: display_pred(decreases_expr),
+                    span: loop_span,
+                });
+                return;
+            }
         }
     }
 

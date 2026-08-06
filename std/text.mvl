@@ -81,12 +81,14 @@ pub fn Span::intersect(self, other: Span) -> Span {
 ///   span.text("a,bb,ccc")       → "a", "bb", "ccc"
 ///
 /// Empty `sep`: advances one character per step (avoids infinite loop).
-pub fn String::split_spans(self, sep: String) -> List[Span] {
+/// `partial`: the match-arm branching in the loop body is beyond what the
+/// checker's per-iteration `decreases` extractor can analyse (#2211).
+pub partial fn String::split_spans(self, sep: String) -> List[Span] {
     let sep_len: Int = sep.len();
     let src_len: Int = self.len();
     let result: ref List[Span] = [];
     let pos: ref Int = 0;
-    while pos <= src_len decreases src_len + 1 - pos {
+    while pos <= src_len {
         match self.substring(pos, src_len).find(sep) {
             None => {
                 result.push(Span { start: pos, end: src_len });
@@ -106,12 +108,13 @@ pub fn String::split_spans(self, sep: String) -> List[Span] {
 ///
 /// Zero long-lived string allocations.
 /// Empty `needle`: advances one character per step.
-pub fn String::find_all_spans(self, needle: String) -> List[Span] {
+/// `partial`: same reasoning as `split_spans` above (#2211).
+pub partial fn String::find_all_spans(self, needle: String) -> List[Span] {
     let needle_len: Int = needle.len();
     let src_len: Int = self.len();
     let result: ref List[Span] = [];
     let pos: ref Int = 0;
-    while pos <= src_len decreases src_len + 1 - pos {
+    while pos <= src_len {
         match self.substring(pos, src_len).find(needle) {
             None => { pos = src_len + 1 },
             Some(rel) => {

@@ -7320,7 +7320,18 @@ fn decreases_parses_in_while_loop() {
 #[test]
 fn decreases_method_call_parses_and_preserves_body() {
     // GIVEN: `decreases` clause contains a method call expression (#968)
-    // THEN: parses without error AND loop body is not silently dropped
+    // THEN: parses without error AND the loop body is not silently dropped.
+    //
+    // Verified structurally (parser + AST shape) rather than via `check_src`:
+    // since #2211, the checker correctly flags this measure as unproven
+    // (`.concat()` isn't a representable per-iteration effect — and rightly
+    // so, since `n - result.len()` does not decrease when `fill` is empty).
+    // A zero-checker-errors assertion would no longer distinguish "body
+    // preserved but correctly flagged" from the historical #968 bug (body
+    // silently dropped, which also yields zero errors) — so assert directly
+    // on the parsed body instead.
+    use mvl::mvl::parser::ast::{Decl, Stmt};
+
     let src = r#"
         partial fn pad_right(s: String, n: Int, fill: String) -> String {
             let result: ref String = s;
@@ -7330,11 +7341,35 @@ fn decreases_method_call_parses_and_preserves_body() {
             result
         }
     "#;
-    let result = check_src(src);
+    let (mut p, lex_errors) = Parser::new(src);
+    let prog = p.parse_program();
+    assert!(lex_errors.is_empty(), "unexpected lex errors: {lex_errors:?}");
     assert!(
-        result.is_ok(),
-        "decreases with method call should parse and type-check, got: {:?}",
-        result.errors
+        p.errors().is_empty(),
+        "unexpected parse errors: {:?}",
+        p.errors()
+    );
+    let fd = prog
+        .declarations
+        .iter()
+        .find_map(|d| match d {
+            Decl::Fn(fd) if fd.name == "pad_right" => Some(fd),
+            _ => None,
+        })
+        .expect("pad_right fn not found");
+    let loop_body = fd
+        .body
+        .stmts
+        .iter()
+        .find_map(|s| match s {
+            Stmt::While { body, .. } => Some(body),
+            _ => None,
+        })
+        .expect("while loop not found in pad_right body");
+    assert_eq!(
+        loop_body.stmts.len(),
+        1,
+        "loop body should have 1 statement (not silently dropped), got: {loop_body:?}"
     );
 }
 
@@ -7414,6 +7449,77 @@ fn decreases_not_decreasing_detected() {
             .any(|e| matches!(e, CheckError::DecreasesNotDecreasing { .. })),
         "increasing measure should produce DecreasesNotDecreasing, got: {:?}",
         errors
+    );
+}
+
+// ── #2211: unprovable decreases measures must not be silently accepted ──────
+
+#[test]
+fn decreases_over_complex_body_rejected_not_silently_accepted() {
+    // GIVEN: two `total fn`s with the IDENTICAL non-decreasing measure
+    // `decreases n` (n is never reassigned) — one with a simple loop body,
+    // one with an if/else the checker's per-iteration effect extractor
+    // cannot analyse. Before #2211, the complex one was silently accepted
+    // (RuntimeCheck, no diagnostic) purely because the extractor bailed —
+    // indistinguishable from a proven measure. Both must now be rejected.
+    let simple_src = r#"
+        total fn simple_bad(n: Int) -> Int {
+            let i: ref Int = 0;
+            while i < n decreases n { i = i + 1; }
+            i
+        }
+    "#;
+    let complex_src = r#"
+        total fn complex_bad(n: Int) -> Int {
+            let i: ref Int = 0;
+            let acc: ref Int = 0;
+            while i < n decreases n {
+                if i > 5 { acc = acc + 2; i = i + 1; } else { acc = acc + 1; i = i + 1; }
+            }
+            acc
+        }
+    "#;
+    let simple_errors = errors_for(simple_src);
+    assert!(
+        simple_errors
+            .iter()
+            .any(|e| matches!(e, CheckError::DecreasesNotDecreasing { fn_name, .. } if fn_name == "simple_bad")),
+        "simple_bad: expected DecreasesNotDecreasing, got: {simple_errors:?}"
+    );
+    let complex_errors = errors_for(complex_src);
+    assert!(
+        complex_errors.iter().any(
+            |e| matches!(e, CheckError::DecreasesNotDecreasing { fn_name, .. } if fn_name == "complex_bad")
+        ),
+        "complex_bad: an unanalysable measure must be rejected, not silently accepted — got: {complex_errors:?}"
+    );
+}
+
+#[test]
+fn decreases_effect_irrelevant_to_measure_does_not_sink_proof() {
+    // GIVEN: `decreases fuel` where the loop body also reassigns `result` via
+    // a method call the extractor can't model (`.concat`) — but `result` is
+    // not referenced by the measure at all, and `fuel`'s own effect (`fuel -
+    // 1`) is trivially analysable and genuinely decreasing.
+    // THEN: no DecreasesNotDecreasing — an effect on an unrelated variable
+    // must not sink an otherwise-provable measure (#2211).
+    let src = r#"
+        total fn pad_right(s: String, n: Int, fill: String) -> String {
+            let result: ref String = s;
+            let fuel: ref Int = n;
+            while result.len() < n decreases fuel {
+                result = result.concat(fill);
+                fuel = fuel - 1
+            }
+            result
+        }
+    "#;
+    let errors = errors_for(src);
+    assert!(
+        !errors
+            .iter()
+            .any(|e| matches!(e, CheckError::DecreasesNotDecreasing { .. })),
+        "an effect on a variable the measure doesn't reference must not block proof, got: {errors:?}"
     );
 }
 

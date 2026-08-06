@@ -307,14 +307,16 @@ pub fn List[T]::max(self) -> Option[T] {
 /// `cmp(a, b)` returns `true` when `a` should be considered *less* than `b`.
 /// MVL-expressible alternative to [`min`] that avoids ADR-0053's ban on
 /// comparing unbounded generics.
-pub fn List[T]::min_by(self, cmp: fn(T, T) -> Bool) -> Option[T] {
+/// `partial`: the match/if branching in the loop body is beyond what the
+/// checker's per-iteration `decreases` extractor can analyse (#2211).
+pub partial fn List[T]::min_by(self, cmp: fn(T, T) -> Bool) -> Option[T] {
     match self.first() {
         None => None,
         Some(head) => {
             let best: ref T = head;
             let i: ref Int = 1;
             let n: Int = self.len();
-            while i < n decreases n - i {
+            while i < n {
                 match self.get(i) {
                     Some(x) => {
                         if cmp(x.clone(), best.clone()) {
@@ -335,14 +337,15 @@ pub fn List[T]::min_by(self, cmp: fn(T, T) -> Bool) -> Option[T] {
 /// `cmp(a, b)` returns `true` when `a` should be considered *less* than `b`;
 /// the element for which `cmp(other, self)` is true for every other element
 /// wins.
-pub fn List[T]::max_by(self, cmp: fn(T, T) -> Bool) -> Option[T] {
+/// `partial`: same reasoning as `min_by` above (#2211).
+pub partial fn List[T]::max_by(self, cmp: fn(T, T) -> Bool) -> Option[T] {
     match self.first() {
         None => None,
         Some(head) => {
             let best: ref T = head;
             let i: ref Int = 1;
             let n: Int = self.len();
-            while i < n decreases n - i {
+            while i < n {
                 match self.get(i) {
                     Some(x) => {
                         if cmp(best.clone(), x.clone()) {

@@ -149,7 +149,10 @@ pub actor Supervisor traps_exit {
         let _: Option[Int] = self.counts.remove(name);
         let all_ids: List[Int] = self.live.keys();
         let i: ref Int = 0;
-        while i < all_ids.len() decreases all_ids.len() - i {
+        // No `decreases`: actor methods have no partial/total marker (Req 8
+        // does not apply), and the checker's per-iteration effect extractor
+        // cannot see through the nested match/if below anyway (#2211).
+        while i < all_ids.len() {
             let kid: Int = all_ids.get(i).unwrap_or(0);
             match self.live.get(kid) {
                 Some(n) => {
@@ -253,7 +256,8 @@ pub actor Supervisor traps_exit {
                             // exists yet (Phase 9). Old instances are not stopped.
                             let all_ids: List[Int] = self.live.keys();
                             let ui: ref Int = 0;
-                            while ui < all_ids.len() decreases all_ids.len() - ui {
+                            // No `decreases`: see remove_child above (#2211).
+                            while ui < all_ids.len() {
                                 let kid: Int = all_ids.get(ui).unwrap_or(0);
                                 unlink(self.self_id, kid);
                                 ui = ui + 1;
@@ -300,7 +304,8 @@ pub actor Supervisor traps_exit {
                             while ri < self.order.len() decreases self.order.len() - ri {
                                 let child_name: String = self.order.get(ri).unwrap_or("");
                                 let ki: ref Int = 0;
-                                while ki < all_ids.len() decreases all_ids.len() - ki {
+                                // No `decreases`: see remove_child above (#2211).
+                                while ki < all_ids.len() {
                                     let kid: Int = all_ids.get(ki).unwrap_or(0);
                                     match self.live.get(kid) {
                                         Some(kid_name) => {
