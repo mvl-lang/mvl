@@ -53,8 +53,31 @@ struct RefCollector {
 impl<'a> Visit<'a> for RefCollector {
     fn visit_tir_expr(&mut self, e: &'a TirExpr) {
         match &e.kind {
-            TirExprKind::FnCall { name, .. } => {
+            TirExprKind::FnCall { name, args, .. } => {
                 self.fn_calls.insert(name.clone());
+                // Free-function syntax on an extension method (`is_none(c)`
+                // instead of `c.is_none()`) lowers to this same `FnCall`
+                // shape — the checker resolves both to the identical
+                // `FnDecl`, dispatch-wise indistinguishable here. But
+                // `all_fn_decls` (used to pull in a plain `fn_calls` name)
+                // deliberately never contains extension methods — they live
+                // only in `all_method_decls`, keyed by `(receiver_type,
+                // name)` to disambiguate same-named methods across types
+                // (`len`, `get`, ...). A bare-name call was invisible to the
+                // `method_refs` pull-in frontier, so its body never got
+                // lowered and the call site emitted a `call` to a symbol
+                // nobody defined (#2186). The first argument is always the
+                // receiver for a free-function-style extension-method call,
+                // so register it as a method_refs candidate the same way a
+                // real `MethodCall` would — a false-positive registration
+                // for a genuine plain function is harmless: the later
+                // `all_method_decls.get((type, name))` lookup just misses.
+                if let Some(receiver) = args.first() {
+                    if let Some(type_name) = named_type_name(&receiver.ty) {
+                        self.method_refs
+                            .push((type_name, name.clone(), receiver.ty.clone()));
+                    }
+                }
             }
             TirExprKind::Var(name) if name.contains("::") => {
                 self.variant_refs.insert(name.clone());
@@ -1917,6 +1940,41 @@ mod string_static_ctor_tests {
                  assert_eq(s, \"Hi\");\n\
              }\n",
         );
+    }
+
+    /// Regression for #2186: `is_none(choice(xs))` — free-function syntax on
+    /// a builtin-wrapper extension method (`c.is_none()`'s bare-name
+    /// sibling) — is the exact shape `tests/stdlib/random_test.mvl` already
+    /// used successfully under the Rust backend. Under `--backend=wasm` this
+    /// hit three compounding gaps: `pull_in_missing_prelude_items`'s
+    /// `RefCollector` only registered extension-method bodies reached via
+    /// `MethodCall`, never a `FnCall` referencing the same fn by plain name
+    /// (leaving the body unpulled, "unknown func"); `collect_generic_instantiations`
+    /// and `emit_expr`'s `FnCall` dispatch (`src/mvl/backends/wasm_text.rs`)
+    /// likewise only considered `MethodCall` receivers, so even once the
+    /// body was pulled in the call site kept the bare (wrong) name; and the
+    /// checker's `UndefinedFunction` fallback for this call shape always
+    /// returned `Ty::Unknown` for the whole expression, which the WASM
+    /// backend's `assert_eq` comparison-width selection defaulted to
+    /// Int-shaped (`i64.eq`) codegen for what's actually a `Bool` (`i32`) —
+    /// a validation failure once the naming gaps above were fixed.
+    #[test]
+    fn free_function_syntax_on_extension_method_assembles_and_validates() {
+        let (mut p, errs) = Parser::new(
+            "use std.random.{choice}\n\
+             test fn t() -> Unit ! Random {\n\
+                 let xs: List[Int] = [];\n\
+                 assert_eq(is_none(choice(xs)), true);\n\
+             }\n",
+        );
+        assert!(errs.is_empty(), "lex errors: {errs:?}");
+        let prog = p.parse_program();
+        assert!(p.errors().is_empty(), "parse errors: {:?}", p.errors());
+        let (wat, _tir) = compile_wat(&prog, "test", AssertMode::Always);
+        let bytes = wat::parse_str(&wat).unwrap_or_else(|e| panic!("assemble failed: {e}\n{wat}"));
+        if let Err(e) = wasmparser::Validator::new().validate_all(&bytes) {
+            panic!("validate failed: {e}\n{wat}");
+        }
     }
 }
 

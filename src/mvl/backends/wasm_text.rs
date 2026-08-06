@@ -4026,6 +4026,25 @@ fn emit_expr(out: &mut String, expr: &TirExpr, ctx: &Ctx) {
                 }
                 let mangled = mangle_generic_name(name, type_params, &subst);
                 out.push_str(&format!("    call ${mangled}\n"));
+            } else if let Some((_, _, mangled)) = args.first().and_then(|receiver| {
+                resolve_generic_method_call(
+                    receiver,
+                    name,
+                    &args[1..],
+                    ctx.generic_methods,
+                    ctx.type_subst,
+                )
+            }) {
+                // Free-function syntax on a generic extension method
+                // (`is_none(c)` instead of `c.is_none()`) — the args were
+                // already pushed above in call order (receiver first), which
+                // is exactly the shape `emit_generic_fn` expects for a method
+                // with a receiver, so only the callee name needs correcting
+                // here. Without this the call site kept the bare `$name` even
+                // once `collect_instantiations_in_expr` started emitting the
+                // mangled instantiation, referencing a symbol nobody defined
+                // under that name (#2186).
+                out.push_str(&format!("    call ${mangled}\n"));
             } else {
                 out.push_str(&format!("    call ${name}\n"));
             }
@@ -8916,6 +8935,27 @@ fn collect_instantiations_in_expr<'a>(
                 let mangled = mangle_generic_name(&gf.name, &gf.type_params, &subst);
                 if seen.insert(mangled.clone(), ()).is_none() {
                     result.push((gf, subst, mangled));
+                }
+            }
+        } else if let Some(receiver) = args.first() {
+            // Free-function syntax on a generic extension method (`is_none(c)`
+            // instead of `c.is_none()`) — checked only once the bare-name
+            // lookup above misses, so a genuine plain generic fn never gets
+            // reinterpreted as a method call. `resolve_generic_method_call`
+            // treats every extension method on a generic receiver (`Option`,
+            // `Result`, `List`, ...) as "generic" regardless of whether it
+            // introduces its own type param, since its declared receiver type
+            // (`Option[T]`) always carries the receiver's own `T` — `is_none`
+            // has no `type_params` of its own but still lands in
+            // `generic_ext_methods`, not the plain `ext_methods` bucket
+            // `emit_extension_method` iterates directly. Without this, the
+            // instantiation this call needs is never discovered and the
+            // module references a symbol nobody emitted (#2186).
+            if let Some((gm, subst, mangled)) =
+                resolve_generic_method_call(receiver, name, &args[1..], &callees.methods, outer)
+            {
+                if seen.insert(mangled.clone(), ()).is_none() {
+                    result.push((gm, subst, mangled));
                 }
             }
         }
