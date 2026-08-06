@@ -96,28 +96,34 @@ fn dt_pad4(n: Int) -> String {
 ///
 /// Supported specifiers: %Y (4-digit year), %m (month), %d (day),
 /// %H (hour), %M (minute), %S (second). Other % sequences pass through literally.
+///
+/// Advances `i` by exactly 1 every iteration (a specifier's second character
+/// is silently skipped on the following iteration via `pending_spec`) so the
+/// `decreases n - i` measure is a single unconditional increment the checker
+/// can verify, rather than a conditional `+1`-or-`+2` step it can't (#2211).
 pub fn format_datetime(t: DateTime, pattern: String) -> String {
     let n: Int = pattern.len();
     let result: ref String = "";
     let i: ref Int = 0;
+    let pending_spec: ref Bool = false;
     while i < n decreases n - i {
         let c: String = pattern.char_at(i).unwrap_or("");
-        if c == "%" && i + 1 < n {
-            let spec: String = pattern.char_at(i + 1).unwrap_or("");
-            let fmtd: String =
+        let is_spec_start: Bool = !pending_spec && c == "%" && i + 1 < n;
+        let spec: String = if is_spec_start { pattern.char_at(i + 1).unwrap_or("") } else { "" };
+        let piece: String =
+            if pending_spec { "" }
+            else if is_spec_start {
                 if spec == "Y" { dt_pad4(t.year) }
                 else if spec == "m" { dt_pad2(t.month) }
                 else if spec == "d" { dt_pad2(t.day) }
                 else if spec == "H" { dt_pad2(t.hour) }
                 else if spec == "M" { dt_pad2(t.minute) }
                 else if spec == "S" { dt_pad2(t.second) }
-                else { "%".concat(spec) };
-            result = result.concat(fmtd);
-            i = i + 2
-        } else {
-            result = result.concat(c);
-            i = i + 1
-        }
+                else { "%".concat(spec) }
+            } else { c };
+        result = result.concat(piece);
+        pending_spec = is_spec_start;
+        i = i + 1
     };
     result
 }

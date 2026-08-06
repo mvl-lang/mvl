@@ -16,11 +16,13 @@
 // ── String helpers ────────────────────────────────────────────────────────────
 
 /// Split string on first occurrence of sep, returning [before, after] or None.
-pub total fn split_once(s: String, sep: String) -> Option[List[String]] {
+/// `partial`: the loop body's early-return branch is beyond what the
+/// checker's per-iteration `decreases` extractor can analyse (#2211).
+pub partial fn split_once(s: String, sep: String) -> Option[List[String]] {
     let i: ref Int = 0;
     let sep_len: Int = sep.len();
     let s_len: Int = s.len();
-    while i <= s_len - sep_len decreases s_len - sep_len - i {
+    while i <= s_len - sep_len {
         let sub: String = s.substring(i, i + sep_len);
         if sub == sep {
             return Some([s.substring(0, i), s.substring(i + sep_len, s_len)])
@@ -512,7 +514,7 @@ test partial fn substitute_ty_list_inner() -> Unit {
     assert_eq(result, Ty::List(Box::new(Ty::Str)))
 }
 
-test fn split_once_finds_sep() -> Unit {
+test partial fn split_once_finds_sep() -> Unit {
     let result: Option[List[String]] = split_once("Type::method", "::");
     match result {
         Some(parts) => {
@@ -523,7 +525,7 @@ test fn split_once_finds_sep() -> Unit {
     }
 }
 
-test fn split_once_no_sep_returns_none() -> Unit {
+test partial fn split_once_no_sep_returns_none() -> Unit {
     let result: Option[List[String]] = split_once("nocolon", "::");
     assert_eq(result.is_none(), true)
 }
