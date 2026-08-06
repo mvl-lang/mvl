@@ -59,7 +59,7 @@ test fn config_as_map_from_map_returns_ok() -> Unit {
 
 // ── json.decode: parse a JSON string into Value ──────────────────────────────
 
-test fn json_decode_parses_simple_object() -> Unit {
+test partial fn json_decode_parses_simple_object() -> Unit {
     match decode("{\"port\": 8080}") {
         Ok(Value::Object(fields)) => {
             match fields.get("port") {
@@ -72,14 +72,14 @@ test fn json_decode_parses_simple_object() -> Unit {
 }
 // ── merge: scalar overlay ─────────────────────────────────────────────────────
 
-test fn config_merge_scalar_overlay_wins() -> Unit {
+test partial fn config_merge_scalar_overlay_wins() -> Unit {
     let base: ConfigValue = ConfigValue::Int(8080);
     let overlay: ConfigValue = ConfigValue::Int(9090);
     let result: ConfigValue = merge(base, overlay);
     assert_eq(as_int(result).unwrap_or(0), 9090)
 }
 
-test fn config_merge_null_overlay_wins() -> Unit {
+test partial fn config_merge_null_overlay_wins() -> Unit {
     let base: ConfigValue = ConfigValue::Int(42);
     let result: ConfigValue = merge(base, ConfigValue::Null);
     match result {
@@ -90,7 +90,7 @@ test fn config_merge_null_overlay_wins() -> Unit {
 
 // ── merge: map deep merge ─────────────────────────────────────────────────────
 
-test fn config_merge_maps_additive() -> Unit {
+test partial fn config_merge_maps_additive() -> Unit {
     let base: ConfigValue = ConfigValue::Map({"port": ConfigValue::Int(8080)});
     let overlay: ConfigValue = ConfigValue::Map({"host": ConfigValue::String("prod")});
 
@@ -112,7 +112,7 @@ test fn config_merge_maps_additive() -> Unit {
     }
 }
 
-test fn config_merge_maps_overlay_wins_on_conflict() -> Unit {
+test partial fn config_merge_maps_overlay_wins_on_conflict() -> Unit {
     let base_m: Map[String, ConfigValue] = {"port": ConfigValue::Int(8080)};
     let over_m: Map[String, ConfigValue] = {"port": ConfigValue::Int(9090)};
     let result: ConfigValue = merge(ConfigValue::Map(base_m), ConfigValue::Map(over_m));
@@ -127,7 +127,7 @@ test fn config_merge_maps_overlay_wins_on_conflict() -> Unit {
     }
 }
 
-test fn config_merge_nested_maps_deep() -> Unit {
+test partial fn config_merge_nested_maps_deep() -> Unit {
     // base: { db: { pool: 5, host: "localhost" } }
     let inner_base: Map[String, ConfigValue] = {"pool": ConfigValue::Int(5)}.put(
         "host", ConfigValue::String("localhost")
@@ -163,7 +163,7 @@ test fn config_merge_nested_maps_deep() -> Unit {
 
 // ── get_path ──────────────────────────────────────────────────────────────────
 
-test fn config_get_path_top_level() -> Unit {
+test partial fn config_get_path_top_level() -> Unit {
     let m: Map[String, ConfigValue] = {"port": ConfigValue::Int(8080)};
     let cfg: ConfigValue = ConfigValue::Map(m);
     match get_path(cfg, "port") {
@@ -172,7 +172,7 @@ test fn config_get_path_top_level() -> Unit {
     }
 }
 
-test fn config_get_path_missing_returns_none() -> Unit {
+test partial fn config_get_path_missing_returns_none() -> Unit {
     // {} is an empty block in MVL; use sentinel-and-remove to get an empty map.
     let m_empty: ref Map[String, ConfigValue] = {"__init__": ConfigValue::Null};
     m_empty.remove("__init__");
@@ -183,7 +183,7 @@ test fn config_get_path_missing_returns_none() -> Unit {
     }
 }
 
-test fn config_get_path_nested() -> Unit {
+test partial fn config_get_path_nested() -> Unit {
     let inner: Map[String, ConfigValue] = {"pool_size": ConfigValue::Int(10)};
     let outer: Map[String, ConfigValue] = {"database": ConfigValue::Map(inner)};
     let cfg: ConfigValue = ConfigValue::Map(outer);
@@ -193,7 +193,7 @@ test fn config_get_path_nested() -> Unit {
     }
 }
 
-test fn config_get_path_mid_missing_returns_none() -> Unit {
+test partial fn config_get_path_mid_missing_returns_none() -> Unit {
     let cfg: ConfigValue = ConfigValue::Map({"port": ConfigValue::Int(8080)});
     match get_path(cfg, "missing.key") {
         None    => assert(true),
@@ -283,35 +283,35 @@ test fn config_as_float_from_string() -> Unit {
 
 // ── from_json ─────────────────────────────────────────────────────────────────
 
-test fn config_from_json_null() -> Unit {
+test partial fn config_from_json_null() -> Unit {
     match from_json(Value::Null) {
         ConfigValue::Null => assert(true),
         _                 => assert(false),
     }
 }
 
-test fn config_from_json_bool() -> Unit {
+test partial fn config_from_json_bool() -> Unit {
     match from_json(Value::Bool(true)) {
         ConfigValue::Bool(b) => assert_eq(b, true),
         _                    => assert(false),
     }
 }
 
-test fn config_from_json_integer_number_becomes_int() -> Unit {
+test partial fn config_from_json_integer_number_becomes_int() -> Unit {
     match from_json(Value::Number(42.0)) {
         ConfigValue::Int(n) => assert_eq(n, 42),
         _                   => assert(false),
     }
 }
 
-test fn config_from_json_fractional_number_becomes_float() -> Unit {
+test partial fn config_from_json_fractional_number_becomes_float() -> Unit {
     match from_json(Value::Number(1.5)) {
         ConfigValue::Float(_) => assert(true),
         _                     => assert(false),
     }
 }
 
-test fn config_from_json_string() -> Unit {
+test partial fn config_from_json_string() -> Unit {
     match from_json(Value::String("hello")) {
         ConfigValue::String(s) => assert_eq(s, "hello"),
         _                      => assert(false),
@@ -320,28 +320,28 @@ test fn config_from_json_string() -> Unit {
 
 // ── from_toml ─────────────────────────────────────────────────────────────────
 
-test fn config_from_toml_int() -> Unit {
+test partial fn config_from_toml_int() -> Unit {
     match from_toml(TomlValue::TInt(8080)) {
         ConfigValue::Int(n) => assert_eq(n, 8080),
         _                   => assert(false),
     }
 }
 
-test fn config_from_toml_bool() -> Unit {
+test partial fn config_from_toml_bool() -> Unit {
     match from_toml(TomlValue::TBool(false)) {
         ConfigValue::Bool(b) => assert_eq(b, false),
         _                    => assert(false),
     }
 }
 
-test fn config_from_toml_string() -> Unit {
+test partial fn config_from_toml_string() -> Unit {
     match from_toml(TomlValue::TStr("world")) {
         ConfigValue::String(s) => assert_eq(s, "world"),
         _                      => assert(false),
     }
 }
 
-test fn config_from_toml_datetime_becomes_string() -> Unit {
+test partial fn config_from_toml_datetime_becomes_string() -> Unit {
     match from_toml(TomlValue::TDateTime("2024-01-01T00:00:00Z")) {
         ConfigValue::String(s) => assert_eq(s, "2024-01-01T00:00:00Z"),
         _                      => assert(false),
@@ -357,7 +357,7 @@ fn setup_env_cfg() -> ConfigValue {
     ConfigValue::Map(m)
 }
 
-test fn config_with_env_overrides_int() -> Unit ! Env {
+test partial fn config_with_env_overrides_int() -> Unit ! Env {
     let _: Unit = set("CFG_TEST_PORT", "9090").unwrap_or(());
     let cfg: ConfigValue = setup_env_cfg();
     let result: ConfigValue = with_env(cfg, "CFG_TEST").unwrap_or(ConfigValue::Null);
@@ -368,7 +368,7 @@ test fn config_with_env_overrides_int() -> Unit ! Env {
     }
 }
 
-test fn config_with_env_overrides_bool() -> Unit ! Env {
+test partial fn config_with_env_overrides_bool() -> Unit ! Env {
     let _: Unit = set("CFG_TEST2_VERBOSE", "true").unwrap_or(());
     let m: Map[String, ConfigValue] = {"verbose": ConfigValue::Bool(false)};
     let cfg: ConfigValue = ConfigValue::Map(m);
@@ -380,7 +380,7 @@ test fn config_with_env_overrides_bool() -> Unit ! Env {
     }
 }
 
-test fn config_with_env_no_match_keeps_base() -> Unit ! Env {
+test partial fn config_with_env_no_match_keeps_base() -> Unit ! Env {
     let cfg: ConfigValue = setup_env_cfg();
     // Use a prefix unlikely to match any real env var
     let result: ConfigValue = with_env(cfg, "MVLTEST_NOENV_XYZ987").unwrap_or(ConfigValue::Null);

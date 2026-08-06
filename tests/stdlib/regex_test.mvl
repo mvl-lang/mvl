@@ -47,39 +47,39 @@ test fn regex_find_text_matches_expected() -> Unit {
 
 // ── find_all ─────────────────────────────────────────────────────────────────
 
-fn count_matches(pattern: String, input: String) -> Int {
+partial fn count_matches(pattern: String, input: String) -> Int {
     match compile(pattern) {
         Ok(re) => find_all(re, input).len(),
         Err(_) => -1,
     }
 }
 
-test fn regex_find_all_counts_multiple_matches() -> Unit {
+test partial fn regex_find_all_counts_multiple_matches() -> Unit {
     assert_eq(count_matches("[0-9]+", "1 22 333"), 3);
 }
 
-test fn regex_find_all_returns_zero_for_no_match() -> Unit {
+test partial fn regex_find_all_returns_zero_for_no_match() -> Unit {
     assert_eq(count_matches("[0-9]+", "abc"), 0);
 }
 
 // ── replace ──────────────────────────────────────────────────────────────────
 
-fn replace_digits(input: String) -> String {
+partial fn replace_digits(input: String) -> String {
     match compile("[0-9]+") {
         Ok(re) => replace(re, input, "N"),
         Err(_) => input,
     }
 }
 
-test fn regex_replace_substitutes_matched_text() -> Unit {
+test partial fn regex_replace_substitutes_matched_text() -> Unit {
     assert_eq(replace_digits("abc 123 def"), "abc N def");
 }
 
-test fn regex_replace_no_match_returns_original() -> Unit {
+test partial fn regex_replace_no_match_returns_original() -> Unit {
     assert_eq(replace_digits("no digits here"), "no digits here");
 }
 
-test fn regex_replace_multiple_occurrences() -> Unit {
+test partial fn regex_replace_multiple_occurrences() -> Unit {
     assert_eq(replace_digits("1 2 3"), "N N N");
 }
 
