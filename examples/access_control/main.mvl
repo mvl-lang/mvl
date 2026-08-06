@@ -44,7 +44,7 @@ use std.math.{int_clamp}
 
 // ── Trust boundary: demo fixture data lives in Rust ───────────────────────
 extern "rust" {
-    fn get_demo_hash(username: String) -> Option[Secret[String]]
+    total fn get_demo_hash(username: String) -> Option[Secret[String]]
 }
 
 // Demo fixture: returns hardcoded hash for known usernames.

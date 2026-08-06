@@ -56,16 +56,16 @@ extern "rust" {
     // The stored Secret[String] never crosses back into MVL code — it lives entirely
     // in Rust state (see bridge.rs init_auth_store). This prevents any accidental
     // log or response inclusion.
-    fn verify_request_auth(provided: Tainted[String]) -> Result[Unit, HandlerError];
+    total fn verify_request_auth(provided: Tainted[String]) -> Result[Unit, HandlerError];
 
     // Read a stored config value. Returns JSON-formatted String.
-    fn get_config_value(path: String) -> Result[String, HandlerError];
+    total fn get_config_value(path: String) -> Result[String, HandlerError];
 
     // Update a stored config value; value is String (caller sanitizes).
-    fn put_config_value(path: String, value: String) -> Result[String, HandlerError];
+    total fn put_config_value(path: String, value: String) -> Result[String, HandlerError];
 
     // Reset a stored config key to its default value.
-    fn reset_config_value(path: String) -> Result[String, HandlerError];
+    total fn reset_config_value(path: String) -> Result[String, HandlerError];
 }
 
 // ── Dispatch ──────────────────────────────────────────────────────────────

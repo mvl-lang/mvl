@@ -17,8 +17,8 @@ use model::AuthError;
 
 // ── Trust boundary ─────────────────────────────────────────────────────────
 extern "rust" {
-    fn hash_verify(input: Tainted[String], stored_hash: Secret[String]) -> Result[Unit, AuthError]
-    fn generate_token(username: String) -> String
+    total fn hash_verify(input: Tainted[String], stored_hash: Secret[String]) -> Result[Unit, AuthError]
+    total fn generate_token(username: String) -> String
 }
 
 // hash_verify consumes Secret[String] — it cannot escape into output.
