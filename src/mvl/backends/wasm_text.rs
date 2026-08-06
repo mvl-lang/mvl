@@ -1822,8 +1822,101 @@ fn exclude_returned_locals_into(expr: &TirExpr, ctx: &Ctx, out: &mut Vec<String>
         TirExprKind::FnCall { name, args, .. } if name == "format" && args.len() == 2 => {
             out.push(mvl_string_temp_name(expr));
         }
+        // A compound expression used as a fn's implicit return can itself be
+        // an `if`/`match`/bare block — each arm's own tail expression is the
+        // value actually flowing out, whichever arm runs, so every arm's
+        // temps need the same exclusion the top-level tail gets. Missing
+        // this let `fn pad(level: String) -> String { if ... { level.concat(" ") } else { level } }`
+        // compile fine but free the `then`-arm's `__ms_*` concat temp via the
+        // blanket fn-exit drop sweep right before returning its now-dangling
+        // (ptr, len) — a use-after-free that only shows up once the caller
+        // reads past the freed bytes (#2194).
+        TirExprKind::If { then, else_, .. } => {
+            if let Some(t) = tail_expr_of_block(then) {
+                exclude_returned_locals_into(t, ctx, out);
+            }
+            if let Some(e) = else_ {
+                exclude_returned_locals_into(e, ctx, out);
+            }
+        }
+        TirExprKind::Block(block) => {
+            if let Some(t) = tail_expr_of_block(block) {
+                exclude_returned_locals_into(t, ctx, out);
+            }
+        }
+        TirExprKind::Match { arms, .. } => {
+            for arm in arms {
+                match &arm.body {
+                    TirMatchBody::Expr(e) => exclude_returned_locals_into(e, ctx, out),
+                    TirMatchBody::Block(b) => {
+                        if let Some(t) = tail_expr_of_block(b) {
+                            exclude_returned_locals_into(t, ctx, out);
+                        }
+                    }
+                }
+            }
+        }
         _ => {}
     }
+}
+
+/// The tail expression of a block — the value it evaluates to when used as
+/// an expression (an `if`/`match` arm, a fn's implicit return) — is its last
+/// statement, if that statement is a bare `Expr` (no trailing `;`). Returns
+/// `None` for a block ending in `let`/`return`/etc., which don't produce a
+/// value here (a block with no trailing expression is `Unit`-typed).
+fn tail_expr_of_block(block: &TirBlock) -> Option<&TirExpr> {
+    match block.stmts.last() {
+        Some(TirStmt::Expr { expr, .. }) => Some(expr),
+        _ => None,
+    }
+}
+
+/// Same exclusion `exclude_returned_locals` computes for a bare trailing
+/// `TirStmt::Expr`, but also covers a fn body whose implicit return is a
+/// trailing `if`/`match` — the TIR lowerer emits those as `TirStmt::If`/
+/// `TirStmt::Match` (statement form, see `if_stmt_result_ty`'s doc comment),
+/// never wrapped in `TirStmt::Expr`, so the plain `Some(TirStmt::Expr { expr,
+/// .. }) => ...` match at each of this fn's two call sites silently fell to
+/// `_ => Vec::new()` for `fn f() -> String { if c { a.concat(b) } else { a } }`
+/// — no exclusion at all, so the blanket fn-exit drop sweep freed the
+/// `then`-arm's `__ms_*` concat temp out from under the (ptr, len) the
+/// function had *already* returned (#2194).
+fn implicit_return_excludes(last: Option<&TirStmt>, ctx: &Ctx) -> Vec<String> {
+    let mut out = Vec::new();
+    match last {
+        Some(TirStmt::Expr { expr, .. }) => exclude_returned_locals_into(expr, ctx, &mut out),
+        Some(TirStmt::If { then, else_, .. }) => {
+            if let Some(t) = tail_expr_of_block(then) {
+                exclude_returned_locals_into(t, ctx, &mut out);
+            }
+            match else_ {
+                Some(TirElseBranch::Block(b)) => {
+                    if let Some(t) = tail_expr_of_block(b) {
+                        exclude_returned_locals_into(t, ctx, &mut out);
+                    }
+                }
+                Some(TirElseBranch::If(nested)) => {
+                    out.extend(implicit_return_excludes(Some(nested), ctx));
+                }
+                None => {}
+            }
+        }
+        Some(TirStmt::Match { arms, .. }) => {
+            for arm in arms {
+                match &arm.body {
+                    TirMatchBody::Expr(e) => exclude_returned_locals_into(e, ctx, &mut out),
+                    TirMatchBody::Block(b) => {
+                        if let Some(t) = tail_expr_of_block(b) {
+                            exclude_returned_locals_into(t, ctx, &mut out);
+                        }
+                    }
+                }
+            }
+        }
+        _ => {}
+    }
+    out
 }
 
 /// If `expr` itself (no recursion through `Var`/`let` chains, unlike
@@ -2088,10 +2181,7 @@ fn emit_fn(out: &mut String, f: &TirFn, ctx: &Ctx) {
         // path, needed so e.g. `fn f(a, b) -> String { a.concat(b) }` doesn't
         // free its own `*MvlString` result before the caller reads it
         // (#2023, #2052).
-        let implicit_excludes = match f.body.stmts.last() {
-            Some(TirStmt::Expr { expr, .. }) => exclude_returned_locals(expr, ctx),
-            _ => Vec::new(),
-        };
+        let implicit_excludes = implicit_return_excludes(f.body.stmts.last(), ctx);
         emit_fn_heap_drops(out, &locals, &implicit_excludes);
     }
     out.push_str("  )\n");
@@ -2969,7 +3059,19 @@ fn emit_stmt(out: &mut String, stmt: &TirStmt, ctx: &Ctx) {
         } => {
             if let Pattern::Ident(name, _) = pattern {
                 emit_expr(out, init, ctx);
-                if is_string_ty(ty, ctx) {
+                if matches!(ty, Ty::Unit) {
+                    // `let x: Unit = call_returning_unit();` — a Unit-typed
+                    // call leaves nothing on the stack (`(func $f)` has no
+                    // `(result ...)`, same as any other Unit-returning fn),
+                    // so there's no value to store into `$name` — a bare
+                    // `local.set $name` here underflows the stack and
+                    // wasmtime's validator rejects the whole module
+                    // ("type mismatch: expected i64 but nothing on stack").
+                    // Nothing was pushed, so — like the `let _ = expr`
+                    // wildcard arm below when its type isn't String — there's
+                    // also nothing to drop; `init` already ran for its
+                    // effects.
+                } else if is_string_ty(ty, ctx) {
                     // Init leaves (ptr, len) on stack — store into split locals.
                     out.push_str(&format!("    local.set ${name}_len\n"));
                     out.push_str(&format!("    local.set ${name}_ptr\n"));
@@ -2994,7 +3096,16 @@ fn emit_stmt(out: &mut String, stmt: &TirStmt, ctx: &Ctx) {
             } else if matches!(pattern, Pattern::Wildcard(_)) {
                 // `let _ = expr` — evaluate for side effects, discard result.
                 emit_expr(out, init, ctx);
-                if is_string_ty(ty, ctx) {
+                if matches!(ty, Ty::Unit) {
+                    // `let _: Unit = call_returning_unit();` — same "nothing
+                    // was pushed" case the named-binding arm above handles:
+                    // a Unit-typed call leaves the stack exactly as it found
+                    // it, so there's nothing here to drop either. Emitting a
+                    // bare `drop` unconditionally underflowed the stack and
+                    // failed WASM validation ("type mismatch: expected a
+                    // type but nothing on stack") the moment a real `extern`
+                    // or user fn returning `Unit` got assigned to `_`.
+                } else if is_string_ty(ty, ctx) {
                     // String init leaves two i32s (ptr, len) on the stack.
                     out.push_str("    drop\n    drop\n");
                 } else {
@@ -9531,10 +9642,7 @@ fn emit_extension_method(out: &mut String, f: &TirFn, ctx: &Ctx) {
         // { "...".concat(...) }`, no `return` keyword) must not have its own
         // *MvlString result freed by the blanket drop sweep before the caller
         // reads it.
-        let implicit_excludes = match f.body.stmts.last() {
-            Some(TirStmt::Expr { expr, .. }) => exclude_returned_locals(expr, ctx),
-            _ => Vec::new(),
-        };
+        let implicit_excludes = implicit_return_excludes(f.body.stmts.last(), ctx);
         emit_fn_heap_drops(out, &locals, &implicit_excludes);
     }
     out.push_str("  )\n");
