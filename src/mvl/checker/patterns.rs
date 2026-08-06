@@ -101,9 +101,15 @@ impl TypeChecker {
         // Exhaustiveness check
         self.check_exhaustiveness(arms, scrutinee_ty, span);
 
+        // `Never` (#2217) is a bottom type: an arm that never actually
+        // produces a value (e.g. `panic(...)`) must not win the join — prefer
+        // the first arm with a genuine (non-`Unknown`, non-`Never`) type, and
+        // only fall back to a `Never` arm if every arm is `Never`/`Unknown`.
         arm_tys
-            .into_iter()
-            .find(|t| !matches!(t, Ty::Unknown))
+            .iter()
+            .find(|t| !matches!(t, Ty::Unknown | Ty::Never))
+            .or_else(|| arm_tys.iter().find(|t| !matches!(t, Ty::Unknown)))
+            .cloned()
             .unwrap_or(Ty::Unknown)
     }
 

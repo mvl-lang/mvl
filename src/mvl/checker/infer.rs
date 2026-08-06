@@ -407,8 +407,13 @@ impl TypeChecker {
                     let merged =
                         TypeEnv::union_moved_snapshots(&post_then_snapshot, &post_else_snapshot);
                     self.env.restore_moved(&merged);
-                    if !matches!(promoted_then, Ty::Unknown)
-                        && !matches!(promoted_else, Ty::Unknown)
+                    // `Never` (#2217) is a bottom type: a branch that never
+                    // actually produces a value (e.g. `panic(...)`) must not
+                    // be compared against the other branch, and must not win
+                    // the join — the other branch's type is the expression's
+                    // real type.
+                    if !matches!(promoted_then, Ty::Unknown | Ty::Never)
+                        && !matches!(promoted_else, Ty::Unknown | Ty::Never)
                         && !types_compatible(&promoted_then, &promoted_else)
                     {
                         self.emit(CheckError::TypeMismatch {
@@ -417,7 +422,7 @@ impl TypeChecker {
                             span: *span,
                         });
                     }
-                    if matches!(promoted_then, Ty::Unknown) {
+                    if matches!(promoted_then, Ty::Unknown | Ty::Never) {
                         promoted_else
                     } else {
                         promoted_then

@@ -125,16 +125,20 @@ Reserved words, but constructors rather than syntax:
 | `Ok` | Result variant — success | 5 |
 | `Err` | Result variant — failure | 5 |
 
-## Built-in type names (23)
+## Built-in type names (24)
 
 **Not reserved words.** The lexer does not protect them; they are reserved by
 convention and should not be shadowed (`keywords.yaml:89-90`).
 
 `Int` `Int8` `Int16` `Int32` `Int64` `UInt8` `UInt16` `UInt32` `UInt64`
 `Float` `Float32` `Float64` `Bool` `Char` `Byte` `String` `Unit`
-`Option` `Result` `List` `Array` `Map` `Set`
+`Option` `Result` `List` `Array` `Map` `Set` `Never`
 
-`Option` (Req 4) replaces null; `Result` (Req 5) replaces exceptions.
+`Option` (Req 4) replaces null; `Result` (Req 5) replaces exceptions. `Never`
+(§9.5) is the bottom type — the return type of `panic` and other always-
+aborting functions; it has no values and unifies with any expected type.
+Not yet listed in `mvl-spec`'s `grammar.ebnf`/`keywords.yaml` (#2217) — the
+other 23 names are normative there, `Never` currently is not.
 
 ## Stdlib IFC labels (6)
 

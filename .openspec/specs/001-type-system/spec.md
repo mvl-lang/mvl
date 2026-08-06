@@ -37,6 +37,54 @@ The type system MUST support sum types (enums) and product types (structs) as fi
 - WHEN a fourth variant `Polygon(Array[Point])` is added to the enum
 - THEN every `match` on `Shape` MUST fail compilation until the new variant is handled
 
+#### Never: the bottom type
+
+`Never` is the bottom type — the type of an expression that never actually
+produces a value (a call to `panic`, an infinite loop, or any other
+diverging computation). It has no values and unifies with every other type:
+wherever a value of type `T` is expected, an expression of type `Never` MUST
+be accepted, because that branch is proven never to run to completion.
+
+This matters most for branch-arm unification: when one arm of an `if`/`match`
+has type `Never` (e.g. it calls `panic`) and the other arm has a concrete
+type `T`, the expression's type MUST be `T` — the `Never`-typed arm
+contributes nothing to the join, regardless of which arm is written first.
+Before #2217, this unification was order-dependent: only an arm written
+*after* the `Never` arm was checked correctly, because the checker used the
+first-inferred arm's type as the "expected" type for every subsequent arm.
+
+`Never` is unrelated to Requirement 8 (Termination, `.openspec/specs/013-termination/spec.md`):
+a function returning `Never` (e.g. `panic`) or calling one MAY be `total` —
+`total` means the function always terminates, not that it always returns a
+value by reaching the end of its body normally. `panic` terminates (it
+aborts); it is implicitly total, the same as any other MVL function
+(#2213). Domain partiality (division by zero, out-of-bounds indexing) is
+Requirement 5's job via refinements, not Requirement 8's.
+
+**Implementation:** `src/mvl/checker/types.rs::types_compatible` (bottom-type
+compatibility), `src/mvl/checker/infer.rs` (`Expr::If` branch join),
+`src/mvl/checker/stmts.rs::infer_tail_if` (tail-position `if`/`else if`
+chains), `src/mvl/checker/patterns.rs::check_match_arms` (match-arm join),
+`src/mvl/checker/context.rs::register_builtins` (`panic`'s totality)
+
+**Tests:** `tests/type_checker.rs::panic_in_match_arm_unifies_with_any_type`,
+`tests/type_checker.rs::panic_in_first_match_arm_still_unifies_with_later_concrete_arm`,
+`tests/type_checker.rs::panic_in_if_then_branch_unifies_with_else_branch`,
+`tests/type_checker.rs::panic_in_if_else_branch_unifies_with_then_branch`,
+`tests/type_checker.rs::total_fn_returning_never_via_panic_accepted`
+
+#### Scenario: panic branch unifies with the other branch regardless of order
+
+- GIVEN `total fn f(x: Int) -> Int { if x < 0 { panic("neg") } else { x } }`
+- WHEN the checker infers the type of the `if`-expression
+- THEN the compiler MUST accept — `Never` contributes nothing to the join, so the expression's type is `Int`, and the same holds with the branches swapped
+
+#### Scenario: a total function may call panic
+
+- GIVEN `total fn always_dies() -> Never { panic("dead") }`
+- WHEN the checker verifies Requirement 8 (Termination)
+- THEN the compiler MUST accept — `panic` terminates; Requirement 8 does not require a function to return a value
+
 ### Requirement 2: Null Elimination [MUST]
 
 The type system MUST NOT have a null, nil, or undefined value. Absence MUST be represented by `Option[T]` (either `Some(value)` or `None`). Accessing the value inside an `Option` MUST require pattern matching or explicit unwrapping.

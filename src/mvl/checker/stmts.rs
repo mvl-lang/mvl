@@ -265,7 +265,7 @@ impl TypeChecker {
         let then_ty = self.infer_block_type(then, return_ty, suppress_result_ignored);
         self.check_branch_label_promotion(cond_label.clone(), &then_ty, return_ty, span);
         let post_then_snapshot = self.env.snapshot_moved();
-        let result_ty = then_ty;
+        let mut result_ty = then_ty;
         if let Some(else_branch) = else_ {
             self.env.restore_moved(&pre_snapshot);
             match else_branch {
@@ -277,8 +277,12 @@ impl TypeChecker {
                         return_ty,
                         span,
                     );
-                    if !matches!(result_ty, Ty::Unknown)
-                        && !matches!(else_ty, Ty::Unknown)
+                    // `Never` (#2217) is a bottom type: a branch that never
+                    // actually produces a value (e.g. `panic(...)`) must not
+                    // be compared against the other branch, and must not win
+                    // the join — the other branch's type is the real type.
+                    if !matches!(result_ty, Ty::Unknown | Ty::Never)
+                        && !matches!(else_ty, Ty::Unknown | Ty::Never)
                         && !self.types_compatible_resolved(&result_ty, &else_ty)
                     {
                         self.emit(CheckError::TypeMismatch {
@@ -286,6 +290,9 @@ impl TypeChecker {
                             found: else_ty.display(),
                             span,
                         });
+                    }
+                    if matches!(result_ty, Ty::Unknown | Ty::Never) {
+                        result_ty = else_ty;
                     }
                 }
                 ElseBranch::If(nested_if) => {
@@ -306,8 +313,8 @@ impl TypeChecker {
                             return_ty,
                             span,
                         );
-                        if !matches!(result_ty, Ty::Unknown)
-                            && !matches!(nested_ty, Ty::Unknown)
+                        if !matches!(result_ty, Ty::Unknown | Ty::Never)
+                            && !matches!(nested_ty, Ty::Unknown | Ty::Never)
                             && !self.types_compatible_resolved(&result_ty, &nested_ty)
                         {
                             self.emit(CheckError::TypeMismatch {
@@ -315,6 +322,9 @@ impl TypeChecker {
                                 found: nested_ty.display(),
                                 span,
                             });
+                        }
+                        if matches!(result_ty, Ty::Unknown | Ty::Never) {
+                            result_ty = nested_ty;
                         }
                     } else {
                         // Shouldn't happen by construction (ElseBranch::If always wraps
