@@ -9278,6 +9278,37 @@ fn mutual_recursion_in_partial_functions_ok() {
     );
 }
 
+#[test]
+fn mutual_recursion_diagnostic_does_not_suggest_nonexistent_decreases() {
+    // GIVEN: the canonical provably-terminating mutual-recursion example
+    // (is_even/is_odd) — still rejected outright (#2216(b), extending the
+    // check to accept it, is not implemented; see the diagnostic wording
+    // fix tracked as #2216(a)).
+    // THEN: the message suggests only `partial` — there is no function-level
+    // `decreases` syntax to suggest instead (FnDecl has no `decreases` field;
+    // `decreases` is only a `while`-loop clause).
+    let src = r#"
+        total fn is_even(n: Int) -> Bool { if n <= 0 { true } else { is_odd(n - 1) } }
+        total fn is_odd(n: Int) -> Bool { if n <= 0 { false } else { is_even(n - 1) } }
+    "#;
+    let errors = errors_for(src);
+    let msg = errors
+        .iter()
+        .find_map(|e| match e {
+            CheckError::MutualRecursionInTotal { .. } => Some(e.message()),
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("expected MutualRecursionInTotal, got: {errors:?}"));
+    assert!(
+        msg.contains("partial"),
+        "message should still suggest `partial`, got: {msg}"
+    );
+    assert!(
+        !msg.contains("add `decreases`"),
+        "message must not suggest a function-level `decreases` — no such syntax exists, got: {msg}"
+    );
+}
+
 // ── #1068 Gap 5: Sendability checks on complex expressions ──────────────────
 
 #[test]
