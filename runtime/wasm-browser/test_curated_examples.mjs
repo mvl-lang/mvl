@@ -1,7 +1,10 @@
-// runtime/wasm-browser/test_curated_examples.mjs — smoke-tests the exact
-// example apps mvl-lang/mvl-playground curates in its Examples dropdown
-// (mvl-playground#36's web/scripts/sync-examples.sh) against the real
-// wasm-browser runtime, end to end under Node (#2093 Phase 2, ADR-0063).
+// runtime/wasm-browser/test_curated_examples.mjs — smoke-tests example apps
+// against the real wasm-browser runtime, end to end under Node (#2093
+// Phase 2, ADR-0063). Starts from the exact list mvl-lang/mvl-playground
+// curates in its Examples dropdown (mvl-playground#36's
+// web/scripts/sync-examples.sh) and extends it to every other `examples/*`
+// app this shim can actually run — see CURATED_EXAMPLES below for which
+// ones and why the rest are excluded.
 //
 // This is a "does it actually run" guarantee, not output-correctness
 // per example: build via `mvl build --backend=wasm --target=wasm-browser`,
@@ -29,10 +32,27 @@ if (!runtimePath) {
   process.exit(1);
 }
 
-// Mirrors web/scripts/sync-examples.sh's curated list in
+// The first 6 mirror web/scripts/sync-examples.sh's curated list in
 // mvl-lang/mvl-playground (issue #8 / PR #36) — same 6 apps, same names
 // modulo etcs_move_authority (mvl-playground's manifest currently spells
 // it etcs_movement_authority; the directory here is the source of truth).
+//
+// The rest extend coverage to every other `examples/*` app that (a) has a
+// `fn main` entry point (not a bare `test fn` library like hipaa_healthcare,
+// not a grab-bag directory like `programs/`), (b) needs no host beyond what
+// `runtime.mjs`'s shim already provides — no `extern "rust"` FFI (access_
+// control, config_server, random_dice all declare one; satisfying it needs
+// `mvl test --backend=wasm`'s native-embedding host, #2049 — a different,
+// heavier harness than this "build + bare wasmtime-in-a-browser-shim" one),
+// no interactive stdin (mastermind's `read_line`), no raw-terminal control
+// (snake_game's `tui_set_cursor`), and no argv (log_analyzer's `--file`
+// CLI flag has nothing to bind to here) — and (c) doesn't already trip a
+// documented WASM-backend stub (task_pipeline, csv_transactions, bzip all
+// build with an `unreachable`-stub warning and trap on the stubbed path).
+// Every one of these was built + run individually against this exact
+// runtime.mjs shim to confirm it passes before being added — this is not
+// a copy of test-examples-wasm's WASI list, which allows `extern` FFI via
+// a different host and so covers examples that can't run here.
 //
 // `knownIssue` marks a documented, tracked xfail — NOT a silent exclusion
 // (the example still builds and runs every time this target does; its
@@ -46,6 +66,14 @@ const CURATED_EXAMPLES = [
   { name: "etcs_move_authority", entry: "examples/etcs_move_authority/main.mvl" },
   { name: "pci_payment", entry: "examples/pci_payment/main.mvl" },
   { name: "medical_triage", entry: "examples/medical_triage/main.mvl" },
+  { name: "actor_trading", entry: "examples/actor_trading/main.mvl" },
+  { name: "cbtc_train_presence", entry: "examples/cbtc_train_presence/main.mvl" },
+  { name: "data_integrity", entry: "examples/data_integrity/main.mvl" },
+  { name: "dose_scheduling", entry: "examples/dose_scheduling/main.mvl" },
+  { name: "flight_clearance", entry: "examples/flight_clearance/main.mvl" },
+  { name: "grid_protection", entry: "examples/grid_protection/main.mvl" },
+  { name: "sql_inj_prevention", entry: "examples/sql_inj_prevention/main.mvl" },
+  { name: "log_to_file", entry: "examples/log_to_file/main.mvl" },
 ];
 
 const mvlBin = path.join(repoRoot, "target", "debug", "mvl");
