@@ -466,6 +466,50 @@ impl TypeChecker {
                     }
                 }
             }
+            // Free-function syntax on a builtin-wrapper extension method
+            // (`is_none(c)` instead of `c.is_none()`) — ADR-0031 disallows
+            // this (UFCS), but `tests/stdlib/random_test.mvl` already relies
+            // on it and every backend executes it identically to method-call
+            // syntax regardless (the Rust backend transpiles extension
+            // methods to plain top-level functions, so `x.method()` and
+            // `method(x)` compile to the exact same call either way). The
+            // `UndefinedFunction` diagnostic below still fires unchanged —
+            // this only corrects the *inferred type*, previously always
+            // `Ty::Unknown` here. A backend that trusts `expr_types` to pick
+            // a comparison/storage width (WASM) silently defaulted to
+            // Int-shaped codegen for the result of a call like `is_none(c)`,
+            // producing an invalid module even once the callee's body itself
+            // was correctly emitted (#2186). Scoped to the same builtin
+            // wrapper types `infer_method_call`'s pure per-type dispatchers
+            // already cover — user struct/actor methods keep the stricter
+            // "genuinely undefined" behavior ADR-0031 intends.
+            if let Some(first_ty) = arg_tys.first() {
+                let rest = &arg_tys[1..];
+                let resolved = match first_ty.unlabeled() {
+                    Ty::Int => Self::int_method_ty(name),
+                    Ty::Bool => Self::bool_method_ty(name),
+                    Ty::Byte => Self::byte_method_ty(name),
+                    Ty::UByte => Self::ubyte_method_ty(name),
+                    Ty::UInt => Self::uint_method_ty(name),
+                    Ty::Float => Self::float_method_ty(name),
+                    Ty::String => Self::string_method_ty(name, rest),
+                    Ty::List(elem_ty) => Self::list_method_ty(elem_ty.as_ref(), name, rest),
+                    Ty::Option(inner) => Self::option_method_ty(inner.as_ref(), name, rest),
+                    Ty::Result(ok_ty, _) => Self::result_method_ty(ok_ty.as_ref(), name, rest),
+                    Ty::Map(k_ty, v_ty) => {
+                        Self::map_method_ty(k_ty.as_ref(), v_ty.as_ref(), name, rest)
+                    }
+                    Ty::Set(t_ty) => Self::set_method_ty(t_ty.as_ref(), name, rest),
+                    _ => Ty::Unknown,
+                };
+                if !matches!(resolved, Ty::Unknown) {
+                    self.emit(CheckError::UndefinedFunction {
+                        name: name.to_string(),
+                        span,
+                    });
+                    return resolved;
+                }
+            }
             // Not in function table — could be builtin or foreign; emit Unknown
             self.emit(CheckError::UndefinedFunction {
                 name: name.to_string(),
