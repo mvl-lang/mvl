@@ -3059,7 +3059,19 @@ fn emit_stmt(out: &mut String, stmt: &TirStmt, ctx: &Ctx) {
         } => {
             if let Pattern::Ident(name, _) = pattern {
                 emit_expr(out, init, ctx);
-                if is_string_ty(ty, ctx) {
+                if matches!(ty, Ty::Unit) {
+                    // `let x: Unit = call_returning_unit();` — a Unit-typed
+                    // call leaves nothing on the stack (`(func $f)` has no
+                    // `(result ...)`, same as any other Unit-returning fn),
+                    // so there's no value to store into `$name` — a bare
+                    // `local.set $name` here underflows the stack and
+                    // wasmtime's validator rejects the whole module
+                    // ("type mismatch: expected i64 but nothing on stack").
+                    // Nothing was pushed, so — like the `let _ = expr`
+                    // wildcard arm below when its type isn't String — there's
+                    // also nothing to drop; `init` already ran for its
+                    // effects.
+                } else if is_string_ty(ty, ctx) {
                     // Init leaves (ptr, len) on stack — store into split locals.
                     out.push_str(&format!("    local.set ${name}_len\n"));
                     out.push_str(&format!("    local.set ${name}_ptr\n"));
@@ -3084,7 +3096,16 @@ fn emit_stmt(out: &mut String, stmt: &TirStmt, ctx: &Ctx) {
             } else if matches!(pattern, Pattern::Wildcard(_)) {
                 // `let _ = expr` — evaluate for side effects, discard result.
                 emit_expr(out, init, ctx);
-                if is_string_ty(ty, ctx) {
+                if matches!(ty, Ty::Unit) {
+                    // `let _: Unit = call_returning_unit();` — same "nothing
+                    // was pushed" case the named-binding arm above handles:
+                    // a Unit-typed call leaves the stack exactly as it found
+                    // it, so there's nothing here to drop either. Emitting a
+                    // bare `drop` unconditionally underflowed the stack and
+                    // failed WASM validation ("type mismatch: expected a
+                    // type but nothing on stack") the moment a real `extern`
+                    // or user fn returning `Unit` got assigned to `_`.
+                } else if is_string_ty(ty, ctx) {
                     // String init leaves two i32s (ptr, len) on the stack.
                     out.push_str("    drop\n    drop\n");
                 } else {

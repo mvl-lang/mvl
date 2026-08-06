@@ -93,35 +93,47 @@ async function runOne({ name, entry }) {
   }
 }
 
+// Same `%-20s  <color>SYMBOL  LABEL</color>` layout `examples/test-all.sh`
+// uses for `make test-examples-wasm` (and every other `test-examples-*`
+// suite) — one visual vocabulary for "did this example's backend run pass"
+// across both entry points instead of this script inventing its own.
+const GREEN = "\x1b[32m";
+const RED = "\x1b[31m";
+const YELLOW = "\x1b[33m";
+const RESET = "\x1b[0m";
+
 let unexpectedFailures = 0;
 let stalePasses = 0;
 for (const example of CURATED_EXAMPLES) {
   const result = await runOne(example);
+  const namePad = example.name.padEnd(20);
   if (result.ok && !example.knownIssue) {
-    console.log(`  ✓  ${result.name} (${result.stdout.length} line(s) of output)`);
+    console.log(`  ${namePad}  ${GREEN}✓  PASS${RESET}`);
   } else if (result.ok && example.knownIssue) {
     stalePasses++;
-    console.log(`  ✓  ${result.name}  (xpass — issue #${example.knownIssue} looks fixed, remove its knownIssue marker)`);
+    console.log(
+      `  ${namePad}  ${YELLOW}✓  XPASS${RESET}  issue #${example.knownIssue} looks fixed — remove its knownIssue marker`,
+    );
   } else if (!result.ok && example.knownIssue) {
-    console.log(`  ⚠  ${result.name}  (known issue #${example.knownIssue}, tracked — not blocking)`);
+    console.log(`  ${namePad}  ${YELLOW}~  XFAIL${RESET}  known issue #${example.knownIssue}, tracked — not blocking`);
   } else {
     unexpectedFailures++;
-    console.log(`  ✗  ${result.name}`);
+    console.log(`  ${namePad}  ${RED}✗  FAIL${RESET}`);
     if (result.failure) {
       const msg = result.failure.stderr?.toString?.() || result.failure.message || String(result.failure);
-      msg.trim().split("\n").slice(-5).forEach((l) => console.log(`       ${l}`));
+      msg.trim().split("\n").slice(-5).forEach((l) => console.log(`         ${l}`));
     }
-    result.stderr.forEach((l) => console.log(`       stderr: ${l}`));
+    result.stderr.forEach((l) => console.log(`         stderr: ${l}`));
   }
 }
 
 console.log("");
 if (unexpectedFailures > 0) {
-  console.log(`${unexpectedFailures}/${CURATED_EXAMPLES.length} curated example(s) failed unexpectedly under wasm-browser`);
+  console.log(`  ${RED}✗  ${unexpectedFailures} of ${CURATED_EXAMPLES.length} curated example(s) failed unexpectedly under wasm-browser${RESET}\n`);
   process.exit(1);
 }
 if (stalePasses > 0) {
-  console.log(`${stalePasses} curated example(s) marked knownIssue now pass — update test_curated_examples.mjs`);
+  console.log(`  ${RED}✗  ${stalePasses} curated example(s) marked knownIssue now pass — update test_curated_examples.mjs${RESET}\n`);
   process.exit(1);
 }
-console.log(`all ${CURATED_EXAMPLES.length} curated examples run as expected under wasm-browser (known issues tracked separately)`);
+console.log(`  ${GREEN}✓  All ${CURATED_EXAMPLES.length} curated example(s) passed under wasm-browser${RESET}\n`);
