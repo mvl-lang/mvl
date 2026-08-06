@@ -395,6 +395,48 @@ mod tests {
         assert!(modules.is_empty());
     }
 
+    /// Regression for #2137: `capability_params_map` is one flat, program-wide
+    /// `HashMap<String, _>` shared between real global function names and a
+    /// per-function *temporary overlay* of local HOF-parameter names (`f` in
+    /// `List[T]::any(self, f: fn(T) -> Bool)`) — used so a call to that local
+    /// closure parameter picks up its own inner-signature borrow behavior
+    /// rather than whatever a same-named *global* function happens to need.
+    /// The overlay only got installed when the closure's own inner signature
+    /// had an explicit `ref`/`val` marker; `any`/`all`'s plain `fn(T) -> Bool`
+    /// never does, so nothing shadowed a same-named global entry. A user's own
+    /// top-level `fn f(xs: ref List[Int], ...)` — sharing `std/lists.mvl`'s
+    /// universal HOF-parameter name — then leaked its own `&mut`-borrow flags
+    /// into every generic-prelude HOF body that also names its closure
+    /// parameter `f`, mangling `f(x)` into `f(&mut x)` inside `any`'s dead (but
+    /// still transpiled and compiled) monomorphized copy — `rustc` rejects the
+    /// resulting type mismatch even though nothing ever calls it.
+    #[test]
+    fn user_fn_named_f_does_not_poison_dead_hof_prelude_bodies() {
+        let implicit_prelude = crate::mvl::loader::load_implicit_prelude();
+        let prelude_tirs = crate::mvl::pipeline::lower_prelude(&implicit_prelude);
+
+        let prog = parse(
+            "fn f(xs: ref List[Int], other: List[Int]) -> Unit {\n\
+                 for x in xs {\n\
+                     if !other.contains(x) { }\n\
+                 }\n\
+             }\n\
+             fn main() -> Unit {\n\
+                 let xs: ref List[Int] = [1, 2, 3];\n\
+                 let other: List[Int] = [2, 4];\n\
+                 f(xs, other);\n\
+             }\n",
+        );
+        let out =
+            do_transpile(&prog, TranspileConfig::new("crate").with_prelude(prelude_tirs)).output;
+        assert!(
+            !out.lib_rs.contains("f(&mut x)") && !out.lib_rs.contains("(f)(&"),
+            "a same-named user fn must not poison `any`/`all`'s dead HOF body \
+             with borrowed args:\n{}",
+            out.lib_rs
+        );
+    }
+
     #[test]
     fn transpile_emits_stdlib_use_for_std_import() {
         let prog = parse("use std.env.{getuid}\nfn main() -> Unit ! Env { }");
