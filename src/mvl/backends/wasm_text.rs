@@ -1987,8 +1987,34 @@ fn consumed_named_local(value: &TirExpr) -> Option<String> {
         },
         _ => return None,
     };
+    // The bare `None` literal lowers to `Var("None")` (see the `emit_expr`
+    // arm matching `name == "None"`), not a real declared local — there is
+    // no `(local $None ...)` for a later `local.set $None` to target.
+    // `[Some(1), None, Some(3)]`'s list-literal element loop (#2205) is the
+    // first `consumed_named_local` call site that can see a bare `None`;
+    // the pre-existing assignment/enum-payload-field call sites apparently
+    // never did. Without this guard `wasm-tools` rejects the whole module:
+    // "unknown local: failed to find name `$None`".
+    if name == "None" {
+        return None;
+    }
     local_drop_fn(name, &value.ty)?;
     Some(name.clone())
+}
+
+/// If `value`'s value was just taken over by a new owner (per
+/// [`consumed_named_local`]), zero the source local so a later heap sweep
+/// that still walks it by name (loop-per-iteration, function-exit) finds it
+/// already null instead of double-owning — and double-freeing — the same
+/// pointer the new owner just took over. A no-op when `value` isn't a bare
+/// consumed local. Called immediately after emitting the code that stores
+/// `value` into its new owner (a container push, an `Ok`/`Some`/`Err`
+/// constructor, ...).
+fn emit_consumed_local_zero(out: &mut String, value: &TirExpr) {
+    if let Some(source) = consumed_named_local(value) {
+        out.push_str("    i32.const 0\n");
+        out.push_str(&format!("    local.set ${source}\n"));
+    }
 }
 
 /// Populate `ctx.fn_let_inits` with every `let NAME = INIT` binding in
@@ -3983,6 +4009,13 @@ fn emit_expr(out: &mut String, expr: &TirExpr, ctx: &Ctx) {
                     let (some_ctor, _) = option_ops_for(&inner, ctx);
                     out.push_str(&format!("    call ${some_ctor}\n"));
                 }
+                // `Some(row)` where `row: List[...]`/`Map[...]`/etc stores
+                // `row`'s pointer by value into this Option's payload slot —
+                // but `row` is still a separately drop-tracked named local.
+                // Same shape as the `.push(row)` fix above (#2205): zero the
+                // source so a later heap sweep's null-safe drop no-ops
+                // instead of freeing the value this Option now owns.
+                emit_consumed_local_zero(out, &args[0]);
                 return;
             }
             // `Shape::Circle(5)` — positional enum-variant constructor written
@@ -4024,6 +4057,10 @@ fn emit_expr(out: &mut String, expr: &TirExpr, ctx: &Ctx) {
                     let (ok_ctor, _) = result_ops_for_ok(&ok_ty, ctx);
                     out.push_str(&format!("    call ${ok_ctor}\n"));
                 }
+                // Same source-local zeroing as `Some(x)` above (#2205) —
+                // `Ok(result)` where `result` is a separately drop-tracked
+                // named local.
+                emit_consumed_local_zero(out, &args[0]);
                 return;
             }
             // `Err(x)` constructor — dispatches by the Result's actual
@@ -4047,6 +4084,8 @@ fn emit_expr(out: &mut String, expr: &TirExpr, ctx: &Ctx) {
                     let (err_ctor, _) = result_ops_for_err(&err_ty, ctx);
                     out.push_str(&format!("    call ${err_ctor}\n"));
                 }
+                // Same source-local zeroing as `Some(x)`/`Ok(x)` above (#2205).
+                emit_consumed_local_zero(out, &args[0]);
                 return;
             }
             // A bare call inside an actor body may name one of the actor's own
@@ -4824,6 +4863,20 @@ fn emit_expr(out: &mut String, expr: &TirExpr, ctx: &Ctx) {
             } else {
                 out.push_str(&format!("    call {}\n", push_op_for(&elem_ty, ctx)));
             }
+            // `result.push(row)` where `row: List[String]`/`Map[...]`/etc
+            // stores `row`'s pointer by value into `result`'s buffer — but
+            // `row` is still a separately drop-tracked named local
+            // (`local_drop_fn` doesn't know its value moved). This
+            // function's own function-exit (and, inside a loop,
+            // per-iteration) heap sweep walks every in-scope local by name,
+            // so `row` gets dropped on schedule regardless of `result`
+            // outliving it — freeing the exact value `result`'s new element
+            // now points to, out from under it (#2205, same shape as
+            // #2169's `consume(r2)`/enum-payload-field fixes: a value
+            // escapes into a new owner while the source local stays
+            // independently drop-tracked). Zero the source so that later
+            // drop is the same null-safe no-op used at those other sites.
+            emit_consumed_local_zero(out, &args[0]);
         }
         // `.clone()` — needed by six `std/lists.mvl` bodies (#2014):
         // `filter`/`take_while`/`skip_while` call `f(x.clone())`, and
@@ -5085,6 +5138,7 @@ fn emit_expr(out: &mut String, expr: &TirExpr, ctx: &Ctx) {
                     emit_expr(out, e, ctx);
                     out.push_str("    call $_mvl_string_new\n");
                     out.push_str("    call $_mvl_array_push_i32\n");
+                    emit_consumed_local_zero(out, e);
                 }
             } else {
                 let push_op = push_op_for(&elem_ty, ctx);
@@ -5092,6 +5146,15 @@ fn emit_expr(out: &mut String, expr: &TirExpr, ctx: &Ctx) {
                     out.push_str(&format!("    local.get ${temp}\n"));
                     emit_expr(out, e, ctx);
                     out.push_str(&format!("    call {push_op}\n"));
+                    // `[row]` where `row: List[...]`/`Map[...]`/etc — same
+                    // "moved into a new owner, source still independently
+                    // drop-tracked" shape as `.push(row)` (#2205). `std/
+                    // csv.mvl`'s `parse_row` binds `row` from a match arm
+                    // and does `rows.concat([row])` inside a `while` loop —
+                    // without this, the loop's own per-iteration heap sweep
+                    // frees `row` right after this literal aliases its
+                    // pointer, corrupting the row `rows` just gained.
+                    emit_consumed_local_zero(out, e);
                 }
             }
             out.push_str(&format!("    local.get ${temp}\n"));

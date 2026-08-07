@@ -372,8 +372,37 @@ test-bdd: build ## Run BDD corpus scenarios with Gherkin report (mvl test --bdd)
 test-rust-rust: build ## rust/rust — new corpus through Rust transpiler (batched, via mvlr)
 	$(MVLR) --mvl=$(MVL) --compiler=rust --backend=rust tests/corpus/
 
+# LLVM-specific curated exclude list — same discipline as WASM_CORPUS_EXCLUDE
+# below: an LLVM backend gap gets one entry here plus a comment explaining
+# why and a tracking issue, rather than silently going untested by CI. Kept
+# minimal on purpose — LLVM is otherwise full-corpus (#1823) — so new
+# entries should stay rare; each is a real gap, not a convenience.
+#
+# map_hof_test.mvl (#2251): `Map[K, V]::fold`/`any`/`all`/`filter` type-
+# confuse the map with a `List` in `emit_exprs_tir.rs`'s shape-only HOF
+# dispatch (`("fold", "ptr")` etc. match any pointer-shaped receiver, Map
+# included, and call the List-only `_mvl_list_fold` runtime fn on a
+# `HashMap` pointer) — silently corrupts the map rather than trapping.
+#
+# nested_container_ownership_test.mvl (#2252): a `ref`-declared local moved
+# into an outer container via `.push()` is double-freed at scope exit
+# (`.push()`'s existing `exclude_returned_value_tir` call doesn't cover this
+# shape) — the WASM analog of this exact bug is #2205, fixed on that
+# backend in the same PR that added this file; LLVM needs its own fix.
+LLVM_CORPUS_EXCLUDE := \
+	tests/corpus/05_collections/map_hof_test.mvl \
+	tests/corpus/07_ownership/nested_container_ownership_test.mvl
+
+# Directories containing an LLVM_CORPUS_EXCLUDE entry need per-file listing;
+# every other directory passes through whole (mvlr's directory-arg form).
+LLVM_CORPUS_WHOLE_DIRS := $(filter-out tests/corpus/05_collections tests/corpus/07_ownership, \
+	$(patsubst %/,%,$(sort $(dir $(wildcard tests/corpus/*/*_test.mvl)))))
+LLVM_CORPUS := $(LLVM_CORPUS_WHOLE_DIRS) \
+	$(filter-out $(LLVM_CORPUS_EXCLUDE), $(wildcard tests/corpus/05_collections/*_test.mvl)) \
+	$(filter-out $(LLVM_CORPUS_EXCLUDE), $(wildcard tests/corpus/07_ownership/*_test.mvl))
+
 test-rust-llvm: build ## rust/llvm — new corpus through LLVM text emitter (via mvlr, see #1828)
-	$(MVLR) --mvl=$(MVL) --compiler=rust --backend=llvm tests/corpus/
+	$(MVLR) --mvl=$(MVL) --compiler=rust --backend=llvm $(LLVM_CORPUS)
 
 test-mvl-llvm: build ## mvl/llvm — MVL self-hosted → LLVM (tracer bullet, via mvlr, broader corpus in #1828)
 	$(MVLR) --mvl=$(MVL) --compiler=mvl --backend=llvm examples/programs/hello_world.mvl

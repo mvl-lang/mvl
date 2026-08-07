@@ -1,0 +1,133 @@
+// 07_ownership/nested_container_ownership_test.mvl — a `ref` local whose
+// value is moved into an outer container must not also be dropped under its
+// own name (#2205).
+//
+// `result.push(row)` (or `[row]` inside a list literal, or `Ok(result)`/
+// `Some(result)`) stores `row`'s pointer *by value* into the new owner —
+// but `row` stays a separately drop-tracked named local. Without excluding
+// it, the function-exit (or, inside a loop, per-iteration) heap sweep frees
+// `row` on schedule regardless of the new owner outliving it, corrupting —
+// or dangling — the exact value the new owner now points to. Found via
+// `examples/csv_transactions`'s `encode_rows`/`parse_rows` round trip,
+// which builds `List[List[String]]` this way and returns it wrapped in a
+// `Result`.
+//
+// Every case below reads the moved-into value back out (not just checks a
+// length) — the corruption manifested as a garbage `len()` or a trap when
+// dereferencing a freed string, not a build failure.
+
+fn build_plain() -> List[List[String]] {
+    let result: ref List[List[String]] = [];
+    let row: ref List[String] = [];
+    row.push("a");
+    row.push("b");
+    result.push(row);
+    result
+}
+
+test fn push_nested_list_direct_return_survives() -> Unit {
+    let rows: List[List[String]] = build_plain();
+    assert_eq(rows.len(), 1);
+    match rows.get(0) {
+        None => assert(false),
+        Some(row) => {
+            assert_eq(row.len(), 2);
+            assert_eq(row.get(1).unwrap_or("?"), "b");
+        },
+    }
+}
+
+fn build_ok_wrapped() -> Result[List[List[String]], String] {
+    let result: ref List[List[String]] = [];
+    let row: ref List[String] = [];
+    row.push("x");
+    row.push("y");
+    result.push(row);
+    Ok(result)
+}
+
+test fn push_nested_list_ok_wrapped_survives() -> Unit {
+    match build_ok_wrapped() {
+        Err(_) => assert(false),
+        Ok(rows) => {
+            assert_eq(rows.len(), 1);
+            match rows.get(0) {
+                None => assert(false),
+                Some(row) => assert_eq(row.get(0).unwrap_or("?"), "x"),
+            }
+        },
+    }
+}
+
+fn build_some_wrapped() -> Option[List[List[String]]] {
+    let result: ref List[List[String]] = [];
+    let row: ref List[String] = [];
+    row.push("p");
+    row.push("q");
+    result.push(row);
+    Some(result)
+}
+
+test fn push_nested_list_some_wrapped_survives() -> Unit {
+    match build_some_wrapped() {
+        None => assert(false),
+        Some(rows) => {
+            assert_eq(rows.len(), 1);
+            match rows.get(0) {
+                None => assert(false),
+                Some(row) => assert_eq(row.get(1).unwrap_or("?"), "q"),
+            }
+        },
+    }
+}
+
+// Same shape as `std/csv.mvl`'s `parse_row`/`parse_rows_with`: a match-arm
+// -bound local (`row`, from destructuring a payload enum) boxed into a
+// single-element list literal, then `.concat`ed onto an accumulator, across
+// several `while`-loop iterations. Each iteration's per-iteration heap
+// sweep must not free `row` before `[row]`'s alias of it escapes into the
+// accumulator.
+type RowResult = enum {
+    Row(List[String]),
+    Done,
+}
+
+partial fn next_row(i: Int) -> RowResult {
+    if i >= 3 {
+        RowResult::Done
+    } else {
+        let row: ref List[String] = [];
+        row.push("item");
+        row.push(i.to_string());
+        RowResult::Row(row)
+    }
+}
+
+partial fn collect_rows() -> List[List[String]] {
+    let rows: ref List[List[String]] = [];
+    let i: ref Int = 0;
+    let done: ref Bool = false;
+    while done == false {
+        match next_row(i) {
+            RowResult::Done => { done = true },
+            RowResult::Row(row) => {
+                rows = rows.concat([row]);
+                i = i + 1
+            },
+        }
+    }
+    rows
+}
+
+test partial fn list_literal_element_survives_loop_per_iteration_sweep() -> Unit {
+    let rows: List[List[String]] = collect_rows();
+    assert_eq(rows.len(), 3);
+    match rows.get(0) {
+        None => assert(false),
+        Some(row) => assert_eq(row.get(1).unwrap_or("?"), "0"),
+    }
+    match rows.get(2) {
+        None => assert(false),
+        Some(row) => assert_eq(row.get(1).unwrap_or("?"), "2"),
+    }
+}
