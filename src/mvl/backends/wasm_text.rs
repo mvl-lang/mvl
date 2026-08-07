@@ -2162,7 +2162,7 @@ fn emit_fn(out: &mut String, f: &TirFn, ctx: &Ctx) {
             f.body.stmts.last(),
             Some(TirStmt::Expr { expr, .. })
                 if matches!(expr.kind, TirExprKind::Var(_))
-                    && matches!(resolve_ty_param(&expr.ty, &ctx.type_subst), Ty::Unit)
+                    && matches!(resolve_ty_param(&expr.ty, ctx.type_subst), Ty::Unit)
         );
     if skip_tail {
         emit_block(
@@ -3156,7 +3156,7 @@ fn emit_stmt(out: &mut String, stmt: &TirStmt, ctx: &Ctx) {
         TirStmt::Assign { target, value, .. } => match target {
             LValue::Ident(name, _) => {
                 emit_expr(out, value, ctx);
-                if matches!(resolve_ty_param(&value.ty, &ctx.type_subst), Ty::Unit) {
+                if matches!(resolve_ty_param(&value.ty, ctx.type_subst), Ty::Unit) {
                     // `acc = f(acc, x);` where `f` returns `Unit` (e.g.
                     // `List[T]::fold[U]`'s `acc = f(acc, x)` monomorphized
                     // with `U = Unit`, the side-effecting-iteration-via-fold
@@ -9419,9 +9419,7 @@ fn unify_ty_params(
             // shape (#2195). Once a concrete (non-`Unknown`) binding exists,
             // keep it; only an `Unknown`-tainted (or absent) existing binding
             // yields to a later candidate.
-            let should_replace = subst
-                .get(name.as_str())
-                .is_none_or(|existing| ty_contains_unknown(existing));
+            let should_replace = subst.get(name.as_str()).is_none_or(ty_contains_unknown);
             if should_replace {
                 subst.insert(name.clone(), actual.clone());
             }
