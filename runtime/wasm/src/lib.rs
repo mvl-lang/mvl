@@ -868,6 +868,65 @@ pub unsafe extern "C" fn _mvl_array_slice(a: i32, start: i64, end: i64) -> i32 {
     out
 }
 
+/// `_mvl_array_windows(a, n)` — new array of `List[T]`, one per contiguous
+/// window of `n` elements (#2119). Each window is itself an `_mvl_array_slice`
+/// result, so this inherits that function's exact aliasing caveat: correct
+/// only for scalar/pointer-identity-safe element types (the emitter's
+/// `slice_is_supported` gate, reused for this too, keeps `String`/nested-
+/// collection/`Map`/`Option`/`Result` elements off this path — two
+/// overlapping windows would alias the same string, and dropping both would
+/// double-free it).
+///
+/// `n <= 0` or `n > len` yields an empty result array (element size 4: each
+/// element is an `i32` pointer to a window's own `MvlArray`).
+///
+/// # Safety
+/// `a` must be a valid `MvlArray` pointer or null.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn _mvl_array_windows(a: i32, n: i64) -> i32 {
+    if a == 0 || n <= 0 {
+        return _mvl_array_new(4, 0);
+    }
+    let len = unsafe { &*(a as usize as *const MvlArray) }.len as i64;
+    let count = (len - n + 1).max(0);
+    let out = _mvl_array_new(4, count as i32);
+    let mut start = 0i64;
+    while start < count {
+        let window = unsafe { _mvl_array_slice(a, start, start + n) };
+        unsafe { _mvl_array_push_i32(out, window) };
+        start += 1;
+    }
+    out
+}
+
+/// `_mvl_array_chunks(a, n)` — new array of `List[T]`, splitting into
+/// non-overlapping runs of up to `n` elements (the last one shorter if `len`
+/// isn't a multiple of `n`) (#2119). Same `_mvl_array_slice`-based
+/// aliasing caveat as `_mvl_array_windows` above — chunks don't overlap each
+/// other, but each chunk still aliases the *parent* array's elements, so the
+/// same element-type restriction applies.
+///
+/// `n <= 0` yields an empty result array.
+///
+/// # Safety
+/// `a` must be a valid `MvlArray` pointer or null.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn _mvl_array_chunks(a: i32, n: i64) -> i32 {
+    if a == 0 || n <= 0 {
+        return _mvl_array_new(4, 0);
+    }
+    let len = unsafe { &*(a as usize as *const MvlArray) }.len as i64;
+    let out = _mvl_array_new(4, ((len + n - 1) / n).max(0) as i32);
+    let mut start = 0i64;
+    while start < len {
+        let end = (start + n).min(len);
+        let chunk = unsafe { _mvl_array_slice(a, start, end) };
+        unsafe { _mvl_array_push_i32(out, chunk) };
+        start += n;
+    }
+    out
+}
+
 /// `_mvl_array_concat(a, b)` — new array holding `a`'s elements followed
 /// by `b`'s (#2114). Port of `runtime/llvm/`'s `_mvl_list_concat`.
 ///

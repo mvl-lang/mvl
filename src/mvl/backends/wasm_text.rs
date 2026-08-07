@@ -492,6 +492,10 @@ const RUNTIME_IMPORTS: &[(&str, &str)] = &[
     // `.slice(start, end)` — MVL `Int` bounds are i64 (#2014). Backs
     // `List[T]::take`/`::skip`, which are pure-MVL wrappers over `slice`.
     ("_mvl_array_slice", "(param i32 i64 i64) (result i32)"),
+    // `.windows(n)`/`.chunks(n)` (#2119) — each element of the result is
+    // itself an `_mvl_array_slice`-built `List[T]`, same aliasing caveat.
+    ("_mvl_array_windows", "(param i32 i64) (result i32)"),
+    ("_mvl_array_chunks", "(param i32 i64) (result i32)"),
     // `.concat(other)` (#2114) — new array holding `self`'s elements
     // followed by `other`'s. Byte-wise copy at `elem_size` granularity,
     // same caveat as `slice`: correct for scalar/pointer arrays, not
@@ -3013,6 +3017,12 @@ fn collect_locals_expr(expr: &TirExpr, locals: &mut Vec<(String, Ty)>) {
                     locals.push((get_clone_temp_name(expr), Ty::Bool));
                 }
             }
+            // `List[T]::set(i, value)` (#2119) — `_mvl_array_get`'s slot
+            // pointer is read once for the bounds check, once to store
+            // through; see `set_slot_temp_name`.
+            if collection_elem_ty(&receiver.ty).is_some() && method == "set" && args.len() == 2 {
+                locals.push((set_slot_temp_name(expr), Ty::Bool));
+            }
             // `abs`/`clamp` on Int/UInt/Float (#2122) — both need the
             // receiver stashed in a temp so it can be read more than once
             // (a `select`-based abs, or clamp's bounds check); `clamp`
@@ -4623,6 +4633,15 @@ fn emit_expr(out: &mut String, expr: &TirExpr, ctx: &Ctx) {
             emit_expr(out, &args[0], ctx); // key → (ptr, len)
             emit_map_value_push(out, &args[1], &val_ty, ctx);
             out.push_str("    call $_mvl_map_insert_si64\n");
+            // `result.insert(key, bucket)` where `bucket: List[...]`/etc —
+            // same "moved into a new owner, source local stays
+            // independently drop-tracked" shape as `.push()`/`Some`/`Ok`/
+            // `Err`/list-literal-elements (#2205): `bucket` is still a
+            // separately drop-tracked named local after its value is
+            // stored into the map, so a later heap sweep frees it out from
+            // under the map entry. Surfaced by `List[T]::group_by`'s
+            // get-bucket-push-reinsert pattern (#2119).
+            emit_consumed_local_zero(out, &args[1]);
         }
         TirExprKind::MethodCall {
             receiver,
@@ -4902,6 +4921,45 @@ fn emit_expr(out: &mut String, expr: &TirExpr, ctx: &Ctx) {
             // drop is the same null-safe no-op used at those other sites.
             emit_consumed_local_zero(out, &args[0]);
         }
+        // `.set(i, value)` on List/Array — in-place index write (#2119).
+        // No dedicated `_mvl_array_set_*` runtime primitive needed:
+        // `_mvl_array_get` already returns a pointer *into the backing
+        // buffer* at `idx` (0 if out of bounds, same convention every other
+        // `.get()`-based arm relies on), so this reuses it and stores
+        // through the result directly rather than adding a parallel
+        // runtime function. The slot pointer is read once — needed for
+        // both the bounds check and the store — so it's stashed in
+        // `set_slot_temp_name`'s temp local rather than calling
+        // `_mvl_array_get` twice.
+        TirExprKind::MethodCall {
+            receiver,
+            method,
+            args,
+        } if collection_elem_ty(&receiver.ty).is_some() && method == "set" && args.len() == 2 => {
+            ctx.needs_runtime.set(true);
+            let elem_ty = collection_elem_ty(&receiver.ty).cloned().unwrap_or(Ty::Int);
+            let slot = set_slot_temp_name(expr);
+            emit_expr(out, receiver, ctx);
+            emit_expr(out, &args[0], ctx); // idx (i64)
+            out.push_str("    call $_mvl_array_get\n");
+            out.push_str(&format!("    local.tee ${slot}\n"));
+            out.push_str("    i32.eqz\n");
+            out.push_str("    if\n      unreachable\n    end\n");
+            out.push_str(&format!("    local.get ${slot}\n"));
+            emit_expr(out, &args[1], ctx);
+            if is_string_ty(&elem_ty, ctx) {
+                out.push_str("    call $_mvl_string_new\n");
+                out.push_str("    i32.store offset=0\n");
+            } else {
+                let store_op = match wasm_ty(&elem_ty, ctx) {
+                    "i32" => "i32.store offset=0",
+                    "f64" => "f64.store offset=0",
+                    _ => "i64.store offset=0",
+                };
+                out.push_str(&format!("    {store_op}\n"));
+            }
+            emit_consumed_local_zero(out, &args[1]);
+        }
         // `.clone()` — needed by six `std/lists.mvl` bodies (#2014):
         // `filter`/`take_while`/`skip_while` call `f(x.clone())`, and
         // `sort_by`/`min_by`/`max_by` call `cmp(x.clone(), y.clone())`. There
@@ -4960,6 +5018,26 @@ fn emit_expr(out: &mut String, expr: &TirExpr, ctx: &Ctx) {
             emit_expr(out, &args[0], ctx);
             emit_expr(out, &args[1], ctx);
             out.push_str("    call $_mvl_array_slice\n");
+        }
+        // `.windows(n)` / `.chunks(n)` on List / Array (#2119) — `builtin
+        // fn`s in std/lists.mvl with no WASM emitter arm at all until now.
+        // Each result element is itself an `_mvl_array_slice`-built
+        // `List[T]`, so this reuses `slice_is_supported`'s exact element-
+        // type gate — the same aliasing risk `slice`/`take`/`skip` already
+        // guard against applies here too (two overlapping windows sharing
+        // a `*MvlString` element would double-free it on drop).
+        TirExprKind::MethodCall {
+            receiver,
+            method,
+            args,
+        } if matches!(method.as_str(), "windows" | "chunks")
+            && args.len() == 1
+            && slice_is_supported(&resolve_ty_param(&receiver.ty, ctx.type_subst), ctx) =>
+        {
+            ctx.needs_runtime.set(true);
+            emit_expr(out, receiver, ctx);
+            emit_expr(out, &args[0], ctx);
+            out.push_str(&format!("    call $_mvl_array_{method}\n"));
         }
         // `.concat(other)` on List / Array — new array holding `self`'s
         // elements followed by `other`'s (#2114). A `builtin fn` in
@@ -7138,6 +7216,16 @@ fn mvl_string_temp_name(expr: &TirExpr) -> String {
 /// every other temp here is named.
 fn box_temp_name(arg: &TirExpr) -> String {
     format!("__bx_{}_{}", arg.span.offset, arg.span.len)
+}
+
+/// Temp local holding the element-slot pointer `_mvl_array_get` returns
+/// while `List[T]::set(i, value)` (#2119) both bounds-checks it and stores
+/// through it — read twice, so it must be stashed rather than calling
+/// `_mvl_array_get` a second time (which would re-evaluate `self`/`i` from
+/// the stack, not from memory, so this is about avoiding a second runtime
+/// call, not double-evaluating a source expression with side effects).
+fn set_slot_temp_name(expr: &TirExpr) -> String {
+    format!("__mset_{}_{}", expr.span.offset, expr.span.len)
 }
 
 /// Temp local holding the `*MvlString` pointer while a `Some(v)` match arm
