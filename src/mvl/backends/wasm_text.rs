@@ -859,11 +859,25 @@ impl Backend for WasmTextCompiler {
         // real function bodies (the WASI shim, `_start`) — `wasm-tools
         // parse` rejects an import appearing after those with "import after
         // function".
+        // Dedupe by name: two sibling files in the same directory can each
+        // legitimately declare their own `extern "rust" { fn f(...); }`
+        // block for the same extern function — same-directory MVL files
+        // don't need to `use` each other's externs, so this is the normal
+        // way for multiple files to call the same FFI function. Once merged
+        // into one `TirProgram` (`merge_tir_programs`), that's two identical
+        // `(import "extern" "f" ...)` entries with the same name, which
+        // `wasm-tools` rejects outright as a "duplicate func identifier" —
+        // taking down the whole module for every file, not just the
+        // colliding one (#2244).
+        let mut imported_externs: HashSet<&str> = HashSet::new();
         for ed in &tir.externs {
             if ed.abi != "rust" {
                 continue;
             }
             for ef in &ed.fns {
+                if !imported_externs.insert(ef.name.as_str()) {
+                    continue;
+                }
                 let sig = extern_fn_signature(&ef.params, &ef.ret_ty, &ctx);
                 out.push_str(&format!(
                     "  (import \"extern\" \"{}\"\n    (func ${}{sig}))\n",

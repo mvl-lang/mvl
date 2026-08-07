@@ -2213,3 +2213,60 @@ mod err_string_payload_tests {
         validate(&wat);
     }
 }
+
+/// Regression test for #2244: two sibling files in the same directory each
+/// legitimately declaring their own `extern "rust" { fn f(...); }` block for
+/// the *same* extern function (the normal way same-directory MVL files call
+/// a shared FFI function without a `use` between them) produced two
+/// identical `(import "extern" "f" ...)` entries once merged into one
+/// module — `wasm-tools` rejects that outright as a "duplicate func
+/// identifier", taking down the whole module. Found via `examples/
+/// snake_game` (`main.mvl` and `render.mvl` both declare `tui_set_cursor`).
+#[cfg(test)]
+mod duplicate_extern_import_tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    fn write_file(dir: &TempDir, name: &str, content: &str) -> std::path::PathBuf {
+        let path = dir.path().join(name);
+        fs::write(&path, content).unwrap();
+        path
+    }
+
+    #[test]
+    fn shared_extern_declared_in_two_sibling_files_imports_once() {
+        let dir = TempDir::new().unwrap();
+        write_file(
+            &dir,
+            "render.mvl",
+            "extern \"rust\" {\n    total fn beep() -> Unit;\n}\n\
+             pub fn ring() -> Unit ! Console { beep() }",
+        );
+        let entry_path = write_file(
+            &dir,
+            "main.mvl",
+            "use render.{ring}\n\
+             extern \"rust\" {\n    total fn beep() -> Unit;\n}\n\
+             fn main() -> Unit ! Console {\n    beep();\n    ring();\n}",
+        );
+
+        let (prog, _src) = super::super::parse_or_exit(&entry_path.display().to_string());
+        let (wat, _tir) = compile_wat_multi(
+            &prog,
+            &entry_path.display().to_string(),
+            "main",
+            AssertMode::Always,
+            false,
+        );
+        let bytes = wat::parse_str(&wat)
+            .unwrap_or_else(|e| panic!("failed to assemble emitted WAT: {e}\n--- WAT ---\n{wat}"));
+        if let Err(e) = wasmparser::Validator::new().validate_all(&bytes) {
+            panic!("emitted module failed validation: {e}\n--- WAT ---\n{wat}");
+        }
+        let import_count = wat.matches("(import \"extern\" \"beep\"").count();
+        assert_eq!(
+            import_count, 1,
+            "extern fn declared identically in two sibling files must import once, not {import_count}:\n{wat}"
+        );
+    }
+}
