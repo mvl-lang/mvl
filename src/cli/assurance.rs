@@ -698,7 +698,9 @@ pub fn run(path: &str, json: bool, verbose: bool) {
                     fd.name, kind, totality, effects, caps, refs
                 );
             }
-            println!("  * implicit default (no explicit keyword): total for fn, partial for extern");
+            println!(
+                "  * implicit default (no explicit keyword): total for fn, partial for extern"
+            );
         }
     }
 

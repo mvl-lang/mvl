@@ -7479,7 +7479,10 @@ fn decreases_method_call_parses_and_preserves_body() {
     "#;
     let (mut p, lex_errors) = Parser::new(src);
     let prog = p.parse_program();
-    assert!(lex_errors.is_empty(), "unexpected lex errors: {lex_errors:?}");
+    assert!(
+        lex_errors.is_empty(),
+        "unexpected lex errors: {lex_errors:?}"
+    );
     assert!(
         p.errors().is_empty(),
         "unexpected parse errors: {:?}",
