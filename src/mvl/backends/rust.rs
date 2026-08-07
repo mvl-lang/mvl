@@ -427,8 +427,11 @@ mod tests {
                  f(xs, other);\n\
              }\n",
         );
-        let out =
-            do_transpile(&prog, TranspileConfig::new("crate").with_prelude(prelude_tirs)).output;
+        let out = do_transpile(
+            &prog,
+            TranspileConfig::new("crate").with_prelude(prelude_tirs),
+        )
+        .output;
         assert!(
             !out.lib_rs.contains("f(&mut x)") && !out.lib_rs.contains("(f)(&"),
             "a same-named user fn must not poison `any`/`all`'s dead HOF body \

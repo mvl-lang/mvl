@@ -21,8 +21,7 @@ use crate::mvl::checker::refinements::{
 use crate::mvl::checker::solver::{RefResult, SolverMode};
 use crate::mvl::parser::ast::{
     expr_to_ref_expr_ext, ActorDecl, ArithOp, Block, CmpOp, Decl, ElseBranch, Expr, FieldDecl,
-    LValue, Literal, LogicOp, MatchBody, Program, RefExpr, Stmt, TypeBody, UnaryOp,
-    VariantFields,
+    LValue, Literal, LogicOp, MatchBody, Program, RefExpr, Stmt, TypeBody, UnaryOp, VariantFields,
 };
 use crate::mvl::parser::lexer::Span;
 
