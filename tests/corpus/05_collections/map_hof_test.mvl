@@ -1,0 +1,75 @@
+// 05_collections/map_hof_test.mvl — Map[K, V] higher-order functions:
+// fold, any, all, filter, map_values, entries.
+//
+// #2124: fold/any/all/filter/map_values' `std/collections.mvl` bodies were
+// literally self-recursive placeholders (e.g. `fold`'s body was
+// `self.fold(init, f)`). Rust/LLVM dispatch all five by name at the call
+// site (transpiler-handled, #554) and never execute the declared body, so
+// the placeholder was invisible on those backends. WASM has no such native
+// dispatch arm for any of the five — it monomorphizes the literal declared
+// body — so every call recursed into itself until the WASM call stack was
+// exhausted. This is not a stub: the placeholder body builds and assembles
+// fine, so `make wasm-stub-report` cannot catch it; only running the
+// emitted module (as this corpus test does) surfaces the trap.
+//
+// `entries()` was a `builtin fn` (no body at all) — Rust/LLVM dispatch it
+// natively by name too, but WASM had no native arm and nothing to
+// monomorphize, so it stubbed to `unreachable`. Given a real body (the same
+// keys()/values() parallel-iteration shape as filter/map_values), WASM's
+// generic-method monomorphization runs it correctly like any other method.
+
+fn is_big(x: Int) -> Bool { x > 10 }
+
+test fn map_fold_sums_values() -> Unit {
+    let m: Map[String, Int] = {"a": 1, "b": 2, "c": 3};
+    assert_eq(m.fold(0, |acc: Int, v: Int| acc + v), 6);
+}
+
+test fn map_any_true() -> Unit {
+    let m: Map[String, Int] = {"a": 5, "b": 20};
+    assert_eq(m.any(is_big), true);
+}
+
+test fn map_any_false() -> Unit {
+    let m: Map[String, Int] = {"a": 1, "b": 2};
+    assert_eq(m.any(is_big), false);
+}
+
+test fn map_all_true() -> Unit {
+    let m: Map[String, Int] = {"a": 20, "b": 30};
+    assert_eq(m.all(is_big), true);
+}
+
+test fn map_all_false() -> Unit {
+    let m: Map[String, Int] = {"a": 20, "b": 5};
+    assert_eq(m.all(is_big), false);
+}
+
+test fn map_filter_keeps_matching() -> Unit {
+    let m: Map[String, Int] = {"a": 20, "b": 5, "c": 30};
+    let m2: Map[String, Int] = m.filter(is_big);
+    assert_eq(m2.len(), 2);
+    assert_eq(m2.contains_key("a"), true);
+    assert_eq(m2.contains_key("b"), false);
+}
+
+test fn map_map_values_doubles() -> Unit {
+    let m: Map[String, Int] = {"a": 1, "b": 2};
+    let m2: Map[String, Int] = m.map_values(|v: Int| v * 2);
+    assert_eq(m2.len(), 2);
+    assert_eq(m2.get("a").unwrap_or(-1), 2);
+    assert_eq(m2.get("b").unwrap_or(-1), 4);
+}
+
+test fn map_entries_len_matches() -> Unit {
+    let m: Map[String, Int] = {"a": 1, "b": 2};
+    let es: List[Entry[String, Int]] = m.entries();
+    assert_eq(es.len(), 2);
+}
+
+test fn map_entries_sum_of_values() -> Unit {
+    let m: Map[String, Int] = {"a": 1, "b": 2, "c": 3};
+    let es: List[Entry[String, Int]] = m.entries();
+    let sum: Int = es.fold(0, |acc: Int, e: Entry[String, Int]| acc + e.value);
+    assert_eq(sum, 6);
+}

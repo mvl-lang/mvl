@@ -67,9 +67,31 @@ pub fn Map[K, V]::values(self) -> List[V] {
 /// Return all key-value pairs as a list of `Entry[K, V]` records (order unspecified).
 ///
 /// Replaces the prior `List[(K, V)]` tuple pattern (ADR-0002, #1380).
-/// Builtin: Rust backend emits `into_iter().map(|(k, v)| Entry { … })`.
-/// LLVM: C-ABI `_mvl_map_entries`. Closes #1383.
-pub builtin fn Map[K, V]::entries(self) -> List[Entry[K, V]]
+/// Rust backend emits `into_iter().map(|(k, v)| Entry { … })`; LLVM uses the
+/// C-ABI `_mvl_map_entries` (closes #1383) — both dispatch by name and never
+/// execute this body. WASM has no such native arm, so it genuinely
+/// monomorphizes this body: real parallel iteration of `keys()`/`values()`,
+/// same shape as `map_values`/`filter` above (#2124).
+pub partial fn Map[K, V]::entries(self) -> List[Entry[K, V]] {
+    let result: ref List[Entry[K, V]] = [];
+    let ks: List[K] = self.keys();
+    let vs: List[V] = self.values();
+    let i: ref Int = 0;
+    let n: Int = ks.len();
+    while i < n {
+        match ks.get(i) {
+            Some(k) => {
+                match vs.get(i) {
+                    Some(v) => { result.push(Entry { key: k, value: v }) },
+                    None => {},
+                }
+            },
+            None => {},
+        };
+        i = i + 1
+    };
+    result
+}
 
 /// Number of entries.  Always non-negative — inherited from the underlying
 /// map representation (#1805).
@@ -84,41 +106,86 @@ pub fn Map[K, V]::is_empty(self) -> Bool {
     self.len() == 0
 }
 
-// ── Map HOFs (transpiler-handled) ────────────────────────────────────────
+// ── Map HOFs ──────────────────────────────────────────────────────────────
+//
+// `fold`/`any`/`all` delegate to `List[V]::fold`/`any`/`all` over
+// `self.values()` — a *different* method call (not self-recursive), so this
+// is safe on every backend. Rust/LLVM still direct-dispatch these three by
+// name (transpiler-handled, #554) and never execute this body; WASM has no
+// such native arm and genuinely monomorphizes it, which previously meant
+// monomorphizing the old `self.fold(init, f)`/`self.any(f)`/`self.all(f)`
+// placeholder — every one of those calls right back into the *same* method,
+// an unconditional infinite recursion that ran until the WASM call stack
+// was exhausted (#2124, same failure class as #2192's `keys`/`values`/
+// `remove`, found auditing that fix's remaining scope).
+//
+// `filter`/`map_values` can't delegate the same way — they must preserve
+// each value's key, which a plain `values()` iteration loses. Iterates
+// `keys()`/`values()` in parallel by index instead of going through
+// `.entries()`, since that's a separate, still-open gap under WASM. Same
+// `partial` shape as `List[T]::min_by`/`max_by`: the match/if branching
+// inside the loop is beyond what the checker's `decreases` extractor can
+// prove terminates (#2211).
 
 /// Apply `f` to each value, producing a new map with the same keys.
-///
-/// Transpiler-handled: emits `map.into_iter().map(|(k,v)| (k, f(v))).collect()`.
-pub fn Map[K, V]::map_values[U](self, f: fn(V) -> U) -> Map[K, U] {
-    self.map_values(f)
+pub partial fn Map[K, V]::map_values[U](self, f: fn(V) -> U) -> Map[K, U] {
+    let result: ref Map[K, U] = Map[K, U]::new();
+    let ks: List[K] = self.keys();
+    let vs: List[V] = self.values();
+    let i: ref Int = 0;
+    let n: Int = ks.len();
+    while i < n {
+        match ks.get(i) {
+            Some(k) => {
+                match vs.get(i) {
+                    Some(v) => { result.insert(k, f(v)) },
+                    None => {},
+                }
+            },
+            None => {},
+        };
+        i = i + 1
+    };
+    result
 }
 
 /// Retain entries whose value satisfies predicate `f`.
-///
-/// Transpiler-handled: emits `map.into_iter().filter(|(_,v)| f(v)).collect()`.
-pub fn Map[K, V]::filter(self, f: fn(V) -> Bool) -> Map[K, V] {
-    self.filter(f)
+pub partial fn Map[K, V]::filter(self, f: fn(V) -> Bool) -> Map[K, V] {
+    let result: ref Map[K, V] = Map[K, V]::new();
+    let ks: List[K] = self.keys();
+    let vs: List[V] = self.values();
+    let i: ref Int = 0;
+    let n: Int = ks.len();
+    while i < n {
+        match ks.get(i) {
+            Some(k) => {
+                match vs.get(i) {
+                    Some(v) => {
+                        if f(v.clone()) { result.insert(k, v) }
+                    },
+                    None => {},
+                }
+            },
+            None => {},
+        };
+        i = i + 1
+    };
+    result
 }
 
 /// Left fold over map values: reduce to a single value using `f` and accumulator `init`.
-///
-/// Transpiler-handled: emits `map.into_iter().fold(init, |acc, (_, v)| f(acc, v))`.
 pub fn Map[K, V]::fold[U](self, init: U, f: fn(U, V) -> U) -> U {
-    self.fold(init, f)
+    self.values().fold(init, f)
 }
 
 /// True if at least one value satisfies `f`.
-///
-/// Transpiler-handled: emits `map.into_iter().any(|(_,v)| f(v))`.
 pub fn Map[K, V]::any(self, f: fn(V) -> Bool) -> Bool {
-    self.any(f)
+    self.values().any(f)
 }
 
 /// True if every value satisfies `f`.
-///
-/// Transpiler-handled: emits `map.into_iter().all(|(_,v)| f(v))`.
 pub fn Map[K, V]::all(self, f: fn(V) -> Bool) -> Bool {
-    self.all(f)
+    self.values().all(f)
 }
 
 // ── Set[T] ─────────────────────────────────────────────────────────────────
