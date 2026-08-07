@@ -186,6 +186,68 @@ pub unsafe extern "C" fn _mvl_io_write(fd: *const MvlFd, content: *const MvlStri
     }
 }
 
+/// `read_line(fd: Fd) → Result[Tainted[String], IoError]` (#2088's LLVM
+/// counterpart to the WASM fix of the same name).
+///
+/// Byte-at-a-time reads, never a `BufReader` — mirrors
+/// `runtime/rust/src/stdlib/io.rs::read_line`'s reasoning exactly: a
+/// per-call `BufReader` would slurp every available byte into its own
+/// private buffer, return the first line, and drop the rest on return,
+/// losing every subsequent line on a pipe or multi-line file. No state is
+/// kept between calls, so repeated `read_line`s on the same fd each pick up
+/// where the last one left off.
+///
+/// Returns `Ok(Tainted(""))` at EOF, never `Err` — `std.io.read_line`'s
+/// documented contract distinguishes "no more input" from a real I/O error
+/// by the returned string's emptiness, not the `Result` variant.
+///
+/// # Safety
+/// `fd` must be a valid `*const MvlFd` (stdin, or a still-open handle from
+/// `open()`), not already closed.
+#[no_mangle]
+#[allow(unsafe_code)]
+pub unsafe extern "C" fn _mvl_io_read_line(fd: *const MvlFd) -> LlvmResult {
+    use std::io::Read as _;
+    use std::os::unix::io::FromRawFd;
+    if fd.is_null() {
+        return LlvmResult::err(&std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "null fd",
+        ));
+    }
+    let raw = (*fd).inner;
+    if raw < 0 || raw > i32::MAX as i64 {
+        return LlvmResult::err(&std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "fd out of range",
+        ));
+    }
+    let fd_num = raw as i32;
+    let mut f = std::fs::File::from_raw_fd(fd_num);
+    let mut bytes: Vec<u8> = Vec::new();
+    let mut one = [0u8; 1];
+    let result = loop {
+        match f.read(&mut one) {
+            Ok(0) => break Ok(bytes),
+            Ok(_) => {
+                bytes.push(one[0]);
+                if one[0] == b'\n' {
+                    break Ok(bytes);
+                }
+            }
+            Err(ref e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(e) => break Err(e),
+        }
+    };
+    // Prevent Rust from closing the fd when `f` is dropped — the fd is
+    // still owned by MVL (stdin, or a still-open handle from `open()`).
+    std::mem::forget(f);
+    match result {
+        Ok(bytes) => LlvmResult::ok_str(&String::from_utf8_lossy(&bytes)),
+        Err(e) => LlvmResult::err(&e),
+    }
+}
+
 /// `open(p: Path) → Result[Fd, IoError]` (#2110's LLVM counterpart)
 ///
 /// Opens a file for reading/writing, creating it if it does not exist.
