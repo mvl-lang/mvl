@@ -2161,3 +2161,55 @@ mod assembly_gate_tests {
         );
     }
 }
+
+/// Regression test for #2067, driven through the real `compile_wat` CLI
+/// pipeline (prelude loading + `pull_in_missing_prelude_items`) rather than
+/// `src/mvl/backends/wasm_text.rs`'s own minimal-prelude unit-test harness —
+/// the latter infers a different (and, for this exact match shape, invalid)
+/// result type for the enclosing `match` used as a statement, an unrelated
+/// harness artifact this repro would otherwise trip over.
+#[cfg(test)]
+mod err_string_payload_tests {
+    use super::*;
+
+    fn validate(wat: &str) {
+        let bytes = match wat::parse_str(wat) {
+            Ok(b) => b,
+            Err(e) => panic!("failed to assemble emitted WAT: {e}\n--- WAT ---\n{wat}"),
+        };
+        if let Err(e) = wasmparser::Validator::new().validate_all(&bytes) {
+            panic!("emitted module failed validation: {e}\n--- WAT ---\n{wat}");
+        }
+    }
+
+    /// A bound `Err(e)` payload on `Result[T, String]` only declared a
+    /// single i32 placeholder local for `e` (the raw `*MvlString` pointer),
+    /// never the split `e_ptr`/`e_len` pair every other String variable
+    /// uses — using `e` as a String (here, passing it straight to
+    /// `println`) referenced `$e_ptr`, a local nothing declared, and
+    /// `wasm-tools parse` rejected the whole module. `Ok`/`Some` already
+    /// had this fix (#2076/#2056); `Err` was the missing, symmetric case.
+    #[test]
+    fn err_string_payload_binds_split_locals() {
+        let (mut p, errs) = Parser::new(
+            "fn compute(fail: Bool) -> Result[Int, String] {\n\
+                 if fail { Err(\"bad input\") } else { Ok(1) }\n\
+             }\n\
+             fn main() -> Unit ! Console {\n\
+                 match compute(true) {\n\
+                     Ok(v) => println(v.to_string()),\n\
+                     Err(e) => println(e),\n\
+                 }\n\
+             }\n",
+        );
+        assert!(errs.is_empty(), "lex errors: {errs:?}");
+        let prog = p.parse_program();
+        assert!(p.errors().is_empty(), "parse errors: {:?}", p.errors());
+        let (wat, _tir) = compile_wat(&prog, "test", AssertMode::Always);
+        assert!(
+            wat.contains("(local $e_ptr i32)") && wat.contains("(local $e_len i32)"),
+            "Err payload must bind split (ptr, len) locals like every other String:\n{wat}"
+        );
+        validate(&wat);
+    }
+}

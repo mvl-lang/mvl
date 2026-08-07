@@ -5806,7 +5806,7 @@ fn emit_match_impl(
             // qualified Err arms in the same match (e.g. `Err(AuthError::A)`,
             // `Err(AuthError::B)`) all lower to the same "tag == 1" condition,
             // so only the first one listed is ever reachable.
-            Pattern::Err { inner, .. } => {
+            Pattern::Err { inner, span } => {
                 ctx.needs_runtime.set(true);
                 let err_ty = result_err_ty(&scrutinee.ty).cloned().unwrap_or(Ty::String);
                 let qualified = wasm_qualified_variant_name(inner);
@@ -5831,25 +5831,33 @@ fn emit_match_impl(
                 }
                 out.push_str(&if_open);
                 // Bind inner only if named and non-wildcard. Dispatches by
-                // the Result's actual Err-payload type (#2066) — String is
-                // extracted as *MvlString i32 (not unpacked to (ptr, len);
-                // no corpus/example Err arm uses the bound string as a
-                // String yet), a genuinely i64-shaped payload (Int, Float)
-                // keeps the full i64 getter instead of the old unconditional
-                // `i32.wrap_i64`, which silently truncated it.
+                // the Result's actual Err-payload type (#2066) — a
+                // genuinely i64-shaped payload (Int, Float) keeps the full
+                // i64 getter instead of the old unconditional
+                // `i32.wrap_i64`, which silently truncated it. String binds
+                // the split (ptr, len) locals every other String variable
+                // uses (#2067), mirroring the `Pattern::Ok` arm above.
                 match inner.as_ref() {
                     Pattern::Ident(name, _) if name != "_" && !name.contains("::") => {
-                        out.push_str(&format!("    local.get ${temp}\n"));
                         if peels_to_string(&err_ty) {
+                            let scratch = mvl_err_string_temp_name(span);
+                            out.push_str(&format!("    local.get ${temp}\n"));
                             out.push_str("    call $_mvl_result_value_i32\n");
+                            out.push_str(&format!("    local.tee ${scratch}\n"));
+                            out.push_str(&format!("    i32.load offset={MVL_STRING_OFFSET_PTR}\n"));
+                            out.push_str(&format!("    local.set ${name}_ptr\n"));
+                            out.push_str(&format!("    local.get ${scratch}\n"));
+                            out.push_str(&format!("    i32.load offset={MVL_STRING_OFFSET_LEN}\n"));
+                            out.push_str(&format!("    local.set ${name}_len\n"));
                         } else {
+                            out.push_str(&format!("    local.get ${temp}\n"));
                             let (_, getter) = result_ops_for_err(&err_ty, ctx);
                             out.push_str(&format!("    call ${getter}\n"));
                             if is_float_ctx(&err_ty, ctx) {
                                 out.push_str("    f64.reinterpret_i64\n");
                             }
+                            out.push_str(&format!("    local.set ${name}\n"));
                         }
-                        out.push_str(&format!("    local.set ${name}\n"));
                     }
                     // Struct-shaped variant pattern with bound fields (e.g.
                     // `Err(AuthError::AccountLocked { attempts })`) — the
@@ -6684,23 +6692,27 @@ fn collect_match_arm_locals(
                 push_wrapped_variant_field_locals_speculative(inner, span_offset, locals);
             }
         }
-        Pattern::Err { inner, .. } => match inner.as_ref() {
+        Pattern::Err { inner, span } => match inner.as_ref() {
             Pattern::Ident(name, _) if name != "_" => {
                 // Bind at the Result's actual Err-payload type (#2066) —
                 // mirrors the Ok arm's #2038 fix above. A hardcoded
                 // Ty::Bool (i32) here declared e.g. an Int/Float
                 // payload's local as i32, then `local.set` on the
                 // i64/f64-reinterpreted extraction value failed
-                // validation. String keeps the i32 placeholder — it's
-                // extracted as a raw *MvlString pointer, not unpacked
-                // to (ptr, len).
+                // validation.
                 let err_ty = result_err_ty(scrutinee_ty).cloned().unwrap_or(Ty::String);
-                let ty = if peels_to_string(&err_ty) {
-                    Ty::Bool
+                if peels_to_string(&err_ty) {
+                    // Split (ptr, len) locals — mirrors `Pattern::Ok`'s
+                    // String handling above (#2076) for the symmetric Err
+                    // case (#2067). Plus a scratch local for the
+                    // `*MvlString` pointer itself while it's being
+                    // unpacked (see the emit-side `Pattern::Err` arm).
+                    locals.push((format!("{name}_ptr"), Ty::Bool)); // i32
+                    locals.push((format!("{name}_len"), Ty::Bool)); // i32
+                    locals.push((mvl_err_string_temp_name(span), Ty::Bool)); // i32
                 } else {
-                    err_ty
-                };
-                locals.push((name.clone(), ty));
+                    locals.push((name.clone(), err_ty));
+                }
             }
             // Struct-shaped variant pattern with bound fields (e.g.
             // `Err(AuthError::AccountLocked { attempts })`) — names must
@@ -7042,6 +7054,14 @@ fn mvl_some_string_temp_name(pattern_span: &Span) -> String {
 /// for #2056). Keyed by the `Ok(...)` pattern's own span.
 fn mvl_ok_string_temp_name(pattern_span: &Span) -> String {
     format!("__mvo_{}_{}", pattern_span.offset, pattern_span.len)
+}
+
+/// Temp local holding the `*MvlString` pointer while an `Err(e)` match arm
+/// on `Result[T, String]` unpacks it into the `e_ptr`/`e_len` locals every
+/// other String variable uses (#2067, mirrors `mvl_ok_string_temp_name`).
+/// Keyed by the `Err(...)` pattern's own span.
+fn mvl_err_string_temp_name(pattern_span: &Span) -> String {
+    format!("__mve_{}_{}", pattern_span.offset, pattern_span.len)
 }
 
 /// Temp local name for the `*MvlArray` pointer stashed during a list
