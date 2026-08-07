@@ -2305,6 +2305,59 @@ pub unsafe extern "C" fn _mvl_io_read_file(path_ptr: i32, path_len: i32) -> i32 
     }
 }
 
+/// `io.read_line(fd)` — read one line (up to and including `\n`) from a raw
+/// WASI file descriptor (#2088). Mirrors
+/// `runtime/rust/src/stdlib/io.rs::read_line` exactly, including its two
+/// load-bearing details:
+///
+/// - Byte-at-a-time reads, never a `BufReader`: a per-call `BufReader` would
+///   slurp every available byte into its own private buffer, return the
+///   first line, and drop the rest on return — losing every subsequent line
+///   on a pipe or multi-line file. No state is kept between calls, so
+///   repeated `read_line`s on the same fd (`examples/mastermind`'s guess
+///   loop) each pick up where the last one left off.
+/// - `Ok(Tainted(""))` at EOF, not `Err`: `std.io.read_line`'s documented
+///   contract distinguishes "no more input" from a real I/O error by the
+///   returned string's emptiness, not the `Result` variant — callers (e.g.
+///   `examples/mastermind`'s `read_guess`) already branch on
+///   `trimmed.is_empty()` for exactly this reason.
+///
+/// # Safety
+/// `fd` must be a raw WASI file descriptor (0 for stdin, or a value
+/// previously returned by `_mvl_io_open`) and not already closed.
+#[unsafe(no_mangle)]
+#[cfg(target_os = "wasi")]
+pub unsafe extern "C" fn _mvl_io_read_line(fd: i32) -> i32 {
+    use std::io::Read as _;
+    use std::os::wasi::io::FromRawFd as _;
+    if fd == 1 || fd == 2 {
+        return _mvl_result_err_i32(alloc_io_error(IO_ERR_PERMISSION_DENIED, None));
+    }
+    let mut f = unsafe { std::fs::File::from_raw_fd(fd) };
+    let mut bytes: Vec<u8> = Vec::new();
+    let mut one = [0u8; 1];
+    let result: Result<Vec<u8>, i32> = loop {
+        match f.read(&mut one) {
+            Ok(0) => break Ok(bytes),
+            Ok(_) => {
+                bytes.push(one[0]);
+                if one[0] == b'\n' {
+                    break Ok(bytes);
+                }
+            }
+            Err(ref e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(e) => break Err(io_error_from_std(&e)),
+        }
+    };
+    // Prevent Rust from closing the fd when `f` is dropped — the fd is still
+    // owned by MVL (stdin, or a still-open handle from `open()`).
+    std::mem::forget(f);
+    match result {
+        Ok(bytes) => _mvl_result_ok_i32(alloc_mvl_string(&bytes)),
+        Err(header) => _mvl_result_err_i32(header),
+    }
+}
+
 // ── std.env — environment and process control ───────────────────────────
 //
 // WASI provides environment variables, command-line arguments, and process
@@ -2637,6 +2690,14 @@ pub unsafe extern "C" fn _mvl_env_get(_ptr: i32, _len: i32) -> i32 {
 #[unsafe(no_mangle)]
 #[cfg(not(target_os = "wasi"))]
 pub unsafe extern "C" fn _mvl_io_read_file(_path_ptr: i32, _path_len: i32) -> i32 {
+    _mvl_result_err_i32(alloc_io_error(
+        IO_ERR_OTHER,
+        Some(b"unsupported on wasm-browser"),
+    ))
+}
+#[unsafe(no_mangle)]
+#[cfg(not(target_os = "wasi"))]
+pub unsafe extern "C" fn _mvl_io_read_line(_fd: i32) -> i32 {
     _mvl_result_err_i32(alloc_io_error(
         IO_ERR_OTHER,
         Some(b"unsupported on wasm-browser"),

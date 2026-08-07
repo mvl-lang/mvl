@@ -46,8 +46,19 @@ test-solver: guard-mvl ## Check each source file individually
 test: guard-mvl ## Run game logic tests
 	$(MVL) test $(DIR)code_test.mvl
 
-test-wasm: guard-mvl ## Run game logic tests via WASM backend (code_test.mvl only — main.mvl needs stdin, out of scope)
+test-wasm: guard-mvl ## Run game logic tests via WASM backend, plus a deterministic empty-stdin smoke test of main.mvl (#2088)
 	MVL_RUNTIME_WASM=$(WASM_RUNTIME) $(MVLR) --mvl=$(MVL) --compiler=rust --backend=wasm $(DIR)code_test.mvl
+	@tmp=$$(mktemp -d) || exit 1; \
+	trap 'rm -rf "$$tmp"' EXIT; \
+	(cd "$$tmp" && $(abspath $(MVL)) build $(DIR)main.mvl --backend=wasm) || exit 1; \
+	wasm-tools parse "$$tmp/main.wat" -o "$$tmp/main.wasm" || exit 1; \
+	GOT=$$(printf "" | wasmtime run -Wcomponent-model=n --preload runtime=$(abspath $(WASM_RUNTIME)) "$$tmp/main.wasm" 2>&1) || exit 1; \
+	if echo "$$GOT" | grep -q "Goodbye! The code was:"; then \
+		printf "  \033[32m✓\033[0m  main.mvl (empty stdin -> EOF): reached Goodbye line\n"; \
+	else \
+		printf "  \033[31m✗\033[0m  main.mvl (empty stdin -> EOF): did not reach Goodbye line\n%s\n" "$$GOT"; \
+		exit 1; \
+	fi
 
 assurance: guard-mvl ## Run MVL assurance report for the pure game logic
 	$(MVL) assurance $(DIR)code.mvl

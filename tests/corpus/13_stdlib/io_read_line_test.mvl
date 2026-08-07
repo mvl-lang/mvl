@@ -1,0 +1,33 @@
+// 13_stdlib/io_read_line_test.mvl — std.io `read_line` (WASI stdin) on the
+// WASM backend (#2088).
+//
+// Before #2088 the WASM backend had no dispatch arm or runtime shim for
+// `read_line` — `read_line` is a `builtin fn` with no MVL body, so any
+// caller produced a `.wasm` module with an undefined-func call (`wasm-tools
+// validate`/assemble rejected it outright, same failure class #2110 fixed
+// for `open`/`close`). `examples/mastermind` couldn't build under
+// `--backend=wasm` at all until this was fixed.
+//
+// The WASM test harness (`tools/mvlr`) doesn't feed any particular stdin
+// content to the process, so this pins the "does not trap" contract (the
+// module assembles and runs) rather than exercising multi-line reading —
+// same tradeoff `io_open_close_test.mvl` documents for `open`/`close` with
+// no `--dir` preopen. `read_line`'s documented contract is `Ok(Tainted(""))`
+// at EOF, never `Err`, so an empty/closed stdin should land in the `Ok`
+// arm with an empty string — asserted here, not just "didn't trap".
+//
+// Real end-to-end stdin behavior (multi-line input, EOF handling) is
+// covered by `examples/mastermind`'s `make test-wasm` target, which pipes
+// real stdin content via `wasmtime run` directly.
+
+use std.io.{stdin, read_line}
+
+test fn read_line_from_stdin_does_not_trap() -> Unit ! Console {
+    match read_line(stdin()) {
+        Err(_) => assert(true),
+        Ok(raw) => {
+            let line: String = relabel trust(raw, "TEST-2088-001");
+            assert_eq(line.is_empty(), true)
+        },
+    }
+}

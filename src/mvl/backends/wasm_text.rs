@@ -23,8 +23,17 @@
 //!   value, no trailing newline. `now()` / `_instant_epoch_seconds(t)` —
 //!   WASI `clock_time_get` (real wall-clock reads, not faked). Together
 //!   these unblock `std.log` (#2056) for the common stdout/stderr case.
-//!   Arbitrary-fd `write`/`read` against `open()`-returned file descriptors
-//!   is still unsupported (no WASI preopen wiring).
+//! - `read_line(fd)` (#2088) — one line (through `\n`, EOF → `Ok("")`) via
+//!   the preloaded `runtime/wasm/` crate's `_mvl_io_read_line`, not a
+//!   hand-declared WASI `fd_read` import: byte-at-a-time buffered reading
+//!   needs real host logic (a fixed WAT instruction sequence can't scan for
+//!   `\n` without knowing the line length up front), the same reason
+//!   `read_file`/`open`/`close` route through the runtime crate instead of
+//!   inline WASI imports. Unblocks interactive/stdin-driven programs (e.g.
+//!   `examples/mastermind`) under `--backend=wasm`.
+//!   Arbitrary-fd `write` against `open()`-returned file descriptors is
+//!   still unsupported (no WASI preopen wiring) — `read_line` doesn't need
+//!   preopens since it takes an already-open fd, not a path.
 //! - `assert(cond)` / `assert_eq[T](a, b)` / `assert_ne[T](a, b)` — trap
 //!   via `unreachable` on failure. Type-directed equality.
 //! - `let` and `let ref` bindings — WASM locals, declared in a fn prelude
@@ -579,6 +588,8 @@ const RUNTIME_IMPORTS: &[(&str, &str)] = &[
     ("_mvl_io_remove", "(param i32 i32) (result i32)"),
     ("_mvl_io_open", "(param i32 i32) (result i32)"),
     ("_mvl_io_close", "(param i32)"),
+    // Takes a raw fd; returns heap-allocated MvlResult (#2088).
+    ("_mvl_io_read_line", "(param i32) (result i32)"),
     // ── std.time — wall clock and sleep ───────────────────────────────────
     ("_mvl_time_now", "(result i32)"),
     (
@@ -3873,6 +3884,19 @@ fn emit_expr(out: &mut String, expr: &TirExpr, ctx: &Ctx) {
                 emit_field_access(out, &args[0], "inner", ctx); // i64 fd number
                 out.push_str("    i32.wrap_i64\n");
                 out.push_str("    call $_mvl_io_close\n");
+                return;
+            }
+            // `read_line(fd)` (std.io, #2088) — read one line from a raw
+            // WASI fd via the preloaded `runtime/wasm/` crate, same reason
+            // `read_file` isn't hand-rolled WASI: byte-at-a-time buffered
+            // reading needs real host logic, not a fixed WAT instruction
+            // sequence. `stdin()`'s `Fd { inner: 0 }` (built above) and any
+            // fd from `open()` both flow through unchanged.
+            if name == "read_line" && args.len() == 1 {
+                ctx.needs_runtime.set(true);
+                emit_field_access(out, &args[0], "inner", ctx); // i64 fd number
+                out.push_str("    i32.wrap_i64\n");
+                out.push_str("    call $_mvl_io_read_line\n");
                 return;
             }
             // `now()` (std.time) — returns Instant handle via runtime.
