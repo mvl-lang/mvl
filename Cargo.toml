@@ -26,20 +26,22 @@ tar = "0.4"
 flate2 = "1"
 regex = "1"
 z3 = { version = "0.12", optional = true }
+# Assemble + type-validate `--backend=wasm` output before reporting success.
+# `mvl build --backend=wasm` / `mvl test --backend=wasm` used to exit 0 on a
+# module with a dangling `call` to an undefined function (or any other
+# assembly failure) — the compiler had already written the broken call, but
+# nothing checked it before declaring victory (#2091). Promoted from
+# dev-dependencies (where they already validated emitted WAT inside `cargo
+# test`, see `src/cli/wasm_text.rs`'s test modules) since the same check now
+# also runs in the production CLI path, not just tests.
+wat = "1"
+wasmparser = "0.221"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }
-# Assemble + type-validate emitted WAT inside `cargo test`. The WASM emitter's
-# tests used to assert only on substrings of the generated text, which cannot
-# see a module that assembles but fails validation — the failure mode behind
-# several #2014 gaps (uninterned literal leaving the stack short, dangling
-# `call`, undeclared local). `wasm-tools parse` in the corpus runner did not
-# catch these either; `parse` is not `validate`.
-wat = "1"
-wasmparser = "0.221"
 
 [[bench]]
 name = "refinement_solver"

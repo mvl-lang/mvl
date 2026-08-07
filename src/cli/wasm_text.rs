@@ -1010,7 +1010,43 @@ pub(super) fn build_project_wasm(path: &str, assert_mode: AssertMode, _target: &
         eprintln!("error: cannot write {out_path}: {e}");
         process::exit(1);
     });
+    assemble_or_exit(&wat, &out_path);
     println!("WAT written to: {out_path}");
+}
+
+/// Assemble + type-validate emitted WAT before `mvl build --backend=wasm`
+/// reports success.
+///
+/// Without this, a module with a dangling `call` to a function that was
+/// never defined or imported (or any other assembly/validation failure)
+/// wrote a broken `.wat` file and exited 0 — the checker's own `[REQ1]
+/// undefined function` diagnostic is a non-fatal warning under this backend
+/// (mirrors `mvl test --backend=wasm`'s existing tolerance for a
+/// synthesized, deliberately-unsound effect set), so it was the only signal,
+/// and nothing acted on it. `wasm-tools parse`/`validate` downstream would
+/// catch it, but only if someone remembers to run them (#2091). The file is
+/// still written first so it's available for inspection either way.
+fn assemble_or_exit(wat: &str, out_path: &str) {
+    if let Some(msg) = wat_assembly_error(wat) {
+        eprintln!("error: {msg}");
+        eprintln!("  (invalid WAT written to {out_path} for inspection)");
+        process::exit(1);
+    }
+}
+
+/// `Some(message)` if `wat` fails to assemble or validate, `None` if it's a
+/// well-formed module. Split out from [`assemble_or_exit`] so the check
+/// itself is unit-testable without a `process::exit` call tearing down the
+/// test runner.
+fn wat_assembly_error(wat: &str) -> Option<String> {
+    let bytes = match wat::parse_str(wat) {
+        Ok(b) => b,
+        Err(e) => return Some(format!("emitted WASM module failed to assemble: {e}")),
+    };
+    wasmparser::Validator::new()
+        .validate_all(&bytes)
+        .err()
+        .map(|e| format!("emitted WASM module failed to validate: {e}"))
 }
 
 // ── Test harness — mirrors cmd_test_llvm_text ─────────────────────────────────
@@ -2071,6 +2107,57 @@ mod test_dispatch_main_exclusion_tests {
         assert!(
             !tir.fns.iter().any(|f| f.name == "main"),
             "both fn mains must be dropped for test-fn dispatch"
+        );
+    }
+}
+
+/// Regression tests for #2091: `mvl build --backend=wasm` exited 0 on a
+/// module with a dangling `call` to a function nothing defines or imports —
+/// the checker's `[REQ1] undefined function` diagnostic is a non-fatal
+/// warning under this backend, so it was the only signal, and nothing acted
+/// on it. `wat_assembly_error` (used by `build_project_wasm` via
+/// `assemble_or_exit`) now catches this before the CLI reports success.
+#[cfg(test)]
+mod assembly_gate_tests {
+    use super::*;
+
+    fn compile(src: &str) -> String {
+        let (mut p, errs) = Parser::new(src);
+        assert!(errs.is_empty(), "lex errors: {errs:?}");
+        let prog = p.parse_program();
+        assert!(p.errors().is_empty(), "parse errors: {:?}", p.errors());
+        let (wat, _tir) = compile_wat(&prog, "test", AssertMode::Always);
+        wat
+    }
+
+    #[test]
+    fn dangling_call_to_undefined_function_is_rejected() {
+        // `read_line()` names no declared function and isn't a recognized
+        // builtin under this backend (the exact shape from #2088/#2091) — the
+        // checker only warns, so the emitter proceeds and writes a `call
+        // $read_line` against nothing.
+        let wat = compile(
+            "test fn t() -> Unit {\n\
+                 let _: String = read_line();\n\
+             }\n",
+        );
+        assert!(
+            wat_assembly_error(&wat).is_some(),
+            "a dangling call to an undefined function must fail assembly:\n{wat}"
+        );
+    }
+
+    #[test]
+    fn well_formed_module_has_no_assembly_error() {
+        let wat = compile(
+            "test fn t() -> Unit {\n\
+                 assert_eq(1 + 1, 2);\n\
+             }\n",
+        );
+        assert_eq!(
+            wat_assembly_error(&wat),
+            None,
+            "a well-formed module must not be flagged:\n{wat}"
         );
     }
 }
