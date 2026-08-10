@@ -1,77 +1,84 @@
 // LLVM smoke test: medical_triage core decisions.
 // expect: RED
 // expect: GREEN
+//
+// Fully self-contained: no `use` imports, deliberately duplicates its own
+// minimal type/fn universe rather than sharing triage.mvl/model.mvl's, so it
+// can be a standalone LLVM backend repro case. Every name below is prefixed
+// (`Smoke`/`smoke_`) to avoid colliding with triage.mvl's same-named,
+// differently-shaped declarations when `mvl check`/`make check` merges every
+// .mvl file in this directory into one flat whole-program namespace.
 
-type Priority = enum { Red, Orange, Yellow, Green, Blue }
-type Consciousness = enum { Alert, VoiceResponse, PainResponse, Unresponsive }
-type BreathingStatus = enum { Normal, Labored, Absent }
-type PulseStrength = enum { Strong, Weak, Absent }
-type Vitals = struct {
+type SmokePriority = enum { Red, Orange, Yellow, Green, Blue }
+type SmokeConsciousness = enum { Alert, VoiceResponse, PainResponse, Unresponsive }
+type SmokeBreathingStatus = enum { Normal, Labored, Absent }
+type SmokePulseStrength = enum { Strong, Weak, Absent }
+type SmokeVitals = struct {
     heart_rate: Int, systolic_bp: Int, oxygen_sat: Int, temperature: Int,
-    consciousness: Consciousness, breathing: BreathingStatus, pulse: PulseStrength,
+    consciousness: SmokeConsciousness, breathing: SmokeBreathingStatus, pulse: SmokePulseStrength,
 }
-type AgeGroup = enum { Infant, Child, Adult, Elderly }
-type ChiefComplaint = enum { ChestPain, Breathing, Trauma, Abdominal, Neurological, Fever, Minor }
-type Patient = struct {
-    age_group: AgeGroup, complaint: ChiefComplaint, vitals: Vitals,
+type SmokeAgeGroup = enum { Infant, Child, Adult, Elderly }
+type SmokeChiefComplaint = enum { ChestPain, Breathing, Trauma, Abdominal, Neurological, Fever, Minor }
+type SmokePatient = struct {
+    age_group: SmokeAgeGroup, complaint: SmokeChiefComplaint, vitals: SmokeVitals,
     allergies: Bool, pregnant: Bool,
 }
-type Assessment = struct { priority: Priority, resuscitate: Bool, isolate: Bool, reassess_mins: Int }
+type SmokeAssessment = struct { priority: SmokePriority, resuscitate: Bool, isolate: Bool, reassess_mins: Int }
 
-total fn airway_compromise(v: Vitals) -> Bool {
-    v.breathing == BreathingStatus::Absent
-    || (v.breathing == BreathingStatus::Labored && v.oxygen_sat < 92)
-    || v.pulse == PulseStrength::Absent
+total fn smoke_airway_compromise(v: SmokeVitals) -> Bool {
+    v.breathing == SmokeBreathingStatus::Absent
+    || (v.breathing == SmokeBreathingStatus::Labored && v.oxygen_sat < 92)
+    || v.pulse == SmokePulseStrength::Absent
 }
 
-total fn circulation_failure(v: Vitals) -> Bool {
+total fn smoke_circulation_failure(v: SmokeVitals) -> Bool {
     (v.heart_rate > 130 && v.systolic_bp < 100)
     || v.systolic_bp < 80
-    || (v.oxygen_sat < 90 && v.breathing != BreathingStatus::Absent)
+    || (v.oxygen_sat < 90 && v.breathing != SmokeBreathingStatus::Absent)
 }
 
-total fn neuro_critical(v: Vitals) -> Bool {
-    v.consciousness == Consciousness::Unresponsive
-    || v.consciousness == Consciousness::PainResponse
+total fn smoke_neuro_critical(v: SmokeVitals) -> Bool {
+    v.consciousness == SmokeConsciousness::Unresponsive
+    || v.consciousness == SmokeConsciousness::PainResponse
 }
 
-total fn assess(p: Patient) -> Assessment {
-    if airway_compromise(p.vitals) || circulation_failure(p.vitals) || neuro_critical(p.vitals) {
-        Assessment { priority: Priority::Red, resuscitate: true, isolate: false, reassess_mins: 0 }
+total fn smoke_assess(p: SmokePatient) -> SmokeAssessment {
+    if smoke_airway_compromise(p.vitals) || smoke_circulation_failure(p.vitals) || smoke_neuro_critical(p.vitals) {
+        SmokeAssessment { priority: SmokePriority::Red, resuscitate: true, isolate: false, reassess_mins: 0 }
     } else {
-        Assessment { priority: Priority::Green, resuscitate: false, isolate: false, reassess_mins: 60 }
+        SmokeAssessment { priority: SmokePriority::Green, resuscitate: false, isolate: false, reassess_mins: 60 }
     }
 }
 
-total fn print_priority(p: Priority) -> Unit ! Console {
+total fn smoke_print_priority(p: SmokePriority) -> Unit ! Console {
     match p {
-        Priority::Red    => println("RED"),
-        Priority::Orange => println("ORANGE"),
-        Priority::Yellow => println("YELLOW"),
-        Priority::Green  => println("GREEN"),
-        Priority::Blue   => println("BLUE"),
+        SmokePriority::Red    => println("RED"),
+        SmokePriority::Orange => println("ORANGE"),
+        SmokePriority::Yellow => println("YELLOW"),
+        SmokePriority::Green  => println("GREEN"),
+        SmokePriority::Blue   => println("BLUE"),
     }
 }
 
 total fn main() -> Unit ! Console {
-    let cv: Vitals = Vitals {
+    let cv: SmokeVitals = SmokeVitals {
         heart_rate: 45, systolic_bp: 80, oxygen_sat: 88, temperature: 365,
-        consciousness: Consciousness::Unresponsive, breathing: BreathingStatus::Labored,
-        pulse: PulseStrength::Weak
+        consciousness: SmokeConsciousness::Unresponsive, breathing: SmokeBreathingStatus::Labored,
+        pulse: SmokePulseStrength::Weak
     };
-    let sv: Vitals = Vitals {
+    let sv: SmokeVitals = SmokeVitals {
         heart_rate: 72, systolic_bp: 118, oxygen_sat: 98, temperature: 368,
-        consciousness: Consciousness::Alert, breathing: BreathingStatus::Normal,
-        pulse: PulseStrength::Strong
+        consciousness: SmokeConsciousness::Alert, breathing: SmokeBreathingStatus::Normal,
+        pulse: SmokePulseStrength::Strong
     };
-    let cp: Patient = Patient {
-        age_group: AgeGroup::Adult, complaint: ChiefComplaint::Neurological,
+    let cp: SmokePatient = SmokePatient {
+        age_group: SmokeAgeGroup::Adult, complaint: SmokeChiefComplaint::Neurological,
         vitals: cv, allergies: false, pregnant: false
     };
-    let sp: Patient = Patient {
-        age_group: AgeGroup::Adult, complaint: ChiefComplaint::Minor,
+    let sp: SmokePatient = SmokePatient {
+        age_group: SmokeAgeGroup::Adult, complaint: SmokeChiefComplaint::Minor,
         vitals: sv, allergies: false, pregnant: false
     };
-    print_priority(assess(cp).priority);
-    print_priority(assess(sp).priority)
+    smoke_print_priority(smoke_assess(cp).priority);
+    smoke_print_priority(smoke_assess(sp).priority)
 }
