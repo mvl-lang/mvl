@@ -26,6 +26,26 @@
 
 set -euo pipefail
 
+# Batch harness: never inherit the caller's stdin.
+#
+# `tests/corpus/13_stdlib/io_read_line_test.mvl` calls `read_line(stdin())`,
+# and the rust/wasm path runs the module under `wasmtime run`, which passes
+# the caller's stdin straight through. Run from an interactive terminal,
+# WASI `fd_read` on fd 0 blocks forever waiting for input, so
+# `make test-rust-wasm` (and therefore `make test-full`) hangs partway
+# through with no output — observed as a `wasmtime` process parked for
+# minutes on `.mvlr_synth.*.io_read_line_test.wasm`.
+#
+# CI never hit it: its stdin is already at EOF, which is also the contract
+# that test asserts (`read_line` at EOF → `Ok("")`), so /dev/null is the
+# semantically correct stdin for the whole corpus, not just a workaround.
+# The same hazard applies to the native rust/llvm paths, hence redirecting
+# once here rather than at each `wasmtime`/`mvl run` call site.
+#
+# mvlr's own `read` loops are fed by here-strings and process substitution,
+# never stdin, so closing it here is safe.
+exec </dev/null
+
 COMPILER=rust
 BACKEND=rust
 QUIET=0
