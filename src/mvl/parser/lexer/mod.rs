@@ -1036,12 +1036,18 @@ mod tests {
 
     #[test]
     fn tokenize_decimal_with_underscores() {
-        assert_eq!(lex_kinds_no_eof("1_000_000"), vec![TokenKind::Integer(1_000_000)]);
+        assert_eq!(
+            lex_kinds_no_eof("1_000_000"),
+            vec![TokenKind::Integer(1_000_000)]
+        );
     }
 
     #[test]
     fn tokenize_hex_binary_octal_with_underscores() {
-        assert_eq!(lex_kinds_no_eof("0xFF_FF"), vec![TokenKind::Integer(0xFFFF)]);
+        assert_eq!(
+            lex_kinds_no_eof("0xFF_FF"),
+            vec![TokenKind::Integer(0xFFFF)]
+        );
         assert_eq!(
             lex_kinds_no_eof("0b1010_1010"),
             vec![TokenKind::Integer(0b1010_1010)]
@@ -1051,10 +1057,7 @@ mod tests {
 
     #[test]
     fn tokenize_float_with_underscores() {
-        assert_eq!(
-            lex_kinds_no_eof("1_000.5"),
-            vec![TokenKind::Float(1_000.5)]
-        );
+        assert_eq!(lex_kinds_no_eof("1_000.5"), vec![TokenKind::Float(1_000.5)]);
         assert_eq!(lex_kinds_no_eof("1.5e1_0"), vec![TokenKind::Float(1.5e10)]);
     }
 
