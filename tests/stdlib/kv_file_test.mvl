@@ -223,7 +223,7 @@ test fn set_same_key_overwrites() -> Unit {
 
 // ── round-trip: save → open ───────────────────────────────────────────────────
 
-test fn roundtrip_all_types() -> Unit ! FileRead + FileWrite + FileDelete {
+test partial fn roundtrip_all_types() -> Unit ! FileRead + FileWrite + FileDelete {
     let p: String = "/tmp/mvl_kv_file_test_963.kv";
     let s0: FileKv = kv_new(p);
     let s1: FileKv = kv_set(s0, "user.name",    KvValue::Text("Bob"));
@@ -257,7 +257,7 @@ test fn roundtrip_all_types() -> Unit ! FileRead + FileWrite + FileDelete {
     }
 }
 
-test fn open_missing_file_returns_empty() -> Unit ! FileRead {
+test partial fn open_missing_file_returns_empty() -> Unit ! FileRead {
     match kv_open("/tmp/mvl_kv_file_no_such_file_963.kv") {
         Err(_)   => assert(false),
         Ok(store) => assert_eq(kv_len(store), 0),

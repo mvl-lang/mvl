@@ -29,7 +29,7 @@ use std.env.{get_secret, set, remove_var, args, current_dir, getuid, getgid,
 // ── get_secret ────────────────────────────────────────────────────────────
 
 fn env_get_secret_set_var() -> Result[Bool, String] ! Env {
-    let _: Unit = set("MVL_TEST_SECRET_99994", "super_secret")?;
+    let _: Unit = set("MVL_TEST_SECRET_99994", relabel taint("super_secret", "ENV-TEST-SECRET"))?;
     let opt: Option[Secret[String]] = get_secret("MVL_TEST_SECRET_99994");
     remove_var("MVL_TEST_SECRET_99994");
     Ok(opt.is_some())
@@ -49,7 +49,7 @@ test fn env_get_secret_returns_none_when_missing() -> Unit ! Env {
 }
 
 fn env_get_secret_declassify_roundtrip() -> Result[Bool, String] ! Env {
-    let _: Unit = set("MVL_TEST_SECRET_99996", "roundtrip_value")?;
+    let _: Unit = set("MVL_TEST_SECRET_99996", relabel taint("roundtrip_value", "ENV-TEST-SECRET-ROUNDTRIP"))?;
     let opt: Option[Secret[String]] = get_secret("MVL_TEST_SECRET_99996");
     remove_var("MVL_TEST_SECRET_99996");
     match opt {
@@ -68,7 +68,7 @@ test fn env_get_secret_declassify_roundtrip_correct() -> Unit ! Env {
 // ── set + remove_var lifecycle ────────────────────────────────────────────
 
 fn env_set_succeeds() -> Result[Bool, String] ! Env {
-    let _: Unit = set("MVL_ENV_TEST_SET_99992", "mvl_test_value")?;
+    let _: Unit = set("MVL_ENV_TEST_SET_99992", relabel taint("mvl_test_value", "ENV-TEST-SET"))?;
     remove_var("MVL_ENV_TEST_SET_99992");
     Ok(true)
 }
@@ -78,7 +78,7 @@ test fn env_set_and_remove_lifecycle() -> Unit ! Env {
 }
 
 fn env_set_rejects_invalid_name() -> Result[Bool, String] ! Env {
-    let r: Result[Unit, String] = set("INVALID=NAME", "value");
+    let r: Result[Unit, String] = set("INVALID=NAME", relabel taint("value", "ENV-TEST-INVALID-NAME"));
     Ok(r.is_err())
 }
 
@@ -87,7 +87,7 @@ test fn env_set_name_with_equals_is_err() -> Unit ! Env {
 }
 
 fn env_set_succeeds_returns_ok() -> Result[Bool, String] ! Env {
-    let r: Result[Unit, String] = set("MVL_ENV_TEST_OK_99993", "ok_value");
+    let r: Result[Unit, String] = set("MVL_ENV_TEST_OK_99993", relabel taint("ok_value", "ENV-TEST-OK"));
     remove_var("MVL_ENV_TEST_OK_99993");
     Ok(r.is_ok())
 }
