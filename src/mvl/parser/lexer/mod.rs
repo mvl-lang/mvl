@@ -1032,6 +1032,46 @@ mod tests {
         assert_eq!(kinds, vec![TokenKind::Float(1.0e-2)]);
     }
 
+    // ── Digit-group separators `_` (mvl-lang/mvl-spec#38) ──────────────────
+
+    #[test]
+    fn tokenize_decimal_with_underscores() {
+        assert_eq!(lex_kinds_no_eof("1_000_000"), vec![TokenKind::Integer(1_000_000)]);
+    }
+
+    #[test]
+    fn tokenize_hex_binary_octal_with_underscores() {
+        assert_eq!(lex_kinds_no_eof("0xFF_FF"), vec![TokenKind::Integer(0xFFFF)]);
+        assert_eq!(
+            lex_kinds_no_eof("0b1010_1010"),
+            vec![TokenKind::Integer(0b1010_1010)]
+        );
+        assert_eq!(lex_kinds_no_eof("0o7_7"), vec![TokenKind::Integer(0o77)]);
+    }
+
+    #[test]
+    fn tokenize_float_with_underscores() {
+        assert_eq!(
+            lex_kinds_no_eof("1_000.5"),
+            vec![TokenKind::Float(1_000.5)]
+        );
+        assert_eq!(lex_kinds_no_eof("1.5e1_0"), vec![TokenKind::Float(1.5e10)]);
+    }
+
+    #[test]
+    fn tokenize_trailing_underscore_is_a_known_gap_not_rejected() {
+        // Documented in numbers.rs: a trailing `_` is not currently rejected.
+        // This test pins that behavior — it is not a suggestion to fix it here.
+        assert_eq!(lex_kinds_no_eof("1_"), vec![TokenKind::Integer(1)]);
+    }
+
+    #[test]
+    fn tokenize_base_prefix_with_no_digits_errors() {
+        let (_, errors) = lex_all("0x_");
+        assert_eq!(errors.len(), 1);
+        assert!(errors[0].message.contains("empty integer literal"));
+    }
+
     #[test]
     fn tokenize_impl_keyword() {
         let kinds = lex_kinds_no_eof("impl");
