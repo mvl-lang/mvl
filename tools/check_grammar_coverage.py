@@ -106,6 +106,14 @@ EBNF_KNOWN_ABSENT = {
     "ANY_CHAR": "terminal — character class, no named rule needed",
     "NEWLINE": "terminal — handled by extras whitespace",
     "CHAR_ELEM": "terminal — inlined into string/char regex",
+    # mvl-spec 0.1.6 (#38): EBNF split INTEGER/FLOAT's digit classes and
+    # exponent suffix into their own named terminals for readability. All four
+    # are already covered by tree-sitter's integer_literal/float_literal
+    # regexes — same as INTEGER/FLOAT above, not new surface to implement.
+    "HEX_DIGIT": "terminal — character class, covered by integer_literal regex",
+    "BIN_DIGIT": "terminal — character class, covered by integer_literal regex",
+    "OCT_DIGIT": "terminal — character class, covered by integer_literal regex",
+    "EXPONENT": "terminal — suffix, covered by float_literal regex",
 }
 
 # Rules that exist in grammar.js but not in EBNF — deliberate extensions.
