@@ -59,12 +59,12 @@ test fn format_datetime_year_only() -> Unit {
 
 test fn parse_valid_date_returns_some() -> Unit {
     let r: Option[DateTime] = parse("2024-03-15", "%Y-%m-%d");
-    assert_eq(is_some(r), true);
+    assert_eq(r.is_some(), true);
 }
 
 test fn parse_invalid_date_returns_none() -> Unit {
     let r: Option[DateTime] = parse("not-a-date", "%Y-%m-%d");
-    assert_eq(is_none(r), true);
+    assert_eq(r.is_none(), true);
 }
 
 test fn parse_roundtrips_year() -> Unit {

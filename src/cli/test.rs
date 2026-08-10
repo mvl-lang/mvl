@@ -70,13 +70,21 @@ fn qualified_module_name(path: &str) -> String {
 
 /// Requirement numbers enforced fatally by `mvl test` (#2214).
 ///
-/// Everything else stays a warning: a class of checker false positives on
-/// Rust-backed builtins invisible to the checker prelude (`is_some`,
-/// `is_none`, and similar — tracked on #2017) still lives under Req 1, and
-/// making the whole checker fatal today would fail on those, not on real
-/// bugs. Req 7 (Effects) and Req 8 (Termination) were audited clean across
-/// the entire corpus (#2215) before this enforcement flip landed, so there
-/// is no equivalent false-positive class to gate on for these two.
+/// Everything else stays a warning. That was originally justified by a
+/// presumed class of checker false positives on Rust-backed builtins
+/// invisible to the checker prelude (`is_some`, `is_none`, and similar —
+/// tracked on #2017). Those specific diagnostics turned out NOT to be false
+/// positives: `is_some`/`is_none`/`is_ok`/`is_err`/`unwrap_or` are declared
+/// as *methods* on `Option`/`Result` in `std/core.mvl`, and the call sites
+/// were invoking them with free-function syntax, which ADR-0031 (no UFCS)
+/// forbids — the checker was right. They are fixed; `tests/stdlib` and the
+/// `tests/corpus` rust/rust suite now both report zero checker diagnostics.
+///
+/// Promoting Req 1 to fatal is therefore plausible, but has not been audited
+/// against `examples/` or user projects — do that before flipping it.
+///
+/// Req 7 (Effects) and Req 8 (Termination) were audited clean across the
+/// entire corpus (#2215) before this enforcement flip landed.
 const FATAL_REQUIREMENTS: &[u8] = &[7, 8];
 
 /// Print `check_result`'s diagnostics for `file_str`, split by whether their

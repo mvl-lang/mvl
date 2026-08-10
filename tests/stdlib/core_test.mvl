@@ -35,52 +35,52 @@ test fn range_empty_when_start_exceeds_end() -> Unit {
 
 test fn is_some_returns_true_for_some() -> Unit {
     let opt: Option[Int] = Some(42);
-    assert_eq(is_some(opt), true);
+    assert_eq(opt.is_some(), true);
 }
 
 test fn is_some_returns_false_for_none() -> Unit {
     let opt: Option[Int] = None;
-    assert_eq(is_some(opt), false);
+    assert_eq(opt.is_some(), false);
 }
 
 test fn is_none_returns_true_for_none() -> Unit {
     let opt: Option[Int] = None;
-    assert_eq(is_none(opt), true);
+    assert_eq(opt.is_none(), true);
 }
 
 test fn is_none_returns_false_for_some() -> Unit {
     let opt: Option[Int] = Some(1);
-    assert_eq(is_none(opt), false);
+    assert_eq(opt.is_none(), false);
 }
 
 test fn unwrap_or_returns_value_when_some() -> Unit {
     let opt: Option[Int] = Some(7);
-    assert_eq(unwrap_or(opt, 0), 7);
+    assert_eq(opt.unwrap_or(0), 7);
 }
 
 test fn unwrap_or_returns_default_when_none() -> Unit {
     let opt: Option[Int] = None;
-    assert_eq(unwrap_or(opt, 99), 99);
+    assert_eq(opt.unwrap_or(99), 99);
 }
 
 // ── Result predicates ──────────────────────────────────────────────────────
 
 test fn is_ok_returns_true_for_ok() -> Unit {
     let r: Result[Int, String] = Ok(1);
-    assert_eq(is_ok(r), true);
+    assert_eq(r.is_ok(), true);
 }
 
 test fn is_ok_returns_false_for_err() -> Unit {
     let r: Result[Int, String] = Err("bad");
-    assert_eq(is_ok(r), false);
+    assert_eq(r.is_ok(), false);
 }
 
 test fn is_err_returns_true_for_err() -> Unit {
     let r: Result[Int, String] = Err("oops");
-    assert_eq(is_err(r), true);
+    assert_eq(r.is_err(), true);
 }
 
 test fn is_err_returns_false_for_ok() -> Unit {
     let r: Result[Int, String] = Ok(42);
-    assert_eq(is_err(r), false);
+    assert_eq(r.is_err(), false);
 }

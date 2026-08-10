@@ -113,7 +113,11 @@ test fn env_current_dir_returns_ok() -> Unit ! Env {
 
 fn env_current_dir_nonempty() -> Result[Bool, String] ! Env {
     let p: Tainted[String] = current_dir()?;
-    Ok(p.is_empty() == false)
+    // Declassify before inspecting: a method call on a `Tainted[T]` receiver
+    // yields `Tainted[U]` (#1007), so `p.is_empty()` is `Tainted[Bool]` and
+    // cannot be compared against a bare `Bool`.
+    let path: String = relabel trust(p, "CWD-PATH");
+    Ok(path.is_empty() == false)
 }
 
 test fn env_current_dir_path_is_nonempty() -> Unit ! Env {
