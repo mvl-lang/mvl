@@ -924,6 +924,33 @@ impl TextEmitter {
             return Ok(Some(reg));
         }
 
+        // `Option[T]`/`Result[T, E]` `==`/`!=` (#2270) — on LLVM, both lower
+        // to inline `{ i8, ptr }` tagged-union values. Falling through to
+        // the generic path below would emit `icmp eq { i8, ptr } %a, %b`,
+        // an LLVM verifier error (icmp requires integer/pointer operands,
+        // not an aggregate struct). Compare tag first, then payload —
+        // structurally via `_mvl_string_eq` for `String` payloads,
+        // otherwise by value — same shape as #2249's
+        // `_mvl_option_eq`/`_mvl_result_eq` WASM runtime fns, ported here
+        // as inline LLVM IR instead of a heap-boxed runtime call, matching
+        // this file's existing inline style (see `unwrap_or` above).
+        if matches!(op, BinaryOp::Eq | BinaryOp::Ne) {
+            match unwrap_labels(&left.ty) {
+                Ty::Option(inner) => {
+                    let inner = (**inner).clone();
+                    let result = self.emit_option_eq_tir(&lv, &rv, &inner);
+                    return Ok(Some(self.maybe_negate_tir(result, op)));
+                }
+                Ty::Result(ok_ty, err_ty) => {
+                    let ok_ty = (**ok_ty).clone();
+                    let err_ty = (**err_ty).clone();
+                    let result = self.emit_result_eq_tir(&lv, &rv, &ok_ty, &err_ty);
+                    return Ok(Some(self.maybe_negate_tir(result, op)));
+                }
+                _ => {}
+            }
+        }
+
         let instr = Self::binary_instr(op, is_float, &lhs_ty, &lv, &rv);
         let reg = self.next_reg();
         self.push_instr(&format!("{reg} = {instr}"));
@@ -937,6 +964,196 @@ impl TextEmitter {
         };
         self.fn_ctx.reg_types.insert(reg.clone(), result_ty.into());
         Ok(Some(reg))
+    }
+
+    /// `Ne` negates the `Eq`-shaped result computed by the Option/Result
+    /// equality helpers below; `Eq` passes it through unchanged.
+    fn maybe_negate_tir(&mut self, reg: String, op: &BinaryOp) -> String {
+        if matches!(op, BinaryOp::Ne) {
+            let neg = self.next_reg();
+            self.push_instr(&format!("{neg} = xor i1 {reg}, true"));
+            self.fn_ctx.reg_types.insert(neg.clone(), "i1".into());
+            neg
+        } else {
+            reg
+        }
+    }
+
+    /// `Option[T]::eq` — tags must match; if both `Some`, payloads must
+    /// also match (`None == None` needs no payload comparison).
+    fn emit_option_eq_tir(&mut self, lv: &str, rv: &str, inner: &Ty) -> String {
+        let tag_l = self.next_reg();
+        self.push_instr(&format!("{tag_l} = extractvalue {{ i8, ptr }} {lv}, 0"));
+        let tag_r = self.next_reg();
+        self.push_instr(&format!("{tag_r} = extractvalue {{ i8, ptr }} {rv}, 0"));
+        let tags_eq = self.next_reg();
+        self.push_instr(&format!("{tags_eq} = icmp eq i8 {tag_l}, {tag_r}"));
+        let is_some = self.next_reg();
+        self.push_instr(&format!("{is_some} = icmp eq i8 {tag_l}, 0"));
+
+        let match_bb = self.next_bb("opt_eq_tags_match");
+        let compare_bb = self.next_bb("opt_eq_compare");
+        let both_none_bb = self.next_bb("opt_eq_both_none");
+        let mismatch_bb = self.next_bb("opt_eq_mismatch");
+        let merge_bb = self.next_bb("opt_eq_merge");
+
+        self.push_instr(&format!(
+            "br i1 {tags_eq}, label %{match_bb}, label %{mismatch_bb}"
+        ));
+
+        self.start_bb(&match_bb);
+        self.push_instr(&format!(
+            "br i1 {is_some}, label %{compare_bb}, label %{both_none_bb}"
+        ));
+
+        self.start_bb(&compare_bb);
+        let ptr_l = self.next_reg();
+        self.push_instr(&format!("{ptr_l} = extractvalue {{ i8, ptr }} {lv}, 1"));
+        let ptr_r = self.next_reg();
+        self.push_instr(&format!("{ptr_r} = extractvalue {{ i8, ptr }} {rv}, 1"));
+        let payload_eq = self.emit_option_result_payload_eq_tir(inner, &ptr_l, &ptr_r);
+        self.push_instr(&format!("br label %{merge_bb}"));
+        let compare_end = self.fn_ctx.current_bb.clone();
+
+        self.start_bb(&both_none_bb);
+        self.push_instr(&format!("br label %{merge_bb}"));
+        let both_none_end = self.fn_ctx.current_bb.clone();
+
+        self.start_bb(&mismatch_bb);
+        self.push_instr(&format!("br label %{merge_bb}"));
+        let mismatch_end = self.fn_ctx.current_bb.clone();
+
+        self.start_bb(&merge_bb);
+        let result = self.next_reg();
+        self.push_instr(&format!(
+            "{result} = phi i1 [ {payload_eq}, %{compare_end} ], [ true, %{both_none_end} ], [ false, %{mismatch_end} ]"
+        ));
+        self.fn_ctx.reg_types.insert(result.clone(), "i1".into());
+        result
+    }
+
+    /// `Result[T, E]::eq` — tags must match; `Ok` payloads compare via `T`,
+    /// `Err` payloads compare via `E` (they may be different types, unlike
+    /// `Option`'s single payload type).
+    fn emit_result_eq_tir(&mut self, lv: &str, rv: &str, ok_ty: &Ty, err_ty: &Ty) -> String {
+        let tag_l = self.next_reg();
+        self.push_instr(&format!("{tag_l} = extractvalue {{ i8, ptr }} {lv}, 0"));
+        let tag_r = self.next_reg();
+        self.push_instr(&format!("{tag_r} = extractvalue {{ i8, ptr }} {rv}, 0"));
+        let tags_eq = self.next_reg();
+        self.push_instr(&format!("{tags_eq} = icmp eq i8 {tag_l}, {tag_r}"));
+        let is_ok = self.next_reg();
+        self.push_instr(&format!("{is_ok} = icmp eq i8 {tag_l}, 0"));
+
+        let match_bb = self.next_bb("res_eq_tags_match");
+        let ok_bb = self.next_bb("res_eq_compare_ok");
+        let err_bb = self.next_bb("res_eq_compare_err");
+        let mismatch_bb = self.next_bb("res_eq_mismatch");
+        let merge_bb = self.next_bb("res_eq_merge");
+
+        self.push_instr(&format!(
+            "br i1 {tags_eq}, label %{match_bb}, label %{mismatch_bb}"
+        ));
+
+        self.start_bb(&match_bb);
+        self.push_instr(&format!("br i1 {is_ok}, label %{ok_bb}, label %{err_bb}"));
+
+        self.start_bb(&ok_bb);
+        let ok_ptr_l = self.next_reg();
+        self.push_instr(&format!("{ok_ptr_l} = extractvalue {{ i8, ptr }} {lv}, 1"));
+        let ok_ptr_r = self.next_reg();
+        self.push_instr(&format!("{ok_ptr_r} = extractvalue {{ i8, ptr }} {rv}, 1"));
+        let ok_eq = self.emit_option_result_payload_eq_tir(ok_ty, &ok_ptr_l, &ok_ptr_r);
+        self.push_instr(&format!("br label %{merge_bb}"));
+        let ok_end = self.fn_ctx.current_bb.clone();
+
+        self.start_bb(&err_bb);
+        let err_ptr_l = self.next_reg();
+        self.push_instr(&format!("{err_ptr_l} = extractvalue {{ i8, ptr }} {lv}, 1"));
+        let err_ptr_r = self.next_reg();
+        self.push_instr(&format!("{err_ptr_r} = extractvalue {{ i8, ptr }} {rv}, 1"));
+        let err_eq = self.emit_option_result_payload_eq_tir(err_ty, &err_ptr_l, &err_ptr_r);
+        self.push_instr(&format!("br label %{merge_bb}"));
+        let err_end = self.fn_ctx.current_bb.clone();
+
+        self.start_bb(&mismatch_bb);
+        self.push_instr(&format!("br label %{merge_bb}"));
+        let mismatch_end = self.fn_ctx.current_bb.clone();
+
+        self.start_bb(&merge_bb);
+        let result = self.next_reg();
+        self.push_instr(&format!(
+            "{result} = phi i1 [ {ok_eq}, %{ok_end} ], [ {err_eq}, %{err_end} ], [ false, %{mismatch_end} ]"
+        ));
+        self.fn_ctx.reg_types.insert(result.clone(), "i1".into());
+        result
+    }
+
+    /// Compare two `Option`/`Result` payload values already unboxed to raw
+    /// pointers (`extractvalue ..., 1`). `String` compares by content via
+    /// the runtime; scalar/pointer payloads compare by value after a typed
+    /// load. Nested aggregate payloads (structs, payload-carrying enums)
+    /// have no structural comparator here — out of scope for #2270, which
+    /// only requires String and scalar payloads (mirrors #2249's WASM
+    /// `_mvl_option_eq`/`_mvl_result_eq`) — so they fall back to comparing
+    /// the boxed slot's own address.
+    fn emit_option_result_payload_eq_tir(
+        &mut self,
+        payload_ty: &Ty,
+        ptr_l: &str,
+        ptr_r: &str,
+    ) -> String {
+        let payload_ty = unwrap_labels(payload_ty);
+        if matches!(payload_ty, Ty::String) {
+            // `ptr_l`/`ptr_r` are the payload *slot* addresses (like
+            // `unwrap_or`'s `payload_ptr`) — the slot holds a `*MvlString`
+            // handle, not the string struct itself, so it must be loaded
+            // before `_mvl_string_eq` (which expects `*const MvlString`)
+            // can dereference it.
+            let sl = self.next_reg();
+            self.push_instr(&format!("{sl} = load ptr, ptr {ptr_l}"));
+            let sr = self.next_reg();
+            self.push_instr(&format!("{sr} = load ptr, ptr {ptr_r}"));
+            self.ensure_extern("declare i1 @_mvl_string_eq(ptr, ptr)");
+            let reg = self.next_reg();
+            self.push_instr(&format!(
+                "{reg} = call i1 @_mvl_string_eq(ptr {sl}, ptr {sr})"
+            ));
+            self.fn_ctx.reg_types.insert(reg.clone(), "i1".into());
+            return reg;
+        }
+        let payload_llvm_ty = self.ty_to_llvm_ctx(payload_ty);
+        match payload_llvm_ty.as_str() {
+            // A zero-sized payload (`Result[Unit, E]`'s `Ok` arm) has
+            // exactly one value — always equal, nothing to load.
+            "void" => "true".to_string(),
+            "double" => {
+                let lv = self.next_reg();
+                self.push_instr(&format!("{lv} = load double, ptr {ptr_l}"));
+                let rv = self.next_reg();
+                self.push_instr(&format!("{rv} = load double, ptr {ptr_r}"));
+                let reg = self.next_reg();
+                self.push_instr(&format!("{reg} = fcmp oeq double {lv}, {rv}"));
+                self.fn_ctx.reg_types.insert(reg.clone(), "i1".into());
+                reg
+            }
+            "i1" | "i8" | "i32" | "i64" | "ptr" => {
+                let lv = self.next_reg();
+                self.push_instr(&format!("{lv} = load {payload_llvm_ty}, ptr {ptr_l}"));
+                let rv = self.next_reg();
+                self.push_instr(&format!("{rv} = load {payload_llvm_ty}, ptr {ptr_r}"));
+                let reg = self.next_reg();
+                self.push_instr(&format!("{reg} = icmp eq {payload_llvm_ty} {lv}, {rv}"));
+                self.fn_ctx.reg_types.insert(reg.clone(), "i1".into());
+                reg
+            }
+            _ => {
+                let reg = self.next_reg();
+                self.push_instr(&format!("{reg} = icmp eq ptr {ptr_l}, {ptr_r}"));
+                self.fn_ctx.reg_types.insert(reg.clone(), "i1".into());
+                reg
+            }
+        }
     }
 
     fn emit_short_circuit_and_tir(

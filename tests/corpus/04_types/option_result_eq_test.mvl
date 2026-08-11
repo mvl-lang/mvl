@@ -7,12 +7,14 @@
 // there via `_mvl_option_eq`/`_mvl_result_eq` (runtime/wasm), dispatched
 // by a compile-time `is_str` flag per payload type.
 //
-// Split from option_result_test.mvl and excluded from `--backend=llvm`:
-// `Option`/`Result` are `{i8, ptr}` structs on that backend, and `==` on
-// them doesn't even compile there today ("icmp requires integer
-// operands") — a separate, pre-existing gap, not attempted here. Passes
-// on `--backend=wasm` (this fix) and `--backend=rust` (derived
-// `PartialEq`, unaffected by either backend's bug).
+// Split from option_result_test.mvl. On `--backend=llvm`, `Option`/`Result`
+// are `{i8, ptr}` structs and `==` fell through to a generic `icmp eq`
+// on the aggregate, which doesn't compile ("icmp requires integer
+// operands") — fixed (#2270) via a dedicated `emit_binary_tir` case that
+// compares tag then payload, structurally for `String` via
+// `_mvl_string_eq`. Passes on `--backend=wasm` (#2249's fix) and
+// `--backend=rust` (derived `PartialEq`, unaffected by either backend's
+// bug).
 test fn option_string_eq_same_content_different_allocations() -> Unit {
     let a: Option[String] = Some("hello");
     let b: Option[String] = Some("hello");

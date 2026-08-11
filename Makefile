@@ -393,14 +393,7 @@ test-rust-rust: build ## rust/rust — new corpus through Rust transpiler (batch
 # declaration-time type-param name instead of the call site's concrete
 # type) was fixed on that backend in the same change that added this file;
 # LLVM's `emit_exprs_tir.rs` needs its own fix.
-#
-# option_result_eq_test.mvl (#2249, split from option_result_test.mvl):
-# `Option[T]`/`Result[T, E]` are `{i8, ptr}` structs on this backend, and
-# `==` on them doesn't even compile ("icmp requires integer operands") —
-# a separate, pre-existing gap from the WASM equality fix that added this
-# file; needs its own LLVM emit_binary case.
 LLVM_CORPUS_EXCLUDE := \
-	tests/corpus/04_types/option_result_eq_test.mvl \
 	tests/corpus/05_collections/map_entries_value_field_test.mvl \
 	tests/corpus/13_stdlib/list_stubs_test.mvl
 
