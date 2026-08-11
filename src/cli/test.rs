@@ -459,8 +459,7 @@ pub fn run(path: &str, quiet: bool, verbose: bool, coverage: bool, bdd: bool, us
                                         })
                                 };
                                 if entry_point_ok
-                                    && (transpiler::has_extern_or_type_decls(&parsed)
-                                        || imported_by_test_files.contains(&file_stem)
+                                    && (imported_by_test_files.contains(&file_stem)
                                         || imported_by_test_files.contains(&qual_stem))
                                 {
                                     let stem = file_stem.replace('-', "_");
