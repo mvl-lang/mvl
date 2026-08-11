@@ -4662,6 +4662,28 @@ impl TextEmitter {
                 self.fn_ctx.reg_types.insert(reg.clone(), "i1".into());
                 Ok(Some(reg))
             }
+            // `List[String]::contains(x)` needs its own C-ABI symbol (#2256) —
+            // `_mvl_array_contains` (the generic arm below reaches for)
+            // compares elements as raw bytes, which for a `*mut MvlString`
+            // element is the heap address, not the string's content. Checked
+            // ahead of the generic arm so String receivers never reach it —
+            // same shape as the `sort` fix (#2173) just below.
+            ("contains", "ptr")
+                if args.len() == 1
+                    && matches!(unwrap_labels(&receiver.ty), Ty::List(e) | Ty::Array(e, _) if matches!(unwrap_labels(e), Ty::String)) =>
+            {
+                let needle = match self.emit_expr_tir(&args[0])? {
+                    Some(v) => v,
+                    None => return Ok(None),
+                };
+                self.ensure_extern("declare i1 @_mvl_array_contains_str(ptr, ptr)");
+                let reg = self.next_reg();
+                self.push_instr(&format!(
+                    "{reg} = call i1 @_mvl_array_contains_str(ptr {val}, ptr {needle})"
+                ));
+                self.fn_ctx.reg_types.insert(reg.clone(), "i1".into());
+                Ok(Some(reg))
+            }
             ("contains", "ptr")
                 if matches!(unwrap_labels(&receiver.ty), Ty::List(_) | Ty::Array(_, _))
                     && args.len() == 1 =>
@@ -4695,6 +4717,29 @@ impl TextEmitter {
                 self.ensure_extern("declare ptr @_mvl_list_sort_str(ptr)");
                 let reg = self.next_reg();
                 self.push_instr(&format!("{reg} = call ptr @_mvl_list_sort_str(ptr {val})"));
+                self.fn_ctx.reg_types.insert(reg.clone(), "ptr".into());
+                Ok(Some(reg))
+            }
+            // `List[String]::join(sep)` (#2256) — a non-generic extension
+            // method (`List[String]`, not `List[T]`), so it falls outside the
+            // generic-fallback dispatch at the bottom of this match (that
+            // path only covers monomorphized `List[T]` methods) and no
+            // dedicated arm existed, so the call silently emitted nothing.
+            // Own C-ABI symbol, same shape as the `sort`/`contains` fixes
+            // just above.
+            ("join", "ptr")
+                if args.len() == 1
+                    && matches!(unwrap_labels(&receiver.ty), Ty::List(e) | Ty::Array(e, _) if matches!(unwrap_labels(e), Ty::String)) =>
+            {
+                let sep = match self.emit_expr_tir(&args[0])? {
+                    Some(v) => v,
+                    None => return Ok(None),
+                };
+                self.ensure_extern("declare ptr @_mvl_list_join_str(ptr, ptr)");
+                let reg = self.next_reg();
+                self.push_instr(&format!(
+                    "{reg} = call ptr @_mvl_list_join_str(ptr {val}, ptr {sep})"
+                ));
                 self.fn_ctx.reg_types.insert(reg.clone(), "ptr".into());
                 Ok(Some(reg))
             }
