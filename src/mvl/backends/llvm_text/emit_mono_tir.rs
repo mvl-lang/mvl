@@ -24,6 +24,17 @@ use crate::mvl::ir::{
 use super::emit_program_tir::ty_to_type_expr_or_unit;
 use super::TextEmitter;
 
+/// Key for `MonoQueue::tir_generic_fns` (#2251). Extension methods are keyed
+/// by `"Receiver::name"` so two receiver types declaring a generic method of
+/// the same name (e.g. `List::fold` and `Map::fold`) don't collide on a
+/// shared bare-name key. Free functions (no receiver) keep the bare name.
+pub(super) fn tir_generic_fn_key(receiver_type: Option<&str>, name: &str) -> String {
+    match receiver_type {
+        Some(r) => format!("{r}::{name}"),
+        None => name.to_string(),
+    }
+}
+
 impl TextEmitter {
     /// Emit a call to a generic TIR function, enqueuing the monomorphized copy
     /// if it has not been seen yet.
@@ -94,9 +105,35 @@ impl TextEmitter {
         // Emit the call. Argument lowering uses the runtime arg types (already
         // concrete in TIR), not the generic param shapes.
         let mut arg_vals: Vec<(String, String)> = Vec::new();
-        for arg in args {
+        for (i, arg) in args.iter().enumerate() {
             let ty_str = self.ty_to_llvm_ctx(&arg.ty);
-            if let Some(v) = self.emit_expr_tir(arg)? {
+            // #2251, mirrors emit_fn_call_tir's #1832 fix: a bare reference
+            // to a top-level function (e.g. `m.any(is_big)`) passed where
+            // the generic fn declares a `fn(...) -> ...`-typed param must
+            // cross as a `%__closure_type` value, not the raw `@is_big`
+            // function-pointer `emit_expr_tir`'s general `Var` case returns.
+            // Every call site that already forwards a closure into a native
+            // HOF runtime call (`_mvl_list_any`, etc.) dereferences that
+            // pointer as `{fn_ptr, env_ptr}` — handing it a bare code
+            // address reads the callee's own machine code as those two
+            // fields.
+            let param_wants_fn = matches!(gf.params.get(i).map(|p| &p.ty), Some(Ty::Fn(..)));
+            let v = if param_wants_fn {
+                if let TirExprKind::Var(fn_name) = &arg.kind {
+                    if !self.fn_ctx.locals.contains_key(fn_name.as_str())
+                        && self.module.fn_ret_types.contains_key(fn_name.as_str())
+                    {
+                        self.make_named_fn_closure_hof(fn_name, &[])?
+                    } else {
+                        self.emit_expr_tir(arg)?
+                    }
+                } else {
+                    self.emit_expr_tir(arg)?
+                }
+            } else {
+                self.emit_expr_tir(arg)?
+            };
+            if let Some(v) = v {
                 arg_vals.push((ty_str, v));
             }
         }

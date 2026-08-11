@@ -997,26 +997,51 @@ pub(crate) unsafe fn mvl_map_keys(m: *const MvlMap) -> *mut MvlArray {
     arr
 }
 
-/// Return an `MvlArray*` of raw-byte values stored in the map.
-///
-/// Each value is wrapped in a freshly-allocated `MvlString` (reusing the
-/// string container as a typed byte-buffer), mirroring the layout returned
-/// by `mvl_map_keys`.  Callers should drop the result with
-/// `mvl_string_ptr_array_drop` when done.
+/// Return an `MvlArray*` of the map's values, in the same raw representation
+/// `V` already has in each slot (a scalar's bits, or a boxed value's
+/// pointer — always exactly `val_len` bytes, since every MVL value that fits
+/// a map slot is a single GPR-class register — see `mvl_map_insert`).
 ///
 /// # Safety
 /// `m` must be a valid non-null `MvlMap` pointer.
+///
+/// Previously wrapped each value in a freshly-allocated `MvlString` via
+/// `_mvl_string_new(slot.val_ptr, slot.val_len)`, mirroring `mvl_map_keys` —
+/// correct there because a key's stored bytes really are its UTF-8 content,
+/// but wrong here: a value's stored bytes are a fixed-size register value
+/// (e.g. an `Int`'s raw bits, or a `String`'s pointer), not variable-length
+/// text. Treating those bytes as string content built a garbage `MvlString`
+/// and returned *its* pointer in place of the real value, so every element
+/// silently became an unrelated heap address (#2251 — surfaced via
+/// `Map[K,V]::fold`/`any`/`all`/`filter`/`map_values`, which all forward
+/// through `self.values()` in `std/collections.mvl`).
+///
+/// Boxed value types (`String`, nested collections, structs holding boxed
+/// fields) are copied by raw pointer without bumping their refcount here —
+/// the returned array aliases the map's own owned reference rather than
+/// cloning it (contrast `Map::get`'s scalar-vs-String clone split at the
+/// call site). Fine for the scalar-`V` corpus this fixes; a boxed-`V`
+/// `.values()`/`.fold()` call that outlives the source map, or drops both
+/// independently, is a latent double-free/use-after-free this doesn't
+/// address — not attempted here.
 pub(crate) unsafe fn mvl_map_values(m: *const MvlMap) -> *mut MvlArray {
-    let arr = _mvl_array_new(std::mem::size_of::<*mut MvlString>(), 0);
     if m.is_null() || (*m).cap == 0 {
-        return arr;
+        return _mvl_array_new(std::mem::size_of::<i64>(), 0);
     }
     let cap = (*m).cap as usize;
+    let mut elem_size = std::mem::size_of::<i64>();
     for i in 0..cap {
         let slot = &*(*m).slots.add(i);
         if slot.occupied == 1 {
-            let val_s = _mvl_string_new(slot.val_ptr, slot.val_len as usize);
-            _mvl_array_push(arr, (&val_s as *const *mut MvlString).cast());
+            elem_size = slot.val_len as usize;
+            break;
+        }
+    }
+    let arr = _mvl_array_new(elem_size, 0);
+    for i in 0..cap {
+        let slot = &*(*m).slots.add(i);
+        if slot.occupied == 1 && !slot.val_ptr.is_null() {
+            _mvl_array_push(arr, slot.val_ptr);
         }
     }
     arr

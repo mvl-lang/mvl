@@ -378,11 +378,13 @@ test-rust-rust: build ## rust/rust — new corpus through Rust transpiler (batch
 # minimal on purpose — LLVM is otherwise full-corpus (#1823) — so new
 # entries should stay rare; each is a real gap, not a convenience.
 #
-# map_hof_test.mvl (#2251): `Map[K, V]::fold`/`any`/`all`/`filter` type-
-# confuse the map with a `List` in `emit_exprs_tir.rs`'s shape-only HOF
-# dispatch (`("fold", "ptr")` etc. match any pointer-shaped receiver, Map
-# included, and call the List-only `_mvl_list_fold` runtime fn on a
-# `HashMap` pointer) — silently corrupts the map rather than trapping.
+# map_entries_value_field_test.mvl (#2251, split from map_hof_test.mvl):
+# `Entry[K, V]`'s LLVM struct type hardcodes `ptr` for a generic field
+# regardless of the concrete instantiation — the same generic-struct-
+# field-layout gap as list_stubs_test.mvl below (#2119's LLVM remainder),
+# hit here via `Entry[String, Int]`'s `value` field. map_hof_test.mvl's
+# other Map HOF tests (fold/any/all/filter/map_values/entries-without-
+# field-access) are fixed and no longer excluded.
 #
 # nested_container_ownership_test.mvl (#2252): a `ref`-declared local moved
 # into an outer container via `.push()` is double-freed at scope exit
@@ -398,7 +400,7 @@ test-rust-rust: build ## rust/rust — new corpus through Rust transpiler (batch
 # type) was fixed on that backend in the same change that added this file;
 # LLVM's `emit_exprs_tir.rs` needs its own fix.
 LLVM_CORPUS_EXCLUDE := \
-	tests/corpus/05_collections/map_hof_test.mvl \
+	tests/corpus/05_collections/map_entries_value_field_test.mvl \
 	tests/corpus/07_ownership/nested_container_ownership_test.mvl \
 	tests/corpus/13_stdlib/list_stubs_test.mvl
 

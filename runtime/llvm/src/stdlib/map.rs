@@ -75,7 +75,8 @@ pub unsafe extern "C" fn _mvl_map_keys(map: *const MvlMap) -> *mut MvlArray {
     memory_ops::mvl_map_keys(map)
 }
 
-/// Return all values as a `MvlArray*` of `*mut MvlString` pointers (order unspecified).
+/// Return all values as a `MvlArray*` in `V`'s own raw slot representation
+/// (a scalar's bits, or a boxed value's pointer; order unspecified).
 ///
 /// `_mvl_map_values(map: *const MvlMap) -> *mut MvlArray`
 #[no_mangle]

@@ -17,6 +17,22 @@
 // monomorphize, so it stubbed to `unreachable`. Given a real body (the same
 // keys()/values() parallel-iteration shape as filter/map_values), WASM's
 // generic-method monomorphization runs it correctly like any other method.
+//
+// #2251: on `--backend=llvm`, `fold`/`any`/`all`/`filter`'s shape-only HOF
+// dispatch arms matched any pointer-shaped receiver (List/Set *and* Map,
+// indistinguishable at that layer) and called the List-only runtime fn on
+// a `HashMap` pointer — type confusion, not a crash. Fixed by guarding
+// those arms against `Map` and by making `std/collections.mvl`'s generic
+// Map bodies (previously stripped from the prelude and never emitted,
+// regardless of genericity) reachable through the existing generic-method
+// fallback dispatch.
+//
+// A `map_entries_sum_of_values` test (iterating `List[Entry[K, V]]` and
+// reading `.value`) originally lived here too — split to
+// `map_entries_value_field_test.mvl` and excluded from `LLVM_CORPUS_EXCLUDE`:
+// it hits the *same* generic-struct-field-layout gap as
+// `list_stubs_test.mvl` (#2119's LLVM remainder), unrelated to the Map HOF
+// dispatch bug this file covers.
 
 fn is_big(x: Int) -> Bool { x > 10 }
 
@@ -67,9 +83,3 @@ test fn map_entries_len_matches() -> Unit {
     assert_eq(es.len(), 2);
 }
 
-test fn map_entries_sum_of_values() -> Unit {
-    let m: Map[String, Int] = {"a": 1, "b": 2, "c": 3};
-    let es: List[Entry[String, Int]] = m.entries();
-    let sum: Int = es.fold(0, |acc: Int, e: Entry[String, Int]| acc + e.value);
-    assert_eq(sum, 6);
-}

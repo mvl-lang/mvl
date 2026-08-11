@@ -20,6 +20,7 @@ use crate::mvl::parser::lexer::Span;
 use std::collections::HashSet;
 
 use super::emit_helpers::ty_to_type_expr;
+use super::emit_mono_tir::tir_generic_fn_key;
 use super::{TextEmitter, MAIN_RET};
 
 /// Compute the transitive closure of functions that call (directly or indirectly)
@@ -309,9 +310,31 @@ impl TextEmitter {
         // First pass: register fn signatures and emit struct/alias type defs.
         // Generic fns are stashed in `tir_generic_fns` and registered per
         // mangled instantiation when a call site enqueues them (#1612, Bug 4).
+        //
+        // Generic extension methods are keyed by `"Receiver::name"`, not the
+        // bare name (#2251): a plain-name key collides whenever two receiver
+        // types declare a generic method of the same name (e.g. `List::fold`
+        // and `Map::fold`), and a `HashMap::insert` silently drops whichever
+        // one is inserted first. Generic free functions have no receiver and
+        // keep the bare-name key, matching the free-function call sites
+        // (`emit_fn_call_tir`) that look them up the same way.
         for f in &prog.fns {
             if !f.type_params.is_empty() {
-                self.mono.tir_generic_fns.insert(f.name.clone(), f.clone());
+                // `builtin fn`s (e.g. `Map[K, V]::new()`) have no monomorphizable
+                // body — they're pure C-ABI dispatch, resolved through
+                // `builtin_syms`/`dispatch.rs` regardless of type params.
+                // Registering one here would let a later zero-arg call to it
+                // (e.g. `Map[K, V]::new()` inside another generic method's
+                // own body) match this table before ever reaching the
+                // builtin dispatch check in `emit_fn_call_tir`, sending it
+                // through generic type-inference instead — which has
+                // nothing to infer `K`/`V` from on a no-arg call and
+                // defaults both to `Ty::Int`, producing a wrongly-typed
+                // `Map__new__Int_Int` (#2251).
+                if !f.is_builtin {
+                    let key = tir_generic_fn_key(f.receiver_type.as_deref(), &f.name);
+                    self.mono.tir_generic_fns.insert(key, f.clone());
+                }
                 continue;
             }
             self.register_fn_tir_sig(f);
@@ -599,7 +622,25 @@ impl TextEmitter {
                 // otherwise every heap-typed parameter leaks unconditionally.
                 // `Ty::Ref` (`val T` / `ref T`) parameters are borrows: the
                 // callee never owns them and must never drop them.
-                if !matches!(p.ty, Ty::Ref(..)) {
+                //
+                // #2251: an extension method's `self` receiver is exempt
+                // even without an explicit `Ty::Ref` — `pub fn
+                // List[T]::fold(self, ...)`/`Map[K, V]::fold`/etc. declare a
+                // bare `self` (no `ref`) but the checker and Rust backend
+                // both treat calling them as a *borrow*: `s.fold(...)`
+                // followed by further use of `s` type-checks and runs
+                // correctly on `--backend=rust`. A bare-`self` user struct
+                // method already behaves this way here too — `heap_kind`
+                // returns `None` for struct types, so a struct's `self`
+                // was never added to `heap_locals` to begin with. Only
+                // builtin collection/String receivers (where `heap_kind`
+                // *does* return `Some`) hit this: their `self` got
+                // registered and dropped at function exit, double-freeing
+                // the caller's own copy — `Map[K, V]::fold`'s call to
+                // `self.values()` inside its monomorphized body, dropped at
+                // the body's end, then dropped again by the caller.
+                let is_extension_receiver = f.receiver_type.is_some() && p.name == "self";
+                if !matches!(p.ty, Ty::Ref(..)) && !is_extension_receiver {
                     if let Some(hk) = Self::heap_kind(&param_ty_te) {
                         self.fn_ctx.heap_locals.push((ssa, hk, false));
                     }

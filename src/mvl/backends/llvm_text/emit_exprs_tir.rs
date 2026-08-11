@@ -17,6 +17,7 @@ use crate::mvl::ir::{
     BinaryOp, Pattern, TirExpr, TirExprKind, TirMatchArm, TirMatchBody, Ty, TypeExpr, UnaryOp,
 };
 
+use super::emit_mono_tir::tir_generic_fn_key;
 use super::{TextEmitter, RESULT_LLVM_TY};
 
 /// Recursively check if a TIR expression's static type is `Float`.
@@ -483,7 +484,20 @@ impl TextEmitter {
                     let mut call_args: Vec<String> = Vec::new();
                     let mut to_exclude: Vec<&TirExpr> = Vec::new();
                     for (i, arg) in args.iter().enumerate() {
-                        let ty = self.ty_to_llvm_ctx(&arg.ty);
+                        // #2251: the call-site type annotation must match
+                        // what the callee's own signature declares for this
+                        // param, not `arg`'s checker-inferred type — those
+                        // can disagree (e.g. `.clone()` has no checker type
+                        // rule of its own and its result type doesn't
+                        // always resolve to match the receiver after
+                        // monomorphization), and LLVM requires the call
+                        // instruction's argument types to match the actual
+                        // function pointer's real ABI, not whatever the
+                        // argument expression happens to be typed as.
+                        let ty = params
+                            .get(i)
+                            .map(|t| self.llvm_ty_ctx(t))
+                            .unwrap_or_else(|| self.ty_to_llvm_ctx(&arg.ty));
                         let Some(v) = self.emit_expr_tir(arg)? else {
                             continue;
                         };
@@ -545,7 +559,14 @@ impl TextEmitter {
                 let mut call_args = vec![format!("ptr {env_ptr}")];
                 let mut to_exclude: Vec<&TirExpr> = Vec::new();
                 for (i, arg) in args.iter().enumerate() {
-                    let ty = self.ty_to_llvm_ctx(&arg.ty);
+                    // #2251: use the closure's own declared param type for
+                    // the call-site annotation, not `arg`'s checker-inferred
+                    // type — see the identical fix/comment in the `is_alias`
+                    // branch above.
+                    let ty = closure_param_tys
+                        .get(i)
+                        .map(|t| self.llvm_ty_ctx(t))
+                        .unwrap_or_else(|| self.ty_to_llvm_ctx(&arg.ty));
                     let Some(v) = self.emit_expr_tir(arg)? else {
                         continue;
                     };
@@ -3758,6 +3779,52 @@ impl TextEmitter {
                 Ok(Some(reg))
             }
 
+            // `clone()` (#2251) had no dispatch arm at all for any receiver
+            // — every generic stdlib body that calls it (e.g.
+            // `Map[K, V]::filter`'s `if f(v.clone())`, `List[T]::filter`'s
+            // `if f(x.clone())`) was previously dead code (see the `Map`
+            // arms above and #2251's fix to `strip_prelude_extension_methods_tir`),
+            // so this was never reached before. With no arm, the call fell
+            // to the generic fallback, found no user-defined `clone`
+            // generic method, and returned `Ok(None)` — silently dropping
+            // the argument value entirely at the call site (e.g. `f(v.clone())`
+            // became a call with the closure's `env` as its only argument).
+            // Scalars are copy types (cloning is a no-op); `String`/collections
+            // need an actual runtime copy so the clone and the original can be
+            // dropped independently.
+            ("clone", "ptr" | "i64" | "i1" | "i8" | "i32" | "double") if args.is_empty() => {
+                match unwrap_labels(&receiver.ty) {
+                    Ty::String => {
+                        self.ensure_extern("declare ptr @_mvl_string_clone(ptr)");
+                        let reg = self.next_reg();
+                        self.push_instr(&format!("{reg} = call ptr @_mvl_string_clone(ptr {val})"));
+                        self.fn_ctx.reg_types.insert(reg.clone(), "ptr".into());
+                        Ok(Some(reg))
+                    }
+                    Ty::List(_) | Ty::Array(_, _) | Ty::Set(_) => {
+                        self.ensure_extern("declare ptr @_mvl_array_clone(ptr)");
+                        let reg = self.next_reg();
+                        self.push_instr(&format!("{reg} = call ptr @_mvl_array_clone(ptr {val})"));
+                        self.fn_ctx.reg_types.insert(reg.clone(), "ptr".into());
+                        Ok(Some(reg))
+                    }
+                    Ty::Map(_, _) => {
+                        self.ensure_extern("declare ptr @_mvl_map_clone(ptr)");
+                        let reg = self.next_reg();
+                        self.push_instr(&format!("{reg} = call ptr @_mvl_map_clone(ptr {val})"));
+                        self.fn_ctx.reg_types.insert(reg.clone(), "ptr".into());
+                        Ok(Some(reg))
+                    }
+                    // Scalars (Int/Float/Bool/Byte/UByte/UInt/Char) are copy
+                    // types under every backend — `clone()` is the identity.
+                    // Structs/enums/Option/Result aren't handled here: a
+                    // correct clone of those needs a field-aware deep copy
+                    // this arm doesn't attempt — not needed by #2251's
+                    // corpus, left as a follow-up gap.
+                    _ => Ok(Some(val.clone())),
+                }
+            }
+
             // ── Set methods ───────────────────────────────────────────────
             // #1845: Set::insert(x) on a literal-constructed set was a no-op —
             // the receiver is an array under the hood, so we need to route
@@ -4433,8 +4500,17 @@ impl TextEmitter {
             }
 
             // ── HOF: filter / map / take_while / skip_while / any / all ───
+            // Guarded against `Map` receivers (#2251): `Map[K, V]::filter`
+            // shares this arm's name with `List`/`Set`, but Map's LLVM
+            // representation is a boxed `HashMap`, not the `Vec`-backed
+            // allocation `_mvl_list_filter`/etc. expect — routing it here
+            // type-confuses the two and corrupts the map in place. Map's own
+            // generic body (`std/collections.mvl`) is dispatched via the
+            // fallback arm below instead.
             ("filter" | "map" | "take_while" | "skip_while", "ptr")
-                if args.len() == 1 && self.is_closure_arg_tir(&args[0]) =>
+                if args.len() == 1
+                    && self.is_closure_arg_tir(&args[0])
+                    && !matches!(unwrap_labels(&receiver.ty), Ty::Map(_, _)) =>
             {
                 let closure = match self.emit_as_hof_closure_tir(&args[0], &[0])? {
                     Some(p) => p,
@@ -4446,7 +4522,12 @@ impl TextEmitter {
                     &[("ptr", &closure)],
                 )))
             }
-            ("any" | "all", "ptr") if args.len() == 1 && self.is_closure_arg_tir(&args[0]) => {
+            // Guarded against `Map` receivers — same reasoning as above.
+            ("any" | "all", "ptr")
+                if args.len() == 1
+                    && self.is_closure_arg_tir(&args[0])
+                    && !matches!(unwrap_labels(&receiver.ty), Ty::Map(_, _)) =>
+            {
                 let closure = match self.emit_as_hof_closure_tir(&args[0], &[0])? {
                     Some(p) => p,
                     None => return Ok(None),
@@ -4483,7 +4564,11 @@ impl TextEmitter {
                     &[("ptr", &closure)],
                 )))
             }
-            ("fold", "ptr") if args.len() == 2 => {
+            // Guarded against `Map` receivers — same reasoning as the
+            // filter/any/all arms above (#2251).
+            ("fold", "ptr")
+                if args.len() == 2 && !matches!(unwrap_labels(&receiver.ty), Ty::Map(_, _)) =>
+            {
                 let init_ty = self.ty_to_llvm_ctx(&args[0].ty);
                 let init_val = match self.emit_expr_tir(&args[0])? {
                     Some(v) => v,
@@ -5207,25 +5292,24 @@ impl TextEmitter {
             // they land in `mono.tir_generic_fns` and are emitted per
             // mangled instantiation, so this fallback safely dispatches
             // to a body we know is in the module.
+            //
+            // Looked up by the `"Receiver::method"` key (#2251), not the
+            // bare method name — `tir_generic_fns` is keyed that way
+            // precisely so a same-named generic method on another receiver
+            // (e.g. `List::fold` vs. `Map::fold`) can't shadow this one.
             _ => {
                 let base = match receiver_base_name(&receiver.ty) {
                     Some(b) => b,
                     None => return Ok(None),
                 };
-                let generic_matches = self
-                    .mono
-                    .tir_generic_fns
-                    .get(method)
-                    .and_then(|f| f.receiver_type.as_deref())
-                    .map(|r| r == base)
-                    .unwrap_or(false);
-                if !generic_matches {
+                let key = tir_generic_fn_key(Some(&base), method);
+                if !self.mono.tir_generic_fns.contains_key(&key) {
                     return Ok(None);
                 }
                 let mut full_args: Vec<TirExpr> = Vec::with_capacity(args.len() + 1);
                 full_args.push(receiver.clone());
                 full_args.extend(args.iter().cloned());
-                self.emit_monomorphized_call_tir(method, &full_args)
+                self.emit_monomorphized_call_tir(&key, &full_args)
             }
         }
     }
