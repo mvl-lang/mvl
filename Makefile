@@ -386,12 +386,6 @@ test-rust-rust: build ## rust/rust — new corpus through Rust transpiler (batch
 # other Map HOF tests (fold/any/all/filter/map_values/entries-without-
 # field-access) are fixed and no longer excluded.
 #
-# nested_container_ownership_test.mvl (#2252): a `ref`-declared local moved
-# into an outer container via `.push()` is double-freed at scope exit
-# (`.push()`'s existing `exclude_returned_value_tir` call doesn't cover this
-# shape) — the WASM analog of this exact bug is #2205, fixed on that
-# backend in the same PR that added this file; LLVM needs its own fix.
-#
 # list_stubs_test.mvl (#2119): constructs `Indexed`/`Pair`/`Partitioned` —
 # generic structs never actually built under LLVM before `List[T]::
 # enumerate`/`zip`/`partition` got real bodies. The WASM analog (a generic
@@ -401,7 +395,6 @@ test-rust-rust: build ## rust/rust — new corpus through Rust transpiler (batch
 # LLVM's `emit_exprs_tir.rs` needs its own fix.
 LLVM_CORPUS_EXCLUDE := \
 	tests/corpus/05_collections/map_entries_value_field_test.mvl \
-	tests/corpus/07_ownership/nested_container_ownership_test.mvl \
 	tests/corpus/13_stdlib/list_stubs_test.mvl
 
 # Directories containing an LLVM_CORPUS_EXCLUDE entry need per-file listing;

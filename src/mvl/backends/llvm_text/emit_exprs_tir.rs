@@ -4669,14 +4669,30 @@ impl TextEmitter {
                 // array still owns; the array's own scope-exit drop later
                 // walks and frees every contained string, so if the caller
                 // also drops the extracted element, that's a double free.
-                // Clone the string here so the Option holds an
+                // Clone the element here so the Option holds an
                 // independently-owned reference, mirroring the identical
                 // fix for `Map::get` (#2047). Scalar elements (Int, Bool,
                 // …) have no ownership to share and are returned as before.
-                let elem_is_string = matches!(
-                    unwrap_labels(&receiver.ty),
-                    Ty::List(e) | Ty::Array(e, _) if matches!(unwrap_labels(e), Ty::String)
-                );
+                //
+                // #2203/#2252: this was originally String-only, missing the
+                // identical case for a nested-collection element
+                // (`List[List[T]]`/`List[Set[T]]`/`List[Map[K,V]]`) —
+                // `rows.get(0)` on a `List[List[String]]` handed back the
+                // same inner array pointer `rows` still owned, so extracting
+                // it into a `Some(row)` match arm and letting that arm's
+                // scope end freed it once there, then `rows`'s own deep drop
+                // (which recursively frees nested collection elements, see
+                // `concat_is_supported`'s comment in `wasm_text.rs`) freed
+                // the same buffer again.
+                let elem_clone_sym: Option<&str> = match unwrap_labels(&receiver.ty) {
+                    Ty::List(e) | Ty::Array(e, _) => match unwrap_labels(e) {
+                        Ty::String => Some("_mvl_string_clone"),
+                        Ty::List(_) | Ty::Array(_, _) | Ty::Set(_) => Some("_mvl_array_clone"),
+                        Ty::Map(_, _) => Some("_mvl_map_clone"),
+                        _ => None,
+                    },
+                    _ => None,
+                };
 
                 // Bounds check: 0 <= index < len. Mirror of AST emit_method_call's
                 // ("get", "ptr") arm — alloca + store + load shape (not the
@@ -4721,11 +4737,11 @@ impl TextEmitter {
                 ));
                 let elem_val = self.next_reg();
                 self.push_instr(&format!("{elem_val} = load {elem_llvm_ty}, ptr {elem_ptr}"));
-                let elem_val = if elem_is_string {
-                    self.ensure_extern("declare ptr @_mvl_string_clone(ptr)");
+                let elem_val = if let Some(sym) = elem_clone_sym {
+                    self.ensure_extern(&format!("declare ptr @{sym}(ptr)"));
                     let cloned = self.next_reg();
                     self.push_instr(&format!(
-                        "{cloned} = call ptr @_mvl_string_clone(ptr {elem_val})"
+                        "{cloned} = call ptr @{sym}(ptr {elem_val})"
                     ));
                     cloned
                 } else {
@@ -4943,12 +4959,18 @@ impl TextEmitter {
                     _ => "i64".to_string(),
                 };
                 // See the identical clone-on-extract fix in the `("get",
-                // "ptr")` arm above (#2169) — `first()` aliases the same
+                // "ptr")` arm above (#2169, generalized to nested
+                // collections by #2252) — `first()` aliases the same
                 // buffer slot and needs the same treatment.
-                let elem_is_string = matches!(
-                    unwrap_labels(&receiver.ty),
-                    Ty::List(e) | Ty::Array(e, _) if matches!(unwrap_labels(e), Ty::String)
-                );
+                let elem_clone_sym: Option<&str> = match unwrap_labels(&receiver.ty) {
+                    Ty::List(e) | Ty::Array(e, _) => match unwrap_labels(e) {
+                        Ty::String => Some("_mvl_string_clone"),
+                        Ty::List(_) | Ty::Array(_, _) | Ty::Set(_) => Some("_mvl_array_clone"),
+                        Ty::Map(_, _) => Some("_mvl_map_clone"),
+                        _ => None,
+                    },
+                    _ => None,
+                };
 
                 self.ensure_extern("declare i64 @_mvl_array_len(ptr)");
                 let len = self.next_reg();
@@ -4988,12 +5010,10 @@ impl TextEmitter {
                 ));
                 let elem_val = self.next_reg();
                 self.push_instr(&format!("{elem_val} = load {elem_llvm_ty}, ptr {elem_ptr}"));
-                let elem_val = if elem_is_string {
-                    self.ensure_extern("declare ptr @_mvl_string_clone(ptr)");
+                let elem_val = if let Some(sym) = elem_clone_sym {
+                    self.ensure_extern(&format!("declare ptr @{sym}(ptr)"));
                     let cloned = self.next_reg();
-                    self.push_instr(&format!(
-                        "{cloned} = call ptr @_mvl_string_clone(ptr {elem_val})"
-                    ));
+                    self.push_instr(&format!("{cloned} = call ptr @{sym}(ptr {elem_val})"));
                     cloned
                 } else {
                     elem_val
@@ -5036,10 +5056,17 @@ impl TextEmitter {
                     Ty::List(e) | Ty::Array(e, _) => self.ty_to_llvm_ctx(e),
                     _ => "i64".to_string(),
                 };
-                let elem_is_string = matches!(
-                    unwrap_labels(&receiver.ty),
-                    Ty::List(e) | Ty::Array(e, _) if matches!(unwrap_labels(e), Ty::String)
-                );
+                // #2203/#2252: generalized to nested collections — see the
+                // `("get", "ptr")` arm above.
+                let elem_clone_sym: Option<&str> = match unwrap_labels(&receiver.ty) {
+                    Ty::List(e) | Ty::Array(e, _) => match unwrap_labels(e) {
+                        Ty::String => Some("_mvl_string_clone"),
+                        Ty::List(_) | Ty::Array(_, _) | Ty::Set(_) => Some("_mvl_array_clone"),
+                        Ty::Map(_, _) => Some("_mvl_map_clone"),
+                        _ => None,
+                    },
+                    _ => None,
+                };
 
                 self.ensure_extern("declare i64 @_mvl_array_len(ptr)");
                 let len = self.next_reg();
@@ -5081,12 +5108,10 @@ impl TextEmitter {
                 ));
                 let elem_val = self.next_reg();
                 self.push_instr(&format!("{elem_val} = load {elem_llvm_ty}, ptr {elem_ptr}"));
-                let elem_val = if elem_is_string {
-                    self.ensure_extern("declare ptr @_mvl_string_clone(ptr)");
+                let elem_val = if let Some(sym) = elem_clone_sym {
+                    self.ensure_extern(&format!("declare ptr @{sym}(ptr)"));
                     let cloned = self.next_reg();
-                    self.push_instr(&format!(
-                        "{cloned} = call ptr @_mvl_string_clone(ptr {elem_val})"
-                    ));
+                    self.push_instr(&format!("{cloned} = call ptr @{sym}(ptr {elem_val})"));
                     cloned
                 } else {
                     elem_val
