@@ -47,7 +47,7 @@ test fn random_choice_single_element_returns_that_element() -> Unit ! Random {
 
 test fn random_choice_empty_list_returns_none() -> Unit ! Random {
     let xs: List[Int] = [];
-    assert_eq(is_none(choice(xs)), true);
+    assert_eq(choice(xs).is_none(), true);
 }
 
 // ── shuffle ───────────────────────────────────────────────────────────────────

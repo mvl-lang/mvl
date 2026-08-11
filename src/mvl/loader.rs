@@ -1863,21 +1863,28 @@ pub fn load_stdlib_prelude<'a>(
     for prog in progs {
         for decl in &prog.declarations {
             if let Decl::Use(ud) = decl {
-                if ud.path.first().map(|s| s == "std").unwrap_or(false) {
-                    if let Some(module) = ud.path.get(1) {
-                        if IMPLICIT_PRELUDE_MODULES.contains(&module.as_str()) {
-                            continue;
-                        }
-                        if loaded.insert(module.clone()) {
-                            let filename = format!("{module}.mvl");
-                            let stdlib_file = stdlib_dir.join(&filename);
-                            let src_opt = fs::read_to_string(&stdlib_file)
-                                .ok()
-                                .or_else(|| crate::mvl::stdlib::stdlib_content(&filename));
-                            if let Some(src) = src_opt {
-                                let (mut p, _) = Parser::new(&src);
-                                prelude.push(p.parse_program());
-                            }
+                if ud.path.first().map(|s| s == "std").unwrap_or(false) && ud.path.len() >= 2 {
+                    let module = ud.path[1].as_str();
+                    if IMPLICIT_PRELUDE_MODULES.contains(&module) {
+                        continue;
+                    }
+                    // Full subpath after `std`, not just the top-level module name —
+                    // mirrors `load_mvl_native_stdlib_extras`. `std.kv.file` lives at
+                    // `std/kv/file.mvl`; taking only `ud.path[1]` ("kv") looked for a
+                    // nonexistent `kv.mvl` and silently loaded nothing, so every
+                    // `std.kv.file` symbol showed as undefined in this checker-only
+                    // prelude while the real transpile prelude resolved it fine.
+                    let subpath = &ud.path[1..];
+                    let cache_key = subpath.join(".");
+                    let filename = format!("{}.mvl", subpath.join("/"));
+                    if loaded.insert(cache_key) {
+                        let stdlib_file = stdlib_dir.join(&filename);
+                        let src_opt = fs::read_to_string(&stdlib_file)
+                            .ok()
+                            .or_else(|| crate::mvl::stdlib::stdlib_content(&filename));
+                        if let Some(src) = src_opt {
+                            let (mut p, _) = Parser::new(&src);
+                            prelude.push(p.parse_program());
                         }
                     }
                 }

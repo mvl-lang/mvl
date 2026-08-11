@@ -54,7 +54,7 @@ test fn lists_first_nonempty() -> Unit {
 
 test fn lists_first_empty_returns_none() -> Unit {
     let xs: List[Int] = [];
-    assert_eq(is_none(xs.first()), true);
+    assert_eq(xs.first().is_none(), true);
 }
 
 test fn lists_last_nonempty() -> Unit {
@@ -64,7 +64,7 @@ test fn lists_last_nonempty() -> Unit {
 
 test fn lists_last_empty_returns_none() -> Unit {
     let xs: List[Int] = [];
-    assert_eq(is_none(xs.last()), true);
+    assert_eq(xs.last().is_none(), true);
 }
 
 // ── take ────────────────────────────────────────────────────────────────────

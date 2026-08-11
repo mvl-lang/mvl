@@ -106,6 +106,17 @@ EBNF_KNOWN_ABSENT = {
     "ANY_CHAR": "terminal — character class, no named rule needed",
     "NEWLINE": "terminal — handled by extras whitespace",
     "CHAR_ELEM": "terminal — inlined into string/char regex",
+    # mvl-spec 0.1.6 (#38): EBNF split INTEGER/FLOAT's digit classes and
+    # exponent suffix into their own named terminals for readability. Not new
+    # grammar surface — same shape as INTEGER/FLOAT above. NOTE: tree-sitter-
+    # mvl's integer_literal/float_literal regexes did NOT actually cover hex/
+    # binary/octal/exponent forms at the time this was written (they were
+    # decimal-only, a real parser bug independent of this doc gap) — fixed in
+    # a separate change to mvl-lang/tree-sitter-mvl; see that repo's history.
+    "HEX_DIGIT": "terminal — character class, integer_literal regex (see mvl-lang/tree-sitter-mvl)",
+    "BIN_DIGIT": "terminal — character class, integer_literal regex (see mvl-lang/tree-sitter-mvl)",
+    "OCT_DIGIT": "terminal — character class, integer_literal regex (see mvl-lang/tree-sitter-mvl)",
+    "EXPONENT": "terminal — suffix, float_literal regex (see mvl-lang/tree-sitter-mvl)",
 }
 
 # Rules that exist in grammar.js but not in EBNF — deliberate extensions.

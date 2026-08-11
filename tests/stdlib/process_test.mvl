@@ -81,7 +81,16 @@ test fn process_echo_capture_stdout_is_some() -> Unit ! ProcessSpawn {
 fn echo_stdout_nonempty() -> Result[Bool, ProcessError] ! ProcessSpawn {
     let child: Child = spawn("echo", ["mvl_test_output"], Stdio::Devnull, Stdio::Capture, Stdio::Devnull)?;
     let out: ProcessOutput = wait(child)?;
-    Ok(out.stdout.unwrap_or("").is_empty() == false)
+    // `stdout` is `Option[Tainted[String]]` — declassify the payload before
+    // inspecting it, since a method call on a `Tainted[T]` receiver yields
+    // `Tainted[U]` (#1007) and cannot be compared against a bare `Bool`.
+    match out.stdout {
+        Some(t) => {
+            let s: String = relabel trust(t, "PROC-STDOUT");
+            Ok(s.is_empty() == false)
+        },
+        None => Ok(false),
+    }
 }
 
 test fn process_echo_captured_stdout_is_nonempty() -> Unit ! ProcessSpawn {

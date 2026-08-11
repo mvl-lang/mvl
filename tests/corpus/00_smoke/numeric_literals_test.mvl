@@ -1,0 +1,39 @@
+// 00_smoke/numeric_literals_test.mvl — hex/binary/octal/underscore/exponent
+// literal forms (mvl-spec#38's EBNF completeness fix). The lexer
+// (src/mvl/parser/lexer/numbers.rs) already implemented all of this; this
+// file exercises it end-to-end through the real compiler.
+
+test fn decimal_with_underscore_separators() -> Unit {
+    assert_eq(1_000_000, 1000000);
+}
+
+test fn hex_literal() -> Unit {
+    assert_eq(0xFF, 255);
+    assert_eq(0xFF_FF, 65535);
+}
+
+test fn binary_literal() -> Unit {
+    assert_eq(0b1010, 10);
+    assert_eq(0b1010_1010, 170);
+}
+
+test fn octal_literal() -> Unit {
+    assert_eq(0o77, 63);
+    assert_eq(0o7_7, 63);
+}
+
+test fn float_with_fractional_part_and_underscore() -> Unit {
+    assert_eq(1_000.5, 1000.5);
+}
+
+test fn float_exponent_with_fractional_part() -> Unit {
+    assert_eq(1.5e10, 15000000000.0);
+}
+
+test fn float_exponent_without_dot() -> Unit {
+    assert_eq(1e10, 10000000000.0);
+}
+
+test fn float_exponent_negative() -> Unit {
+    assert_eq(1.5e-2, 0.015);
+}

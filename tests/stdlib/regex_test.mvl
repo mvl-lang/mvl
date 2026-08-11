@@ -29,12 +29,12 @@ fn find_first(pattern: String, input: String) -> Option[Match] {
 
 test fn regex_find_returns_some_when_match_exists() -> Unit {
     let m: Option[Match] = find_first("[0-9]+", "abc 123 def");
-    assert_eq(is_some(m), true);
+    assert_eq(m.is_some(), true);
 }
 
 test fn regex_find_returns_none_when_no_match() -> Unit {
     let m: Option[Match] = find_first("[0-9]+", "no digits here");
-    assert_eq(is_none(m), true);
+    assert_eq(m.is_none(), true);
 }
 
 test fn regex_find_text_matches_expected() -> Unit {
