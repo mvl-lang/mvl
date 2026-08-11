@@ -587,10 +587,7 @@ const RUNTIME_IMPORTS: &[(&str, &str)] = &[
     ("_mvl_result_drop", "(param i32)"),
     // Structural `==`/`!=` for `Result[T, E]` (#2249) — `ok_is_str`/
     // `err_is_str` are compile-time flags, not runtime tags.
-    (
-        "_mvl_result_eq",
-        "(param i32 i32 i32 i32) (result i32)",
-    ),
+    ("_mvl_result_eq", "(param i32 i32 i32 i32) (result i32)"),
     // Group H — String parse ops. Take raw (ptr, len) byte slice; return
     // heap-allocated MvlResult pointer.
     ("_mvl_string_parse_int", "(param i32 i32) (result i32)"),
@@ -7922,7 +7919,10 @@ fn emit_binary(out: &mut String, op: BinaryOp, left: &TirExpr, right: &TirExpr, 
     // generic numeric-family fallback below, which is meaningless for the
     // unpacked `(ptr, len)` pair a `String` value is on the stack here.
     if peels_to_string(&left.ty)
-        && matches!(op, BinaryOp::Lt | BinaryOp::Gt | BinaryOp::Le | BinaryOp::Ge)
+        && matches!(
+            op,
+            BinaryOp::Lt | BinaryOp::Gt | BinaryOp::Le | BinaryOp::Ge
+        )
     {
         ctx.needs_runtime.set(true);
         emit_expr(out, left, ctx);
@@ -7953,7 +7953,9 @@ fn emit_binary(out: &mut String, op: BinaryOp, left: &TirExpr, right: &TirExpr, 
             let is_str = is_string_ty(inner, ctx) as i32;
             emit_expr(out, left, ctx);
             emit_expr(out, right, ctx);
-            out.push_str(&format!("    i32.const {is_str}\n    call $_mvl_option_eq\n"));
+            out.push_str(&format!(
+                "    i32.const {is_str}\n    call $_mvl_option_eq\n"
+            ));
             if matches!(op, BinaryOp::Ne) {
                 out.push_str("    i32.eqz\n");
             }

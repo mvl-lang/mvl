@@ -899,7 +899,11 @@ impl TextEmitter {
         // merely wrong: handle addresses depend on allocator/ASLR
         // placement, so the "sort order" it produced was non-deterministic
         // across runs of the same compiled program, not just incorrect.
-        if lhs_ty == "ptr" && matches!(op, BinaryOp::Lt | BinaryOp::Gt | BinaryOp::Le | BinaryOp::Ge)
+        if lhs_ty == "ptr"
+            && matches!(
+                op,
+                BinaryOp::Lt | BinaryOp::Gt | BinaryOp::Le | BinaryOp::Ge
+            )
         {
             self.ensure_extern("declare i32 @_mvl_string_cmp(ptr, ptr)");
             let cmp = self.next_reg();
@@ -4769,9 +4773,7 @@ impl TextEmitter {
                 let elem_val = if let Some(sym) = elem_clone_sym {
                     self.ensure_extern(&format!("declare ptr @{sym}(ptr)"));
                     let cloned = self.next_reg();
-                    self.push_instr(&format!(
-                        "{cloned} = call ptr @{sym}(ptr {elem_val})"
-                    ));
+                    self.push_instr(&format!("{cloned} = call ptr @{sym}(ptr {elem_val})"));
                     cloned
                 } else {
                     elem_val
@@ -5256,9 +5258,12 @@ impl TextEmitter {
                     unwrap_labels(&receiver.ty),
                     Ty::List(e) | Ty::Array(e, _) | Ty::Set(e) if matches!(unwrap_labels(e), Ty::String)
                 );
-                Ok(Some(
-                    self.emit_list_slice_call(&val, &start, &end, elem_is_string),
-                ))
+                Ok(Some(self.emit_list_slice_call(
+                    &val,
+                    &start,
+                    &end,
+                    elem_is_string,
+                )))
             }
             ("take", "ptr")
                 if args.len() == 1
@@ -5275,7 +5280,12 @@ impl TextEmitter {
                     unwrap_labels(&receiver.ty),
                     Ty::List(e) | Ty::Array(e, _) | Ty::Set(e) if matches!(unwrap_labels(e), Ty::String)
                 );
-                Ok(Some(self.emit_list_slice_call(&val, "0", &n, elem_is_string)))
+                Ok(Some(self.emit_list_slice_call(
+                    &val,
+                    "0",
+                    &n,
+                    elem_is_string,
+                )))
             }
             ("skip", "ptr")
                 if args.len() == 1
@@ -5295,9 +5305,12 @@ impl TextEmitter {
                     unwrap_labels(&receiver.ty),
                     Ty::List(e) | Ty::Array(e, _) | Ty::Set(e) if matches!(unwrap_labels(e), Ty::String)
                 );
-                Ok(Some(
-                    self.emit_list_slice_call(&val, &n, &len_reg, elem_is_string),
-                ))
+                Ok(Some(self.emit_list_slice_call(
+                    &val,
+                    &n,
+                    &len_reg,
+                    elem_is_string,
+                )))
             }
             ("concat", "ptr") if args.len() == 1 => {
                 let other = match self.emit_expr_tir(&args[0])? {

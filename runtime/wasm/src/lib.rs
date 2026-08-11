@@ -913,8 +913,7 @@ pub unsafe extern "C" fn _mvl_array_slice_str(a: i32, start: i64, end: i64) -> i
     let count = (hi - lo).max(0);
     let out = _mvl_array_new(4, count as i32);
     for i in lo..hi {
-        let elem =
-            unsafe { core::ptr::read((arr.ptr as usize + (i as usize) * 4) as *const i32) };
+        let elem = unsafe { core::ptr::read((arr.ptr as usize + (i as usize) * 4) as *const i32) };
         let cloned = unsafe { _mvl_string_clone(elem) };
         unsafe { _mvl_array_push_i32(out, cloned) };
     }
@@ -1527,7 +1526,11 @@ pub unsafe extern "C" fn _mvl_result_eq(a: i32, b: i32, ok_is_str: i32, err_is_s
     if tag_a != tag_b {
         return 0;
     }
-    let payload_is_str = if tag_a == 0 { ok_is_str != 0 } else { err_is_str != 0 };
+    let payload_is_str = if tag_a == 0 {
+        ok_is_str != 0
+    } else {
+        err_is_str != 0
+    };
     if payload_is_str {
         let sa = unsafe { _mvl_result_value_i32(a) };
         let sb = unsafe { _mvl_result_value_i32(b) };

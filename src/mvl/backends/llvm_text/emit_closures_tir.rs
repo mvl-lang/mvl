@@ -377,7 +377,11 @@ impl TextEmitter {
     ) -> Result<String, String> {
         let (param_tys, ret_ty) = match fn_ty {
             Ty::Fn(params, ret, _, _) => (params.clone(), (**ret).clone()),
-            _ => return Err(format!("emit_ptr_wrap_closure_trampoline_tir: not a fn type: {fn_ty:?}")),
+            _ => {
+                return Err(format!(
+                    "emit_ptr_wrap_closure_trampoline_tir: not a fn type: {fn_ty:?}"
+                ))
+            }
         };
         let param_tes: Vec<TypeExpr> = param_tys
             .iter()
@@ -419,7 +423,11 @@ impl TextEmitter {
         }
 
         let mut body: Vec<String> = Vec::new();
-        let define_ret = if is_void { "void".to_string() } else { ret_llvm.clone() };
+        let define_ret = if is_void {
+            "void".to_string()
+        } else {
+            ret_llvm.clone()
+        };
         body.push(format!(
             "define {define_ret} @{trampoline_name}({}) {{",
             param_decls.join(", ")
