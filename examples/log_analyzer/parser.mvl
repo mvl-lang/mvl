@@ -17,7 +17,7 @@ use std.collections.{Map}
 
 // ── Domain types ───────────────────────────────────────────────────────────
 
-type ParseError = enum {
+pub type ParseError = enum {
     InvalidJson,
     UnknownLevel,
     MissingField,
