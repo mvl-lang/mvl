@@ -262,14 +262,40 @@ pub fn run(path: &str, req_filter: Option<u8>, opts: CheckOptions) {
         // of the dir passed to `find_module_file`, so a nested file's bare
         // (undotted) reference to a base_dir-level module would silently fail
         // to resolve if we anchored on the file's own directory instead.
-        let sibling_progs: Vec<Program> = loader::load_sibling_modules_transitive(prog, &base_dir)
-            .into_iter()
-            .map(|(_, _, p)| p)
-            .collect();
+        let siblings = loader::load_sibling_modules_transitive(prog, &base_dir);
+        let sibling_paths: std::collections::HashSet<String> =
+            siblings.iter().map(|(_, path, _)| path.clone()).collect();
+        let sibling_progs: Vec<Program> = siblings.into_iter().map(|(_, _, p)| p).collect();
         let user_prelude: Vec<&Program> = sibling_progs.iter().collect();
-        let result = checker::check_with_two_preludes_mode(
+
+        // Go-model method dispatch (#1706): extension methods on a shared
+        // receiver type may be split across same-directory sibling files
+        // that call each other in a cycle (spec 005-modules Req 2/3 bans
+        // circular `use` imports, so this can't be expressed as an explicit
+        // import graph). Register only the *methods* of files sharing this
+        // file's own directory that aren't already pulled in above via
+        // `use` — their types/free functions stay gated on explicit `use`.
+        let file_dir = Path::new(file_str.as_str())
+            .parent()
+            .unwrap_or_else(|| Path::new("."));
+        let method_prelude_progs: Vec<Program> = loader::sibling_module_files(file_dir)
+            .into_iter()
+            .filter(|p| {
+                let p_str = p.display().to_string();
+                p_str != *file_str && !sibling_paths.contains(&p_str)
+            })
+            .filter_map(|p| std::fs::read_to_string(&p).ok().map(|src| (p, src)))
+            .map(|(_, src)| {
+                let (mut parser, _) = Parser::new(&src);
+                parser.parse_program()
+            })
+            .collect();
+        let method_prelude: Vec<&Program> = method_prelude_progs.iter().collect();
+
+        let result = checker::check_with_two_preludes_and_methods_mode(
             &stdlib_prelude,
             &user_prelude,
+            &method_prelude,
             prog,
             solver_mode,
         );

@@ -158,6 +158,28 @@ pub fn check_with_two_preludes_mode(
     prog: &Program,
     solver_mode: SolverMode,
 ) -> CheckResult {
+    check_with_two_preludes_and_methods_mode(prelude_a, prelude_b, &[], prog, solver_mode)
+}
+
+/// Like [`check_with_two_preludes_mode`] but additionally registers extension
+/// *methods* (not types or free functions) declared in `method_prelude`.
+///
+/// `method_prelude` exists for Go-model same-directory method dispatch
+/// (#1706): a receiver type's extension methods may be split across sibling
+/// files that call each other in a cycle (e.g. `EmitCtx::emit_expr` in
+/// emit_exprs.mvl calling `EmitCtx::emit_body` in emit_stmts.mvl and vice
+/// versa) — spec 005-modules Req 2/3 bans circular `use` imports, so this
+/// cannot be expressed as an explicit import graph. Only methods are pulled
+/// from `method_prelude`; its types, free functions, consts, etc. stay
+/// invisible unless also present in `prelude_a`/`prelude_b` (#2204 — no
+/// directory-scoped visibility exception for anything other than methods).
+pub fn check_with_two_preludes_and_methods_mode(
+    prelude_a: &[Program],
+    prelude_b: &[&Program],
+    method_prelude: &[&Program],
+    prog: &Program,
+    solver_mode: SolverMode,
+) -> CheckResult {
     // Dual-pass: collect all EffectDecl nodes from every parsed program, build
     // the hierarchy (validates parents + detects cycles), then type-check.
     let all_effect_decls = collect_effect_decls(
@@ -185,6 +207,9 @@ pub fn check_with_two_preludes_mode(
     }
     for p in prelude_a.iter().chain(prelude_b.iter().copied()) {
         checker.collect_declarations(&p.declarations);
+    }
+    for p in method_prelude.iter().copied() {
+        checker.collect_methods_only(&p.declarations);
     }
     // Seal the prelude: build the set of actor names declared in the prelude so
     // that register_actor can detect user-program shadowing (#1497).
@@ -1894,6 +1919,116 @@ fn main() -> Int {
                 .iter()
                 .any(|e| matches!(e, CheckError::UndefinedFunction { .. })),
             "expected UndefinedFunction for missing method, got: {:?}",
+            result.errors
+        );
+    }
+
+    // ── #2204 / #1706: method_prelude is methods-only ────────────────────
+    //
+    // Go-model same-directory dispatch must expose a sibling's extension
+    // *methods* without an explicit `use`, while its types and free
+    // functions stay gated on one. These three tests pin both halves —
+    // without them, widening `collect_methods_only` to `collect_declarations`
+    // would silently restore the whole-directory visibility #2204 removed.
+
+    fn parse(src: &str) -> Program {
+        let (mut p, _) = Parser::new(src);
+        p.parse_program()
+    }
+
+    /// A sibling file declaring a shared receiver type's method, plus a type
+    /// and a free function that must NOT become visible through it.
+    const GO_MODEL_SIBLING: &str = r#"
+pub type SecretType = struct { hidden: Int }
+pub fn free_helper(n: Int) -> Int { n + 1 }
+pub fn Ctx::method_helper(self) -> Int { self.value + 1 }
+"#;
+
+    #[test]
+    fn method_prelude_exposes_sibling_extension_methods() {
+        let sibling = parse(GO_MODEL_SIBLING);
+        let prog = parse(
+            r#"
+type Ctx = struct { value: Int }
+fn use_method(c: Ctx) -> Int { c.method_helper() }
+"#,
+        );
+        let result = check_with_two_preludes_and_methods_mode(
+            &[],
+            &[],
+            &[&sibling],
+            &prog,
+            SolverMode::Layered,
+        );
+        assert!(
+            result.is_ok(),
+            "sibling extension method must resolve via method_prelude, got: {:?}",
+            result.errors
+        );
+    }
+
+    #[test]
+    fn method_prelude_does_not_expose_sibling_free_functions() {
+        let sibling = parse(GO_MODEL_SIBLING);
+        let prog = parse("fn use_free() -> Int { free_helper(1) }");
+        let result = check_with_two_preludes_and_methods_mode(
+            &[],
+            &[],
+            &[&sibling],
+            &prog,
+            SolverMode::Layered,
+        );
+        assert!(
+            result
+                .errors
+                .iter()
+                .any(|e| matches!(e, CheckError::UndefinedFunction { .. })),
+            "sibling free function must stay gated on an explicit `use`, got: {:?}",
+            result.errors
+        );
+    }
+
+    #[test]
+    fn method_prelude_does_not_expose_sibling_types() {
+        let sibling = parse(GO_MODEL_SIBLING);
+        // Constructor position — the path where the checker does validate a
+        // type name (a bare parameter annotation is not checked at all).
+        let prog =
+            parse("fn make() -> Int { let s: SecretType = SecretType { hidden: 7 }; s.hidden }");
+        let result = check_with_two_preludes_and_methods_mode(
+            &[],
+            &[],
+            &[&sibling],
+            &prog,
+            SolverMode::Layered,
+        );
+        assert!(
+            result
+                .errors
+                .iter()
+                .any(|e| matches!(e, CheckError::UndefinedType { .. })),
+            "sibling type must stay gated on an explicit `use`, got: {:?}",
+            result.errors
+        );
+    }
+
+    #[test]
+    fn method_prelude_skips_methods_on_types_not_visible_here() {
+        // A sibling's method on a receiver type this program never imported
+        // must be skipped silently — registering it would route the sibling's
+        // own UndefinedType diagnostic into this program's error list.
+        let sibling = parse("pub fn Unimported::helper(self) -> Int { 0 }");
+        let prog = parse("fn f() -> Int { 42 }");
+        let result = check_with_two_preludes_and_methods_mode(
+            &[],
+            &[],
+            &[&sibling],
+            &prog,
+            SolverMode::Layered,
+        );
+        assert!(
+            result.is_ok(),
+            "unresolvable sibling receiver type must not leak an error into this file, got: {:?}",
             result.errors
         );
     }

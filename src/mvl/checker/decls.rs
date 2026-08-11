@@ -35,6 +35,31 @@ impl TypeChecker {
         }
     }
 
+    /// Register only extension methods (functions with a receiver type) —
+    /// Go-model same-directory method dispatch (#1706), layered on top of the
+    /// strict `use`-gated prelude (#2204). Free functions, types, consts,
+    /// externs, etc. in `decls` are intentionally skipped: only the receiver
+    /// type's method table gains entries, so a Go-model sibling cannot make
+    /// its non-method declarations visible without an explicit `use`.
+    ///
+    /// A method whose receiver type is not visible here is skipped silently
+    /// rather than registered: `decls` belongs to *another* file, so a
+    /// receiver type this file never imported is that file's business, not a
+    /// diagnostic for this one. Registering it would route `register_fn`'s
+    /// `UndefinedType` emit into the wrong file's error list.
+    pub(super) fn collect_methods_only(&mut self, decls: &[Decl]) {
+        for decl in decls {
+            let Decl::Fn(fd) = decl else { continue };
+            let Some(recv_ty) = &fd.receiver_type else {
+                continue;
+            };
+            if self.env.lookup_type(recv_ty.as_str()).is_none() {
+                continue;
+            }
+            self.register_fn(fd);
+        }
+    }
+
     pub(super) fn collect_declarations(&mut self, decls: &[Decl]) {
         for decl in decls {
             match decl {
