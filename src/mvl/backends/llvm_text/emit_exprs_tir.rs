@@ -102,9 +102,13 @@ impl TextEmitter {
             // time, not in the layout). #1845: after building the raw array,
             // call `_mvl_array_dedup` to remove duplicates in place so
             // `.len()`, `.contains()` and iteration all agree.
-            TirExprKind::List { elems } => self.emit_list_literal_tir(elems, &expr.ty),
+            TirExprKind::List { elems } => {
+                let hint = self.empty_list_elem_hint_from_ty(&expr.ty);
+                self.emit_list_literal_tir(elems, hint.as_deref())
+            }
             TirExprKind::Set { elems } => {
-                let arr = match self.emit_list_literal_tir(elems, &expr.ty)? {
+                let hint = self.empty_list_elem_hint_from_ty(&expr.ty);
+                let arr = match self.emit_list_literal_tir(elems, hint.as_deref())? {
                     Some(v) => v,
                     None => return Ok(None),
                 };
@@ -2416,11 +2420,16 @@ impl TextEmitter {
     }
 
     /// TIR variant of [`Self::emit_list_literal`].
-    /// `list_ty` is the literal's own checker-resolved type (`List[T]` /
-    /// `Set[T]`) — needed for an *empty* literal (`[]`/`{}`), which has no
-    /// element to infer a size from. #2264: this used to hardcode a "ptr"
-    /// (8-byte) fallback for the empty case regardless of the declared
-    /// element type, so `let result: ref List[Byte] = [];` created an array
+    ///
+    /// `empty_elem_ty_hint` is the LLVM element type to use when `elems` is
+    /// *empty* (`[]`/`{}`, no element to infer a size from) — the caller
+    /// computes it however it has the relevant declared type on hand (a
+    /// checker `Ty` for a `let` binding's declared type, a `TypeExpr` for a
+    /// struct field's declared type, ...). `None` falls back to "ptr".
+    ///
+    /// #2264: this used to hardcode the "ptr" (8-byte) fallback
+    /// unconditionally for the empty case, ignoring the declared element
+    /// type entirely — `let result: ref List[Byte] = [];` created an array
     /// with `elem_size = 8` instead of `1`. Every later `.push()` onto that
     /// array then copied `elem_size` (8) bytes from a 1-byte `i8` source
     /// slot per the array's own (wrong) metadata — reading past the alloca,
@@ -2431,17 +2440,32 @@ impl TextEmitter {
     /// mismatch check made an otherwise byte-identical `List[Byte]` compare
     /// unequal — `examples/bzip/bwt.mvl::bwt_decode` builds its result this
     /// exact way, so `decoded == input` failed despite matching content.
+    /// Best-effort `empty_elem_ty_hint` for [`Self::emit_list_literal_tir`]
+    /// from a `List[T]`/`Set[T]`/`Array[T]` `Ty` — typically the literal's
+    /// own `.ty`. Returns `None` (falls back to "ptr") when `ty` isn't one
+    /// of those shapes, or its element is `Ty::Unknown` (the checker's
+    /// "couldn't infer, no declared-type context available" marker — the
+    /// same reason the `let`/struct-field call sites pass their own
+    /// declared type down directly instead of relying on this).
+    fn empty_list_elem_hint_from_ty(&self, ty: &Ty) -> Option<String> {
+        match unwrap_labels(ty) {
+            Ty::List(e) | Ty::Array(e, _) | Ty::Set(e)
+                if !matches!(unwrap_labels(e), Ty::Unknown) =>
+            {
+                Some(self.ty_to_llvm_ctx(e))
+            }
+            _ => None,
+        }
+    }
+
     pub(super) fn emit_list_literal_tir(
         &mut self,
         elems: &[TirExpr],
-        list_ty: &Ty,
+        empty_elem_ty_hint: Option<&str>,
     ) -> Result<Option<String>, String> {
         let elem_ty = match elems.first() {
             Some(e) => self.ty_to_llvm_ctx(&e.ty),
-            None => match unwrap_labels(list_ty) {
-                Ty::List(e) | Ty::Array(e, _) | Ty::Set(e) => self.ty_to_llvm_ctx(e),
-                _ => "ptr".into(),
-            },
+            None => empty_elem_ty_hint.unwrap_or("ptr").to_string(),
         };
 
         let mut elem_vals: Vec<String> = Vec::new();
@@ -3413,6 +3437,26 @@ impl TextEmitter {
         for (field_name, field_ty) in &field_defs {
             let llvm_t = self.llvm_ty_ctx(field_ty);
             let val = match fields.iter().find(|(n, _)| n == field_name) {
+                // #2264: an empty list/set literal field value (e.g.
+                // `BitWriter { bytes: [], .. }`) needs the struct's own
+                // declared field type as the empty-case hint — same fix as
+                // the `let`-statement call site, different position: this
+                // one has no enclosing `let` to read a declared `Ty` from,
+                // only the struct's `TypeExpr` field registry.
+                Some((_, e))
+                    if matches!(
+                        &e.kind,
+                        TirExprKind::List { elems } | TirExprKind::Set { elems } if elems.is_empty()
+                    ) =>
+                {
+                    let hint = list_elem_type_expr(field_ty).map(|te| Self::llvm_ty(te));
+                    let elems: &[TirExpr] = match &e.kind {
+                        TirExprKind::List { elems } | TirExprKind::Set { elems } => elems,
+                        _ => unreachable!(),
+                    };
+                    self.emit_list_literal_tir(elems, hint.as_deref())?
+                        .unwrap_or_else(|| "undef".into())
+                }
                 Some((_, e)) => self.emit_expr_tir(e)?.unwrap_or_else(|| "undef".into()),
                 None => "undef".into(),
             };
@@ -5593,6 +5637,20 @@ fn unwrap_labels(ty: &Ty) -> &Ty {
         cur = inner;
     }
     cur
+}
+
+/// Extract `T`'s `TypeExpr` from a `List[T]`/`Array[T]`/`Set[T]` `TypeExpr`
+/// (a struct field's declared type), for the `emit_construct_tir` empty
+/// list/set literal fix (#2264) — that call site only has a `TypeExpr`
+/// (the field-type registry's representation), not a checker `Ty`.
+fn list_elem_type_expr(ty: &TypeExpr) -> Option<&TypeExpr> {
+    match ty {
+        TypeExpr::Base { name, args, .. } if matches!(name.as_str(), "List" | "Array" | "Set") => {
+            args.first()
+        }
+        TypeExpr::Ref { inner, .. } => list_elem_type_expr(inner),
+        _ => None,
+    }
 }
 
 /// Clone symbol for an element extracted (by raw pointer load) out of a

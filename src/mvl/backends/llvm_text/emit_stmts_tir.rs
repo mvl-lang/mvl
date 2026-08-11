@@ -326,13 +326,17 @@ impl TextEmitter {
                 while let Ty::Ref(_, inner) = declared_ty {
                     declared_ty = inner;
                 }
+                let empty_hint = match declared_ty {
+                    Ty::List(e) | Ty::Array(e, _) | Ty::Set(e) => Some(self.ty_to_llvm_ctx(e)),
+                    _ => None,
+                };
                 let val = match &init.kind {
                     crate::mvl::ir::TirExprKind::List { elems } if elems.is_empty() => {
-                        self.emit_list_literal_tir(elems, declared_ty)?
+                        self.emit_list_literal_tir(elems, empty_hint.as_deref())?
                     }
                     crate::mvl::ir::TirExprKind::Set { elems } if elems.is_empty() => {
                         // Dedup is a no-op on zero elements — safe to skip.
-                        self.emit_list_literal_tir(elems, declared_ty)?
+                        self.emit_list_literal_tir(elems, empty_hint.as_deref())?
                     }
                     _ => self.emit_expr_tir(init)?,
                 };
@@ -482,12 +486,24 @@ impl TextEmitter {
 
             TirStmt::Return { value, .. } => {
                 let ret_ty = self.fn_ctx.current_ret_ty.clone();
-                let ret_val = if let Some(expr) = value {
+                let mut ret_val = if let Some(expr) = value {
                     self.emit_expr_tir(expr)?
                 } else {
                     None
                 };
                 if let Some(expr) = value {
+                    // #2264: an early `return owned.bytes`-shaped FieldAccess
+                    // needs the same clone-not-exclude fix as the
+                    // tail-position case in emit_program_tir.rs — see that
+                    // call site's comment for why.
+                    if let (Some(v), true) = (
+                        ret_val.as_ref(),
+                        matches!(expr.kind, TirExprKind::FieldAccess { .. }),
+                    ) {
+                        if let Some(cloned) = self.clone_heap_value_for_ty(v, &expr.ty) {
+                            ret_val = Some(cloned);
+                        }
+                    }
                     self.exclude_returned_value_tir(expr);
                 }
                 self.emit_heap_drops();

@@ -611,10 +611,30 @@ impl TextEmitter {
         // tail-position `if`/`else` (no `let`, no explicit `return`) types
         // its merge-point `phi` correctly instead of guessing from one
         // branch's emitted value text (#2146).
-        let body_val = self.emit_block_tir_typed(&f.body, Some(&f.ret_ty))?;
+        let mut body_val = self.emit_block_tir_typed(&f.body, Some(&f.ret_ty))?;
 
         if !self.fn_ctx.terminated {
             if let Some(crate::mvl::ir::TirStmt::Expr { expr, .. }) = f.body.stmts.last() {
+                // #2264: a bare tail-position `owned.bytes`-shaped
+                // FieldAccess (e.g. `examples/bzip/bitstream.mvl::
+                // flush_writer`'s `owned.bit_pos == 0` branch returning
+                // `owned.bytes` directly) isn't `exclude_returned_value_tir`-
+                // excludable the way a `Var` is — there's no single tracked
+                // local to blank out, since `owned`'s own scope-exit drop
+                // deep-drops *all* its heap-typed fields, not just this one.
+                // Cloning the returned field value instead (independent
+                // handle, refcount bump) is the only sound choice: same
+                // reasoning as `resolve_owned_call_arg`'s identical fix for
+                // a FieldAccess used as a *call argument*, applied here to
+                // one used as the function's own return value.
+                if let (Some(v), true) = (
+                    body_val.as_ref(),
+                    matches!(expr.kind, crate::mvl::ir::TirExprKind::FieldAccess { .. }),
+                ) {
+                    if let Some(cloned) = self.clone_heap_value_for_ty(v, &expr.ty) {
+                        body_val = Some(cloned);
+                    }
+                }
                 self.exclude_returned_value_tir(expr);
             }
             self.emit_heap_drops();
