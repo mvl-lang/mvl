@@ -4625,7 +4625,19 @@ impl TextEmitter {
                     Some(v) => v,
                     None => return Ok(None),
                 };
-                let elem_ty = self.ty_to_llvm_ctx(&args[0].ty);
+                // #2260: prefer the receiver's own declared element type
+                // over the pushed argument's checker-inferred type — the
+                // list's element type is what actually determines the
+                // array's representation, and the two can disagree (e.g.
+                // `out.push(x.clone())` inside a monomorphized generic
+                // body: `.clone()` has no checker type rule of its own, so
+                // its result type doesn't always resolve to match the
+                // receiver after substitution, same gap as the closure
+                // call-site fix above).
+                let elem_ty = match unwrap_labels(&receiver.ty) {
+                    Ty::List(e) | Ty::Array(e, _) | Ty::Set(e) => self.ty_to_llvm_ctx(e),
+                    _ => self.ty_to_llvm_ctx(&args[0].ty),
+                };
                 self.ensure_extern("declare void @_mvl_array_push(ptr, ptr)");
                 let slot = self.next_reg();
                 self.push_instr(&format!("{slot} = alloca {elem_ty}"));
