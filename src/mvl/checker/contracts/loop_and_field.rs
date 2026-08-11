@@ -217,10 +217,16 @@ fn check_invariant_at_entry(
 /// Extract simple variable assignments from a loop body.
 ///
 /// Only handles top-level `x = expr` assignments where the target is a plain
-/// identifier.  Returns `None` if the body contains any control-flow statement
-/// (`if`, `while`, `for`, `match`) — indicating the effect map cannot be
-/// determined statically and callers should fall back to `RuntimeCheck`.
-fn extract_simple_assignments(body: &Block) -> Option<HashMap<String, Expr>> {
+/// identifier. Control-flow statements (`if`, `while`, `for`, `match`) bail
+/// out with `None` only if they might reassign a variable in
+/// `relevant_vars` — an `if` that only touches a variable the caller doesn't
+/// care about (e.g. a tally next to an unconditional `i = i + 1`) can't
+/// affect the tracked measure/invariant, so it's skipped rather than
+/// poisoning the whole extraction.
+fn extract_simple_assignments(
+    body: &Block,
+    relevant_vars: &HashSet<String>,
+) -> Option<HashMap<String, Expr>> {
     let mut effects = HashMap::new();
     for stmt in &body.stmts {
         match stmt {
@@ -239,11 +245,52 @@ fn extract_simple_assignments(body: &Block) -> Option<HashMap<String, Expr>> {
             // even though such a binding is provably irrelevant to decrease).
             // Bare expression statements are likewise no-effect.
             Stmt::Let { .. } | Stmt::Expr { .. } => {}
-            // Any control flow makes static analysis too complex → RuntimeCheck.
-            _ => return None,
+            // Any other control flow: bail only if it could reassign a
+            // variable the caller actually tracks.
+            other => {
+                if stmt_may_assign(other, relevant_vars) {
+                    return None;
+                }
+            }
         }
     }
     Some(effects)
+}
+
+/// Does `stmt` (recursively, through nested blocks/arms) possibly assign to
+/// any identifier in `relevant_vars`?
+fn stmt_may_assign(stmt: &Stmt, relevant_vars: &HashSet<String>) -> bool {
+    match stmt {
+        Stmt::Assign { target, .. } => lvalue_root_in(target, relevant_vars),
+        Stmt::If { then, else_, .. } => {
+            block_may_assign(then, relevant_vars)
+                || match else_ {
+                    Some(ElseBranch::Block(b)) => block_may_assign(b, relevant_vars),
+                    Some(ElseBranch::If(s)) => stmt_may_assign(s, relevant_vars),
+                    None => false,
+                }
+        }
+        Stmt::Match { arms, .. } => arms.iter().any(|arm| match &arm.body {
+            MatchBody::Block(b) => block_may_assign(b, relevant_vars),
+            MatchBody::Expr(_) => false,
+        }),
+        Stmt::For { body, .. } | Stmt::While { body, .. } => block_may_assign(body, relevant_vars),
+        Stmt::Let { .. } | Stmt::Return { .. } | Stmt::Expr { .. } => false,
+    }
+}
+
+fn block_may_assign(block: &Block, relevant_vars: &HashSet<String>) -> bool {
+    block
+        .stmts
+        .iter()
+        .any(|s| stmt_may_assign(s, relevant_vars))
+}
+
+fn lvalue_root_in(lvalue: &LValue, relevant_vars: &HashSet<String>) -> bool {
+    match lvalue {
+        LValue::Ident(name, _) => relevant_vars.contains(name),
+        LValue::Field { base, .. } => lvalue_root_in(base, relevant_vars),
+    }
 }
 
 /// Substitute all free identifiers in `pred` with their post-iteration values
@@ -428,8 +475,12 @@ fn check_decreases_across_iteration(
     // to a reader, from one that was proven — so treat "too complex to
     // analyse" the same as "proven not to decrease" rather than silently
     // accepting it (#2211). The annotation must never claim more than the
-    // checker actually verified.
-    let Some(effects_exprs) = extract_simple_assignments(body) else {
+    // checker actually verified. Only control flow that could reassign a
+    // variable the measure actually references counts as "too complex" —
+    // an `if`/`match` that only touches unrelated variables can't affect
+    // whether the measure decreases.
+    let measure_vars: HashSet<String> = collect_ident_names(decreases_expr).into_iter().collect();
+    let Some(effects_exprs) = extract_simple_assignments(body, &measure_vars) else {
         ctx.errors.push(CheckError::DecreasesNotDecreasing {
             fn_name: fn_name.to_string(),
             measure: display_pred(decreases_expr),
@@ -443,7 +494,6 @@ fn check_decreases_across_iteration(
     // measure never mentions can't affect whether the measure decreases, so
     // it must not sink an otherwise-analysable proof (e.g. `decreases fuel`
     // with a sibling `result = result.concat(fill)` effect in the body).
-    let measure_vars: HashSet<String> = collect_ident_names(decreases_expr).into_iter().collect();
     let mut effects_ref: HashMap<String, RefExpr> = HashMap::new();
     for (var, expr) in &effects_exprs {
         if !measure_vars.contains(var) {
@@ -509,7 +559,8 @@ fn check_invariant_preserved(
     loop_span: Span,
     ctx: &mut ContractCheckCtx<'_>,
 ) {
-    let Some(effects_exprs) = extract_simple_assignments(body) else {
+    let inv_vars: HashSet<String> = collect_ident_names(inv_pred).into_iter().collect();
+    let Some(effects_exprs) = extract_simple_assignments(body, &inv_vars) else {
         return; // Too complex — RuntimeCheck.
     };
 

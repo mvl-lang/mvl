@@ -7663,6 +7663,43 @@ fn decreases_effect_irrelevant_to_measure_does_not_sink_proof() {
 }
 
 #[test]
+fn decreases_unrelated_if_inside_body_does_not_sink_proof() {
+    // GIVEN: `decreases len - i` where the loop body has an `if` that only
+    // touches an unrelated tally variable (`n`), with `i` incremented
+    // unconditionally by a sibling top-level statement (mirrors
+    // examples/mastermind/code.mvl's count_blacks/count_color_at_mismatch,
+    // which regressed under #2211's stricter extractor: the `if` made the
+    // whole body "too complex to analyse" even though it never touches the
+    // measure).
+    // THEN: no DecreasesNotDecreasing — control flow that can't possibly
+    // reassign a measure-relevant variable must not sink an otherwise
+    // provable measure.
+    let src = r#"
+        total fn count_matches(secret: List[Int], guess: List[Int]) -> Int {
+            let n: ref Int = 0;
+            let i: ref Int = 0;
+            let len: Int = secret.len();
+            while i < len decreases len - i {
+                let s: Int = secret.get(i).unwrap_or(-1);
+                let g: Int = guess.get(i).unwrap_or(-2);
+                if s == g {
+                    n = n + 1
+                }
+                i = i + 1
+            }
+            n
+        }
+    "#;
+    let errors = errors_for(src);
+    assert!(
+        !errors
+            .iter()
+            .any(|e| matches!(e, CheckError::DecreasesNotDecreasing { .. })),
+        "an if/else touching only an unrelated variable must not block proof, got: {errors:?}"
+    );
+}
+
+#[test]
 fn invariant_preservation_proven_for_simple_increment() {
     // GIVEN: `invariant i >= 0` with `i = i + 1`; induction hypothesis makes it provable.
     // THEN: no InvariantNotPreserved error
