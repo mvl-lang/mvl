@@ -241,12 +241,6 @@ pub fn run(path: &str, req_filter: Option<u8>, opts: CheckOptions) {
         }
     }
 
-    // Snapshot all parsed user programs for cross-module prelude building.
-    // Intentionally includes resolver-only siblings (auto-loaded to satisfy imports,
-    // not explicitly requested): they may define types or functions that the
-    // explicitly-checked files call and must therefore be visible to the checker.
-    let all_user_progs: Vec<Program> = all_parsed_progs;
-
     // Collect errors across all files for JSON output (when --format=json).
     let mut json_error_items: Vec<String> = Vec::new();
     // Accumulate refinement stats across all checked files.
@@ -256,15 +250,23 @@ pub fn run(path: &str, req_filter: Option<u8>, opts: CheckOptions) {
     let mut total_by_layer = [0usize; 6];
 
     // Only run the checker on explicitly requested files (not resolver-only siblings).
-    for (idx, (file_str, prog, src)) in parsed.iter().take(check_count).enumerate() {
-        // Build per-file prelude: stdlib + all OTHER user modules so that
-        // cross-file function and type references resolve (whole-program checking).
-        // Flanking slices of all_user_progs avoid cloning individual Programs;
-        // check_with_two_preludes chains prelude_a (&[Program]) and prelude_b
-        // (&[&Program]) without any additional allocation.
-        let (before, after_with_self) = all_user_progs.split_at(idx);
-        let after = &after_with_self[1..];
-        let user_prelude: Vec<&Program> = before.iter().chain(after.iter()).collect();
+    for (file_str, prog, src) in parsed.iter().take(check_count) {
+        // Build per-file prelude: stdlib + this file's own `use`-based transitive
+        // sibling closure — not every other file in the directory. Per
+        // .openspec/specs/005-modules/spec.md Req 2-3, cross-file visibility
+        // requires an explicit `use`; there is no directory-scoped exception.
+        // Mirrors the single-file sibling-loading above and `mvl build`.
+        //
+        // `base_dir` (not this file's own parent) is the root `use` paths are
+        // resolved against (Req 1): a bare name only matches a direct sibling
+        // of the dir passed to `find_module_file`, so a nested file's bare
+        // (undotted) reference to a base_dir-level module would silently fail
+        // to resolve if we anchored on the file's own directory instead.
+        let sibling_progs: Vec<Program> = loader::load_sibling_modules_transitive(prog, &base_dir)
+            .into_iter()
+            .map(|(_, _, p)| p)
+            .collect();
+        let user_prelude: Vec<&Program> = sibling_progs.iter().collect();
         let result = checker::check_with_two_preludes_mode(
             &stdlib_prelude,
             &user_prelude,
