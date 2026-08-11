@@ -17,8 +17,6 @@ behavior. See `src/main.rs` lines 39–45.
 
 If it fails, fix the errors before moving on. The compiler is the oracle — don't guess syntax, verify it.
 
-For full test suite: `make test-corpus` (parse+check all corpus files) or `make test-rust-rust` (run corpus through Rust backend).
-
 ## Debugging the compiler: no print statements
 
 **Do not add `eprintln!`/`println!` "MARKER-…" prints to trace behavior.**
@@ -318,31 +316,11 @@ catalogue with before/after examples and historical drift cases.
 
 ## Project Layout
 
-```
-src/mvl/          — compiler source (Rust)
-std/              — stdlib declarations (.mvl)
-tests/corpus/     — test programs by category (00_smoke..13_stdlib), test fn blocks
-tests/stdlib/     — stdlib integration tests, test fn blocks
-tests/bdd/        — Gherkin BDD scenarios (rust/rust only)
-mvl_runtime/      — Rust runtime backing stdlib builtins
-docs/             — mkdocs site, language manual (grammar EBNF lives in mvl-lang/mvl-spec)
-.openspec/        — specs and ADRs
-```
+Notes not obvious from `ls`:
+- `tests/bdd/` — Gherkin BDD scenarios (rust/rust only)
+- `docs/` — grammar EBNF lives in `mvl-lang/mvl-spec`, not here
 
-## Build & Test
-
-```bash
-cargo build                    # build compiler
-cargo run -- check file.mvl    # type-check a file
-cargo run -- build file.mvl    # compile via Rust backend
-make test-corpus               # parse+check all corpus files
-make test-rust-rust            # run corpus through Rust backend (matrix anchor)
-make test-rust-llvm            # run corpus through LLVM backend
-make test-rust-wasm            # run corpus through WASM backend (assembles + validates)
-make wasm-stub-report          # pin the WASM corpus at zero `unreachable` stubs
-make test-stdlib               # run stdlib tests (Rust backend)
-make test                      # all tests
-```
+Run `make help` for the full build/test target list with descriptions.
 
 ## Loop Style: `while true` over recursive tail-calls
 
@@ -390,28 +368,6 @@ partial fn accept_loop(listener: TcpListener) -> Result[Unit, ZmqError] ! Net {
 
 Note: the linter does NOT currently detect recursive tail-calls that could be `while true`.
 This is a manual style preference.
-
-## LLVM Backend: C-ABI Naming Convention
-
-When emitting LLVM IR for C-ABI calls (e.g., runtime builtins), use the **unprefixed** form in IR:
-
-```llvm
-// CORRECT — LLVM IR C-ABI function calls
-call void @mvl_yield_check()
-call void @mvl_actor_spawn(...)
-call void @mvl_string_drop(ptr %s)
-call ptr @mvl_array_slice(...)
-declare void @mvl_yield_check()
-```
-
-The C compiler (Clang/GCC) automatically adds platform-specific prefixes when generating symbols:
-- **macOS/Darwin**: `_mvl_yield_check` (one underscore prefix)
-- **Linux**: `mvl_yield_check` (no prefix)
-
-Never hardcode the underscore in LLVM IR — the platform convention handles it transparently.
-This applies to all C-ABI runtime functions in `runtime/llvm/` and `runtime/rust/`.
-
----
 
 ## Key Design Principles
 
