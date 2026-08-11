@@ -52,6 +52,23 @@ pub(super) struct ModuleCtx {
     // ── Type registries (populated during first pass) ─────────────────────
     /// struct name → ordered list of (field_name, field_TypeExpr)
     pub struct_fields: HashMap<String, Vec<(String, TypeExpr)>>,
+    /// Generic struct name → declared type-param names, in declaration
+    /// order (e.g. `Entry` → `["K", "V"]`). Only populated for structs with
+    /// a non-empty `TirTypeDecl::params` — absence means "not generic,
+    /// `struct_fields`'s single global `%Name` type def is exact" (#2270).
+    pub struct_generic_params: HashMap<String, Vec<String>>,
+    /// Generic struct name → ordered list of (field_name, declaration-time
+    /// field `Ty`, e.g. `Ty::Named("V", [])` for a bare type-param
+    /// reference). Kept separate from `struct_fields`'s `TypeExpr` list
+    /// because per-instantiation monomorphization (#2270) needs to
+    /// `substitute_ty` a type-param name for a concrete `Ty` — `TypeExpr`
+    /// has no such substitution helper.
+    pub struct_field_raw_tys: HashMap<String, Vec<(String, Ty)>>,
+    /// Mangled per-instantiation struct names already emitted as `%Name_...
+    /// = type { ... }` (e.g. `Entry__String_Int`) — guards against
+    /// duplicate defs the same way `emitted_type_def_names` does for
+    /// non-generic structs (#2270).
+    pub emitted_generic_struct_instantiations: HashSet<String>,
     /// enum name → ordered list of variant names (index = discriminant)
     pub enum_variants: HashMap<String, Vec<String>>,
     /// enum name → ordered list of variant payload field type lists (#1200).
@@ -142,6 +159,9 @@ impl ModuleCtx {
             emitted_fn_names: HashSet::new(),
             extern_decls: Vec::new(),
             struct_fields: HashMap::new(),
+            struct_generic_params: HashMap::new(),
+            struct_field_raw_tys: HashMap::new(),
+            emitted_generic_struct_instantiations: HashSet::new(),
             enum_variants: HashMap::new(),
             enum_variant_fields: HashMap::new(),
             enum_struct_variant_field_names: HashMap::new(),

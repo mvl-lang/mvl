@@ -1,17 +1,16 @@
 // 05_collections/map_entries_value_field_test.mvl — split from
 // map_hof_test.mvl (#2251).
 //
-// `Entry[K, V]`'s LLVM struct type hardcodes `ptr` for a generic field
-// regardless of the concrete instantiation (`Entry[String, Int]`'s `value`
-// field is declared `ptr` instead of `i64`) — the same generic-struct-
-// field-layout gap already tracked for `list_stubs_test.mvl` (#2119's LLVM
-// remainder: "a generic struct's field layout... resolved the struct's own
-// declaration-time type-param name instead of the concrete type at the
-// call site"). Reading `.value` off an `Entry[String, Int]` — with or
-// without going through a HOF closure — hits an LLVM type mismatch
-// (`ptr` where `i64` is expected) and fails to compile under
-// `--backend=llvm`. Excluded there via `LLVM_CORPUS_EXCLUDE` until that
-// struct-layout fix lands; passes on `--backend=rust`/`wasm`.
+// `Entry[K, V]`'s LLVM struct type used to hardcode `ptr` for a generic
+// field regardless of the concrete instantiation (`Entry[String, Int]`'s
+// `value` field was declared `ptr` instead of `i64`) — the same generic-
+// struct-field-layout gap still tracked for `list_stubs_test.mvl` (#2119's
+// LLVM remainder, a broader set of gaps this fix doesn't touch). Fixed
+// (#2270) by mangling a distinct named type per concrete instantiation
+// (`%Entry__String_Int`) the first time it's constructed/read/bound,
+// mirroring the existing per-call-site monomorphization for generic
+// *functions*. No longer excluded from `--backend=llvm`; passes on
+// `--backend=rust`/`wasm` as before.
 
 use std.collections.{Entry}
 

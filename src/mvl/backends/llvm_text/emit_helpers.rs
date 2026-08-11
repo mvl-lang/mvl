@@ -8,10 +8,14 @@
 //! deleted). All helpers here are AST-shape-agnostic and live above the
 //! TIR vs AST boundary.
 
+use std::collections::HashMap;
+
 use crate::mvl::checker::types::Ty;
+use crate::mvl::ir::lower::substitute_ty;
 use crate::mvl::ir::{BinaryOp, Literal, Pattern, TypeExpr};
 use crate::mvl::parser::lexer::Span;
 
+use super::emit_program_tir::ty_to_type_expr_or_unit;
 use super::{HeapKind, TextEmitter, RESULT_LLVM_TY};
 
 /// Synthesize a `TypeExpr` from a checker-resolved `Ty` so loop variables
@@ -335,6 +339,89 @@ impl TextEmitter {
             Ty::Never => "void".into(),
             Ty::Session(_) | Ty::Unknown => "ptr".into(),
         }
+    }
+
+    /// Resolve a struct name + concrete type args to the LLVM named type to
+    /// use for it, emitting that instantiation's `%Name__Args = type {...}`
+    /// def on first use (#2270).
+    ///
+    /// `ty_to_llvm_ctx`/`llvm_ty_ctx` stay `&self` (read-only) and can't
+    /// emit a def the first time a generic struct instantiation is seen —
+    /// callers that construct, read a field of, or bind a generic-struct
+    /// *value* (as opposed to merely naming the type in a context that
+    /// never touches a concrete value) must call this `&mut self` helper
+    /// instead, mirroring `emit_monomorphized_call_tir`'s per-call-site
+    /// mangling for generic *functions*. For a non-generic struct (or any
+    /// name `struct_generic_params` doesn't know about — including the
+    /// no-args case, since MVL has no partial generic application), this
+    /// is a no-op that returns the plain `%Name`, so it's safe to call
+    /// unconditionally at any of those touch points.
+    pub(super) fn ensure_generic_struct_llvm_ty(&mut self, name: &str, args: &[Ty]) -> String {
+        let param_names = match self.module.struct_generic_params.get(name) {
+            Some(p) if !args.is_empty() => p.clone(),
+            _ => return format!("%{name}"),
+        };
+        let concrete_te: Vec<TypeExpr> = args.iter().map(ty_to_type_expr_or_unit).collect();
+        let mangled = Self::mangle_generic(name, &concrete_te);
+
+        if self
+            .module
+            .emitted_generic_struct_instantiations
+            .insert(mangled.clone())
+        {
+            let subs: HashMap<String, Ty> =
+                param_names.into_iter().zip(args.iter().cloned()).collect();
+            let raw_fields = self
+                .module
+                .struct_field_raw_tys
+                .get(name)
+                .cloned()
+                .unwrap_or_default();
+            let field_types: Vec<String> = raw_fields
+                .iter()
+                .map(|(_, field_ty)| {
+                    let concrete_field_ty = substitute_ty(field_ty, &subs);
+                    self.ty_to_llvm_ctx(&concrete_field_ty)
+                })
+                .collect();
+            self.module.type_defs.push(format!(
+                "%{mangled} = type {{ {} }}",
+                field_types.join(", ")
+            ));
+        }
+        format!("%{mangled}")
+    }
+
+    /// Like [`Self::ensure_generic_struct_llvm_ty`], but for call sites
+    /// (e.g. lambda parameter binding) that hold both the original
+    /// checker-resolved `Ty` (which carries concrete generic args) and its
+    /// `TypeExpr` round-trip (which most of this module's type-string
+    /// helpers take). Checks whether `ty` names a generic struct
+    /// instantiation first; if not, falls back to the ordinary
+    /// `llvm_ty_ctx(te)` unchanged (#2270).
+    pub(super) fn llvm_ty_ctx_for_param_tir(&mut self, ty: &Ty, te: &TypeExpr) -> String {
+        if let Ty::Named(name, args) = super::emit_exprs_tir::unwrap_labels(ty) {
+            if !args.is_empty() && self.module.struct_generic_params.contains_key(name) {
+                return self.ensure_generic_struct_llvm_ty(name, args);
+            }
+        }
+        self.llvm_ty_ctx(te)
+    }
+
+    /// `&mut self` counterpart of [`Self::ty_to_llvm_ctx`] for call sites
+    /// that resolve a *value's* LLVM type (deciding a `load`/`extractvalue`/
+    /// `store` instruction's type, as opposed to merely naming a type in a
+    /// declaration that never touches a concrete instance) — checks for a
+    /// generic struct instantiation first, ensuring its mangled def is
+    /// emitted (#2270), and otherwise defers to the ordinary read-only
+    /// `ty_to_llvm_ctx` unchanged.
+    pub(super) fn ty_to_llvm_ctx_mut(&mut self, ty: &Ty) -> String {
+        if let Ty::Named(name, args) = super::emit_exprs_tir::unwrap_labels(ty) {
+            if !args.is_empty() && self.module.struct_generic_params.contains_key(name) {
+                return self.ensure_generic_struct_llvm_ty(name, args);
+            }
+        }
+        self.ty_to_llvm_ctx(ty)
     }
 
     /// Map a checker-resolved [`Ty`] to its LLVM IR type, consulting registries.

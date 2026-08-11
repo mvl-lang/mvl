@@ -505,6 +505,38 @@ impl TextEmitter {
                     .iter()
                     .map(|f| (f.name.clone(), ty_to_type_expr_or_unit(&f.ty)))
                     .collect();
+
+                // Generic structs (`Entry[K, V]`, `Pair[A, B]`, ...) can't use
+                // one global `%Name = type {...}` — a field whose declared
+                // type is a bare type-param name (`value: V`) resolves via
+                // `llvm_ty_ctx`'s unknown-base-name fallback to `ptr`
+                // regardless of the concrete instantiation, so e.g.
+                // `Entry[String, Int]`'s `Int`-typed `value` field would be
+                // declared `ptr` instead of `i64` — an LLVM type mismatch at
+                // every read (#2270). Each concrete instantiation gets its
+                // own mangled type def instead, emitted on first use by
+                // `ensure_generic_struct_emitted_tir`. `struct_fields` still
+                // gets the (name, declaration-time-TypeExpr) list — construct/
+                // field-access need it for field *order*, just not for the
+                // (necessarily wrong-for-generics) type it carries.
+                if !td.params.is_empty() {
+                    self.module.struct_generic_params.insert(
+                        td.name.clone(),
+                        td.params.iter().map(|p| p.name().to_string()).collect(),
+                    );
+                    self.module.struct_field_raw_tys.insert(
+                        td.name.clone(),
+                        fields
+                            .iter()
+                            .map(|f| (f.name.clone(), f.ty.clone()))
+                            .collect(),
+                    );
+                    self.module
+                        .struct_fields
+                        .insert(td.name.clone(), field_list);
+                    return;
+                }
+
                 let field_types: Vec<String> = field_list
                     .iter()
                     .map(|(_, ty)| self.llvm_ty_ctx(ty))
