@@ -138,6 +138,21 @@ impl TextEmitter {
                         return Ok(Some(cloned));
                     }
                 }
+                // #2264: this block's tail value escapes into the caller's
+                // phi/return — exclude the owning local (`Var`/`Consume`/
+                // `Relabel`/`Construct`) from *this* block's own scope-exit
+                // drop sweep the same way a function body's tail statement
+                // and an explicit `return` already do (see those call
+                // sites). Without this, a `ref`-qualified local returned as
+                // an if/else branch's bare tail `Var` is dropped by
+                // `drop_scope_locals` right before its value is used as the
+                // branch's phi input — `drop_scope_locals`'s `escape`
+                // parameter only string-matches a *non-ref* local's own SSA
+                // value, never a `ref` local's alloca, so it can't catch
+                // this on its own. `examples/bzip/bitstream.mvl::
+                // flush_writer`'s `else` branch (`out.push(..); out`) hits
+                // this exact shape.
+                self.exclude_returned_value_tir(expr);
                 Ok(val)
             }
             TirStmt::If {
