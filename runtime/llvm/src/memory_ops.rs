@@ -1501,16 +1501,26 @@ pub unsafe extern "C" fn _mvl_list_filter(
 pub unsafe extern "C" fn _mvl_list_map(
     list: *mut MvlArray,
     closure: *const MvlClosure,
+    out_elem_size: i64,
 ) -> *mut MvlArray {
     if list.is_null() {
-        return _mvl_array_new(8, 1);
+        return _mvl_array_new(out_elem_size as usize, 1);
     }
     if closure.is_null() || (*closure).fn_ptr.is_null() {
         std::process::abort();
     }
     let len = (*list).len as usize;
     let es = (*list).elem_size as usize;
-    let out = _mvl_array_new(es, len.max(1));
+    // #2264: the OUTPUT array's element size is the closure's *return*
+    // type's size, not the input's — `(*list).elem_size` was used for both
+    // before this fix, silently wrong whenever `.map()` changes element
+    // size (e.g. `List[Int]::map(|v: Int| -> Byte {...})`, exactly
+    // `examples/bzip/bwt.mvl`'s pattern for every `List[Byte]` it builds).
+    // Every pushed result byte-copied a full closure-return-width value
+    // into a slot sized for the *input* element instead — silently correct
+    // for same-width in/out types (String→String, Int→Int), corrupting/
+    // truncating anything else.
+    let out = _mvl_array_new(out_elem_size as usize, len.max(1));
     let map_fn: unsafe extern "C" fn(*const u8, *const u8) -> i64 =
         std::mem::transmute((*closure).fn_ptr);
     let env = (*closure).env_ptr as *const u8;
@@ -3087,7 +3097,7 @@ mod tests {
         unsafe {
             let a = make_i64_array(&[1, 2, 3]);
             let c = make_closure(map_double as *const (), std::ptr::null());
-            let out = _mvl_list_map(a, &c);
+            let out = _mvl_list_map(a, &c, 8);
             assert_eq!(read_i64_array(out), vec![2, 4, 6]);
             _mvl_array_drop(out);
             _mvl_array_drop(a);
@@ -3099,8 +3109,42 @@ mod tests {
         unsafe {
             let a = make_i64_array(&[]);
             let c = make_closure(map_double as *const (), std::ptr::null());
-            let out = _mvl_list_map(a, &c);
+            let out = _mvl_list_map(a, &c, 8);
             assert_eq!(_mvl_array_len(out), 0);
+            _mvl_array_drop(out);
+            _mvl_array_drop(a);
+        }
+    }
+
+    /// Map fn narrowing i64 -> byte-sized value (element still passed back
+    /// as i64 per the closure ABI, but the caller declares `out_elem_size`
+    /// as 1). Mirrors `List[Int]::map(|v: Int| -> Byte {...})`.
+    unsafe extern "C" fn map_to_byte(_env: *const u8, elem: *const u8) -> i64 {
+        let x = *(elem as *const i64);
+        (x % 256) as i64
+    }
+
+    #[test]
+    fn list_map_narrowing_uses_out_elem_size_not_input_elem_size() {
+        unsafe {
+            // #2264: input elements are 8-byte i64; output should be
+            // 1-byte, driven by `out_elem_size`, not `(*list).elem_size`.
+            let a = make_i64_array(&[104, 101, 108, 108, 111]);
+            let c = make_closure(map_to_byte as *const (), std::ptr::null());
+            let out = _mvl_list_map(a, &c, 1);
+            assert_eq!((*out).elem_size, 1);
+            let len = _mvl_array_len(out);
+            let bytes: Vec<u8> = (0..len).map(|i| *(_mvl_array_get(out, i))).collect();
+            assert_eq!(bytes, vec![104u8, 101, 108, 108, 111]);
+            // A same-size List[Byte] built independently (elem_size == 1)
+            // must byte-for-byte match this map result — the exact check
+            // that caught this bug via `_mvl_array_eq`.
+            let independent = _mvl_array_new(1, 5);
+            for b in &bytes {
+                _mvl_array_push(independent, b as *const u8);
+            }
+            assert!(_mvl_array_eq(out, independent));
+            _mvl_array_drop(independent);
             _mvl_array_drop(out);
             _mvl_array_drop(a);
         }

@@ -17,6 +17,7 @@ use crate::mvl::ir::{
     BinaryOp, Pattern, TirExpr, TirExprKind, TirMatchArm, TirMatchBody, Ty, TypeExpr, UnaryOp,
 };
 
+use super::emit_helpers::ty_to_type_expr;
 use super::{TextEmitter, RESULT_LLVM_TY};
 
 /// Recursively check if a TIR expression's static type is `Float`.
@@ -101,9 +102,9 @@ impl TextEmitter {
             // time, not in the layout). #1845: after building the raw array,
             // call `_mvl_array_dedup` to remove duplicates in place so
             // `.len()`, `.contains()` and iteration all agree.
-            TirExprKind::List { elems } => self.emit_list_literal_tir(elems),
+            TirExprKind::List { elems } => self.emit_list_literal_tir(elems, &expr.ty),
             TirExprKind::Set { elems } => {
-                let arr = match self.emit_list_literal_tir(elems)? {
+                let arr = match self.emit_list_literal_tir(elems, &expr.ty)? {
                     Some(v) => v,
                     None => return Ok(None),
                 };
@@ -270,6 +271,27 @@ impl TextEmitter {
                     let clone_reg = self.emit_clone_for_heap_kind(&v, hk);
                     return (clone_reg, false);
                 }
+            }
+        } else if matches!(arg.kind, TirExprKind::FieldAccess { .. }) {
+            // #2264: a struct-field read (e.g. `owned.data`) passed to a
+            // consuming parameter. `last_use.rs` only tracks last-use by
+            // *binding name* (`Var` nodes) — it has no notion of "the last
+            // read of this particular field" — so unlike the `Var` case
+            // above, there's no way to know whether this is the field's
+            // final use. The struct local itself (`owned`) remains the true
+            // owner and will deep-drop this same field pointer at its own
+            // scope exit regardless, so always cloning here (never moving)
+            // is the only sound choice. Confirmed via a real double-free:
+            // `examples/bzip/bwt.mvl::bwt_decode` reads `owned.data` three
+            // times (`.len()`, `sort_copy(owned.data)`,
+            // `build_t(owned.data, ...)`); `sort_copy` and `build_t` both
+            // take their `List[Byte]` parameter as consuming and drop it
+            // internally — without this fix, both calls received the
+            // identical unrefcounted pointer and both dropped it.
+            let heap_kind = ty_to_type_expr(&arg.ty).and_then(|te| Self::heap_kind(&te));
+            if let Some(hk) = heap_kind {
+                let clone_reg = self.emit_clone_for_heap_kind(&v, hk);
+                return (clone_reg, false);
             }
         }
 
@@ -2394,11 +2416,33 @@ impl TextEmitter {
     }
 
     /// TIR variant of [`Self::emit_list_literal`].
-    fn emit_list_literal_tir(&mut self, elems: &[TirExpr]) -> Result<Option<String>, String> {
-        let elem_ty = elems
-            .first()
-            .map(|e| self.ty_to_llvm_ctx(&e.ty))
-            .unwrap_or_else(|| "ptr".into());
+    /// `list_ty` is the literal's own checker-resolved type (`List[T]` /
+    /// `Set[T]`) — needed for an *empty* literal (`[]`/`{}`), which has no
+    /// element to infer a size from. #2264: this used to hardcode a "ptr"
+    /// (8-byte) fallback for the empty case regardless of the declared
+    /// element type, so `let result: ref List[Byte] = [];` created an array
+    /// with `elem_size = 8` instead of `1`. Every later `.push()` onto that
+    /// array then copied `elem_size` (8) bytes from a 1-byte `i8` source
+    /// slot per the array's own (wrong) metadata — reading past the alloca,
+    /// and leaving an array whose `elem_size` silently disagreed with every
+    /// *other* `List[Byte]` built from a non-empty literal (`elem_size ==
+    /// 1`). Content was still byte-correct by accident (each `i8` load only
+    /// reads the slot's first byte), but `_mvl_array_eq`'s `elem_size`
+    /// mismatch check made an otherwise byte-identical `List[Byte]` compare
+    /// unequal — `examples/bzip/bwt.mvl::bwt_decode` builds its result this
+    /// exact way, so `decoded == input` failed despite matching content.
+    pub(super) fn emit_list_literal_tir(
+        &mut self,
+        elems: &[TirExpr],
+        list_ty: &Ty,
+    ) -> Result<Option<String>, String> {
+        let elem_ty = match elems.first() {
+            Some(e) => self.ty_to_llvm_ctx(&e.ty),
+            None => match unwrap_labels(list_ty) {
+                Ty::List(e) | Ty::Array(e, _) | Ty::Set(e) => self.ty_to_llvm_ctx(e),
+                _ => "ptr".into(),
+            },
+        };
 
         let mut elem_vals: Vec<String> = Vec::new();
         for e in elems {
@@ -2679,9 +2723,32 @@ impl TextEmitter {
             None => return Ok(None),
         };
 
-        // Compare — Int/Bool/enum-disc via icmp; String via runtime helper.
-        // Any other aggregate type is unsupported (matches what the
-        // Rust backend covers in practice for corpus assertions).
+        // Compare — Int/Bool/enum-disc via icmp; String/scalar-element-List
+        // via runtime helper. Any other aggregate type is unsupported
+        // (matches what the Rust backend covers in practice for corpus
+        // assertions).
+        //
+        // Bug (#2264): this used to route *every* pointer type through
+        // `_mvl_string_eq` unconditionally ("conservatively route all
+        // pointer types through it") — same root cause as the `==`
+        // operator fix just above `emit_binary_tir`, reading an
+        // `MvlArray*`'s bytes through `MvlString`'s field layout. Every
+        // `assert_eq(decoded, input)`-shaped roundtrip test on a non-String
+        // List (e.g. `examples/bzip/bwt_test.mvl`'s `List[Byte]` roundtrips)
+        // hit this. Now gated on the actual MVL type, mirroring
+        // `emit_binary_tir`'s fix.
+        let eq_sym = match unwrap_labels(&args[0].ty) {
+            Ty::String => Some("_mvl_string_eq"),
+            Ty::List(e) | Ty::Array(e, _) | Ty::Set(e)
+                if matches!(
+                    unwrap_labels(e),
+                    Ty::Int | Ty::Float | Ty::Bool | Ty::Char | Ty::Byte | Ty::UByte | Ty::UInt
+                ) =>
+            {
+                Some("_mvl_array_eq")
+            }
+            _ => None,
+        };
         let eq_reg = self.next_reg();
         match left_ty_llvm.as_str() {
             "i64" | "i32" | "i8" | "i1" => {
@@ -2689,16 +2756,20 @@ impl TextEmitter {
                     "{eq_reg} = icmp eq {left_ty_llvm} {left_val}, {right_val}"
                 ));
             }
-            "ptr" => {
-                // Strings and other ptr-carried values. Currently only String
-                // has a runtime equality helper; conservatively route all
-                // pointer types through it — the checker guarantees both
-                // sides have the same MVL type.
-                self.ensure_extern("declare i1 @_mvl_string_eq(ptr, ptr)");
-                self.push_instr(&format!(
-                    "{eq_reg} = call i1 @_mvl_string_eq(ptr {left_val}, ptr {right_val})"
-                ));
-            }
+            "ptr" => match eq_sym {
+                Some(sym) => {
+                    self.ensure_extern(&format!("declare i1 @{sym}(ptr, ptr)"));
+                    self.push_instr(&format!(
+                        "{eq_reg} = call i1 @{sym}(ptr {left_val}, ptr {right_val})"
+                    ));
+                }
+                // Not yet supported (struct/enum elements, List[List[String]],
+                // Map, …, #2265) — pointer identity rather than crashing via
+                // the wrong runtime function.
+                None => {
+                    self.push_instr(&format!("{eq_reg} = icmp eq ptr {left_val}, {right_val}"));
+                }
+            },
             "double" => {
                 self.push_instr(&format!(
                     "{eq_reg} = fcmp oeq double {left_val}, {right_val}"
@@ -4437,6 +4508,11 @@ impl TextEmitter {
             // literal construction already relies on (#1845), so this
             // doesn't introduce new semantics for pointer-typed elements
             // beyond what Set already has.
+            //
+            // #2264: `_mvl_list_map` needs the closure's *return* type's
+            // size as an explicit 3rd argument — it used to reuse the
+            // input's own `elem_size` for the output array too, silently
+            // wrong whenever `.map()` changes element size.
             ("map", "ptr")
                 if args.len() == 1
                     && self.is_closure_arg_tir(&args[0])
@@ -4446,14 +4522,32 @@ impl TextEmitter {
                     Some(p) => p,
                     None => return Ok(None),
                 };
-                let mapped = self.emit_c_call_simple(method, &val, &[("ptr", &closure)]);
+                let out_size = self.closure_ret_llvm_size(&args[0].ty).to_string();
+                let mapped =
+                    self.emit_c_call_simple(method, &val, &[("ptr", &closure), ("i64", &out_size)]);
                 self.ensure_extern("declare void @_mvl_array_dedup(ptr)");
                 self.push_instr(&format!("call void @_mvl_array_dedup(ptr {mapped})"));
                 Ok(Some(mapped))
             }
+            // `List[T]::map(f) -> List[U]` — same #2264 fix as `Set::map`
+            // just above, split out of the shared HOF arm below because
+            // `filter`/`take_while`/`skip_while` preserve the element type
+            // (no output-size argument needed) but `map` doesn't.
+            ("map", "ptr") if args.len() == 1 && self.is_closure_arg_tir(&args[0]) => {
+                let closure = match self.emit_as_hof_closure_tir(&args[0], &[0])? {
+                    Some(p) => p,
+                    None => return Ok(None),
+                };
+                let out_size = self.closure_ret_llvm_size(&args[0].ty).to_string();
+                Ok(Some(self.emit_c_call_simple(
+                    method,
+                    &val,
+                    &[("ptr", &closure), ("i64", &out_size)],
+                )))
+            }
 
-            // ── HOF: filter / map / take_while / skip_while / any / all ───
-            ("filter" | "map" | "take_while" | "skip_while", "ptr")
+            // ── HOF: filter / take_while / skip_while / any / all ─────────
+            ("filter" | "take_while" | "skip_while", "ptr")
                 if args.len() == 1 && self.is_closure_arg_tir(&args[0]) =>
             {
                 let closure = match self.emit_as_hof_closure_tir(&args[0], &[0])? {
@@ -5371,6 +5465,21 @@ impl TextEmitter {
             self.push_instr(&format!("{reg} = call {llvm_ret} @{method}({args_str})"));
             self.fn_ctx.reg_types.insert(reg.clone(), llvm_ret);
             Ok(Some(reg))
+        }
+    }
+
+    /// LLVM byte size of a `.map()` closure argument's *return* type
+    /// (#2264) — the size `_mvl_list_map`'s output array needs, which is
+    /// generally NOT the input list's own element size (e.g.
+    /// `List[Int]::map(|v: Int| -> Byte {...})`). `closure_ty` is the
+    /// closure-argument `TirExpr`'s own `.ty`, resolved by the checker to
+    /// `Ty::Fn(params, ret, ..)`. Falls back to 8 (ptr/i64-sized) for any
+    /// shape that isn't a plain `Fn` — shouldn't happen for a
+    /// checker-accepted `.map()` call, but a safe default beats a panic.
+    fn closure_ret_llvm_size(&self, closure_ty: &Ty) -> usize {
+        match unwrap_labels(closure_ty) {
+            Ty::Fn(_, ret, _, _) => Self::llvm_type_size(&self.ty_to_llvm_ctx(ret)),
+            _ => 8,
         }
     }
 

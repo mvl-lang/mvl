@@ -59,6 +59,24 @@ impl TextEmitter {
             TirExprKind::Consume(inner) | TirExprKind::Relabel { expr: inner, .. } => {
                 self.exclude_returned_value_tir(inner);
             }
+            // #2264: a struct/enum-payload literal returned as a function's
+            // tail expression (e.g. `BwtResult { data: last, primary: primary }`)
+            // moves each field's value into the constructed value — but this
+            // case wasn't handled at all, so none of those locals were
+            // excluded from the blanket `emit_heap_drops()` sweep that runs
+            // right after. `examples/bzip/bwt.mvl::bwt_encode` returns
+            // `BwtResult { data: last, .. }`: `last` got returned as the
+            // struct's `data` field *and* dropped by the same sweep — a
+            // use-after-free on the return value itself, corrupting it
+            // before the caller ever reads it. Same shape as the
+            // already-handled push/Some/Ok/Err/list-literal "moved into a
+            // container" sites — a struct/enum constructor is just another
+            // container.
+            TirExprKind::Construct { fields, .. } | TirExprKind::Spawn { fields, .. } => {
+                for (_, value) in fields {
+                    self.exclude_returned_value_tir(value);
+                }
+            }
             _ => {}
         }
     }
@@ -288,7 +306,36 @@ impl TextEmitter {
                 if *kind == LetKind::Ghost {
                     return Ok(());
                 }
-                let val = self.emit_expr_tir(init)?;
+                // #2264: an *empty* list/set literal's own `.ty` is never
+                // resolved by the checker (`List[Unknown]`, not e.g.
+                // `List[Byte]`) — there's no element to infer it from. The
+                // generic `emit_expr_tir(init)` path then falls back to a
+                // hardcoded "ptr" (8-byte) element size regardless of the
+                // declared type, so `let result: ref List[Byte] = [];`
+                // built an array with `elem_size == 8` instead of `1`.
+                // Every later `.push()` copied 8 bytes from a 1-byte source
+                // per that wrong metadata (UB, though accidentally
+                // byte-correct at read time), and the array's `elem_size`
+                // silently disagreed with any same-typed `List[Byte]` built
+                // from a non-empty literal — breaking content equality
+                // (`_mvl_array_eq`'s `elem_size` check) despite identical
+                // bytes. This `let` statement's own declared `ty` (unlike
+                // the literal's) IS fully resolved, so use it directly for
+                // the empty case instead of going through `emit_expr_tir`.
+                let mut declared_ty = ty;
+                while let Ty::Ref(_, inner) = declared_ty {
+                    declared_ty = inner;
+                }
+                let val = match &init.kind {
+                    crate::mvl::ir::TirExprKind::List { elems } if elems.is_empty() => {
+                        self.emit_list_literal_tir(elems, declared_ty)?
+                    }
+                    crate::mvl::ir::TirExprKind::Set { elems } if elems.is_empty() => {
+                        // Dedup is a no-op on zero elements — safe to skip.
+                        self.emit_list_literal_tir(elems, declared_ty)?
+                    }
+                    _ => self.emit_expr_tir(init)?,
+                };
                 // Convert TIR `Ty` once at the boundary; the rest reuses the
                 // existing AST-shaped helpers (deref_ty, is_mutable_ref, …).
                 let ty_te = ty_to_type_expr(ty).unwrap_or_else(|| {
