@@ -492,6 +492,10 @@ const RUNTIME_IMPORTS: &[(&str, &str)] = &[
     // `.slice(start, end)` — MVL `Int` bounds are i64 (#2014). Backs
     // `List[T]::take`/`::skip`, which are pure-MVL wrappers over `slice`.
     ("_mvl_array_slice", "(param i32 i64 i64) (result i32)"),
+    // `.windows(n)`/`.chunks(n)` (#2119) — each element of the result is
+    // itself an `_mvl_array_slice`-built `List[T]`, same aliasing caveat.
+    ("_mvl_array_windows", "(param i32 i64) (result i32)"),
+    ("_mvl_array_chunks", "(param i32 i64) (result i32)"),
     // `.concat(other)` (#2114) — new array holding `self`'s elements
     // followed by `other`'s. Byte-wise copy at `elem_size` granularity,
     // same caveat as `slice`: correct for scalar/pointer arrays, not
@@ -1530,6 +1534,50 @@ fn clone_is_supported(ty: &Ty, ctx: &Ctx) -> bool {
                     .type_aliases
                     .get(name.as_str())
                     .map(|aliased| clone_is_supported(&aliased.clone(), ctx))
+                    .unwrap_or(false)
+        }
+        _ => false,
+    }
+}
+
+/// Element types `List[T]::filled(n, value)` (#2119) can push natively: the
+/// same `value` representation is pushed `n` times without re-evaluating the
+/// source expression, so anything whose representation is safe to duplicate
+/// bit-for-bit qualifies. Scalars trivially do. Struct/payload-enum/unit-enum
+/// pointers do too — same reasoning as `clone_is_supported`'s struct branch:
+/// `_mvl_struct_alloc` never frees, so N slots aliasing the same pointer
+/// carry no double-free risk.
+///
+/// String and nested-collection elements are excluded: each slot must own an
+/// *independent* allocation (`_mvl_string_new`/`_mvl_array_clone` per push),
+/// which this arm does not do. Calls with those element types fall through to
+/// the unsupported-expr stub — a documented gap, not a silent one (#2119
+/// follow-up).
+fn filled_elem_supported(ty: &Ty, ctx: &Ctx) -> bool {
+    if peels_to_string(ty) || collection_elem_ty(ty).is_some() {
+        return false;
+    }
+    if option_inner_ty(ty).is_some()
+        || result_ok_ty(ty).is_some()
+        || map_key_val_ty(ty).is_some()
+        || matches!(ty, Ty::Fn(..))
+    {
+        return false;
+    }
+    let bare = match ty {
+        Ty::Ref(_, inner) | Ty::Labeled(_, inner) | Ty::Refined(inner, _) => inner.as_ref(),
+        other => other,
+    };
+    match bare {
+        Ty::Int | Ty::UInt | Ty::Float | Ty::Bool | Ty::Byte | Ty::UByte | Ty::Char => true,
+        Ty::Named(name, _) => {
+            ctx.enum_types.contains(name)
+                || ctx.struct_layouts.contains_key(name.as_str())
+                || ctx.payload_enums.contains_key(name.as_str())
+                || ctx
+                    .type_aliases
+                    .get(name.as_str())
+                    .map(|aliased| filled_elem_supported(&aliased.clone(), ctx))
                     .unwrap_or(false)
         }
         _ => false,
@@ -2593,7 +2641,19 @@ fn collect_locals_ctx_expr(expr: &TirExpr, locals: &mut Vec<(String, Ty)>, ctx: 
             if let Some(sname) = struct_name {
                 if let Some(layout) = ctx.struct_layouts.get(&sname) {
                     if let Some(slot) = layout.fields.iter().find(|s| s.name == *field) {
-                        if peels_to_string(&slot.ty) {
+                        // `expr.ty` (this access's own resolved type), not
+                        // `slot.ty` (the struct's declaration-time field
+                        // type) — for a generic struct (`Indexed[T]::value:
+                        // T`) `slot.ty` is still the struct's own bare
+                        // type-param name, a different namespace than this
+                        // context's `ctx.type_subst`, so it never resolves
+                        // to String here. Mirrors the emit-side fix in
+                        // `emit_field_access` (#2119) — without this, a
+                        // String-instantiated field's temp local was never
+                        // declared, so the emit side's `local.tee $__sf_*`
+                        // referenced an undeclared local.
+                        let access_ty = resolve_ty_param(&expr.ty, ctx.type_subst);
+                        if peels_to_string(&access_ty) {
                             locals.push((
                                 format!("__sf_{}_{}", slot.offset, field.len()),
                                 Ty::Bool, // i32 placeholder
@@ -2734,6 +2794,22 @@ fn collect_locals_ctx_expr(expr: &TirExpr, locals: &mut Vec<(String, Ty)>, ctx: 
             if let Some(info) = actor_name_of(&receiver.ty, ctx) {
                 if info.behaviors.iter().any(|m| m.name == *method) {
                     locals.push((actor_msg_temp_name(expr), Ty::Bool)); // i32 placeholder
+                }
+            }
+            // `.get(i)` on a `List[String]`/`List[List[U]]`/`List[Set[U]]`
+            // needs the clone-and-rewrap temp — mirrors the plain-pass arm in
+            // `collect_locals_expr`, but resolved through `ctx.type_subst`:
+            // inside a monomorphized generic body (e.g. `List[T]::zip[U]`),
+            // `other`'s element type is still bare `U` until substituted, so
+            // an unresolved check here would miss it and leave the emit
+            // side's `local.tee $__gc_*` referencing an undeclared local
+            // (first exercised by `List[T]::zip` getting a real WASM body,
+            // #2119).
+            let recv_ty = resolve_ty_param(&receiver.ty, ctx.type_subst);
+            if collection_elem_ty(&recv_ty).is_some() && method == "get" && args.len() == 1 {
+                let elem_ty = collection_elem_ty(&recv_ty).cloned().unwrap_or(Ty::Int);
+                if peels_to_string(&elem_ty) || collection_elem_ty(&elem_ty).is_some() {
+                    locals.push((get_clone_temp_name(expr), Ty::Bool));
                 }
             }
             collect_locals_ctx_expr(receiver, locals, ctx);
@@ -2970,6 +3046,18 @@ fn collect_locals_expr(expr: &TirExpr, locals: &mut Vec<(String, Ty)>) {
                 locals.push((choice_arr_temp_name(expr), Ty::Bool));
                 locals.push((choice_idx_temp_name(expr), Ty::Int));
             }
+            // `List[T]::filled(n, value)` (#2119) — `n`/`value` are each
+            // evaluated once and re-read every loop iteration; the array
+            // pointer and loop counter need their own persistent slots too.
+            // `value`'s declared type is already concrete at a call site
+            // (this pass only runs for non-generic bodies), so it can be
+            // registered directly without `ctx.type_subst` resolution.
+            if name == "List::filled" && args.len() == 2 {
+                locals.push((mvl_array_temp_name(expr), Ty::Bool));
+                locals.push((filled_n_temp_name(expr), Ty::Int));
+                locals.push((filled_val_temp_name(expr), args[1].ty.clone()));
+                locals.push((filled_i_temp_name(expr), Ty::Int));
+            }
         }
         TirExprKind::MethodCall {
             receiver,
@@ -3012,6 +3100,12 @@ fn collect_locals_expr(expr: &TirExpr, locals: &mut Vec<(String, Ty)>) {
                 if peels_to_string(&elem_ty) || collection_elem_ty(&elem_ty).is_some() {
                     locals.push((get_clone_temp_name(expr), Ty::Bool));
                 }
+            }
+            // `List[T]::set(i, value)` (#2119) — `_mvl_array_get`'s slot
+            // pointer is read once for the bounds check, once to store
+            // through; see `set_slot_temp_name`.
+            if collection_elem_ty(&receiver.ty).is_some() && method == "set" && args.len() == 2 {
+                locals.push((set_slot_temp_name(expr), Ty::Bool));
             }
             // `abs`/`clamp` on Int/UInt/Float (#2122) — both need the
             // receiver stashed in a temp so it can be read more than once
@@ -3777,7 +3871,7 @@ fn emit_expr(out: &mut String, expr: &TirExpr, ctx: &Ctx) {
             // itself has no WASM body, so any caller stubs to `unreachable`.
             if name == "write" && args.len() == 2 {
                 ctx.needs_runtime.set(true);
-                emit_field_access(out, &args[0], "inner", ctx); // i64 fd number
+                emit_field_access(out, &args[0], "inner", None, ctx); // i64 fd number
                 out.push_str("    i32.wrap_i64\n");
                 emit_expr(out, &args[1], ctx); // (ptr, len)
                 out.push_str("    call $mvl_write\n"); // -> i32 errno
@@ -3810,7 +3904,7 @@ fn emit_expr(out: &mut String, expr: &TirExpr, ctx: &Ctx) {
             // `write` shim unwraps `Fd.inner` (#2100).
             if name == "write_file" && args.len() == 2 {
                 ctx.needs_runtime.set(true);
-                emit_field_access(out, &args[0], "inner", ctx); // path (ptr, len)
+                emit_field_access(out, &args[0], "inner", None, ctx); // path (ptr, len)
                 emit_expr(out, &args[1], ctx); // content (ptr, len)
                 out.push_str("    call $_mvl_io_write_file\n");
                 return;
@@ -3818,7 +3912,7 @@ fn emit_expr(out: &mut String, expr: &TirExpr, ctx: &Ctx) {
             // `append(path, content)` (std.io) — append content to file.
             if name == "append" && args.len() == 2 {
                 ctx.needs_runtime.set(true);
-                emit_field_access(out, &args[0], "inner", ctx); // path (ptr, len)
+                emit_field_access(out, &args[0], "inner", None, ctx); // path (ptr, len)
                 emit_expr(out, &args[1], ctx); // content (ptr, len)
                 out.push_str("    call $_mvl_io_append\n");
                 return;
@@ -3826,28 +3920,28 @@ fn emit_expr(out: &mut String, expr: &TirExpr, ctx: &Ctx) {
             // `path_exists(path)` (std.io) — check if path exists.
             if name == "path_exists" && args.len() == 1 {
                 ctx.needs_runtime.set(true);
-                emit_field_access(out, &args[0], "inner", ctx);
+                emit_field_access(out, &args[0], "inner", None, ctx);
                 out.push_str("    call $_mvl_io_exists\n");
                 return;
             }
             // `is_file(path)` (std.io) — check if path is a file.
             if name == "is_file" && args.len() == 1 {
                 ctx.needs_runtime.set(true);
-                emit_field_access(out, &args[0], "inner", ctx);
+                emit_field_access(out, &args[0], "inner", None, ctx);
                 out.push_str("    call $_mvl_io_is_file\n");
                 return;
             }
             // `is_dir(path)` (std.io) — check if path is a directory.
             if name == "is_dir" && args.len() == 1 {
                 ctx.needs_runtime.set(true);
-                emit_field_access(out, &args[0], "inner", ctx);
+                emit_field_access(out, &args[0], "inner", None, ctx);
                 out.push_str("    call $_mvl_io_is_dir\n");
                 return;
             }
             // `create_dir_all(path)` (std.io) — create directory and parents.
             if name == "create_dir_all" && args.len() == 1 {
                 ctx.needs_runtime.set(true);
-                emit_field_access(out, &args[0], "inner", ctx);
+                emit_field_access(out, &args[0], "inner", None, ctx);
                 out.push_str("    call $_mvl_io_create_dir_all\n");
                 return;
             }
@@ -3862,7 +3956,7 @@ fn emit_expr(out: &mut String, expr: &TirExpr, ctx: &Ctx) {
             // silently defeating a type-based guard here (#2100).
             if name == "remove" && args.len() == 1 {
                 ctx.needs_runtime.set(true);
-                emit_field_access(out, &args[0], "inner", ctx);
+                emit_field_access(out, &args[0], "inner", None, ctx);
                 out.push_str("    call $_mvl_io_remove\n");
                 return;
             }
@@ -3874,14 +3968,14 @@ fn emit_expr(out: &mut String, expr: &TirExpr, ctx: &Ctx) {
             // same shape as `write_file`/`path_exists` above.
             if name == "open" && args.len() == 1 {
                 ctx.needs_runtime.set(true);
-                emit_field_access(out, &args[0], "inner", ctx);
+                emit_field_access(out, &args[0], "inner", None, ctx);
                 out.push_str("    call $_mvl_io_open\n");
                 return;
             }
             // `close(fd)` (std.io, #2110) — release the OS file descriptor.
             if name == "close" && args.len() == 1 {
                 ctx.needs_runtime.set(true);
-                emit_field_access(out, &args[0], "inner", ctx); // i64 fd number
+                emit_field_access(out, &args[0], "inner", None, ctx); // i64 fd number
                 out.push_str("    i32.wrap_i64\n");
                 out.push_str("    call $_mvl_io_close\n");
                 return;
@@ -3894,7 +3988,7 @@ fn emit_expr(out: &mut String, expr: &TirExpr, ctx: &Ctx) {
             // fd from `open()` both flow through unchanged.
             if name == "read_line" && args.len() == 1 {
                 ctx.needs_runtime.set(true);
-                emit_field_access(out, &args[0], "inner", ctx); // i64 fd number
+                emit_field_access(out, &args[0], "inner", None, ctx); // i64 fd number
                 out.push_str("    i32.wrap_i64\n");
                 out.push_str("    call $_mvl_io_read_line\n");
                 return;
@@ -3918,8 +4012,8 @@ fn emit_expr(out: &mut String, expr: &TirExpr, ctx: &Ctx) {
             if name == "sleep" && args.len() == 1 {
                 ctx.needs_runtime.set(true);
                 // Extract secs and nanos fields from Duration struct
-                emit_field_access(out, &args[0], "secs", ctx);
-                emit_field_access(out, &args[0], "nanos", ctx);
+                emit_field_access(out, &args[0], "secs", None, ctx);
+                emit_field_access(out, &args[0], "nanos", None, ctx);
                 out.push_str("    call $_mvl_time_thread_sleep\n");
                 return;
             }
@@ -3969,6 +4063,62 @@ fn emit_expr(out: &mut String, expr: &TirExpr, ctx: &Ctx) {
                 out.push_str(&format!("    local.get ${arr_temp}\n"));
                 out.push_str(&format!("    local.get ${idx_temp}\n"));
                 out.push_str(&format!("    call ${getter}\n"));
+                return;
+            }
+            // `List[T]::filled(n, value)` (#2119) — static (no-`self`)
+            // associated function, so it arrives here as a `FnCall` named
+            // `"List::filled"` rather than a `MethodCall`; Rust/LLVM special-
+            // case the identical string at their own call sites (no shared
+            // MVL body ever runs there), and WASM had no arm for it at all.
+            // `value` is evaluated once and its representation is pushed `n`
+            // times — safe for scalars and struct/enum pointers
+            // (`filled_elem_supported`), not yet for String/nested-collection
+            // elements, which would each need an independent per-push
+            // allocation.
+            if name == "List::filled" && args.len() == 2 {
+                let elem_ty = resolve_ty_param(&args[1].ty, ctx.type_subst);
+                if filled_elem_supported(&elem_ty, ctx) {
+                    ctx.needs_runtime.set(true);
+                    let arr_temp = mvl_array_temp_name(expr);
+                    let n_temp = filled_n_temp_name(expr);
+                    let val_temp = filled_val_temp_name(expr);
+                    let i_temp = filled_i_temp_name(expr);
+                    let elem_size = elem_size_bytes(&elem_ty, ctx);
+                    emit_expr(out, &args[0], ctx);
+                    out.push_str(&format!("    local.set ${n_temp}\n"));
+                    emit_expr(out, &args[1], ctx);
+                    out.push_str(&format!("    local.set ${val_temp}\n"));
+                    out.push_str(&format!("    i32.const {elem_size}\n"));
+                    out.push_str(&format!("    local.get ${n_temp}\n"));
+                    out.push_str("    i32.wrap_i64\n");
+                    out.push_str("    call $_mvl_array_new\n");
+                    out.push_str(&format!("    local.set ${arr_temp}\n"));
+                    out.push_str("    i64.const 0\n");
+                    out.push_str(&format!("    local.set ${i_temp}\n"));
+                    let brk = ctx.fresh_label("fend");
+                    let cnt = ctx.fresh_label("fcont");
+                    out.push_str(&format!("    block ${brk}\n"));
+                    out.push_str(&format!("    loop ${cnt}\n"));
+                    out.push_str(&format!("    local.get ${i_temp}\n"));
+                    out.push_str(&format!("    local.get ${n_temp}\n"));
+                    out.push_str("    i64.ge_s\n");
+                    out.push_str(&format!("    br_if ${brk}\n"));
+                    out.push_str(&format!("    local.get ${arr_temp}\n"));
+                    out.push_str(&format!("    local.get ${val_temp}\n"));
+                    out.push_str(&format!("    call {}\n", push_op_for(&elem_ty, ctx)));
+                    out.push_str(&format!("    local.get ${i_temp}\n"));
+                    out.push_str("    i64.const 1\n");
+                    out.push_str("    i64.add\n");
+                    out.push_str(&format!("    local.set ${i_temp}\n"));
+                    out.push_str(&format!("    br ${cnt}\n"));
+                    out.push_str("    end\n");
+                    out.push_str("    end\n");
+                    out.push_str(&format!("    local.get ${arr_temp}\n"));
+                } else {
+                    out.push_str(
+                        "    ;; unsupported: List::filled with a String/nested-collection element (#2119 follow-up)\n",
+                    );
+                }
                 return;
             }
             // `shuffle(list)` (std.random) — shuffled copy of list.
@@ -4623,6 +4773,15 @@ fn emit_expr(out: &mut String, expr: &TirExpr, ctx: &Ctx) {
             emit_expr(out, &args[0], ctx); // key → (ptr, len)
             emit_map_value_push(out, &args[1], &val_ty, ctx);
             out.push_str("    call $_mvl_map_insert_si64\n");
+            // `result.insert(key, bucket)` where `bucket: List[...]`/etc —
+            // same "moved into a new owner, source local stays
+            // independently drop-tracked" shape as `.push()`/`Some`/`Ok`/
+            // `Err`/list-literal-elements (#2205): `bucket` is still a
+            // separately drop-tracked named local after its value is
+            // stored into the map, so a later heap sweep frees it out from
+            // under the map entry. Surfaced by `List[T]::group_by`'s
+            // get-bucket-push-reinsert pattern (#2119).
+            emit_consumed_local_zero(out, &args[1]);
         }
         TirExprKind::MethodCall {
             receiver,
@@ -4902,6 +5061,45 @@ fn emit_expr(out: &mut String, expr: &TirExpr, ctx: &Ctx) {
             // drop is the same null-safe no-op used at those other sites.
             emit_consumed_local_zero(out, &args[0]);
         }
+        // `.set(i, value)` on List/Array — in-place index write (#2119).
+        // No dedicated `_mvl_array_set_*` runtime primitive needed:
+        // `_mvl_array_get` already returns a pointer *into the backing
+        // buffer* at `idx` (0 if out of bounds, same convention every other
+        // `.get()`-based arm relies on), so this reuses it and stores
+        // through the result directly rather than adding a parallel
+        // runtime function. The slot pointer is read once — needed for
+        // both the bounds check and the store — so it's stashed in
+        // `set_slot_temp_name`'s temp local rather than calling
+        // `_mvl_array_get` twice.
+        TirExprKind::MethodCall {
+            receiver,
+            method,
+            args,
+        } if collection_elem_ty(&receiver.ty).is_some() && method == "set" && args.len() == 2 => {
+            ctx.needs_runtime.set(true);
+            let elem_ty = collection_elem_ty(&receiver.ty).cloned().unwrap_or(Ty::Int);
+            let slot = set_slot_temp_name(expr);
+            emit_expr(out, receiver, ctx);
+            emit_expr(out, &args[0], ctx); // idx (i64)
+            out.push_str("    call $_mvl_array_get\n");
+            out.push_str(&format!("    local.tee ${slot}\n"));
+            out.push_str("    i32.eqz\n");
+            out.push_str("    if\n      unreachable\n    end\n");
+            out.push_str(&format!("    local.get ${slot}\n"));
+            emit_expr(out, &args[1], ctx);
+            if is_string_ty(&elem_ty, ctx) {
+                out.push_str("    call $_mvl_string_new\n");
+                out.push_str("    i32.store offset=0\n");
+            } else {
+                let store_op = match wasm_ty(&elem_ty, ctx) {
+                    "i32" => "i32.store offset=0",
+                    "f64" => "f64.store offset=0",
+                    _ => "i64.store offset=0",
+                };
+                out.push_str(&format!("    {store_op}\n"));
+            }
+            emit_consumed_local_zero(out, &args[1]);
+        }
         // `.clone()` — needed by six `std/lists.mvl` bodies (#2014):
         // `filter`/`take_while`/`skip_while` call `f(x.clone())`, and
         // `sort_by`/`min_by`/`max_by` call `cmp(x.clone(), y.clone())`. There
@@ -4960,6 +5158,26 @@ fn emit_expr(out: &mut String, expr: &TirExpr, ctx: &Ctx) {
             emit_expr(out, &args[0], ctx);
             emit_expr(out, &args[1], ctx);
             out.push_str("    call $_mvl_array_slice\n");
+        }
+        // `.windows(n)` / `.chunks(n)` on List / Array (#2119) — `builtin
+        // fn`s in std/lists.mvl with no WASM emitter arm at all until now.
+        // Each result element is itself an `_mvl_array_slice`-built
+        // `List[T]`, so this reuses `slice_is_supported`'s exact element-
+        // type gate — the same aliasing risk `slice`/`take`/`skip` already
+        // guard against applies here too (two overlapping windows sharing
+        // a `*MvlString` element would double-free it on drop).
+        TirExprKind::MethodCall {
+            receiver,
+            method,
+            args,
+        } if matches!(method.as_str(), "windows" | "chunks")
+            && args.len() == 1
+            && slice_is_supported(&resolve_ty_param(&receiver.ty, ctx.type_subst), ctx) =>
+        {
+            ctx.needs_runtime.set(true);
+            emit_expr(out, receiver, ctx);
+            emit_expr(out, &args[0], ctx);
+            out.push_str(&format!("    call $_mvl_array_{method}\n"));
         }
         // `.concat(other)` on List / Array — new array holding `self`'s
         // elements followed by `other`'s (#2114). A `builtin fn` in
@@ -5047,7 +5265,19 @@ fn emit_expr(out: &mut String, expr: &TirExpr, ctx: &Ctx) {
             args,
         } if collection_elem_ty(&receiver.ty).is_some() && method == "get" && args.len() == 1 => {
             ctx.needs_runtime.set(true);
-            let elem_ty = collection_elem_ty(&receiver.ty).cloned().unwrap_or(Ty::Int);
+            // A method-level type param (`List[T]::zip[U](self, other: List[U])`)
+            // is still bare `U` in `other`'s TIR type inside the monomorphized
+            // body — resolve it through the active instantiation's substitution
+            // before dispatching on shape, or a String/struct-instantiated `U`
+            // (e.g. `List_zip__Int__Str`'s `other: List[String]`) matches
+            // neither the i32 branch below nor `peels_to_string`, wrongly
+            // picks `_mvl_array_get_option_i64`, and then mismatches against
+            // `_mvl_option_value_i32` a few lines down (module fails to
+            // validate). Same class of bug as `emit_field_access`'s
+            // `resolve_ty_param` fix above — first exercised by `List[T]::zip`
+            // getting a real WASM body (#2119).
+            let recv_ty = resolve_ty_param(&receiver.ty, ctx.type_subst);
+            let elem_ty = collection_elem_ty(&recv_ty).cloned().unwrap_or(Ty::Int);
             // String elements are stored as *MvlString (i32); Bool/enum/struct are
             // i32 too. Everything else (Int, Float) is i64. Asked via `wasm_ty`
             // so this agrees with `push_op_for`/`list_elem_load_op` by
@@ -5293,7 +5523,7 @@ fn emit_expr(out: &mut String, expr: &TirExpr, ctx: &Ctx) {
         }
         // `expr.field` — struct field access (#1821).
         TirExprKind::FieldAccess { expr: recv, field } => {
-            emit_field_access(out, recv, field, ctx);
+            emit_field_access(out, recv, field, Some(&expr.ty), ctx);
         }
         // `expr?` — propagate Result failure (#1821).
         TirExprKind::Propagate(inner) => {
@@ -6364,7 +6594,22 @@ fn emit_struct_construct(
             continue;
         };
         out.push_str(&format!("    local.get ${temp}\n"));
-        emit_struct_store(out, val, &slot.ty, slot.offset, ctx);
+        // `slot.ty` is the struct's *own* declared field type — for a
+        // generic struct (`Pair[A, B]::second: B`) that's the struct's own
+        // type-param name ("B"), a different namespace than the enclosing
+        // monomorphized function's `ctx.type_subst` (e.g. `List[T]::zip[U]`'s
+        // "T"/"U"), so resolving `slot.ty` through it is always a miss.
+        // `val`'s own TIR type, by contrast, is written in *this* call
+        // site's generics and resolves correctly — inside `zip`, `b: U`
+        // needing "U" → String is exactly `ctx.type_subst`'s namespace.
+        // Without this, a String-instantiated field (e.g. `Pair[Int,
+        // String]` from `List[T]::zip`, #2119) matched neither the String
+        // branch nor `is_i32` in `emit_struct_store`, fell to the
+        // `i64.store` default, and stored two i32s (ptr, len) where one i64
+        // is expected. Same class of bug as `emit_field_access`'s fix
+        // above, on the write side.
+        let field_ty = resolve_ty_param(&val.ty, ctx.type_subst);
+        emit_struct_store(out, val, &field_ty, slot.offset, ctx);
     }
     out.push_str(&format!("    local.get ${temp}\n"));
 }
@@ -6528,7 +6773,13 @@ fn emit_payload_load(out: &mut String, field_ty: &Ty, byte_off: u32, ctx: &Ctx) 
 // ── Field access (#1821) ─────────────────────────────────────────────────
 
 /// Emit `recv.field` — struct field read.
-fn emit_field_access(out: &mut String, recv: &TirExpr, field: &str, ctx: &Ctx) {
+fn emit_field_access(
+    out: &mut String,
+    recv: &TirExpr,
+    field: &str,
+    access_ty: Option<&Ty>,
+    ctx: &Ctx,
+) {
     let struct_name = match &recv.ty {
         Ty::Named(n, _) => n.clone(),
         Ty::Ref(_, inner) => match inner.as_ref() {
@@ -6569,8 +6820,32 @@ fn emit_field_access(out: &mut String, recv: &TirExpr, field: &str, ctx: &Ctx) {
     };
     emit_expr(out, recv, ctx); // leaves *struct on stack
     let byte_off = slot.offset;
-    match &slot.ty {
-        _ if peels_to_string(&slot.ty) => {
+    // `slot.ty` is the struct's *own* declared field type — for a generic
+    // struct (`Indexed[T]::value: T`, `Pair[A, B]::first: A`, ...) that's the
+    // struct's own type-param name, a different namespace than whatever
+    // generic context this access happens in (e.g. `Pair`'s "A"/"B" vs
+    // `List[T]::zip[U]`'s "T"/"U" — resolving "A" through a substitution
+    // keyed by "T"/"U" is always a miss). `access_ty` — the *access
+    // expression's* own TIR type (`pair.second`'s type, not `Pair::second`'s
+    // declared type) — is written in the surrounding call site's own
+    // generics instead, so it resolves through `ctx.type_subst` correctly;
+    // callers synthesizing a field access on a known-concrete struct (Fd,
+    // Path, Duration — never generic) pass `None` and fall back to
+    // `slot.ty`, which is already concrete there. Without this, a
+    // String-instantiated field (`Indexed[String]`, `Pair[Int, String]`)
+    // matched neither the String branch nor `is_i32` below and fell to the
+    // `i64.load` default, reading a `*MvlString` pointer as a scalar.
+    // Nothing exercised a String/struct-typed generic field until
+    // `List[T]::enumerate`/`zip` got real bodies (#2119) — every prior
+    // caller of `Indexed`/`Pair`/`Partitioned`/`Entry` only ever
+    // instantiated them with `Int`-shaped fields, which happen to load
+    // correctly either way.
+    let field_ty = match access_ty {
+        Some(t) => resolve_ty_param(t, ctx.type_subst),
+        None => resolve_ty_param(&slot.ty, ctx.type_subst),
+    };
+    match &field_ty {
+        _ if peels_to_string(&field_ty) => {
             // Stored as *MvlString. Load the i32 pointer, then unpack
             // to (ptr, len) so downstream code sees the standard repr.
             ctx.needs_runtime.set(true);
@@ -6589,7 +6864,7 @@ fn emit_field_access(out: &mut String, recv: &TirExpr, field: &str, ctx: &Ctx) {
         Ty::Float => {
             out.push_str(&format!("    f64.load offset={byte_off}\n"));
         }
-        _ if is_i32(&slot.ty, ctx) => {
+        _ if is_i32(&field_ty, ctx) => {
             out.push_str(&format!("    i32.load offset={byte_off}\n"));
         }
         _ => {
@@ -7140,6 +7415,16 @@ fn box_temp_name(arg: &TirExpr) -> String {
     format!("__bx_{}_{}", arg.span.offset, arg.span.len)
 }
 
+/// Temp local holding the element-slot pointer `_mvl_array_get` returns
+/// while `List[T]::set(i, value)` (#2119) both bounds-checks it and stores
+/// through it — read twice, so it must be stashed rather than calling
+/// `_mvl_array_get` a second time (which would re-evaluate `self`/`i` from
+/// the stack, not from memory, so this is about avoiding a second runtime
+/// call, not double-evaluating a source expression with side effects).
+fn set_slot_temp_name(expr: &TirExpr) -> String {
+    format!("__mset_{}_{}", expr.span.offset, expr.span.len)
+}
+
 /// Temp local holding the `*MvlString` pointer while a `Some(v)` match arm
 /// on `Option[String]` unpacks it into the `v_ptr`/`v_len` locals every
 /// other String variable uses (#2056). Keyed by the `Some(...)` pattern's
@@ -7185,6 +7470,22 @@ fn choice_arr_temp_name(expr: &TirExpr) -> String {
 /// `choice_arr_temp_name`.
 fn choice_idx_temp_name(expr: &TirExpr) -> String {
     format!("__chi_{}_{}", expr.span.offset, expr.span.len)
+}
+
+/// Temp locals for `List[T]::filled(n, value)` (#2119) — `n` and `value`
+/// are each evaluated once and read back on every loop iteration, and the
+/// loop counter needs its own persistent slot. Same span-based scheme as
+/// `choice_arr_temp_name`.
+fn filled_n_temp_name(expr: &TirExpr) -> String {
+    format!("__fn_{}_{}", expr.span.offset, expr.span.len)
+}
+
+fn filled_val_temp_name(expr: &TirExpr) -> String {
+    format!("__fv_{}_{}", expr.span.offset, expr.span.len)
+}
+
+fn filled_i_temp_name(expr: &TirExpr) -> String {
+    format!("__fi_{}_{}", expr.span.offset, expr.span.len)
 }
 
 /// Temp local for the `*MvlOption` handle `.get(i)` gets back from
@@ -9294,9 +9595,24 @@ fn emit_generic_fn(
     collect_locals_block(&f.body, &mut locals);
     collect_locals_ctx(&f.body, &mut locals, &mono_ctx);
     dedup_locals_keep_last(&mut locals);
+    // A `let key: K = …` binding is collected twice under two different
+    // names when `K` resolves to `String`: the ctx-free pass can't see
+    // through the bare type param, so it declares a single scalar `key`
+    // entry (expanded into `key_ptr`/`key_len` below); the ctx-aware pass
+    // *can* resolve it and pushes `key_ptr`/`key_len` directly as their own
+    // entries. `dedup_locals_keep_last` dedupes by exact name, so it can't
+    // catch two entries that expand to the *same* pair under different
+    // names — both fire, and `wasm-tools` rejects the module for
+    // "duplicate local identifier". First exercised by `List[T]::group_by`
+    // getting a real WASM body with a String-instantiated key (#2119).
+    let raw_names: std::collections::HashSet<&str> =
+        locals.iter().map(|(n, _)| n.as_str()).collect();
     for (name, ty) in &locals {
         let concrete = resolve_ty_param(ty, type_subst);
         if peels_to_string(&concrete) {
+            if raw_names.contains(format!("{name}_ptr").as_str()) {
+                continue;
+            }
             out.push_str(&format!("    (local ${name}_ptr i32)\n"));
             out.push_str(&format!("    (local ${name}_len i32)\n"));
         } else {
@@ -9715,11 +10031,37 @@ pub(crate) fn collect_structs(
     let mut map = HashMap::new();
     for td in types {
         if let TirTypeBody::Struct { fields, .. } = &td.body {
+            // A generic struct's field layout is computed once, from the
+            // bare declaration (`Pair[A, B] { first: A, second: B }`), long
+            // before any call site resolves `A`/`B` to a concrete type.
+            // `field_byte_size` can't see past the bare type-param name, so
+            // it always falls to the 4-byte default — correct for an
+            // i32-shaped field, but wrong the moment an instantiation needs
+            // 8 (Int/UInt/Float), overlapping the next field's slot (e.g.
+            // `Pair[Int, String]`'s `second` landing at offset 4, inside
+            // `first`'s own 8-byte `i64.store`). Every field of a generic
+            // struct gets a uniform 8-byte slot instead — mirrors payload
+            // enums' identical `payload_size` convention, which exists for
+            // the same reason. `emit_struct_store`/`emit_field_access`
+            // already resolve each field's *actual* instantiated type via
+            // `ctx.type_subst` and store/load the right width at the slot's
+            // base offset, so the extra reserved bytes an i32-shaped field
+            // leaves unused are simply never read (#2119: first exposed once
+            // `Indexed`/`Pair`/`Partitioned` were ever actually constructed
+            // under WASM, by `enumerate`/`zip`/`partition` getting real
+            // bodies).
+            let is_generic = !td.params.is_empty();
             let mut offset = 0u32;
             let mut slots = Vec::new();
             for f in fields {
-                let size = field_byte_size(&f.ty, type_aliases);
-                let align = field_alignment(&f.ty, type_aliases);
+                let (size, align) = if is_generic {
+                    (8, 8)
+                } else {
+                    (
+                        field_byte_size(&f.ty, type_aliases),
+                        field_alignment(&f.ty, type_aliases),
+                    )
+                };
                 // Align up.
                 offset = (offset + align - 1) & !(align - 1);
                 slots.push(FieldSlot {

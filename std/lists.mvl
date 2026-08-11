@@ -67,12 +67,40 @@ pub builtin fn List[T]::get(self, i: Int) -> Option[T]
 /// Append `x` to the list in place.
 pub builtin fn List[T]::push(self, x: T) -> Unit
 
+/// Append every element of `other` to the list in place.
+///
+/// Not previously declared here at all — the checker recognized `extend`
+/// only via a hardcoded name in `checker/method_types.rs` (predating the
+/// 4-way sync convention this file documents above), and Rust/LLVM
+/// dispatch it by name regardless of any declaration. WASM's generic-
+/// method monomorphization needs an actual declared body to find, which
+/// is what this adds (#2119).
+pub fn List[T]::extend(self, other: List[T]) -> Unit {
+    for x in other {
+        self.push(x)
+    }
+}
+
 /// Replace the element at index `i` with `value`. Panics if `i` is out of bounds.
 pub builtin fn List[T]::set(self, i: Int, value: T) -> Unit
 
 /// Create a list of `n` elements, all initialised to `value`.
 /// Useful for lookup tables and pre-allocated scratch buffers.
-pub builtin fn List[T]::filled(n: Int, value: T) -> List[T]
+///
+/// Rust/LLVM dispatch this by name (transpiler-handled) and never execute
+/// this body. WASM has no such native arm — it monomorphizes this body
+/// directly (#2119). `partial`: the checker's `decreases` extractor can't
+/// prove a plain counting loop terminates through the `ref` rebinding
+/// (same shape as `List[T]::min_by`/`max_by`'s while loops, #2211).
+pub partial fn List[T]::filled(n: Int, value: T) -> List[T] {
+    let result: ref List[T] = [];
+    let i: ref Int = 0;
+    while i < n {
+        result.push(value.clone());
+        i = i + 1
+    };
+    result
+}
 
 /// Safe slice `[start, end)` — clamped, never panics.
 pub builtin fn List[T]::slice(self, start: Int, end: Int) -> List[T]
@@ -217,9 +245,18 @@ pub fn List[T]::sort_by(self, cmp: fn(T, T) -> Bool) -> List[T] {
 /// Returns `List[Indexed[T]]` where each element carries `index: Int` and
 /// `value: T`.  Replaces the prior `(Int, T)` tuple pattern (ADR-0002, #1380).
 ///
-/// Builtin: Rust backend emits `into_iter().enumerate().map(|(i, v)| Indexed { … })`.
-/// LLVM: C-ABI `_mvl_list_enumerate`. Closes #1383.
-pub builtin fn List[T]::enumerate(self) -> List[Indexed[T]]
+/// Rust/LLVM dispatch this by name (transpiler-handled, #1383) and never
+/// execute this body. WASM has no such native arm — it monomorphizes this
+/// body directly (#2119).
+pub fn List[T]::enumerate(self) -> List[Indexed[T]] {
+    let result: ref List[Indexed[T]] = [];
+    let i: ref Int = 0;
+    for x in self {
+        result.push(Indexed { index: i, value: x });
+        i = i + 1
+    };
+    result
+}
 
 /// Pair elements from `self` with elements from `other` by position.
 ///
@@ -227,9 +264,31 @@ pub builtin fn List[T]::enumerate(self) -> List[Indexed[T]]
 /// `self` and `second` is from `other`.  Replaces the prior `(T, U)` tuple
 /// pattern (ADR-0002, #1380).
 ///
-/// Builtin: Rust backend emits `into_iter().zip(…).map(|(a, b)| Pair { … })`.
-/// LLVM: C-ABI `_mvl_list_zip`. Closes #1383.
-pub builtin fn List[T]::zip[U](self, other: List[U]) -> List[Pair[T, U]]
+/// Rust/LLVM dispatch this by name (transpiler-handled, #1383) and never
+/// execute this body. WASM has no such native arm — it monomorphizes this
+/// body directly (#2119). `partial`: the match/if branching inside the
+/// `while` loop is beyond what the checker's `decreases` extractor can
+/// prove terminates, same shape as `List[T]::min_by`/`max_by` (#2211).
+pub partial fn List[T]::zip[U](self, other: List[U]) -> List[Pair[T, U]] {
+    let result: ref List[Pair[T, U]] = [];
+    let i: ref Int = 0;
+    let n1: Int = self.len();
+    let n2: Int = other.len();
+    let n: Int = if n1 < n2 { n1 } else { n2 };
+    while i < n {
+        match self.get(i) {
+            Some(a) => {
+                match other.get(i) {
+                    Some(b) => result.push(Pair { first: a, second: b }),
+                    None => {},
+                }
+            },
+            None => {},
+        };
+        i = i + 1
+    };
+    result
+}
 
 /// Split into elements satisfying `f` and those that do not.
 ///
@@ -237,9 +296,21 @@ pub builtin fn List[T]::zip[U](self, other: List[U]) -> List[Pair[T, U]]
 /// with `matching` (predicate true) and `rest` (predicate false). Replaces
 /// the prior `(List[T], List[T])` tuple return.
 ///
-/// Builtin: Rust backend emits `into_iter().partition::<Vec<_>, _>(…)` and wraps
-/// it in a `Partitioned` record. LLVM: `_mvl_list_partition` (Shape D). Closes #1290.
-pub builtin fn List[T]::partition(self, f: fn(T) -> Bool) -> Partitioned[T]
+/// Rust/LLVM dispatch this by name (transpiler-handled, #1290) and never
+/// execute this body. WASM has no such native arm — it monomorphizes this
+/// body directly (#2119).
+pub fn List[T]::partition(self, f: fn(T) -> Bool) -> Partitioned[T] {
+    let matching: ref List[T] = [];
+    let rest: ref List[T] = [];
+    for x in self {
+        if f(x.clone()) {
+            matching.push(x)
+        } else {
+            rest.push(x)
+        }
+    };
+    Partitioned { matching: matching, rest: rest }
+}
 
 /// Retain leading elements while `f` returns true; stop at first false.
 pub fn List[T]::take_while(self, f: fn(T) -> Bool) -> List[T] {
@@ -384,10 +455,29 @@ pub fn List[String]::join(self, sep: String) -> String {
 /// Group elements by the key returned by `f`, producing a map from
 /// each key to the list of elements that produced it (order within groups preserved).
 ///
-/// Builtin: requires Map get-or-insert-default which MVL cannot express yet.
-/// Rust backend emits a HashMap fold.
-/// LLVM: deferred to #436.
-pub builtin fn List[T]::group_by[K](self, f: fn(T) -> K) -> Map[K, List[T]]
+/// Rust/LLVM dispatch this by name (transpiler-handled) and never execute
+/// this body. WASM has no such native arm — it monomorphizes this body
+/// directly (#2119). `partial`: the match/if branching inside the loop is
+/// beyond what the checker's `decreases` extractor can analyse (#2211).
+pub partial fn List[T]::group_by[K](self, f: fn(T) -> K) -> Map[K, List[T]] {
+    let result: ref Map[K, List[T]] = Map[K, List[T]]::new();
+    for x in self {
+        let key: K = f(x.clone());
+        match result.get(key.clone()) {
+            Some(bucket) => {
+                let updated: ref List[T] = bucket;
+                updated.push(x);
+                result.insert(key, updated)
+            },
+            None => {
+                let bucket: ref List[T] = [];
+                bucket.push(x);
+                result.insert(key, bucket)
+            },
+        }
+    };
+    result
+}
 
 /// Return all contiguous windows of length `n`. If `n` > `len` the result
 /// is empty. Each window is a new list of exactly `n` elements.

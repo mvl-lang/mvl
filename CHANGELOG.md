@@ -2,6 +2,10 @@
 
 ## [1.8.0] - 2026-08-06
 
+### Fixed — #2119
+
+- **WASM: `List[T]` method coverage gaps** — `set`/`windows`/`chunks`/`extend`/`filled`/`enumerate`/`zip`/`partition`/`group_by` had no WASM dispatch arm at all (silent `unreachable` stubs, or an outright undefined-symbol module for `filled`, a self-less associated function). Added native arms for `set`/`windows`/`chunks`/`filled`, and real MVL bodies (monomorphized like any other generic method) for `extend`/`enumerate`/`zip`/`partition`/`group_by`, which surfaced a chain of latent WASM backend bugs never previously exercised (nothing had constructed a `Pair`/`Indexed`/`Partitioned` generic struct, or read/written a String-instantiated generic field, under WASM before): a generic struct's field layout, and its field read/write dispatch, both resolved the struct's own declaration-time type-param name instead of the concrete type at the call site; `.get()` on a generic method's second type parameter (e.g. `zip[U]`) had the same resolution gap; a `String`-typed generic `let` binding inside a monomorphized body could be declared as a WASM local twice. Also fixes a Rust-backend gap where `List[T]::extend`'s body (`self.push(x)`) didn't mark `self` mutable in the generated Rust signature. `Map[Int, V]` (used by a String-keyed `group_by` alternative) remains unsupported under WASM — the `Map` runtime is String-keyed only, a separate pre-existing gap.
+
 ### Fixed — #2225
 
 - **`cargo build --release --workspace` failed to link `mvl_runtime_wasm` on native hosts** (e.g. `brew install mvl` on macOS/Linux). #2093 Phase 2's `epoch_nanos_now()` cfg-gate, `not(target_os = "wasi")`, was meant to select only the browser (`wasm32-unknown-unknown`) target for the JS-host `_mvl_js_now_ms` import, but also matched every native host target — main CI never caught it since it never builds `mvl_runtime_wasm` via `--workspace`. Narrowed to `all(target_arch = "wasm32", not(target_os = "wasi"))`; native hosts fall back to `std::time::SystemTime`, matching pre-#2093 behavior.

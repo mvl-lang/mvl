@@ -389,17 +389,27 @@ test-rust-rust: build ## rust/rust — new corpus through Rust transpiler (batch
 # (`.push()`'s existing `exclude_returned_value_tir` call doesn't cover this
 # shape) — the WASM analog of this exact bug is #2205, fixed on that
 # backend in the same PR that added this file; LLVM needs its own fix.
+#
+# list_stubs_test.mvl (#2119): constructs `Indexed`/`Pair`/`Partitioned` —
+# generic structs never actually built under LLVM before `List[T]::
+# enumerate`/`zip`/`partition` got real bodies. The WASM analog (a generic
+# struct's field layout/store/load dispatch resolving the struct's own
+# declaration-time type-param name instead of the call site's concrete
+# type) was fixed on that backend in the same change that added this file;
+# LLVM's `emit_exprs_tir.rs` needs its own fix.
 LLVM_CORPUS_EXCLUDE := \
 	tests/corpus/05_collections/map_hof_test.mvl \
-	tests/corpus/07_ownership/nested_container_ownership_test.mvl
+	tests/corpus/07_ownership/nested_container_ownership_test.mvl \
+	tests/corpus/13_stdlib/list_stubs_test.mvl
 
 # Directories containing an LLVM_CORPUS_EXCLUDE entry need per-file listing;
 # every other directory passes through whole (mvlr's directory-arg form).
-LLVM_CORPUS_WHOLE_DIRS := $(filter-out tests/corpus/05_collections tests/corpus/07_ownership, \
+LLVM_CORPUS_WHOLE_DIRS := $(filter-out tests/corpus/05_collections tests/corpus/07_ownership tests/corpus/13_stdlib, \
 	$(patsubst %/,%,$(sort $(dir $(wildcard tests/corpus/*/*_test.mvl)))))
 LLVM_CORPUS := $(LLVM_CORPUS_WHOLE_DIRS) \
 	$(filter-out $(LLVM_CORPUS_EXCLUDE), $(wildcard tests/corpus/05_collections/*_test.mvl)) \
-	$(filter-out $(LLVM_CORPUS_EXCLUDE), $(wildcard tests/corpus/07_ownership/*_test.mvl))
+	$(filter-out $(LLVM_CORPUS_EXCLUDE), $(wildcard tests/corpus/07_ownership/*_test.mvl)) \
+	$(filter-out $(LLVM_CORPUS_EXCLUDE), $(wildcard tests/corpus/13_stdlib/*_test.mvl))
 
 test-rust-llvm: build ## rust/llvm — new corpus through LLVM text emitter (via mvlr, see #1828)
 	$(MVLR) --mvl=$(MVL) --compiler=rust --backend=llvm $(LLVM_CORPUS)
