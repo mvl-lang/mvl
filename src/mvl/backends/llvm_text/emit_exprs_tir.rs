@@ -4818,6 +4818,31 @@ impl TextEmitter {
                     &[("ptr", &other)],
                 )))
             }
+            // `Set[String]::contains(x)` (#2270) shares `List[String]`'s gap
+            // (#2256) — the element array holds `*mut MvlString` handles, so
+            // dispatching to the i64-element runtime below would compare
+            // heap addresses instead of string content. `Set[T]` and
+            // `List[T]` share the same underlying `MvlArray` representation,
+            // so the existing `_mvl_array_contains_str` runtime fn applies
+            // unchanged. Checked ahead of the generic `Set[Int]` arm so
+            // String receivers never reach it — same shape as the
+            // `List[String]::contains` fix just below.
+            ("contains", "ptr")
+                if args.len() == 1
+                    && matches!(unwrap_labels(&receiver.ty), Ty::Set(e) if matches!(unwrap_labels(e), Ty::String)) =>
+            {
+                let needle = match self.emit_expr_tir(&args[0])? {
+                    Some(v) => v,
+                    None => return Ok(None),
+                };
+                self.ensure_extern("declare i1 @_mvl_array_contains_str(ptr, ptr)");
+                let reg = self.next_reg();
+                self.push_instr(&format!(
+                    "{reg} = call i1 @_mvl_array_contains_str(ptr {val}, ptr {needle})"
+                ));
+                self.fn_ctx.reg_types.insert(reg.clone(), "i1".into());
+                Ok(Some(reg))
+            }
             // Set[Int]::contains — dispatches to the specialised i64-element
             // runtime (mirrors AST's Set::contains arm).
             ("contains", "ptr")

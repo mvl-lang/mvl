@@ -524,6 +524,17 @@ impl RustEmitter {
                         self.emit_args_no_into(args);
                         self.push(").as_str())");
                     }
+                    Some(Ty::Set(_)) => {
+                        // HashSet::contains<Q> is generic over the borrowed
+                        // key type; wrapping the arg in `.into()` (as the
+                        // fallback arm below does) leaves `Q` unconstrained
+                        // and Rust can't infer it (ambiguous `Into` impls).
+                        // Skip `.into()` here the same way the String arm
+                        // does, so the arg's own concrete type pins `Q`.
+                        self.push(".contains(&(");
+                        self.emit_args_no_into(args);
+                        self.push("))");
+                    }
                     _ => {
                         self.push(".contains(&(");
                         self.emit_args(args);

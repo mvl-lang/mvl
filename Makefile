@@ -477,7 +477,9 @@ test-runtime-llvm: ## Unit-test runtime/llvm/ crate natively (peer of test-runti
 # list_string_ops_test.mvl's other List[String] operations (including
 # skip/take/slice, #2262's actual fix) are confirmed passing end-to-end and
 # no longer excluded.
-WASM_CORPUS_EXCLUDE := tests/corpus/05_collections/list_string_ops_wasm_gaps_test.mvl
+WASM_CORPUS_EXCLUDE := \
+	tests/corpus/05_collections/list_string_ops_wasm_gaps_test.mvl \
+	tests/corpus/05_collections/set_contains_string_wasm_gap_test.mvl
 
 # Directories with nothing excluded pass through whole — mvlr prints a
 # per-test checkmark + pass/fail count for a directory arg, but runs a bare

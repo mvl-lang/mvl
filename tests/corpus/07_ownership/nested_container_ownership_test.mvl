@@ -178,11 +178,10 @@ test fn push_nested_set_get_survives() -> Unit {
     assert_eq(sets.len(), 1);
     match sets.get(0) {
         None => assert(false),
-        // `Set[String]::contains` deliberately not used here — it has its
-        // own, unrelated LLVM dispatch gap (defaults to
-        // `_mvl_set_contains_i64` for any element type, a type mismatch
-        // for String) found while writing this test; out of scope for
-        // #2252, not attempted here.
+        // `Set[String]::contains` itself is covered directly in
+        // `set_test.mvl`/`set_contains_string_wasm_gap_test.mvl` (#2270/#2271)
+        // — not exercised here too, since this file's WASM run would hit
+        // #2271's still-open WASM dispatch gap.
         Some(s) => assert_eq(s.len(), 2),
     }
 }
