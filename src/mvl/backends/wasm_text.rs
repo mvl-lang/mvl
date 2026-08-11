@@ -391,6 +391,8 @@ const LITERAL_BASE: u32 = 32;
 /// symbols were touched during emission.
 const RUNTIME_IMPORTS: &[(&str, &str)] = &[
     ("_mvl_string_eq", "(param i32 i32 i32 i32) (result i32)"),
+    // `<`/`>`/`<=`/`>=` on String (#2260) — lexicographic ordering.
+    ("_mvl_string_cmp", "(param i32 i32 i32 i32) (result i32)"),
     ("_mvl_string_len", "(param i32 i32) (result i64)"),
     ("_mvl_string_is_empty", "(param i32 i32) (result i32)"),
     (
@@ -7911,6 +7913,30 @@ fn emit_binary(out: &mut String, op: BinaryOp, left: &TirExpr, right: &TirExpr, 
         if matches!(op, BinaryOp::Ne) {
             out.push_str("    i32.eqz\n"); // flip: 1 → 0, 0 → 1
         }
+        return;
+    }
+
+    // String ordering (#2260, found immediately after fixing the LLVM
+    // analog via a new `sort_by` regression test): `<`/`>`/`<=`/`>=` had
+    // no `String` case at all — only `==`/`!=` did — so they fell to the
+    // generic numeric-family fallback below, which is meaningless for the
+    // unpacked `(ptr, len)` pair a `String` value is on the stack here.
+    if peels_to_string(&left.ty)
+        && matches!(op, BinaryOp::Lt | BinaryOp::Gt | BinaryOp::Le | BinaryOp::Ge)
+    {
+        ctx.needs_runtime.set(true);
+        emit_expr(out, left, ctx);
+        emit_expr(out, right, ctx);
+        out.push_str("    call $_mvl_string_cmp\n");
+        let pred = match op {
+            BinaryOp::Lt => "i32.lt_s",
+            BinaryOp::Gt => "i32.gt_s",
+            BinaryOp::Le => "i32.le_s",
+            BinaryOp::Ge => "i32.ge_s",
+            _ => unreachable!(),
+        };
+        out.push_str("    i32.const 0\n");
+        out.push_str(&format!("    {pred}\n"));
         return;
     }
 

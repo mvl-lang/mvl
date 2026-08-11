@@ -520,6 +520,26 @@ pub unsafe extern "C" fn _mvl_string_eq(ptr1: i32, len1: i32, ptr2: i32, len2: i
     }
 }
 
+/// `_mvl_string_cmp(ptr1, len1, ptr2, len2) -> i32` — lexicographic
+/// (byte-wise, equivalent to UTF-8 string) ordering: -1 if `a < b`, 0 if
+/// equal, 1 if `a > b` (#2260, found via `List[String]::sort_by` on the
+/// LLVM backend — the analogous WASM gap surfaced immediately after
+/// fixing that one and adding regression coverage here). `emit_binary`
+/// had a `String` case for `==`/`!=` (`_mvl_string_eq` above) but none for
+/// `<`/`>`/`<=`/`>=`, so those fell to the generic numeric-family fallback,
+/// which is meaningless for the unpacked `(ptr, len)` pair a `String`
+/// value actually is on the stack here.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn _mvl_string_cmp(ptr1: i32, len1: i32, ptr2: i32, len2: i32) -> i32 {
+    let a = unsafe { slice_or_empty(ptr1, len1) };
+    let b = unsafe { slice_or_empty(ptr2, len2) };
+    match a.cmp(b) {
+        core::cmp::Ordering::Less => -1,
+        core::cmp::Ordering::Equal => 0,
+        core::cmp::Ordering::Greater => 1,
+    }
+}
+
 // ── MvlArray (Group C, #1820) ────────────────────────────────────────────
 //
 // Backing storage for `List[T]`, `Array[T, N]`, and (once dedup'd) `Set[T]`.

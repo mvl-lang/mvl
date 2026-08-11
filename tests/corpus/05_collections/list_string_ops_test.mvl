@@ -84,6 +84,26 @@ test fn bool_to_string() -> Unit {
     assert_eq(false.to_string(), "false")
 }
 
+// #2262: `_mvl_array_slice` (backing `skip`/`take`/`slice`) byte-copies
+// each `*MvlString` handle without bumping its refcount — safe for
+// scalar elements, but a `List[String]` slice/skip/take result would
+// alias the source array's strings, and both arrays' independent drops
+// at test-fn scope end would then double-free them. The tests above check
+// each result's *content* but never keep the source list alive alongside
+// it; this does, for all three, so both `xs` and every derived list reach
+// drop together.
+test fn list_string_skip_take_slice_source_survives_and_drops_cleanly() -> Unit {
+    let xs: List[String] = ["bb", "a", "ccc"];
+    let skipped: List[String] = xs.skip(1);
+    let taken: List[String] = xs.take(2);
+    let sliced: List[String] = xs.slice(1, 3);
+    assert_eq(xs.len(), 3);
+    assert_eq(xs.get(0).unwrap_or("?"), "bb");
+    assert_eq(skipped.join(","), "a,ccc");
+    assert_eq(taken.join(","), "bb,a");
+    assert_eq(sliced.join(","), "a,ccc");
+}
+
 test fn list_string_is_empty() -> Unit {
     let xs: List[String] = ["bb", "a", "ccc"];
     let empty: List[String] = [];

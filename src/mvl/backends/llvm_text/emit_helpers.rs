@@ -657,13 +657,27 @@ impl TextEmitter {
         }
     }
 
-    /// Emit `call ptr @_mvl_list_slice(ptr val, i64 start, i64 end)` and
-    /// return the result register. Shared by slice/take/skip dispatch.
-    pub(super) fn emit_list_slice_call(&mut self, val: &str, start: &str, end: &str) -> String {
-        self.ensure_extern("declare ptr @_mvl_list_slice(ptr, i64, i64)");
+    /// Emit `call ptr @_mvl_list_slice(ptr val, i64 start, i64 end)` (or the
+    /// `_str` variant for a `List[String]` receiver — #2260: the plain one
+    /// byte-copies each element, aliasing rather than cloning a `*MvlString`
+    /// handle) and return the result register. Shared by slice/take/skip
+    /// dispatch.
+    pub(super) fn emit_list_slice_call(
+        &mut self,
+        val: &str,
+        start: &str,
+        end: &str,
+        elem_is_string: bool,
+    ) -> String {
+        let sym = if elem_is_string {
+            "_mvl_list_slice_str"
+        } else {
+            "_mvl_list_slice"
+        };
+        self.ensure_extern(&format!("declare ptr @{sym}(ptr, i64, i64)"));
         let reg = self.next_reg();
         self.push_instr(&format!(
-            "{reg} = call ptr @_mvl_list_slice(ptr {val}, i64 {start}, i64 {end})"
+            "{reg} = call ptr @{sym}(ptr {val}, i64 {start}, i64 {end})"
         ));
         self.fn_ctx.reg_types.insert(reg.clone(), "ptr".into());
         reg

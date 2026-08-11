@@ -891,6 +891,35 @@ impl TextEmitter {
             return Ok(Some(reg));
         }
 
+        // String ordering (#2260, found via `List[String]::sort_by`): like
+        // the `==`/`!=` case above, `<`/`>`/`<=`/`>=` had no `String` case
+        // at all and fell to the generic pointer-comparison path below —
+        // `a < b` compiled to `icmp slt ptr %a, %b`, comparing the two
+        // `*MvlString` *handle addresses* rather than content. Worse than
+        // merely wrong: handle addresses depend on allocator/ASLR
+        // placement, so the "sort order" it produced was non-deterministic
+        // across runs of the same compiled program, not just incorrect.
+        if lhs_ty == "ptr" && matches!(op, BinaryOp::Lt | BinaryOp::Gt | BinaryOp::Le | BinaryOp::Ge)
+        {
+            self.ensure_extern("declare i32 @_mvl_string_cmp(ptr, ptr)");
+            let cmp = self.next_reg();
+            self.push_instr(&format!(
+                "{cmp} = call i32 @_mvl_string_cmp(ptr {lv}, ptr {rv})"
+            ));
+            self.fn_ctx.reg_types.insert(cmp.clone(), "i32".into());
+            let pred = match op {
+                BinaryOp::Lt => "slt",
+                BinaryOp::Gt => "sgt",
+                BinaryOp::Le => "sle",
+                BinaryOp::Ge => "sge",
+                _ => unreachable!(),
+            };
+            let reg = self.next_reg();
+            self.push_instr(&format!("{reg} = icmp {pred} i32 {cmp}, 0"));
+            self.fn_ctx.reg_types.insert(reg.clone(), "i1".into());
+            return Ok(Some(reg));
+        }
+
         let instr = Self::binary_instr(op, is_float, &lhs_ty, &lv, &rv);
         let reg = self.next_reg();
         self.push_instr(&format!("{reg} = {instr}"));
@@ -5223,7 +5252,13 @@ impl TextEmitter {
                 // `slice` has no `LLVM_DISPATCH` row — emit `_mvl_list_slice`
                 // inline via the shared helper (matches the AST emit_method_call
                 // path used by `slice` / `take` / `skip`).
-                Ok(Some(self.emit_list_slice_call(&val, &start, &end)))
+                let elem_is_string = matches!(
+                    unwrap_labels(&receiver.ty),
+                    Ty::List(e) | Ty::Array(e, _) | Ty::Set(e) if matches!(unwrap_labels(e), Ty::String)
+                );
+                Ok(Some(
+                    self.emit_list_slice_call(&val, &start, &end, elem_is_string),
+                ))
             }
             ("take", "ptr")
                 if args.len() == 1
@@ -5236,7 +5271,11 @@ impl TextEmitter {
                     Some(v) => v,
                     None => return Ok(None),
                 };
-                Ok(Some(self.emit_list_slice_call(&val, "0", &n)))
+                let elem_is_string = matches!(
+                    unwrap_labels(&receiver.ty),
+                    Ty::List(e) | Ty::Array(e, _) | Ty::Set(e) if matches!(unwrap_labels(e), Ty::String)
+                );
+                Ok(Some(self.emit_list_slice_call(&val, "0", &n, elem_is_string)))
             }
             ("skip", "ptr")
                 if args.len() == 1
@@ -5252,7 +5291,13 @@ impl TextEmitter {
                 self.ensure_extern("declare i64 @_mvl_array_len(ptr)");
                 let len_reg = self.next_reg();
                 self.push_instr(&format!("{len_reg} = call i64 @_mvl_array_len(ptr {val})"));
-                Ok(Some(self.emit_list_slice_call(&val, &n, &len_reg)))
+                let elem_is_string = matches!(
+                    unwrap_labels(&receiver.ty),
+                    Ty::List(e) | Ty::Array(e, _) | Ty::Set(e) if matches!(unwrap_labels(e), Ty::String)
+                );
+                Ok(Some(
+                    self.emit_list_slice_call(&val, &n, &len_reg, elem_is_string),
+                ))
             }
             ("concat", "ptr") if args.len() == 1 => {
                 let other = match self.emit_expr_tir(&args[0])? {
