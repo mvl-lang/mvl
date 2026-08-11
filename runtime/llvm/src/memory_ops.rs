@@ -719,6 +719,37 @@ pub unsafe extern "C" fn _mvl_array_contains(a: *const MvlArray, needle_ptr: *co
     false
 }
 
+/// `List[String].contains(x)` (#2256) — linear scan comparing string
+/// *content*, not element pointer identity.
+///
+/// `_mvl_array_contains` compares elements as raw bytes, which for a `*mut
+/// MvlString` element is the heap address, not the string's content — two
+/// equal-content strings from different allocations would never match. Same
+/// bug shape already fixed for `sort` in [`_mvl_list_sort_str`] (#2173).
+///
+/// # Safety
+/// `a` must be a valid non-null `MvlArray` pointer (elem_size == 8, holding
+/// `*mut MvlString` elements) or null. `needle` must be a valid `MvlString`
+/// pointer or null.
+#[no_mangle]
+pub unsafe extern "C" fn _mvl_array_contains_str(
+    a: *const MvlArray,
+    needle: *const MvlString,
+) -> bool {
+    if a.is_null() {
+        return false;
+    }
+    let len = (*a).len as usize;
+    let data = (*a).ptr;
+    for i in 0..len {
+        let elem = *(data.add(i * 8) as *const *mut MvlString);
+        if _mvl_string_eq(elem, needle) != 0 {
+            return true;
+        }
+    }
+    false
+}
+
 /// Remove the first element equal to `*needle_ptr` by shifting subsequent
 /// elements left one slot. No-op if the element is absent. Used for
 /// `Set[T].remove(val)` (#2124) — Set elements are unique by construction,
@@ -1583,6 +1614,62 @@ pub unsafe extern "C" fn _mvl_list_skip_while(
     out
 }
 
+/// `List[T].reverse()` (#2256) — return a new list with elements in
+/// reverse order. Raw byte-level element copy, safe for any non-owning
+/// (scalar or pointer-free struct) element type of any `elem_size`.
+/// Pointer-owning elements (String, nested List/Map/Set, or structs
+/// containing them) need [`_mvl_list_reverse_str`]'s clone-based approach
+/// instead — same reason `sort`/`contains`/`join` needed dedicated
+/// String-aware C-ABI symbols. Also backs `rev()`, whose MVL fallback body
+/// just delegates to `reverse()`.
+///
+/// # Safety
+/// `list` must be a valid `MvlArray*` or null.
+#[no_mangle]
+pub unsafe extern "C" fn _mvl_array_reverse(list: *const MvlArray) -> *mut MvlArray {
+    let len = if list.is_null() {
+        0
+    } else {
+        (*list).len as usize
+    };
+    let es = if list.is_null() {
+        8
+    } else {
+        (*list).elem_size as usize
+    };
+    let out = _mvl_array_new(es, len.max(1));
+    for i in (0..len).rev() {
+        let elem_ptr = (*list).ptr.add(i * es);
+        _mvl_array_push(out, elem_ptr);
+    }
+    out
+}
+
+/// `List[String].reverse()` / `.rev()` (#2256) — return a new
+/// `List[String]` with elements in reverse order. Elements are cloned
+/// (refcount bumped) into the output array rather than moved, matching
+/// `_mvl_list_sort_str`'s ownership contract: `list` and the returned array
+/// are independent owners once `reverse()` returns.
+///
+/// # Safety
+/// `list` must be a valid `MvlArray*` (elem_size == 8, holding `*mut
+/// MvlString` elements) or null.
+#[no_mangle]
+pub unsafe extern "C" fn _mvl_list_reverse_str(list: *const MvlArray) -> *mut MvlArray {
+    let len = if list.is_null() {
+        0
+    } else {
+        (*list).len as usize
+    };
+    let out = _mvl_array_new(8, len.max(1));
+    for i in (0..len).rev() {
+        let src = (*list).ptr.add(i * 8) as *const *mut MvlString;
+        let cloned = _mvl_string_clone(*src);
+        _mvl_array_push(out, (&cloned as *const *mut MvlString).cast());
+    }
+    out
+}
+
 // ── Category-D builtins: sort / partition / group_by / windows / chunks ────────
 
 /// `_mvl_list_sort(list)` — return a new list with elements sorted ascending.
@@ -1632,6 +1719,104 @@ pub unsafe extern "C" fn _mvl_list_sort(list: *mut MvlArray) -> *mut MvlArray {
     out
 }
 
+/// `List[T].min()` / `.max()` (#2256) — index of the numerically smallest
+/// (resp. largest) element, or `-1` for an empty list. Compares elements as
+/// signed i64 bit patterns — correct for `Int`/`Byte`; same bit-pattern
+/// caveat as `_mvl_list_sort` for `Float` (negative values / NaN order
+/// incorrectly).
+///
+/// Returns an index rather than a value or pointer so the emitter can reuse
+/// `_mvl_array_get` + its existing clone-on-extract handling (see the `get`/
+/// `first`/`last` dispatch arms) unchanged.
+///
+/// # Safety
+/// `list` must be a valid `MvlArray*` (elem_size <= 8) or null.
+#[no_mangle]
+pub unsafe extern "C" fn _mvl_list_min_index_i64(list: *const MvlArray) -> i64 {
+    list_extreme_index_i64(list, |a, b| a < b)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn _mvl_list_max_index_i64(list: *const MvlArray) -> i64 {
+    list_extreme_index_i64(list, |a, b| a > b)
+}
+
+unsafe fn list_extreme_index_i64(list: *const MvlArray, better: impl Fn(i64, i64) -> bool) -> i64 {
+    let len = if list.is_null() {
+        0
+    } else {
+        (*list).len as usize
+    };
+    if len == 0 {
+        return -1;
+    }
+    let es = (*list).elem_size as usize;
+    debug_assert!(es <= 8, "_mvl_list_min/max_index_i64: elem_size {es} > 8");
+    let read = |i: usize| -> i64 {
+        let mut buf = [0u8; 8];
+        let src = (*list).ptr.add(i * es);
+        std::ptr::copy_nonoverlapping(src, buf.as_mut_ptr(), es);
+        i64::from_ne_bytes(buf)
+    };
+    let mut best_idx = 0usize;
+    let mut best_val = read(0);
+    for i in 1..len {
+        let v = read(i);
+        if better(v, best_val) {
+            best_val = v;
+            best_idx = i;
+        }
+    }
+    best_idx as i64
+}
+
+/// `List[String].min()` / `.max()` (#2256) — index of the lexicographically
+/// smallest (resp. largest) string, or `-1` for an empty list. Same
+/// index-based contract as [`_mvl_list_min_index_i64`], comparing string
+/// *content* rather than element pointer identity — same reason `sort`/
+/// `contains`/`join` needed dedicated String-aware C-ABI symbols.
+///
+/// # Safety
+/// `list` must be a valid `MvlArray*` (elem_size == 8, holding `*mut
+/// MvlString` elements) or null.
+#[no_mangle]
+pub unsafe extern "C" fn _mvl_list_min_index_str(list: *const MvlArray) -> i64 {
+    list_extreme_index_str(list, |a, b| a < b)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn _mvl_list_max_index_str(list: *const MvlArray) -> i64 {
+    list_extreme_index_str(list, |a, b| a > b)
+}
+
+unsafe fn list_extreme_index_str(
+    list: *const MvlArray,
+    better: impl Fn(&str, &str) -> bool,
+) -> i64 {
+    let len = if list.is_null() {
+        0
+    } else {
+        (*list).len as usize
+    };
+    if len == 0 {
+        return -1;
+    }
+    let read = |i: usize| -> &str {
+        let s = *((*list).ptr.add(i * 8) as *const *mut MvlString);
+        as_str(s)
+    };
+    let mut best_idx = 0usize;
+    let mut best_val = read(0);
+    for i in 1..len {
+        let v = read(i);
+        if better(v, best_val) {
+            best_val = v;
+            best_idx = i;
+        }
+    }
+    best_idx as i64
+}
+
 /// `_mvl_list_sort_str(list)` — return a new `List[String]` sorted ascending
 /// by byte content (#2173).
 ///
@@ -1664,6 +1849,72 @@ pub unsafe extern "C" fn _mvl_list_sort_str(list: *mut MvlArray) -> *mut MvlArra
         _mvl_array_push(out, &p as *const *mut MvlString as *const u8);
     }
     out
+}
+
+/// `List[String].join(sep)` (#2256) — concatenate every element into a
+/// single new `String`, inserting `sep`'s bytes between adjacent elements.
+/// Returns an empty string for an empty list.
+///
+/// Method calls to `List[String]::join` never reached this far: dispatch in
+/// `emit_method_call_tir` had no arm for a non-generic extension method
+/// named `join` (the generic-fallback path only covers `List[T]` methods
+/// monomorphized per element type), so the call silently evaluated to
+/// nothing. This gives it a dedicated C-ABI symbol, same as `sort`/`contains`
+/// got for the same "String needs content-aware handling" reason.
+///
+/// Does not take ownership of `list` or `sep` — callers retain and drop them
+/// separately, matching how `_mvl_string_concat` borrows its arguments.
+///
+/// # Safety
+/// `list` must be a valid `MvlArray*` (elem_size == 8, holding `*mut
+/// MvlString` elements) or null. `sep` must be a valid `MvlString*` or null.
+#[no_mangle]
+pub unsafe extern "C" fn _mvl_list_join_str(
+    list: *const MvlArray,
+    sep: *const MvlString,
+) -> *mut MvlString {
+    let len = if list.is_null() {
+        0
+    } else {
+        (*list).len as usize
+    };
+    let sep_bytes: &[u8] = if sep.is_null() {
+        &[]
+    } else {
+        std::slice::from_raw_parts((*sep).ptr, (*sep).len as usize)
+    };
+    let elems: Vec<&[u8]> = (0..len)
+        .map(|i| {
+            let s = *((*list).ptr.add(i * 8) as *const *mut MvlString);
+            if s.is_null() {
+                &[][..]
+            } else {
+                std::slice::from_raw_parts((*s).ptr, (*s).len as usize)
+            }
+        })
+        .collect();
+    let total: usize = elems.iter().map(|e| e.len()).sum::<usize>()
+        + sep_bytes.len().saturating_mul(len.saturating_sub(1));
+    let mut merged = Vec::with_capacity(total + 1);
+    for (i, e) in elems.iter().enumerate() {
+        if i > 0 {
+            merged.extend_from_slice(sep_bytes);
+        }
+        merged.extend_from_slice(e);
+    }
+    merged.push(0); // null terminator
+    let out_len = merged.len() - 1;
+    let cap = merged.len();
+    let data = _mvl_alloc(cap);
+    ptr::copy_nonoverlapping(merged.as_ptr(), data, cap);
+    let s = _mvl_alloc(std::mem::size_of::<MvlString>()) as *mut MvlString;
+    s.write(MvlString {
+        ptr: data,
+        len: out_len as u64,
+        cap: cap as u64,
+        refcount: 1,
+    });
+    s
 }
 
 /// `_mvl_list_partition(list, closure)` — split into matching and non-matching.
@@ -1980,6 +2231,79 @@ mod tests {
         }
     }
 
+    #[test]
+    fn list_join_str_inserts_separator() {
+        unsafe {
+            let a = _mvl_array_new(8, 0);
+            let bb = _mvl_string_new(b"bb".as_ptr(), 2);
+            let s = _mvl_string_new(b"a".as_ptr(), 1);
+            let ccc = _mvl_string_new(b"ccc".as_ptr(), 3);
+            _mvl_array_push(a, (&bb as *const *mut MvlString).cast());
+            _mvl_array_push(a, (&s as *const *mut MvlString).cast());
+            _mvl_array_push(a, (&ccc as *const *mut MvlString).cast());
+
+            let sep = _mvl_string_new(b"-".as_ptr(), 1);
+            let joined = _mvl_list_join_str(a, sep);
+            assert_eq!(as_str(joined), "bb-a-ccc");
+
+            _mvl_string_drop(joined);
+            _mvl_string_drop(sep);
+            _mvl_string_ptr_array_drop(a);
+        }
+    }
+
+    #[test]
+    fn list_join_str_empty_list_is_empty_string() {
+        unsafe {
+            let a = _mvl_array_new(8, 0);
+            let sep = _mvl_string_new(b"-".as_ptr(), 1);
+            let joined = _mvl_list_join_str(a, sep);
+            assert_eq!(_mvl_string_len(joined), 0);
+            _mvl_string_drop(joined);
+            _mvl_string_drop(sep);
+            _mvl_string_ptr_array_drop(a);
+        }
+    }
+
+    #[test]
+    fn list_min_max_index_i64() {
+        unsafe {
+            let a = _mvl_array_new(8, 0);
+            for v in [3i64, 1, 2] {
+                _mvl_array_push(a, (&v as *const i64).cast());
+            }
+            assert_eq!(_mvl_list_min_index_i64(a), 1);
+            assert_eq!(_mvl_list_max_index_i64(a), 0);
+            _mvl_array_drop(a);
+        }
+    }
+
+    #[test]
+    fn list_min_max_index_i64_empty() {
+        unsafe {
+            let a = _mvl_array_new(8, 0);
+            assert_eq!(_mvl_list_min_index_i64(a), -1);
+            assert_eq!(_mvl_list_max_index_i64(a), -1);
+            _mvl_array_drop(a);
+        }
+    }
+
+    #[test]
+    fn list_min_max_index_str() {
+        unsafe {
+            let a = _mvl_array_new(8, 0);
+            let bb = _mvl_string_new(b"bb".as_ptr(), 2);
+            let s = _mvl_string_new(b"a".as_ptr(), 1);
+            let ccc = _mvl_string_new(b"ccc".as_ptr(), 3);
+            _mvl_array_push(a, (&bb as *const *mut MvlString).cast());
+            _mvl_array_push(a, (&s as *const *mut MvlString).cast());
+            _mvl_array_push(a, (&ccc as *const *mut MvlString).cast());
+            assert_eq!(_mvl_list_min_index_str(a), 1); // "a"
+            assert_eq!(_mvl_list_max_index_str(a), 2); // "ccc"
+            _mvl_string_ptr_array_drop(a);
+        }
+    }
+
     // ── array operations ───────────────────────────────────────────────────────
 
     #[test]
@@ -2028,6 +2352,31 @@ mod tests {
             _mvl_array_drop(a2);
             assert_eq!((*a).refcount, 1);
             _mvl_array_drop(a);
+        }
+    }
+
+    #[test]
+    fn array_contains_str_compares_content_not_identity() {
+        unsafe {
+            let a = _mvl_array_new(8, 0); // *mut MvlString elements
+            let bb = _mvl_string_new(b"bb".as_ptr(), 2);
+            let s = _mvl_string_new(b"a".as_ptr(), 1);
+            let ccc = _mvl_string_new(b"ccc".as_ptr(), 3);
+            _mvl_array_push(a, (&bb as *const *mut MvlString).cast());
+            _mvl_array_push(a, (&s as *const *mut MvlString).cast());
+            _mvl_array_push(a, (&ccc as *const *mut MvlString).cast());
+
+            // Different allocation, same content — must match by content, not pointer.
+            let needle = _mvl_string_new(b"a".as_ptr(), 1);
+            assert_ne!(needle, s);
+            assert!(_mvl_array_contains_str(a, needle));
+
+            let missing = _mvl_string_new(b"zzz".as_ptr(), 3);
+            assert!(!_mvl_array_contains_str(a, missing));
+
+            _mvl_string_drop(needle);
+            _mvl_string_drop(missing);
+            _mvl_string_ptr_array_drop(a);
         }
     }
 

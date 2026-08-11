@@ -1,0 +1,158 @@
+// 05_collections/list_string_ops_test.mvl — full survey of List[String]
+// operations against the Rust backend's ground-truth values (#2256).
+//
+// #2256 found 17 of 26 List[String] operations broken on the LLVM backend.
+// Most were a missing dispatch arm for non-generic extension methods
+// (`join`, `last`, `min`, `max`, `is_empty`, `reverse`, `rev`) that silently
+// emitted nothing rather than crashing or computing a wrong answer; two more
+// were genuine bugs (`contains` compared string pointer identity instead of
+// content; `List[String]::join` collided with the unrelated `std.io.join`
+// free-function dispatch). One survey entry — `Bool::to_string()` — isn't a
+// List method but is included here since the original survey covered it.
+//
+// `sort_by` is intentionally NOT covered here: it has zero LLVM dispatch
+// support for any element type (needs a 2-arg comparator-closure calling
+// convention that doesn't exist yet on this backend), split out to #2260.
+test fn list_string_concat() -> Unit {
+    let xs: List[String] = ["bb", "a", "ccc"];
+    let ys: List[String] = ["dddd"];
+    assert_eq(xs.concat(ys).join(","), "bb,a,ccc,dddd")
+}
+
+test fn list_string_filter() -> Unit {
+    let xs: List[String] = ["bb", "a", "ccc"];
+    assert_eq(xs.filter(|s: String| s.len() > 1).join(","), "bb,ccc")
+}
+
+test fn list_string_join() -> Unit {
+    let xs: List[String] = ["bb", "a", "ccc"];
+    assert_eq(xs.join("-"), "bb-a-ccc")
+}
+
+test fn list_string_join_empty() -> Unit {
+    let xs: List[String] = [];
+    assert_eq(xs.join("-"), "")
+}
+
+test fn list_string_last() -> Unit {
+    let xs: List[String] = ["bb", "a", "ccc"];
+    assert_eq(xs.last().unwrap_or("?"), "ccc")
+}
+
+test fn list_string_last_empty_is_none() -> Unit {
+    let xs: List[String] = [];
+    assert_eq(xs.last().unwrap_or("?"), "?")
+}
+
+test fn list_string_min() -> Unit {
+    let xs: List[String] = ["bb", "a", "ccc"];
+    assert_eq(xs.min().unwrap_or("?"), "a")
+}
+
+test fn list_string_max() -> Unit {
+    let xs: List[String] = ["bb", "a", "ccc"];
+    assert_eq(xs.max().unwrap_or("?"), "ccc")
+}
+
+test fn list_string_rev() -> Unit {
+    let xs: List[String] = ["bb", "a", "ccc"];
+    assert_eq(xs.rev().join(","), "ccc,a,bb")
+}
+
+test fn list_string_skip() -> Unit {
+    let xs: List[String] = ["bb", "a", "ccc"];
+    assert_eq(xs.skip(1).join(","), "a,ccc")
+}
+
+test fn list_string_skip_while() -> Unit {
+    let xs: List[String] = ["bb", "a", "ccc"];
+    assert_eq(xs.skip_while(|s: String| s.len() < 3).join(","), "ccc")
+}
+
+test fn list_string_slice() -> Unit {
+    let xs: List[String] = ["bb", "a", "ccc"];
+    assert_eq(xs.slice(1, 3).join(","), "a,ccc")
+}
+
+test fn list_string_take() -> Unit {
+    let xs: List[String] = ["bb", "a", "ccc"];
+    assert_eq(xs.take(2).join(","), "bb,a")
+}
+
+test fn list_string_take_while() -> Unit {
+    let xs: List[String] = ["bb", "a", "ccc"];
+    assert_eq(xs.take_while(|s: String| s.len() < 3).join(","), "bb,a")
+}
+
+test fn bool_to_string() -> Unit {
+    assert_eq(true.to_string(), "true");
+    assert_eq(false.to_string(), "false")
+}
+
+test fn list_string_is_empty() -> Unit {
+    let xs: List[String] = ["bb", "a", "ccc"];
+    let empty: List[String] = [];
+    assert_eq(xs.is_empty(), false);
+    assert_eq(empty.is_empty(), true)
+}
+
+test fn list_string_reverse() -> Unit {
+    let xs: List[String] = ["bb", "a", "ccc"];
+    assert_eq(xs.reverse().join(","), "ccc,a,bb")
+}
+
+test fn list_string_contains() -> Unit {
+    let xs: List[String] = ["bb", "a", "ccc"];
+    assert_eq(xs.contains("a"), true);
+    assert_eq(xs.contains("zzz"), false)
+}
+
+test fn list_string_all() -> Unit {
+    let xs: List[String] = ["bb", "a", "ccc"];
+    assert_eq(xs.all(|s: String| s.len() > 0), true);
+    assert_eq(xs.all(|s: String| s.len() > 1), false)
+}
+
+test fn list_string_any() -> Unit {
+    let xs: List[String] = ["bb", "a", "ccc"];
+    assert_eq(xs.any(|s: String| s == "a"), true);
+    assert_eq(xs.any(|s: String| s == "zzz"), false)
+}
+
+test fn list_string_first() -> Unit {
+    let xs: List[String] = ["bb", "a", "ccc"];
+    assert_eq(xs.first().unwrap_or("?"), "bb")
+}
+
+test fn list_string_fold() -> Unit {
+    let xs: List[String] = ["bb", "a", "ccc"];
+    assert_eq(xs.fold("", |acc: String, s: String| acc.concat(s)), "bbaccc")
+}
+
+test fn list_string_get() -> Unit {
+    let xs: List[String] = ["bb", "a", "ccc"];
+    assert_eq(xs.get(1).unwrap_or("?"), "a");
+    assert_eq(xs.get(9).unwrap_or("?"), "?")
+}
+
+test fn list_string_len() -> Unit {
+    let xs: List[String] = ["bb", "a", "ccc"];
+    assert_eq(xs.len(), 3)
+}
+
+test fn list_string_map() -> Unit {
+    let xs: List[String] = ["bb", "a", "ccc"];
+    assert_eq(xs.map(|s: String| s.to_upper()).join(","), "BB,A,CCC")
+}
+
+test fn list_string_push() -> Unit {
+    let xs: ref List[String] = ["bb", "a", "ccc"];
+    xs.push("dddd");
+    assert_eq(xs.len(), 4);
+    assert_eq(xs.join(","), "bb,a,ccc,dddd")
+}
+
+test fn list_string_sort() -> Unit {
+    let xs: List[String] = ["bb", "a", "ccc"];
+    assert_eq(xs.sort().join(","), "a,bb,ccc")
+}

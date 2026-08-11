@@ -460,7 +460,13 @@ test-runtime-llvm: ## Unit-test runtime/llvm/ crate natively (peer of test-runti
 # drop-tracked after its value escaped into the new owner, so a later
 # per-iteration or fn-exit heap sweep freed it out from under the new
 # owner. Back in the main corpus glob below — nothing left to exclude.
-WASM_CORPUS_EXCLUDE :=
+#
+# `list_string_ops_test.mvl` (#2256, exclusion tracked as #2262):
+# `List[String]::skip`/`::take`/`::slice` compile to `unreachable` and the
+# emitted module fails validation (`type mismatch: expected i64, found
+# i32`) — a WASM-backend gap unrelated to the LLVM fixes #2256 made; needs
+# its own root-cause pass.
+WASM_CORPUS_EXCLUDE := tests/corpus/05_collections/list_string_ops_test.mvl
 
 # Directories with nothing excluded pass through whole — mvlr prints a
 # per-test checkmark + pass/fail count for a directory arg, but runs a bare

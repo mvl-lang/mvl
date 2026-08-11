@@ -202,6 +202,18 @@ pub const LLVM_DISPATCH: &[(&str, Dispatch)] = &[
             ret_ty: "ptr",
         },
     ),
+    // List::reverse() / ::rev() — the ("reverse" | "rev", "ptr") arm in
+    // emit_method_call_tir routes String-element receivers to
+    // `_mvl_list_reverse_str` before this generic entry is ever reached
+    // (#2256); this backs every other element type.
+    (
+        "reverse",
+        Dispatch::CCall {
+            sym: "_mvl_array_reverse",
+            signature: "ptr @_mvl_array_reverse(ptr)",
+            ret_ty: "ptr",
+        },
+    ),
     // List::enumerate() → List[Indexed[T]]   elem_size=16: { i64 index, 8-byte value }
     (
         "enumerate",

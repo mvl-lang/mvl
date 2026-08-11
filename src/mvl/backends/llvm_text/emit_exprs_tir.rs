@@ -3729,6 +3729,35 @@ impl TextEmitter {
                 }
             }
 
+            // `is_empty()` (#2256) is declared `pub fn X::is_empty(self) -> Bool`
+            // per receiver type — non-generic (no bracket of its own), so it
+            // fell outside the generic-fallback dispatch at the bottom of
+            // this match and had no dedicated arm: the call silently emitted
+            // nothing for every receiver type, not just `List[String]`.
+            // `len() == 0` via the same C-ABI symbol the `len` arm above uses.
+            ("is_empty", "ptr") if args.is_empty() => {
+                let (sym, decl) = match unwrap_labels(&receiver.ty) {
+                    Ty::String => ("_mvl_str_len", "declare i64 @_mvl_str_len(ptr)"),
+                    Ty::List(_) | Ty::Array(_, _) | Ty::Set(_) => {
+                        ("_mvl_array_len", "declare i64 @_mvl_array_len(ptr)")
+                    }
+                    Ty::Map(_, _) => ("_mvl_map_len", "declare i64 @_mvl_map_len(ptr)"),
+                    _ => {
+                        return Err(format!(
+                            "emit_method_call_tir: is_empty() on unsupported type {:?}",
+                            receiver.ty
+                        ))
+                    }
+                };
+                self.ensure_extern(decl);
+                let len = self.next_reg();
+                self.push_instr(&format!("{len} = call i64 @{sym}(ptr {val})"));
+                let reg = self.next_reg();
+                self.push_instr(&format!("{reg} = icmp eq i64 {len}, 0"));
+                self.fn_ctx.reg_types.insert(reg.clone(), "i1".into());
+                Ok(Some(reg))
+            }
+
             // ── Set methods ───────────────────────────────────────────────
             // #1845: Set::insert(x) on a literal-constructed set was a no-op —
             // the receiver is an array under the hood, so we need to route
@@ -4662,6 +4691,28 @@ impl TextEmitter {
                 self.fn_ctx.reg_types.insert(reg.clone(), "i1".into());
                 Ok(Some(reg))
             }
+            // `List[String]::contains(x)` needs its own C-ABI symbol (#2256) —
+            // `_mvl_array_contains` (the generic arm below reaches for)
+            // compares elements as raw bytes, which for a `*mut MvlString`
+            // element is the heap address, not the string's content. Checked
+            // ahead of the generic arm so String receivers never reach it —
+            // same shape as the `sort` fix (#2173) just below.
+            ("contains", "ptr")
+                if args.len() == 1
+                    && matches!(unwrap_labels(&receiver.ty), Ty::List(e) | Ty::Array(e, _) if matches!(unwrap_labels(e), Ty::String)) =>
+            {
+                let needle = match self.emit_expr_tir(&args[0])? {
+                    Some(v) => v,
+                    None => return Ok(None),
+                };
+                self.ensure_extern("declare i1 @_mvl_array_contains_str(ptr, ptr)");
+                let reg = self.next_reg();
+                self.push_instr(&format!(
+                    "{reg} = call i1 @_mvl_array_contains_str(ptr {val}, ptr {needle})"
+                ));
+                self.fn_ctx.reg_types.insert(reg.clone(), "i1".into());
+                Ok(Some(reg))
+            }
             ("contains", "ptr")
                 if matches!(unwrap_labels(&receiver.ty), Ty::List(_) | Ty::Array(_, _))
                     && args.len() == 1 =>
@@ -4698,10 +4749,52 @@ impl TextEmitter {
                 self.fn_ctx.reg_types.insert(reg.clone(), "ptr".into());
                 Ok(Some(reg))
             }
+            // `List[String]::join(sep)` (#2256) — a non-generic extension
+            // method (`List[String]`, not `List[T]`), so it falls outside the
+            // generic-fallback dispatch at the bottom of this match (that
+            // path only covers monomorphized `List[T]` methods) and no
+            // dedicated arm existed, so the call silently emitted nothing.
+            // Own C-ABI symbol, same shape as the `sort`/`contains` fixes
+            // just above.
+            ("join", "ptr")
+                if args.len() == 1
+                    && matches!(unwrap_labels(&receiver.ty), Ty::List(e) | Ty::Array(e, _) if matches!(unwrap_labels(e), Ty::String)) =>
+            {
+                let sep = match self.emit_expr_tir(&args[0])? {
+                    Some(v) => v,
+                    None => return Ok(None),
+                };
+                self.ensure_extern("declare ptr @_mvl_list_join_str(ptr, ptr)");
+                let reg = self.next_reg();
+                self.push_instr(&format!(
+                    "{reg} = call ptr @_mvl_list_join_str(ptr {val}, ptr {sep})"
+                ));
+                self.fn_ctx.reg_types.insert(reg.clone(), "ptr".into());
+                Ok(Some(reg))
+            }
             ("sort", "ptr") if args.is_empty() => {
                 Ok(Some(self.emit_c_call_simple("sort", &val, &[])))
             }
-            ("reverse", "ptr") if args.is_empty() => {
+            // `List[String]::reverse()`/`::rev()` need their own C-ABI
+            // symbol (#2256), same reason `sort` did (#2173): a raw
+            // byte-level element copy would share `*mut MvlString` pointers
+            // between the original list and the reversed result without
+            // bumping their refcount. `rev()` had no dedicated arm at all
+            // (not even the generic one below) — its MVL fallback body just
+            // delegates to `reverse()`, so it gets the identical fix here.
+            ("reverse" | "rev", "ptr")
+                if args.is_empty()
+                    && matches!(unwrap_labels(&receiver.ty), Ty::List(e) | Ty::Array(e, _) if matches!(unwrap_labels(e), Ty::String)) =>
+            {
+                self.ensure_extern("declare ptr @_mvl_list_reverse_str(ptr)");
+                let reg = self.next_reg();
+                self.push_instr(&format!(
+                    "{reg} = call ptr @_mvl_list_reverse_str(ptr {val})"
+                ));
+                self.fn_ctx.reg_types.insert(reg.clone(), "ptr".into());
+                Ok(Some(reg))
+            }
+            ("reverse" | "rev", "ptr") if args.is_empty() => {
                 Ok(Some(self.emit_c_call_simple("reverse", &val, &[])))
             }
             ("enumerate", "ptr") if args.is_empty() => {
@@ -4830,6 +4923,113 @@ impl TextEmitter {
                     .reg_types
                     .insert(result.clone(), "{ i8, ptr }".into());
                 Ok(Some(result))
+            }
+
+            // `last()` (#2256) is `pub fn List[T]::last(self) -> Option[T]`
+            // — non-generic (no bracket of its own beyond the receiver's
+            // `T`), so it fell outside the generic-fallback dispatch at the
+            // bottom of this match and had no dedicated arm: the call
+            // silently emitted nothing. Identical to the `first` arm just
+            // above, indexing `len - 1` instead of `0`.
+            ("last", "ptr")
+                if args.is_empty()
+                    && matches!(unwrap_labels(&receiver.ty), Ty::List(_) | Ty::Array(_, _)) =>
+            {
+                let elem_llvm_ty = match unwrap_labels(&receiver.ty) {
+                    Ty::List(e) | Ty::Array(e, _) => self.ty_to_llvm_ctx(e),
+                    _ => "i64".to_string(),
+                };
+                let elem_is_string = matches!(
+                    unwrap_labels(&receiver.ty),
+                    Ty::List(e) | Ty::Array(e, _) if matches!(unwrap_labels(e), Ty::String)
+                );
+
+                self.ensure_extern("declare i64 @_mvl_array_len(ptr)");
+                let len = self.next_reg();
+                self.push_instr(&format!("{len} = call i64 @_mvl_array_len(ptr {val})"));
+                let not_empty = self.next_reg();
+                self.push_instr(&format!("{not_empty} = icmp sgt i64 {len}, 0"));
+                let last_idx = self.next_reg();
+                self.push_instr(&format!("{last_idx} = sub i64 {len}, 1"));
+
+                let some_bb = self.next_bb("last_some");
+                let none_bb = self.next_bb("last_none");
+                let merge_bb = self.next_bb("last_merge");
+
+                let result_slot = self.next_reg();
+                self.push_instr(&format!("{result_slot} = alloca {{ i8, ptr }}"));
+
+                self.push_instr(&format!(
+                    "br i1 {not_empty}, label %{some_bb}, label %{none_bb}"
+                ));
+
+                self.start_bb(&none_bb);
+                let none_r0 = self.next_reg();
+                self.push_instr(&format!(
+                    "{none_r0} = insertvalue {{ i8, ptr }} zeroinitializer, i8 1, 0"
+                ));
+                let none_r1 = self.next_reg();
+                self.push_instr(&format!(
+                    "{none_r1} = insertvalue {{ i8, ptr }} {none_r0}, ptr null, 1"
+                ));
+                self.push_instr(&format!("store {{ i8, ptr }} {none_r1}, ptr {result_slot}"));
+                self.push_instr(&format!("br label %{merge_bb}"));
+                self.fn_ctx.terminated = true;
+
+                self.start_bb(&some_bb);
+                self.ensure_extern("declare ptr @_mvl_array_get(ptr, i64)");
+                let elem_ptr = self.next_reg();
+                self.push_instr(&format!(
+                    "{elem_ptr} = call ptr @_mvl_array_get(ptr {val}, i64 {last_idx})"
+                ));
+                let elem_val = self.next_reg();
+                self.push_instr(&format!("{elem_val} = load {elem_llvm_ty}, ptr {elem_ptr}"));
+                let elem_val = if elem_is_string {
+                    self.ensure_extern("declare ptr @_mvl_string_clone(ptr)");
+                    let cloned = self.next_reg();
+                    self.push_instr(&format!(
+                        "{cloned} = call ptr @_mvl_string_clone(ptr {elem_val})"
+                    ));
+                    cloned
+                } else {
+                    elem_val
+                };
+                let elem_slot = self.next_reg();
+                self.push_instr(&format!("{elem_slot} = alloca {elem_llvm_ty}"));
+                self.push_instr(&format!("store {elem_llvm_ty} {elem_val}, ptr {elem_slot}"));
+                let some_r0 = self.next_reg();
+                self.push_instr(&format!(
+                    "{some_r0} = insertvalue {{ i8, ptr }} zeroinitializer, i8 0, 0"
+                ));
+                let some_r1 = self.next_reg();
+                self.push_instr(&format!(
+                    "{some_r1} = insertvalue {{ i8, ptr }} {some_r0}, ptr {elem_slot}, 1"
+                ));
+                self.push_instr(&format!("store {{ i8, ptr }} {some_r1}, ptr {result_slot}"));
+                self.push_instr(&format!("br label %{merge_bb}"));
+                self.fn_ctx.terminated = true;
+
+                self.start_bb(&merge_bb);
+                let result = self.next_reg();
+                self.push_instr(&format!("{result} = load {{ i8, ptr }}, ptr {result_slot}"));
+                self.fn_ctx
+                    .reg_types
+                    .insert(result.clone(), "{ i8, ptr }".into());
+                Ok(Some(result))
+            }
+
+            // `min()` / `max()` (0-arg, #2256) are `pub fn List[T]::min/max(self)
+            // -> Option[T]` — non-generic (no bracket of their own), so both
+            // fell outside the generic-fallback dispatch and had no dedicated
+            // arm: the call silently emitted nothing, for every element type
+            // (not just String — `List[Int]::min()` vanished too, since the
+            // `("min"|"max", "i64")` arms above are for `Int::min(other)`, a
+            // different method with a different arity, not this one).
+            ("min" | "max", "ptr")
+                if args.is_empty()
+                    && matches!(unwrap_labels(&receiver.ty), Ty::List(_) | Ty::Array(_, _)) =>
+            {
+                self.emit_list_extreme_tir(receiver, &val, method == "max")
             }
 
             // ── String::parse_int / parse_float → Result[T, String] ───────
@@ -5091,6 +5291,101 @@ impl TextEmitter {
             self.fn_ctx.reg_types.insert(reg.clone(), llvm_ret);
             Ok(Some(reg))
         }
+    }
+
+    /// `List[T]::min()` / `::max()` (#2256) — find the extreme element's
+    /// index via a dedicated C-ABI symbol, then reuse the same
+    /// `_mvl_array_get` + load + clone-on-extract shape as the `get`/
+    /// `first`/`last` arms to build the `Option[T]` result.
+    fn emit_list_extreme_tir(
+        &mut self,
+        receiver: &TirExpr,
+        val: &str,
+        is_max: bool,
+    ) -> Result<Option<String>, String> {
+        let elem_is_string = matches!(
+            unwrap_labels(&receiver.ty),
+            Ty::List(e) | Ty::Array(e, _) if matches!(unwrap_labels(e), Ty::String)
+        );
+        let elem_llvm_ty = match unwrap_labels(&receiver.ty) {
+            Ty::List(e) | Ty::Array(e, _) => self.ty_to_llvm_ctx(e),
+            _ => "i64".to_string(),
+        };
+        let sym = match (elem_is_string, is_max) {
+            (true, false) => "_mvl_list_min_index_str",
+            (true, true) => "_mvl_list_max_index_str",
+            (false, false) => "_mvl_list_min_index_i64",
+            (false, true) => "_mvl_list_max_index_i64",
+        };
+        self.ensure_extern(&format!("declare i64 @{sym}(ptr)"));
+        let idx = self.next_reg();
+        self.push_instr(&format!("{idx} = call i64 @{sym}(ptr {val})"));
+        let found = self.next_reg();
+        self.push_instr(&format!("{found} = icmp sge i64 {idx}, 0"));
+
+        let some_bb = self.next_bb("list_extreme_some");
+        let none_bb = self.next_bb("list_extreme_none");
+        let merge_bb = self.next_bb("list_extreme_merge");
+
+        let result_slot = self.next_reg();
+        self.push_instr(&format!("{result_slot} = alloca {{ i8, ptr }}"));
+        self.push_instr(&format!(
+            "br i1 {found}, label %{some_bb}, label %{none_bb}"
+        ));
+
+        self.start_bb(&none_bb);
+        let none_r0 = self.next_reg();
+        self.push_instr(&format!(
+            "{none_r0} = insertvalue {{ i8, ptr }} zeroinitializer, i8 1, 0"
+        ));
+        let none_r1 = self.next_reg();
+        self.push_instr(&format!(
+            "{none_r1} = insertvalue {{ i8, ptr }} {none_r0}, ptr null, 1"
+        ));
+        self.push_instr(&format!("store {{ i8, ptr }} {none_r1}, ptr {result_slot}"));
+        self.push_instr(&format!("br label %{merge_bb}"));
+        self.fn_ctx.terminated = true;
+
+        self.start_bb(&some_bb);
+        self.ensure_extern("declare ptr @_mvl_array_get(ptr, i64)");
+        let elem_ptr = self.next_reg();
+        self.push_instr(&format!(
+            "{elem_ptr} = call ptr @_mvl_array_get(ptr {val}, i64 {idx})"
+        ));
+        let elem_val = self.next_reg();
+        self.push_instr(&format!("{elem_val} = load {elem_llvm_ty}, ptr {elem_ptr}"));
+        let elem_val = if elem_is_string {
+            self.ensure_extern("declare ptr @_mvl_string_clone(ptr)");
+            let cloned = self.next_reg();
+            self.push_instr(&format!(
+                "{cloned} = call ptr @_mvl_string_clone(ptr {elem_val})"
+            ));
+            cloned
+        } else {
+            elem_val
+        };
+        let elem_slot = self.next_reg();
+        self.push_instr(&format!("{elem_slot} = alloca {elem_llvm_ty}"));
+        self.push_instr(&format!("store {elem_llvm_ty} {elem_val}, ptr {elem_slot}"));
+        let some_r0 = self.next_reg();
+        self.push_instr(&format!(
+            "{some_r0} = insertvalue {{ i8, ptr }} zeroinitializer, i8 0, 0"
+        ));
+        let some_r1 = self.next_reg();
+        self.push_instr(&format!(
+            "{some_r1} = insertvalue {{ i8, ptr }} {some_r0}, ptr {elem_slot}, 1"
+        ));
+        self.push_instr(&format!("store {{ i8, ptr }} {some_r1}, ptr {result_slot}"));
+        self.push_instr(&format!("br label %{merge_bb}"));
+        self.fn_ctx.terminated = true;
+
+        self.start_bb(&merge_bb);
+        let result = self.next_reg();
+        self.push_instr(&format!("{result} = load {{ i8, ptr }}, ptr {result_slot}"));
+        self.fn_ctx
+            .reg_types
+            .insert(result.clone(), "{ i8, ptr }".into());
+        Ok(Some(result))
     }
 }
 
