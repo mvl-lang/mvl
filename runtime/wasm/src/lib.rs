@@ -840,6 +840,49 @@ pub unsafe extern "C" fn _mvl_array_drop(a: i32) {
     }
 }
 
+/// `_mvl_array_eq(a, b)` — content equality for scalar-element `List`/
+/// `Array`/`Set` (#2267). Port of `runtime/llvm`'s `_mvl_array_eq`.
+///
+/// Wired by the emitter's `assert_eq`/`==`/`!=` for any non-`String`
+/// collection element type — without it, `emit_binary`/`emit_assert_eq` fell
+/// through to a plain `i32.eq` on the two `*MvlArray` pointers themselves,
+/// comparing identity instead of content (same bug class the LLVM backend
+/// had for the same operators, #2264). Same `elem_size`-granularity
+/// byte comparison as `_mvl_array_slice`/`_mvl_array_concat` — correct for
+/// scalar elements; not element-aware for `*MvlString`/nested-collection
+/// pointer elements (two content-equal-but-distinct strings at the same
+/// position would compare unequal by pointer). The emitter only routes
+/// scalar-element collections here; `String`/nested-collection element
+/// equality stays unsupported until a `_str`/element-aware variant exists.
+///
+/// # Safety
+/// `a` and `b` must each be a valid `MvlArray` pointer or null.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn _mvl_array_eq(a: i32, b: i32) -> i32 {
+    if a == b {
+        return 1;
+    }
+    if a == 0 || b == 0 {
+        return 0;
+    }
+    let arr_a = unsafe { &*(a as usize as *const MvlArray) };
+    let arr_b = unsafe { &*(b as usize as *const MvlArray) };
+    if arr_a.len != arr_b.len || arr_a.elem_size != arr_b.elem_size {
+        return 0;
+    }
+    if arr_a.len == 0 {
+        return 1;
+    }
+    let nbytes = (arr_a.len as usize) * (arr_a.elem_size as usize);
+    let sa = unsafe { core::slice::from_raw_parts(arr_a.ptr as usize as *const u8, nbytes) };
+    let sb = unsafe { core::slice::from_raw_parts(arr_b.ptr as usize as *const u8, nbytes) };
+    if sa == sb {
+        1
+    } else {
+        0
+    }
+}
+
 /// `_mvl_array_slice(a, start, end)` — new array holding elements
 /// `[start, end)`, with both bounds clamped into `[0, len]` and a reversed
 /// range yielding an empty array (#2014).
@@ -1925,6 +1968,60 @@ pub unsafe extern "C" fn _mvl_array_sort_i64(a: i32) -> i32 {
     }
     arr.rc += 1;
     a
+}
+
+/// `_mvl_array_sort_nested_bytelist(a) -> *MvlArray` — sort a
+/// `List[List[Byte]]` (elements are `*MvlArray` pointers to inner
+/// scalar-element arrays) ascending by the *content* of each inner array,
+/// in-place, returning the same outer pointer with `rc` bumped (#2267).
+///
+/// `_mvl_array_sort_i32` (below) compares elements as raw i32 bit
+/// patterns, which for a `*MvlArray` element is the heap *address* — order
+/// would depend on allocation order rather than being lexicographic.
+/// `examples/bzip/bwt.mvl::bwt_encode` sorts `List[List[Byte]]` rotations
+/// and depends on genuine lexicographic order to find the correct primary
+/// index; pointer order gave a silently wrong (not even nondeterministic —
+/// just wrong) result rather than a crash. No cloning needed: inner
+/// elements are shared, reordered in place, same reasoning as
+/// `slice_is_supported`'s doc comment in `wasm_text.rs` — WASM's
+/// `local_drop_fn` never deep-drops non-`String` collection elements, so
+/// aliasing them across a reorder is exactly as safe (and exactly as
+/// leaky, a separate pre-existing gap) as leaving them untouched.
+///
+/// # Safety
+/// `a` must be a valid `MvlArray*` (`elem_size == 4`, holding `*MvlArray`
+/// element pointers, each itself a scalar-element array) or 0.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn _mvl_array_sort_nested_bytelist(a: i32) -> i32 {
+    if a == 0 {
+        return a;
+    }
+    let arr = unsafe { &mut *(a as usize as *mut MvlArray) };
+    let len = arr.len as usize;
+    if len > 1 {
+        let slice = unsafe { core::slice::from_raw_parts_mut(arr.ptr as *mut i32, len) };
+        slice.sort_unstable_by(|&pa, &pb| {
+            let sa = unsafe { mvl_array_bytes(pa) };
+            let sb = unsafe { mvl_array_bytes(pb) };
+            sa.cmp(sb)
+        });
+    }
+    arr.rc += 1;
+    a
+}
+
+/// Byte view of a scalar-element `*MvlArray`'s live elements, or `&[]` for
+/// a null pointer. Helper for [`_mvl_array_sort_nested_bytelist`].
+///
+/// # Safety
+/// `a` must be a valid `MvlArray*` or 0.
+unsafe fn mvl_array_bytes<'a>(a: i32) -> &'a [u8] {
+    if a == 0 {
+        return &[];
+    }
+    let arr = unsafe { &*(a as usize as *const MvlArray) };
+    let nbytes = (arr.len as usize) * (arr.elem_size as usize);
+    unsafe { core::slice::from_raw_parts(arr.ptr as usize as *const u8, nbytes) }
 }
 
 /// `_mvl_array_sort_i32(a) -> *MvlArray` — sort i32 elements ascending

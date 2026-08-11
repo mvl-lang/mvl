@@ -269,6 +269,15 @@ struct Ctx<'a> {
     type_subst: &'a HashMap<String, Ty>,
     /// Generic function name → (type_params, fn_params) for call-site name mangling.
     generic_fn_map: &'a HashMap<String, (Vec<GenericParam>, Vec<TirParam>)>,
+    /// Every top-level function's name → declared parameter types, generic
+    /// or not (#2267). Consulted at a plain call site (the default
+    /// `TirExprKind::FnCall` arm) so a bare empty `List`/`Set` literal
+    /// argument (e.g. `huf_dec_loop(tree, reader, [], 0, n)`'s `[]`) can be
+    /// given the callee's own declared parameter type as an elem_size hint
+    /// — same problem, and same fix, as `fix_empty_collection_ty`'s
+    /// struct-field and `let`-binding call sites, just for a third position
+    /// (bare call argument) neither of those covers.
+    fn_param_tys: &'a HashMap<String, Vec<Ty>>,
     /// Monotonic counter for fresh WAT labels (`$while_0`, `$while_1`, …).
     label_counter: Cell<usize>,
     /// Set by emitters that reach for `runtime/wasm/` symbols (#1819).
@@ -508,6 +517,7 @@ const RUNTIME_IMPORTS: &[(&str, &str)] = &[
     // refcount-aware for `List[String]` elements.
     ("_mvl_array_concat", "(param i32 i32) (result i32)"),
     ("_mvl_array_concat_str", "(param i32 i32) (result i32)"),
+    ("_mvl_array_eq", "(param i32 i32) (result i32)"),
     ("_mvl_array_drop", "(param i32)"),
     ("_mvl_string_ptr_array_drop", "(param i32)"),
     ("_mvl_string_ptr_array_dedup", "(param i32)"),
@@ -542,6 +552,7 @@ const RUNTIME_IMPORTS: &[(&str, &str)] = &[
     ("_mvl_array_sort_i64", "(param i32) (result i32)"),
     ("_mvl_array_sort_i32", "(param i32) (result i32)"),
     ("_mvl_array_sort_f64", "(param i32) (result i32)"),
+    ("_mvl_array_sort_nested_bytelist", "(param i32) (result i32)"),
     ("_mvl_string_ptr_array_sort", "(param i32) (result i32)"),
     ("_mvl_array_contains_i64", "(param i32 i64) (result i32)"),
     ("_mvl_array_contains_i32", "(param i32 i32) (result i32)"),
@@ -760,6 +771,10 @@ impl Backend for WasmTextCompiler {
             .filter(|f| !f.type_params.is_empty())
             .map(|f| (f.name.clone(), (f.type_params.clone(), f.params.clone())))
             .collect();
+        let fn_param_tys: HashMap<String, Vec<Ty>> = all_fns
+            .iter()
+            .map(|f| (f.name.clone(), f.params.iter().map(|p| p.ty.clone()).collect()))
+            .collect();
         let generic_methods: HashMap<(String, String), &TirFn> = generic_ext_methods
             .iter()
             .map(|f| {
@@ -790,6 +805,7 @@ impl Backend for WasmTextCompiler {
             type_aliases: &type_aliases,
             type_subst: &empty_subst,
             generic_fn_map: &generic_fn_map,
+            fn_param_tys: &fn_param_tys,
             label_counter: Cell::new(0),
             needs_runtime: Cell::new(false),
             string_params: std::cell::RefCell::new(std::collections::HashSet::new()),
@@ -1390,22 +1406,67 @@ fn emit_contract_check(
 /// `_mvl_array_slice` copies the element range byte-wise at `elem_size`
 /// granularity into a fresh array with its own refcount. For scalar elements
 /// that is a complete copy. For elements that are themselves *pointers* —
-/// `*MvlString`, and any other heap handle — it duplicates the pointer without
-/// bumping the pointee's refcount, so the slice aliases the parent's elements
-/// while `local_drop_fn` maps *both* arrays to `_mvl_string_ptr_array_drop`.
-/// Each element then gets dropped twice: a use-after-free and a double-free
-/// that Rust's wasm allocator does not detect, so it corrupts silently rather
-/// than trapping.
+/// `*MvlString`, and any other heap handle — it duplicates the pointer
+/// without bumping the pointee's refcount, so the slice aliases the parent's
+/// elements.
 ///
-/// So `List[String]::take`/`::skip`/`.slice()` stubs until the runtime grows an
-/// element-aware copy. Same reasoning as [`clone_is_supported`]: a loud stub
-/// beats miscompiled ownership (#2014).
+/// For `String` elements that aliasing is a real double-free: `local_drop_fn`
+/// maps a `List[String]` local to `_mvl_string_ptr_array_drop`, which *does*
+/// deep-drop every element, so both the parent and the slice would free the
+/// same `*MvlString` on scope exit. So `List[String]::take`/`::skip`/`.slice()`
+/// stay stubbed until the runtime grows an element-aware copy (same reasoning
+/// as [`clone_is_supported`]: a loud stub beats miscompiled ownership, #2014).
+///
+/// Nested-collection and struct/payload-enum elements don't have that
+/// problem *today*: `local_drop_fn` has no deep-drop case for them at all —
+/// any element type other than `String` falls through to the plain
+/// `_mvl_array_drop` (frees the outer buffer only, never touches element
+/// pointers) — so aliasing a `List[List[Int]]`'s or `List[HuffmanTree]`'s
+/// inner elements across a slice and the original is exactly as safe (and
+/// exactly as leaky — a separate, pre-existing gap) as the un-sliced case.
+/// Unit-variant enums are a bare i32 discriminant, not a pointer, and copy
+/// fine regardless. `Map`/`Option`/`Result` elements are left excluded,
+/// untested rather than confirmed-safe (#2267).
 fn slice_is_supported(ty: &Ty, ctx: &Ctx) -> bool {
     match collection_elem_ty(ty) {
         None => false,
         Some(elem) => {
             let elem = resolve_ty_param(elem, ctx.type_subst);
-            // Scalars are copied whole; anything pointer-shaped is aliased.
+            if peels_to_string(&elem)
+                || map_key_val_ty(&elem).is_some()
+                || option_inner_ty(&elem).is_some()
+                || result_ok_ty(&elem).is_some()
+            {
+                return false;
+            }
+            true
+        }
+    }
+}
+
+/// Whether `==`/`!=`/`assert_eq`/`assert_ne` on this `List`/`Array`/`Set` can
+/// be lowered to [`_mvl_array_eq`]'s scalar-element byte comparison (#2267).
+///
+/// Without a dedicated arm, `emit_binary`/`emit_assert_eq` fell through to
+/// the generic numeric-op path: every collection type answers `true` from
+/// `is_i32` (a `List`/`Array`/`Set`/`Map` value is a pointer, i32 on wasm32),
+/// so the fallback picked plain `i32.eq` — comparing the two `*MvlArray`
+/// pointers' *identity*, not their elements' content. Two independently
+/// built, content-equal lists (e.g. `mtf_decode`'s round-tripped output vs.
+/// its input) are never the same pointer, so every such `assert_eq` traps —
+/// same bug class the LLVM backend had for the same operators (#2264).
+///
+/// Scoped to scalar elements only, same reasoning as [`slice_is_supported`]:
+/// `_mvl_array_eq` compares raw bytes, which is correct for scalars but
+/// would compare *pointers* for `String`/nested-collection/struct/
+/// payload-enum elements — an element-aware `_str`-style variant would be
+/// needed for those, so they stay on the (already-wrong, but no worse than
+/// before this fix) fallback path rather than silently claiming support.
+fn array_eq_is_supported(ty: &Ty, ctx: &Ctx) -> bool {
+    match collection_elem_ty(ty) {
+        None => false,
+        Some(elem) => {
+            let elem = resolve_ty_param(elem, ctx.type_subst);
             if peels_to_string(&elem)
                 || collection_elem_ty(&elem).is_some()
                 || map_key_val_ty(&elem).is_some()
@@ -1414,8 +1475,6 @@ fn slice_is_supported(ty: &Ty, ctx: &Ctx) -> bool {
             {
                 return false;
             }
-            // Structs and payload enums are boxed pointers too; unit-variant
-            // enums are a bare i32 discriminant and copy fine.
             match named_type_name(&elem) {
                 Some(name) => {
                     !ctx.struct_layouts.contains_key(name.as_str())
@@ -1683,6 +1742,7 @@ fn derived_ctx<'a>(base: &Ctx<'a>, type_subst: &'a HashMap<String, Ty>) -> Ctx<'
         payload_enums: base.payload_enums,
         type_aliases: base.type_aliases,
         generic_fn_map: base.generic_fn_map,
+        fn_param_tys: base.fn_param_tys,
         actors: base.actors,
         struct_methods: base.struct_methods,
         generic_methods: base.generic_methods,
@@ -3249,6 +3309,14 @@ fn emit_stmt(out: &mut String, stmt: &TirStmt, ctx: &Ctx) {
             ..
         } => {
             if let Pattern::Ident(name, _) = pattern {
+                // `let result: ref List[U] = [];` (e.g. `List[T]::map[U]`'s
+                // own body) — same empty-literal elem_size gap as
+                // `fix_empty_collection_ty`'s struct-field call site: the
+                // literal's own `.ty` is `List[Unknown]` regardless of the
+                // `let`'s declared type, so use *that* as the hint instead
+                // (#2267).
+                let fixed = fix_empty_collection_ty(init, ty, ctx);
+                let init = fixed.as_ref().unwrap_or(init);
                 emit_expr(out, init, ctx);
                 if matches!(ty, Ty::Unit) {
                     // `let x: Unit = call_returning_unit();` — a Unit-typed
@@ -4287,8 +4355,16 @@ fn emit_expr(out: &mut String, expr: &TirExpr, ctx: &Ctx) {
                     }
                 }
             }
-            for a in args {
-                emit_expr(out, a, ctx);
+            // A bare empty `List`/`Set` literal argument (e.g. `huf_dec_loop(tree,
+            // reader, [], 0, n)`'s `[]`) has no `let`/struct-field context to draw
+            // an elem_size hint from at all — the third position needing this fix,
+            // after `TirStmt::Let` and `emit_struct_construct` (#2267). The
+            // callee's own declared parameter type, when known, fills the gap.
+            let param_tys = ctx.fn_param_tys.get(name.as_str());
+            for (i, a) in args.iter().enumerate() {
+                let hint = param_tys.and_then(|tys| tys.get(i));
+                let fixed = hint.and_then(|hint| fix_empty_collection_ty(a, hint, ctx));
+                emit_expr(out, fixed.as_ref().unwrap_or(a), ctx);
             }
             // If the callee is a generic function, use the mangled monomorphized name.
             if let Some((type_params, fn_params)) = ctx.generic_fn_map.get(name.as_str()) {
@@ -5267,10 +5343,20 @@ fn emit_expr(out: &mut String, expr: &TirExpr, ctx: &Ctx) {
             if let Some(elem_ty) = collection_elem_ty(&elem_ty).cloned() {
                 ctx.needs_runtime.set(true);
                 emit_expr(out, receiver, ctx);
+                // `List[List[T]]` with a scalar `T` — content, not pointer
+                // identity (#2267). Nested-of-nested / nested-of-String
+                // inner lists aren't covered; that's `_mvl_array_sort_i32`'s
+                // existing (wrong, pre-existing) fallback below, unchanged.
+                let inner_elem_ty = collection_elem_ty(&elem_ty)
+                    .map(|inner| resolve_ty_param(inner, ctx.type_subst));
                 let sort_fn = if is_string_ty(&elem_ty, ctx) {
                     "_mvl_string_ptr_array_sort"
                 } else if is_float_ctx(&elem_ty, ctx) {
                     "_mvl_array_sort_f64"
+                } else if inner_elem_ty.is_some_and(|inner| {
+                    !is_string_ty(&inner, ctx) && collection_elem_ty(&inner).is_none()
+                }) {
+                    "_mvl_array_sort_nested_bytelist"
                 } else if wasm_ty(&elem_ty, ctx) == "i32" {
                     "_mvl_array_sort_i32"
                 } else {
@@ -6612,6 +6698,44 @@ fn emit_construct(
     }
 }
 
+/// An empty `List`/`Set` literal's own checker-resolved type is
+/// `List[Unknown]`/`Set[Unknown]` (no elements to infer an element type
+/// from) — so `TirExprKind::List`/`Set`'s emission (which reads its own
+/// `expr.ty`) picks the wrong `elem_size` for `_mvl_array_new`, corrupting
+/// the array's own header field that every later `_mvl_array_slice`/
+/// `_mvl_array_concat`/etc. trusts. `examples/bzip/rle.mvl`'s
+/// `RleEncState { out: [], skip: 0 }` hit this: `out`'s declared field type
+/// (`List[Byte]`, elem_size 4) is available from `slot.ty`, but the literal
+/// itself only knows `List[Unknown]` (defaults to elem_size 8) — the
+/// mismatch between the array's own stored `elem_size` and what later
+/// `.slice()` calls compute from context corrupted every byte count derived
+/// from it (#2267, same underlying gap as LLVM's empty-list-elem_size fix,
+/// #2264).
+///
+/// Returns a clone of `val` with its `.ty` corrected to `hint`'s own
+/// element type when `val` is exactly this shape, or `None` otherwise (the
+/// caller should keep using `val` unchanged).
+fn fix_empty_collection_ty(val: &TirExpr, hint: &Ty, ctx: &Ctx) -> Option<TirExpr> {
+    let is_empty_literal = matches!(
+        &val.kind,
+        TirExprKind::List { elems } | TirExprKind::Set { elems } if elems.is_empty()
+    );
+    if !is_empty_literal {
+        return None;
+    }
+    let unknown_elem = collection_elem_ty(&val.ty).is_some_and(|e| matches!(e, Ty::Unknown));
+    if !unknown_elem {
+        return None;
+    }
+    let real_elem = resolve_ty_param(collection_elem_ty(hint)?, ctx.type_subst);
+    let mut fixed = val.clone();
+    fixed.ty = match &val.ty {
+        Ty::Set(_) => Ty::Set(Box::new(real_elem)),
+        _ => Ty::List(Box::new(real_elem)),
+    };
+    Some(fixed)
+}
+
 fn emit_struct_construct(
     out: &mut String,
     name: &str,
@@ -6635,6 +6759,8 @@ fn emit_struct_construct(
         let Some(val) = val_expr else {
             continue;
         };
+        let fixed = fix_empty_collection_ty(val, &slot.ty, ctx);
+        let val = fixed.as_ref().unwrap_or(val);
         out.push_str(&format!("    local.get ${temp}\n"));
         // `slot.ty` is the struct's *own* declared field type — for a
         // generic struct (`Pair[A, B]::second: B`) that's the struct's own
@@ -6652,6 +6778,18 @@ fn emit_struct_construct(
         // above, on the write side.
         let field_ty = resolve_ty_param(&val.ty, ctx.type_subst);
         emit_struct_store(out, val, &field_ty, slot.offset, ctx);
+        // `{ out: new_out, .. }` moves `new_out`'s value into this struct's
+        // field — but `new_out` stays independently tracked as a named
+        // local, and the function's own exit-time heap sweep drops every
+        // named local by name regardless of what's since happened to its
+        // value (#2267, same "moved into a container but not excluded"
+        // shape as the list-literal/`.push()` arms above, which already
+        // call this). Without it, `examples/bzip/rle.mvl::rle_emit_byte`'s
+        // `RleEncState { out: new_out, .. }` returned a struct whose `out`
+        // field pointed at an array this same function had just freed —
+        // read by the *caller*'s next `.slice()`/`.push()`, corrupting or
+        // crashing on an already-dropped allocation.
+        emit_consumed_local_zero(out, val);
     }
     out.push_str(&format!("    local.get ${temp}\n"));
 }
@@ -7848,6 +7986,21 @@ fn emit_assert_eq(out: &mut String, left: &TirExpr, right: &TirExpr, negate: boo
         return;
     }
 
+    // Scalar-element `List`/`Array`/`Set` — content, not pointer identity
+    // (#2267). See `array_eq_is_supported`'s doc comment / `emit_binary`'s
+    // identical arm above.
+    if array_eq_is_supported(&left.ty, ctx) {
+        ctx.needs_runtime.set(true);
+        emit_expr(out, left, ctx);
+        emit_expr(out, right, ctx);
+        out.push_str("    call $_mvl_array_eq\n");
+        if !negate {
+            out.push_str("    i32.eqz\n");
+        }
+        out.push_str("    if\n      unreachable\n    end\n");
+        return;
+    }
+
     emit_expr(out, left, ctx);
     emit_expr(out, right, ctx);
     let eq_op = if is_float_ctx(&left.ty, ctx) {
@@ -7976,6 +8129,21 @@ fn emit_binary(out: &mut String, op: BinaryOp, left: &TirExpr, right: &TirExpr, 
             }
             return;
         }
+    }
+
+    // Scalar-element `List`/`Array`/`Set` equality — content, not pointer
+    // identity (#2267). Must come before the generic numeric-op fallback
+    // below, which would otherwise pick `i32.eq` on the two collection
+    // pointers themselves (see `array_eq_is_supported`'s doc comment).
+    if matches!(op, BinaryOp::Eq | BinaryOp::Ne) && array_eq_is_supported(&left.ty, ctx) {
+        ctx.needs_runtime.set(true);
+        emit_expr(out, left, ctx);
+        emit_expr(out, right, ctx);
+        out.push_str("    call $_mvl_array_eq\n");
+        if matches!(op, BinaryOp::Ne) {
+            out.push_str("    i32.eqz\n"); // flip: 1 → 0, 0 → 1
+        }
+        return;
     }
 
     // Short-circuit boolean ops — need laziness, can't emit both operands up
@@ -12250,6 +12418,7 @@ mod funcref_table_tests {
             let empty_actors = HashMap::new();
             let empty_methods = std::collections::HashSet::new();
             let empty_gmethods = HashMap::new();
+            let empty_param_tys = HashMap::new();
             let ctx = Ctx {
                 needs_wasi: false,
                 literals: &empty_lits,
@@ -12261,6 +12430,7 @@ mod funcref_table_tests {
                 type_aliases: &empty_aliases,
                 type_subst: &empty_subst,
                 generic_fn_map: &empty_generic,
+                fn_param_tys: &empty_param_tys,
                 label_counter: Cell::new(0),
                 needs_runtime: Cell::new(false),
                 string_params: std::cell::RefCell::new(std::collections::HashSet::new()),
