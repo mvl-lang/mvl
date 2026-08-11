@@ -829,7 +829,7 @@ fn scan_tir_expr_for_mut_calls(
             method,
             args,
         } => {
-            if matches!(method.as_str(), "insert" | "remove" | "retain") {
+            if matches!(method.as_str(), "insert" | "remove" | "retain" | "push") {
                 if let TirExprKind::Var(name) = &receiver.kind {
                     out.insert(name.clone());
                 }
