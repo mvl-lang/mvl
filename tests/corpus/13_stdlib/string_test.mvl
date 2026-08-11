@@ -189,3 +189,41 @@ fn combine_via_let(a: String, b: String) -> String {
 test fn string_method_result_survives_let_bound_return() -> Unit {
     assert_eq(combine_via_let("hello", "world"), "helloworld");
 }
+
+// #2260: `<`/`>`/`<=`/`>=` on `String` had no dedicated LLVM dispatch —
+// only `==`/`!=` did (via `_mvl_string_eq`) — so ordering comparisons fell
+// to the generic pointer-comparison path and compiled `a < b` to a raw
+// `icmp slt ptr %a, %b`: the two `*MvlString` *handle addresses*, not
+// content. Non-deterministic, not just wrong — handle addresses depend on
+// allocator/ASLR placement, so `List[String]::sort_by`'s result order
+// (which calls a user comparator built from `<`) varied across runs of
+// the same compiled program. Found via a new `sort_by` corpus test
+// (#2260) that failed intermittently rather than consistently. Fixed via
+// a dedicated `_mvl_string_cmp` runtime primitive.
+test fn string_lt_true_case() -> Unit {
+    assert_eq("apple" < "banana", true);
+}
+
+test fn string_lt_false_case() -> Unit {
+    assert_eq("banana" < "apple", false);
+}
+
+test fn string_gt() -> Unit {
+    assert_eq("banana" > "apple", true);
+    assert_eq("apple" > "banana", false);
+}
+
+test fn string_le_equal_is_true() -> Unit {
+    assert_eq("apple" <= "apple", true);
+}
+
+test fn string_ge_equal_is_true() -> Unit {
+    assert_eq("apple" >= "apple", true);
+}
+
+test fn string_le_and_ge_across_different_values() -> Unit {
+    assert_eq("apple" <= "banana", true);
+    assert_eq("banana" >= "apple", true);
+    assert_eq("banana" <= "apple", false);
+    assert_eq("apple" >= "banana", false);
+}

@@ -520,6 +520,26 @@ pub unsafe extern "C" fn _mvl_string_eq(ptr1: i32, len1: i32, ptr2: i32, len2: i
     }
 }
 
+/// `_mvl_string_cmp(ptr1, len1, ptr2, len2) -> i32` — lexicographic
+/// (byte-wise, equivalent to UTF-8 string) ordering: -1 if `a < b`, 0 if
+/// equal, 1 if `a > b` (#2260, found via `List[String]::sort_by` on the
+/// LLVM backend — the analogous WASM gap surfaced immediately after
+/// fixing that one and adding regression coverage here). `emit_binary`
+/// had a `String` case for `==`/`!=` (`_mvl_string_eq` above) but none for
+/// `<`/`>`/`<=`/`>=`, so those fell to the generic numeric-family fallback,
+/// which is meaningless for the unpacked `(ptr, len)` pair a `String`
+/// value actually is on the stack here.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn _mvl_string_cmp(ptr1: i32, len1: i32, ptr2: i32, len2: i32) -> i32 {
+    let a = unsafe { slice_or_empty(ptr1, len1) };
+    let b = unsafe { slice_or_empty(ptr2, len2) };
+    match a.cmp(b) {
+        core::cmp::Ordering::Less => -1,
+        core::cmp::Ordering::Equal => 0,
+        core::cmp::Ordering::Greater => 1,
+    }
+}
+
 // ── MvlArray (Group C, #1820) ────────────────────────────────────────────
 //
 // Backing storage for `List[T]`, `Array[T, N]`, and (once dedup'd) `Set[T]`.
@@ -865,6 +885,38 @@ pub unsafe extern "C" fn _mvl_array_slice(a: i32, start: i64, end: i64) -> i32 {
         );
     }
     dst.len = count as i32;
+    out
+}
+
+/// `_mvl_array_slice_str(a, start, end) -> *MvlArray` — like
+/// [`_mvl_array_slice`], but for `List[String]` (`elem_size` 4, each element
+/// a `*MvlString` handle) (#2262). Every element is refcount-cloned into the
+/// new array instead of byte-copied — `_mvl_array_slice`'s raw
+/// `copy_nonoverlapping` would leave the new array's strings double-owned
+/// by both the source array and the slice, a double-free the moment either
+/// side drops (same reasoning as [`_mvl_array_concat_str`], #2047). This is
+/// why `slice_is_supported` (`wasm_text.rs`) excludes String elements from
+/// the plain arm and routes them here instead. Backs `List[String]::take`/
+/// `::skip`, which are pure-MVL wrappers over the `slice` builtin.
+///
+/// # Safety
+/// `a` must be a valid `MvlArray` pointer with `elem_size == 4`, or null.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn _mvl_array_slice_str(a: i32, start: i64, end: i64) -> i32 {
+    if a == 0 {
+        return 0;
+    }
+    let arr = unsafe { &*(a as usize as *const MvlArray) };
+    let len = arr.len as i64;
+    let lo = start.clamp(0, len);
+    let hi = end.clamp(0, len);
+    let count = (hi - lo).max(0);
+    let out = _mvl_array_new(4, count as i32);
+    for i in lo..hi {
+        let elem = unsafe { core::ptr::read((arr.ptr as usize + (i as usize) * 4) as *const i32) };
+        let cloned = unsafe { _mvl_string_clone(elem) };
+        unsafe { _mvl_array_push_i32(out, cloned) };
+    }
     out
 }
 
@@ -1265,6 +1317,51 @@ pub unsafe extern "C" fn _mvl_option_drop(opt: i32) {
     }
 }
 
+/// `_mvl_option_eq(a, b, is_str)` — structural (not pointer-identity)
+/// equality for `Option[T]` (#2249).
+///
+/// `emit_binary`'s only content-aware `==` case was `String` — every other
+/// type, `Option[T]`/`Result[T,E]` included, fell through to a raw `i32.eq`
+/// on the boxed handle, so two independently-allocated `Some("x")` values
+/// (or any other Option) compared unequal even with identical content.
+///
+/// `is_str` is a compile-time constant (`peels_to_string(T)`, known
+/// statically — MVL has no runtime type tags) telling this which
+/// representation the shared `value` slot holds: nonzero means it's a
+/// `*MvlString` handle needing content comparison via `_mvl_string_eq`;
+/// zero means it's a plain scalar/handle compared by raw `i64` equality
+/// (correct for `Int`/`Bool`/`Byte`/enum discriminants; a nested
+/// `Option`/`Result`/struct/collection payload still compares by pointer
+/// identity here — deep structural equality for those is a follow-up, not
+/// attempted in this pass).
+///
+/// # Safety
+/// `a`/`b` must each be a valid `MvlOption` pointer or 0 (None).
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn _mvl_option_eq(a: i32, b: i32, is_str: i32) -> i32 {
+    let tag_a = unsafe { _mvl_option_tag(a) };
+    let tag_b = unsafe { _mvl_option_tag(b) };
+    if tag_a != tag_b {
+        return 0;
+    }
+    if tag_a == 1 {
+        return 1; // both None
+    }
+    if is_str != 0 {
+        let sa = unsafe { _mvl_option_value_i32(a) };
+        let sb = unsafe { _mvl_option_value_i32(b) };
+        if sa == 0 || sb == 0 {
+            return (sa == sb) as i32;
+        }
+        let str_a = unsafe { &*(sa as usize as *const MvlString) };
+        let str_b = unsafe { &*(sb as usize as *const MvlString) };
+        return unsafe { _mvl_string_eq(str_a.ptr, str_a.len, str_b.ptr, str_b.len) };
+    }
+    let va = unsafe { _mvl_option_value_i64(a) };
+    let vb = unsafe { _mvl_option_value_i64(b) };
+    (va == vb) as i32
+}
+
 // ── Result ops (#1821 extension) ─────────────────────────────────────────
 //
 // `Result[T, E]` — tagged union: Ok(v: T) or Err(e: E). Heap-allocated
@@ -1410,6 +1507,43 @@ pub unsafe extern "C" fn _mvl_result_drop(r: i32) {
     unsafe {
         let _ = Box::from_raw(r as usize as *mut MvlResult);
     }
+}
+
+/// `_mvl_result_eq(a, b, ok_is_str, err_is_str)` — structural equality for
+/// `Result[T, E]` (#2249), mirroring [`_mvl_option_eq`].
+///
+/// `T` and `E` can be different types (e.g. `Result[Int, String]`), so
+/// which comparison applies depends on which side (`Ok`/`Err`) the tag
+/// says is live — both flags are compile-time constants
+/// (`peels_to_string(T)`/`peels_to_string(E)`), one read per comparison.
+///
+/// # Safety
+/// `a`/`b` must each be a valid `MvlResult` pointer or 0.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn _mvl_result_eq(a: i32, b: i32, ok_is_str: i32, err_is_str: i32) -> i32 {
+    let tag_a = unsafe { _mvl_result_tag(a) };
+    let tag_b = unsafe { _mvl_result_tag(b) };
+    if tag_a != tag_b {
+        return 0;
+    }
+    let payload_is_str = if tag_a == 0 {
+        ok_is_str != 0
+    } else {
+        err_is_str != 0
+    };
+    if payload_is_str {
+        let sa = unsafe { _mvl_result_value_i32(a) };
+        let sb = unsafe { _mvl_result_value_i32(b) };
+        if sa == 0 || sb == 0 {
+            return (sa == sb) as i32;
+        }
+        let str_a = unsafe { &*(sa as usize as *const MvlString) };
+        let str_b = unsafe { &*(sb as usize as *const MvlString) };
+        return unsafe { _mvl_string_eq(str_a.ptr, str_a.len, str_b.ptr, str_b.len) };
+    }
+    let va = unsafe { _mvl_result_value_i64(a) };
+    let vb = unsafe { _mvl_result_value_i64(b) };
+    (va == vb) as i32
 }
 
 // ── String parse ops ─────────────────────────────────────────────────────

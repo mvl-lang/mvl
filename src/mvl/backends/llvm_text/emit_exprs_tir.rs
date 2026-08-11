@@ -17,6 +17,7 @@ use crate::mvl::ir::{
     BinaryOp, Pattern, TirExpr, TirExprKind, TirMatchArm, TirMatchBody, Ty, TypeExpr, UnaryOp,
 };
 
+use super::emit_mono_tir::tir_generic_fn_key;
 use super::{TextEmitter, RESULT_LLVM_TY};
 
 /// Recursively check if a TIR expression's static type is `Float`.
@@ -483,7 +484,20 @@ impl TextEmitter {
                     let mut call_args: Vec<String> = Vec::new();
                     let mut to_exclude: Vec<&TirExpr> = Vec::new();
                     for (i, arg) in args.iter().enumerate() {
-                        let ty = self.ty_to_llvm_ctx(&arg.ty);
+                        // #2251: the call-site type annotation must match
+                        // what the callee's own signature declares for this
+                        // param, not `arg`'s checker-inferred type — those
+                        // can disagree (e.g. `.clone()` has no checker type
+                        // rule of its own and its result type doesn't
+                        // always resolve to match the receiver after
+                        // monomorphization), and LLVM requires the call
+                        // instruction's argument types to match the actual
+                        // function pointer's real ABI, not whatever the
+                        // argument expression happens to be typed as.
+                        let ty = params
+                            .get(i)
+                            .map(|t| self.llvm_ty_ctx(t))
+                            .unwrap_or_else(|| self.ty_to_llvm_ctx(&arg.ty));
                         let Some(v) = self.emit_expr_tir(arg)? else {
                             continue;
                         };
@@ -545,7 +559,14 @@ impl TextEmitter {
                 let mut call_args = vec![format!("ptr {env_ptr}")];
                 let mut to_exclude: Vec<&TirExpr> = Vec::new();
                 for (i, arg) in args.iter().enumerate() {
-                    let ty = self.ty_to_llvm_ctx(&arg.ty);
+                    // #2251: use the closure's own declared param type for
+                    // the call-site annotation, not `arg`'s checker-inferred
+                    // type — see the identical fix/comment in the `is_alias`
+                    // branch above.
+                    let ty = closure_param_tys
+                        .get(i)
+                        .map(|t| self.llvm_ty_ctx(t))
+                        .unwrap_or_else(|| self.ty_to_llvm_ctx(&arg.ty));
                     let Some(v) = self.emit_expr_tir(arg)? else {
                         continue;
                     };
@@ -866,6 +887,39 @@ impl TextEmitter {
                 self.fn_ctx.reg_types.insert(neg.clone(), "i1".into());
                 return Ok(Some(neg));
             }
+            self.fn_ctx.reg_types.insert(reg.clone(), "i1".into());
+            return Ok(Some(reg));
+        }
+
+        // String ordering (#2260, found via `List[String]::sort_by`): like
+        // the `==`/`!=` case above, `<`/`>`/`<=`/`>=` had no `String` case
+        // at all and fell to the generic pointer-comparison path below —
+        // `a < b` compiled to `icmp slt ptr %a, %b`, comparing the two
+        // `*MvlString` *handle addresses* rather than content. Worse than
+        // merely wrong: handle addresses depend on allocator/ASLR
+        // placement, so the "sort order" it produced was non-deterministic
+        // across runs of the same compiled program, not just incorrect.
+        if lhs_ty == "ptr"
+            && matches!(
+                op,
+                BinaryOp::Lt | BinaryOp::Gt | BinaryOp::Le | BinaryOp::Ge
+            )
+        {
+            self.ensure_extern("declare i32 @_mvl_string_cmp(ptr, ptr)");
+            let cmp = self.next_reg();
+            self.push_instr(&format!(
+                "{cmp} = call i32 @_mvl_string_cmp(ptr {lv}, ptr {rv})"
+            ));
+            self.fn_ctx.reg_types.insert(cmp.clone(), "i32".into());
+            let pred = match op {
+                BinaryOp::Lt => "slt",
+                BinaryOp::Gt => "sgt",
+                BinaryOp::Le => "sle",
+                BinaryOp::Ge => "sge",
+                _ => unreachable!(),
+            };
+            let reg = self.next_reg();
+            self.push_instr(&format!("{reg} = icmp {pred} i32 {cmp}, 0"));
             self.fn_ctx.reg_types.insert(reg.clone(), "i1".into());
             return Ok(Some(reg));
         }
@@ -3758,6 +3812,52 @@ impl TextEmitter {
                 Ok(Some(reg))
             }
 
+            // `clone()` (#2251) had no dispatch arm at all for any receiver
+            // — every generic stdlib body that calls it (e.g.
+            // `Map[K, V]::filter`'s `if f(v.clone())`, `List[T]::filter`'s
+            // `if f(x.clone())`) was previously dead code (see the `Map`
+            // arms above and #2251's fix to `strip_prelude_extension_methods_tir`),
+            // so this was never reached before. With no arm, the call fell
+            // to the generic fallback, found no user-defined `clone`
+            // generic method, and returned `Ok(None)` — silently dropping
+            // the argument value entirely at the call site (e.g. `f(v.clone())`
+            // became a call with the closure's `env` as its only argument).
+            // Scalars are copy types (cloning is a no-op); `String`/collections
+            // need an actual runtime copy so the clone and the original can be
+            // dropped independently.
+            ("clone", "ptr" | "i64" | "i1" | "i8" | "i32" | "double") if args.is_empty() => {
+                match unwrap_labels(&receiver.ty) {
+                    Ty::String => {
+                        self.ensure_extern("declare ptr @_mvl_string_clone(ptr)");
+                        let reg = self.next_reg();
+                        self.push_instr(&format!("{reg} = call ptr @_mvl_string_clone(ptr {val})"));
+                        self.fn_ctx.reg_types.insert(reg.clone(), "ptr".into());
+                        Ok(Some(reg))
+                    }
+                    Ty::List(_) | Ty::Array(_, _) | Ty::Set(_) => {
+                        self.ensure_extern("declare ptr @_mvl_array_clone(ptr)");
+                        let reg = self.next_reg();
+                        self.push_instr(&format!("{reg} = call ptr @_mvl_array_clone(ptr {val})"));
+                        self.fn_ctx.reg_types.insert(reg.clone(), "ptr".into());
+                        Ok(Some(reg))
+                    }
+                    Ty::Map(_, _) => {
+                        self.ensure_extern("declare ptr @_mvl_map_clone(ptr)");
+                        let reg = self.next_reg();
+                        self.push_instr(&format!("{reg} = call ptr @_mvl_map_clone(ptr {val})"));
+                        self.fn_ctx.reg_types.insert(reg.clone(), "ptr".into());
+                        Ok(Some(reg))
+                    }
+                    // Scalars (Int/Float/Bool/Byte/UByte/UInt/Char) are copy
+                    // types under every backend — `clone()` is the identity.
+                    // Structs/enums/Option/Result aren't handled here: a
+                    // correct clone of those needs a field-aware deep copy
+                    // this arm doesn't attempt — not needed by #2251's
+                    // corpus, left as a follow-up gap.
+                    _ => Ok(Some(val.clone())),
+                }
+            }
+
             // ── Set methods ───────────────────────────────────────────────
             // #1845: Set::insert(x) on a literal-constructed set was a no-op —
             // the receiver is an array under the hood, so we need to route
@@ -4433,8 +4533,17 @@ impl TextEmitter {
             }
 
             // ── HOF: filter / map / take_while / skip_while / any / all ───
+            // Guarded against `Map` receivers (#2251): `Map[K, V]::filter`
+            // shares this arm's name with `List`/`Set`, but Map's LLVM
+            // representation is a boxed `HashMap`, not the `Vec`-backed
+            // allocation `_mvl_list_filter`/etc. expect — routing it here
+            // type-confuses the two and corrupts the map in place. Map's own
+            // generic body (`std/collections.mvl`) is dispatched via the
+            // fallback arm below instead.
             ("filter" | "map" | "take_while" | "skip_while", "ptr")
-                if args.len() == 1 && self.is_closure_arg_tir(&args[0]) =>
+                if args.len() == 1
+                    && self.is_closure_arg_tir(&args[0])
+                    && !matches!(unwrap_labels(&receiver.ty), Ty::Map(_, _)) =>
             {
                 let closure = match self.emit_as_hof_closure_tir(&args[0], &[0])? {
                     Some(p) => p,
@@ -4446,7 +4555,12 @@ impl TextEmitter {
                     &[("ptr", &closure)],
                 )))
             }
-            ("any" | "all", "ptr") if args.len() == 1 && self.is_closure_arg_tir(&args[0]) => {
+            // Guarded against `Map` receivers — same reasoning as above.
+            ("any" | "all", "ptr")
+                if args.len() == 1
+                    && self.is_closure_arg_tir(&args[0])
+                    && !matches!(unwrap_labels(&receiver.ty), Ty::Map(_, _)) =>
+            {
                 let closure = match self.emit_as_hof_closure_tir(&args[0], &[0])? {
                     Some(p) => p,
                     None => return Ok(None),
@@ -4483,7 +4597,11 @@ impl TextEmitter {
                     &[("ptr", &closure)],
                 )))
             }
-            ("fold", "ptr") if args.len() == 2 => {
+            // Guarded against `Map` receivers — same reasoning as the
+            // filter/any/all arms above (#2251).
+            ("fold", "ptr")
+                if args.len() == 2 && !matches!(unwrap_labels(&receiver.ty), Ty::Map(_, _)) =>
+            {
                 let init_ty = self.ty_to_llvm_ctx(&args[0].ty);
                 let init_val = match self.emit_expr_tir(&args[0])? {
                     Some(v) => v,
@@ -4540,7 +4658,19 @@ impl TextEmitter {
                     Some(v) => v,
                     None => return Ok(None),
                 };
-                let elem_ty = self.ty_to_llvm_ctx(&args[0].ty);
+                // #2260: prefer the receiver's own declared element type
+                // over the pushed argument's checker-inferred type — the
+                // list's element type is what actually determines the
+                // array's representation, and the two can disagree (e.g.
+                // `out.push(x.clone())` inside a monomorphized generic
+                // body: `.clone()` has no checker type rule of its own, so
+                // its result type doesn't always resolve to match the
+                // receiver after substitution, same gap as the closure
+                // call-site fix above).
+                let elem_ty = match unwrap_labels(&receiver.ty) {
+                    Ty::List(e) | Ty::Array(e, _) | Ty::Set(e) => self.ty_to_llvm_ctx(e),
+                    _ => self.ty_to_llvm_ctx(&args[0].ty),
+                };
                 self.ensure_extern("declare void @_mvl_array_push(ptr, ptr)");
                 let slot = self.next_reg();
                 self.push_instr(&format!("{slot} = alloca {elem_ty}"));
@@ -4572,14 +4702,30 @@ impl TextEmitter {
                 // array still owns; the array's own scope-exit drop later
                 // walks and frees every contained string, so if the caller
                 // also drops the extracted element, that's a double free.
-                // Clone the string here so the Option holds an
+                // Clone the element here so the Option holds an
                 // independently-owned reference, mirroring the identical
                 // fix for `Map::get` (#2047). Scalar elements (Int, Bool,
                 // …) have no ownership to share and are returned as before.
-                let elem_is_string = matches!(
-                    unwrap_labels(&receiver.ty),
-                    Ty::List(e) | Ty::Array(e, _) if matches!(unwrap_labels(e), Ty::String)
-                );
+                //
+                // #2203/#2252: this was originally String-only, missing the
+                // identical case for a nested-collection element
+                // (`List[List[T]]`/`List[Set[T]]`/`List[Map[K,V]]`) —
+                // `rows.get(0)` on a `List[List[String]]` handed back the
+                // same inner array pointer `rows` still owned, so extracting
+                // it into a `Some(row)` match arm and letting that arm's
+                // scope end freed it once there, then `rows`'s own deep drop
+                // (which recursively frees nested collection elements, see
+                // `concat_is_supported`'s comment in `wasm_text.rs`) freed
+                // the same buffer again.
+                let elem_clone_sym: Option<&str> = match unwrap_labels(&receiver.ty) {
+                    Ty::List(e) | Ty::Array(e, _) => match unwrap_labels(e) {
+                        Ty::String => Some("_mvl_string_clone"),
+                        Ty::List(_) | Ty::Array(_, _) | Ty::Set(_) => Some("_mvl_array_clone"),
+                        Ty::Map(_, _) => Some("_mvl_map_clone"),
+                        _ => None,
+                    },
+                    _ => None,
+                };
 
                 // Bounds check: 0 <= index < len. Mirror of AST emit_method_call's
                 // ("get", "ptr") arm — alloca + store + load shape (not the
@@ -4624,12 +4770,10 @@ impl TextEmitter {
                 ));
                 let elem_val = self.next_reg();
                 self.push_instr(&format!("{elem_val} = load {elem_llvm_ty}, ptr {elem_ptr}"));
-                let elem_val = if elem_is_string {
-                    self.ensure_extern("declare ptr @_mvl_string_clone(ptr)");
+                let elem_val = if let Some(sym) = elem_clone_sym {
+                    self.ensure_extern(&format!("declare ptr @{sym}(ptr)"));
                     let cloned = self.next_reg();
-                    self.push_instr(&format!(
-                        "{cloned} = call ptr @_mvl_string_clone(ptr {elem_val})"
-                    ));
+                    self.push_instr(&format!("{cloned} = call ptr @{sym}(ptr {elem_val})"));
                     cloned
                 } else {
                     elem_val
@@ -4846,12 +4990,18 @@ impl TextEmitter {
                     _ => "i64".to_string(),
                 };
                 // See the identical clone-on-extract fix in the `("get",
-                // "ptr")` arm above (#2169) — `first()` aliases the same
+                // "ptr")` arm above (#2169, generalized to nested
+                // collections by #2252) — `first()` aliases the same
                 // buffer slot and needs the same treatment.
-                let elem_is_string = matches!(
-                    unwrap_labels(&receiver.ty),
-                    Ty::List(e) | Ty::Array(e, _) if matches!(unwrap_labels(e), Ty::String)
-                );
+                let elem_clone_sym: Option<&str> = match unwrap_labels(&receiver.ty) {
+                    Ty::List(e) | Ty::Array(e, _) => match unwrap_labels(e) {
+                        Ty::String => Some("_mvl_string_clone"),
+                        Ty::List(_) | Ty::Array(_, _) | Ty::Set(_) => Some("_mvl_array_clone"),
+                        Ty::Map(_, _) => Some("_mvl_map_clone"),
+                        _ => None,
+                    },
+                    _ => None,
+                };
 
                 self.ensure_extern("declare i64 @_mvl_array_len(ptr)");
                 let len = self.next_reg();
@@ -4891,12 +5041,10 @@ impl TextEmitter {
                 ));
                 let elem_val = self.next_reg();
                 self.push_instr(&format!("{elem_val} = load {elem_llvm_ty}, ptr {elem_ptr}"));
-                let elem_val = if elem_is_string {
-                    self.ensure_extern("declare ptr @_mvl_string_clone(ptr)");
+                let elem_val = if let Some(sym) = elem_clone_sym {
+                    self.ensure_extern(&format!("declare ptr @{sym}(ptr)"));
                     let cloned = self.next_reg();
-                    self.push_instr(&format!(
-                        "{cloned} = call ptr @_mvl_string_clone(ptr {elem_val})"
-                    ));
+                    self.push_instr(&format!("{cloned} = call ptr @{sym}(ptr {elem_val})"));
                     cloned
                 } else {
                     elem_val
@@ -4939,10 +5087,17 @@ impl TextEmitter {
                     Ty::List(e) | Ty::Array(e, _) => self.ty_to_llvm_ctx(e),
                     _ => "i64".to_string(),
                 };
-                let elem_is_string = matches!(
-                    unwrap_labels(&receiver.ty),
-                    Ty::List(e) | Ty::Array(e, _) if matches!(unwrap_labels(e), Ty::String)
-                );
+                // #2203/#2252: generalized to nested collections — see the
+                // `("get", "ptr")` arm above.
+                let elem_clone_sym: Option<&str> = match unwrap_labels(&receiver.ty) {
+                    Ty::List(e) | Ty::Array(e, _) => match unwrap_labels(e) {
+                        Ty::String => Some("_mvl_string_clone"),
+                        Ty::List(_) | Ty::Array(_, _) | Ty::Set(_) => Some("_mvl_array_clone"),
+                        Ty::Map(_, _) => Some("_mvl_map_clone"),
+                        _ => None,
+                    },
+                    _ => None,
+                };
 
                 self.ensure_extern("declare i64 @_mvl_array_len(ptr)");
                 let len = self.next_reg();
@@ -4984,12 +5139,10 @@ impl TextEmitter {
                 ));
                 let elem_val = self.next_reg();
                 self.push_instr(&format!("{elem_val} = load {elem_llvm_ty}, ptr {elem_ptr}"));
-                let elem_val = if elem_is_string {
-                    self.ensure_extern("declare ptr @_mvl_string_clone(ptr)");
+                let elem_val = if let Some(sym) = elem_clone_sym {
+                    self.ensure_extern(&format!("declare ptr @{sym}(ptr)"));
                     let cloned = self.next_reg();
-                    self.push_instr(&format!(
-                        "{cloned} = call ptr @_mvl_string_clone(ptr {elem_val})"
-                    ));
+                    self.push_instr(&format!("{cloned} = call ptr @{sym}(ptr {elem_val})"));
                     cloned
                 } else {
                     elem_val
@@ -5101,7 +5254,16 @@ impl TextEmitter {
                 // `slice` has no `LLVM_DISPATCH` row — emit `_mvl_list_slice`
                 // inline via the shared helper (matches the AST emit_method_call
                 // path used by `slice` / `take` / `skip`).
-                Ok(Some(self.emit_list_slice_call(&val, &start, &end)))
+                let elem_is_string = matches!(
+                    unwrap_labels(&receiver.ty),
+                    Ty::List(e) | Ty::Array(e, _) | Ty::Set(e) if matches!(unwrap_labels(e), Ty::String)
+                );
+                Ok(Some(self.emit_list_slice_call(
+                    &val,
+                    &start,
+                    &end,
+                    elem_is_string,
+                )))
             }
             ("take", "ptr")
                 if args.len() == 1
@@ -5114,7 +5276,16 @@ impl TextEmitter {
                     Some(v) => v,
                     None => return Ok(None),
                 };
-                Ok(Some(self.emit_list_slice_call(&val, "0", &n)))
+                let elem_is_string = matches!(
+                    unwrap_labels(&receiver.ty),
+                    Ty::List(e) | Ty::Array(e, _) | Ty::Set(e) if matches!(unwrap_labels(e), Ty::String)
+                );
+                Ok(Some(self.emit_list_slice_call(
+                    &val,
+                    "0",
+                    &n,
+                    elem_is_string,
+                )))
             }
             ("skip", "ptr")
                 if args.len() == 1
@@ -5130,7 +5301,16 @@ impl TextEmitter {
                 self.ensure_extern("declare i64 @_mvl_array_len(ptr)");
                 let len_reg = self.next_reg();
                 self.push_instr(&format!("{len_reg} = call i64 @_mvl_array_len(ptr {val})"));
-                Ok(Some(self.emit_list_slice_call(&val, &n, &len_reg)))
+                let elem_is_string = matches!(
+                    unwrap_labels(&receiver.ty),
+                    Ty::List(e) | Ty::Array(e, _) | Ty::Set(e) if matches!(unwrap_labels(e), Ty::String)
+                );
+                Ok(Some(self.emit_list_slice_call(
+                    &val,
+                    &n,
+                    &len_reg,
+                    elem_is_string,
+                )))
             }
             ("concat", "ptr") if args.len() == 1 => {
                 let other = match self.emit_expr_tir(&args[0])? {
@@ -5207,25 +5387,24 @@ impl TextEmitter {
             // they land in `mono.tir_generic_fns` and are emitted per
             // mangled instantiation, so this fallback safely dispatches
             // to a body we know is in the module.
+            //
+            // Looked up by the `"Receiver::method"` key (#2251), not the
+            // bare method name — `tir_generic_fns` is keyed that way
+            // precisely so a same-named generic method on another receiver
+            // (e.g. `List::fold` vs. `Map::fold`) can't shadow this one.
             _ => {
                 let base = match receiver_base_name(&receiver.ty) {
                     Some(b) => b,
                     None => return Ok(None),
                 };
-                let generic_matches = self
-                    .mono
-                    .tir_generic_fns
-                    .get(method)
-                    .and_then(|f| f.receiver_type.as_deref())
-                    .map(|r| r == base)
-                    .unwrap_or(false);
-                if !generic_matches {
+                let key = tir_generic_fn_key(Some(&base), method);
+                if !self.mono.tir_generic_fns.contains_key(&key) {
                     return Ok(None);
                 }
                 let mut full_args: Vec<TirExpr> = Vec::with_capacity(args.len() + 1);
                 full_args.push(receiver.clone());
                 full_args.extend(args.iter().cloned());
-                self.emit_monomorphized_call_tir(method, &full_args)
+                self.emit_monomorphized_call_tir(&key, &full_args)
             }
         }
     }

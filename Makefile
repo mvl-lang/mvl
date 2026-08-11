@@ -378,17 +378,13 @@ test-rust-rust: build ## rust/rust — new corpus through Rust transpiler (batch
 # minimal on purpose — LLVM is otherwise full-corpus (#1823) — so new
 # entries should stay rare; each is a real gap, not a convenience.
 #
-# map_hof_test.mvl (#2251): `Map[K, V]::fold`/`any`/`all`/`filter` type-
-# confuse the map with a `List` in `emit_exprs_tir.rs`'s shape-only HOF
-# dispatch (`("fold", "ptr")` etc. match any pointer-shaped receiver, Map
-# included, and call the List-only `_mvl_list_fold` runtime fn on a
-# `HashMap` pointer) — silently corrupts the map rather than trapping.
-#
-# nested_container_ownership_test.mvl (#2252): a `ref`-declared local moved
-# into an outer container via `.push()` is double-freed at scope exit
-# (`.push()`'s existing `exclude_returned_value_tir` call doesn't cover this
-# shape) — the WASM analog of this exact bug is #2205, fixed on that
-# backend in the same PR that added this file; LLVM needs its own fix.
+# map_entries_value_field_test.mvl (#2251, split from map_hof_test.mvl):
+# `Entry[K, V]`'s LLVM struct type hardcodes `ptr` for a generic field
+# regardless of the concrete instantiation — the same generic-struct-
+# field-layout gap as list_stubs_test.mvl below (#2119's LLVM remainder),
+# hit here via `Entry[String, Int]`'s `value` field. map_hof_test.mvl's
+# other Map HOF tests (fold/any/all/filter/map_values/entries-without-
+# field-access) are fixed and no longer excluded.
 #
 # list_stubs_test.mvl (#2119): constructs `Indexed`/`Pair`/`Partitioned` —
 # generic structs never actually built under LLVM before `List[T]::
@@ -397,16 +393,23 @@ test-rust-rust: build ## rust/rust — new corpus through Rust transpiler (batch
 # declaration-time type-param name instead of the call site's concrete
 # type) was fixed on that backend in the same change that added this file;
 # LLVM's `emit_exprs_tir.rs` needs its own fix.
+#
+# option_result_eq_test.mvl (#2249, split from option_result_test.mvl):
+# `Option[T]`/`Result[T, E]` are `{i8, ptr}` structs on this backend, and
+# `==` on them doesn't even compile ("icmp requires integer operands") —
+# a separate, pre-existing gap from the WASM equality fix that added this
+# file; needs its own LLVM emit_binary case.
 LLVM_CORPUS_EXCLUDE := \
-	tests/corpus/05_collections/map_hof_test.mvl \
-	tests/corpus/07_ownership/nested_container_ownership_test.mvl \
+	tests/corpus/04_types/option_result_eq_test.mvl \
+	tests/corpus/05_collections/map_entries_value_field_test.mvl \
 	tests/corpus/13_stdlib/list_stubs_test.mvl
 
 # Directories containing an LLVM_CORPUS_EXCLUDE entry need per-file listing;
 # every other directory passes through whole (mvlr's directory-arg form).
-LLVM_CORPUS_WHOLE_DIRS := $(filter-out tests/corpus/05_collections tests/corpus/07_ownership tests/corpus/13_stdlib, \
+LLVM_CORPUS_WHOLE_DIRS := $(filter-out tests/corpus/04_types tests/corpus/05_collections tests/corpus/07_ownership tests/corpus/13_stdlib, \
 	$(patsubst %/,%,$(sort $(dir $(wildcard tests/corpus/*/*_test.mvl)))))
 LLVM_CORPUS := $(LLVM_CORPUS_WHOLE_DIRS) \
+	$(filter-out $(LLVM_CORPUS_EXCLUDE), $(wildcard tests/corpus/04_types/*_test.mvl)) \
 	$(filter-out $(LLVM_CORPUS_EXCLUDE), $(wildcard tests/corpus/05_collections/*_test.mvl)) \
 	$(filter-out $(LLVM_CORPUS_EXCLUDE), $(wildcard tests/corpus/07_ownership/*_test.mvl)) \
 	$(filter-out $(LLVM_CORPUS_EXCLUDE), $(wildcard tests/corpus/13_stdlib/*_test.mvl))
@@ -461,12 +464,20 @@ test-runtime-llvm: ## Unit-test runtime/llvm/ crate natively (peer of test-runti
 # per-iteration or fn-exit heap sweep freed it out from under the new
 # owner. Back in the main corpus glob below — nothing left to exclude.
 #
-# `list_string_ops_test.mvl` (#2256, exclusion tracked as #2262):
-# `List[String]::skip`/`::take`/`::slice` compile to `unreachable` and the
-# emitted module fails validation (`type mismatch: expected i64, found
-# i32`) — a WASM-backend gap unrelated to the LLVM fixes #2256 made; needs
-# its own root-cause pass.
-WASM_CORPUS_EXCLUDE := tests/corpus/05_collections/list_string_ops_test.mvl
+# `list_string_ops_wasm_gaps_test.mvl` (#2262, split from
+# list_string_ops_test.mvl): `List[String]::contains` picks the wrong
+# native dispatch fn (no `String` case in `is_i32`'s scalar/pointer split,
+# so it falls to the i64 arm and gets passed an i32 handle — a module-
+# validation type mismatch, not a runtime bug); `.any(...)` with a string-
+# equality closure hits a related-looking but not-yet-diagnosed one;
+# `.min()`/`.max()` monomorphize `std/lists.mvl`'s documented fallback
+# stub (`self.first()`/`self.last()`, not a true min/max — see that file's
+# own doc comment) since WASM has no native min/max dispatch, unlike LLVM's
+# dedicated `_mvl_list_min_index_str`/`_mvl_list_max_index_str`.
+# list_string_ops_test.mvl's other List[String] operations (including
+# skip/take/slice, #2262's actual fix) are confirmed passing end-to-end and
+# no longer excluded.
+WASM_CORPUS_EXCLUDE := tests/corpus/05_collections/list_string_ops_wasm_gaps_test.mvl
 
 # Directories with nothing excluded pass through whole — mvlr prints a
 # per-test checkmark + pass/fail count for a directory arg, but runs a bare

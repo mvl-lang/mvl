@@ -391,6 +391,8 @@ const LITERAL_BASE: u32 = 32;
 /// symbols were touched during emission.
 const RUNTIME_IMPORTS: &[(&str, &str)] = &[
     ("_mvl_string_eq", "(param i32 i32 i32 i32) (result i32)"),
+    // `<`/`>`/`<=`/`>=` on String (#2260) — lexicographic ordering.
+    ("_mvl_string_cmp", "(param i32 i32 i32 i32) (result i32)"),
     ("_mvl_string_len", "(param i32 i32) (result i64)"),
     ("_mvl_string_is_empty", "(param i32 i32) (result i32)"),
     (
@@ -492,6 +494,10 @@ const RUNTIME_IMPORTS: &[(&str, &str)] = &[
     // `.slice(start, end)` — MVL `Int` bounds are i64 (#2014). Backs
     // `List[T]::take`/`::skip`, which are pure-MVL wrappers over `slice`.
     ("_mvl_array_slice", "(param i32 i64 i64) (result i32)"),
+    // `.slice(start, end)` on `List[String]` (#2262) — refcount-clones each
+    // element instead of the plain arm's byte copy, same relationship as
+    // `_mvl_array_concat`/`_mvl_array_concat_str` below.
+    ("_mvl_array_slice_str", "(param i32 i64 i64) (result i32)"),
     // `.windows(n)`/`.chunks(n)` (#2119) — each element of the result is
     // itself an `_mvl_array_slice`-built `List[T]`, same aliasing caveat.
     ("_mvl_array_windows", "(param i32 i64) (result i32)"),
@@ -516,6 +522,9 @@ const RUNTIME_IMPORTS: &[(&str, &str)] = &[
     ("_mvl_option_value_i64", "(param i32) (result i64)"),
     ("_mvl_option_value_i32", "(param i32) (result i32)"),
     ("_mvl_option_drop", "(param i32)"),
+    // Structural `==`/`!=` for `Option[T]` (#2249) — `is_str` is a
+    // compile-time flag, not a runtime tag.
+    ("_mvl_option_eq", "(param i32 i32 i32) (result i32)"),
     // `xs.get(i)` on `List[T]` — dispatches to one of these based on T.
     // Returns *MvlOption (Some(value) in bounds, None otherwise).
     ("_mvl_array_get_option_i64", "(param i32 i64) (result i32)"),
@@ -576,6 +585,9 @@ const RUNTIME_IMPORTS: &[(&str, &str)] = &[
     ("_mvl_result_value_i64", "(param i32) (result i64)"),
     ("_mvl_result_value_i32", "(param i32) (result i32)"),
     ("_mvl_result_drop", "(param i32)"),
+    // Structural `==`/`!=` for `Result[T, E]` (#2249) — `ok_is_str`/
+    // `err_is_str` are compile-time flags, not runtime tags.
+    ("_mvl_result_eq", "(param i32 i32 i32 i32) (result i32)"),
     // Group H — String parse ops. Take raw (ptr, len) byte slice; return
     // heap-allocated MvlResult pointer.
     ("_mvl_string_parse_int", "(param i32 i32) (result i32)"),
@@ -5145,6 +5157,14 @@ fn emit_expr(out: &mut String, expr: &TirExpr, ctx: &Ctx) {
         // std/lists.mvl with no WASM runtime function until now, which is what
         // stubbed `take` (`self.slice(0, n)`) and `skip`
         // (`self.slice(n, self.len())`).
+        //
+        // #2262: String elements are handled by a dedicated arm below
+        // instead of widening `slice_is_supported` itself — that gate is
+        // shared with `windows`/`chunks`, whose runtime fns call the plain
+        // (byte-copying) `_mvl_array_slice` internally regardless, so
+        // making it pass for String there would silently reintroduce the
+        // same aliasing double-free windows/chunks-of-String never actually
+        // got a real fix for.
         TirExprKind::MethodCall {
             receiver,
             method,
@@ -5158,6 +5178,28 @@ fn emit_expr(out: &mut String, expr: &TirExpr, ctx: &Ctx) {
             emit_expr(out, &args[0], ctx);
             emit_expr(out, &args[1], ctx);
             out.push_str("    call $_mvl_array_slice\n");
+        }
+        // `.slice(start, end)` on `List[String]` (#2262) — `_mvl_array_slice`
+        // would byte-copy the `*MvlString` handles without bumping their
+        // refcount, aliasing the parent's strings; the parent's and the
+        // slice's independent drops would then double-free them (identical
+        // reasoning to `_mvl_array_concat_str`, #2047). Backs
+        // `List[String]::take`/`::skip`.
+        TirExprKind::MethodCall {
+            receiver,
+            method,
+            args,
+        } if method == "slice"
+            && args.len() == 2
+            && collection_elem_ty(&resolve_ty_param(&receiver.ty, ctx.type_subst))
+                .map(|e| resolve_ty_param(e, ctx.type_subst))
+                .is_some_and(|e| peels_to_string(&e)) =>
+        {
+            ctx.needs_runtime.set(true);
+            emit_expr(out, receiver, ctx);
+            emit_expr(out, &args[0], ctx);
+            emit_expr(out, &args[1], ctx);
+            out.push_str("    call $_mvl_array_slice_str\n");
         }
         // `.windows(n)` / `.chunks(n)` on List / Array (#2119) — `builtin
         // fn`s in std/lists.mvl with no WASM emitter arm at all until now.
@@ -7869,6 +7911,71 @@ fn emit_binary(out: &mut String, op: BinaryOp, left: &TirExpr, right: &TirExpr, 
             out.push_str("    i32.eqz\n"); // flip: 1 → 0, 0 → 1
         }
         return;
+    }
+
+    // String ordering (#2260, found immediately after fixing the LLVM
+    // analog via a new `sort_by` regression test): `<`/`>`/`<=`/`>=` had
+    // no `String` case at all — only `==`/`!=` did — so they fell to the
+    // generic numeric-family fallback below, which is meaningless for the
+    // unpacked `(ptr, len)` pair a `String` value is on the stack here.
+    if peels_to_string(&left.ty)
+        && matches!(
+            op,
+            BinaryOp::Lt | BinaryOp::Gt | BinaryOp::Le | BinaryOp::Ge
+        )
+    {
+        ctx.needs_runtime.set(true);
+        emit_expr(out, left, ctx);
+        emit_expr(out, right, ctx);
+        out.push_str("    call $_mvl_string_cmp\n");
+        let pred = match op {
+            BinaryOp::Lt => "i32.lt_s",
+            BinaryOp::Gt => "i32.gt_s",
+            BinaryOp::Le => "i32.le_s",
+            BinaryOp::Ge => "i32.ge_s",
+            _ => unreachable!(),
+        };
+        out.push_str("    i32.const 0\n");
+        out.push_str(&format!("    {pred}\n"));
+        return;
+    }
+
+    // `Option[T]` / `Result[T, E]` equality (#2249) — like the `String`
+    // case above, `==`/`!=` on these otherwise fell to the generic
+    // `i32.eq` on the boxed handle below: pointer identity, not content.
+    // `is_str`/`ok_is_str`/`err_is_str` are compile-time constants (the
+    // payload type is always statically known — MVL has no runtime type
+    // tags), so the runtime fn just branches on a plain `i32` flag rather
+    // than needing a dedicated symbol per payload type.
+    if matches!(op, BinaryOp::Eq | BinaryOp::Ne) {
+        if let Some(inner) = option_inner_ty(&left.ty) {
+            ctx.needs_runtime.set(true);
+            let is_str = is_string_ty(inner, ctx) as i32;
+            emit_expr(out, left, ctx);
+            emit_expr(out, right, ctx);
+            out.push_str(&format!(
+                "    i32.const {is_str}\n    call $_mvl_option_eq\n"
+            ));
+            if matches!(op, BinaryOp::Ne) {
+                out.push_str("    i32.eqz\n");
+            }
+            return;
+        }
+        if let Some(ok_ty) = result_ok_ty(&left.ty) {
+            let err_ty = result_err_ty(&left.ty).cloned().unwrap_or(Ty::String);
+            ctx.needs_runtime.set(true);
+            let ok_is_str = is_string_ty(ok_ty, ctx) as i32;
+            let err_is_str = is_string_ty(&err_ty, ctx) as i32;
+            emit_expr(out, left, ctx);
+            emit_expr(out, right, ctx);
+            out.push_str(&format!(
+                "    i32.const {ok_is_str}\n    i32.const {err_is_str}\n    call $_mvl_result_eq\n"
+            ));
+            if matches!(op, BinaryOp::Ne) {
+                out.push_str("    i32.eqz\n");
+            }
+            return;
+        }
     }
 
     // Short-circuit boolean ops — need laziness, can't emit both operands up
@@ -12624,14 +12731,17 @@ mod validated_module_tests {
         );
     }
 
-    /// `.slice()` on a `List[String]` byte-copies element *pointers* without a
-    /// refcount bump, so parent and slice both drop each string. Must stub
-    /// rather than miscompile ownership.
+    /// `.slice()` on a `List[String]` used to byte-copy element *pointers*
+    /// without a refcount bump, aliasing the parent's strings — both arrays'
+    /// independent drops would then double-free them, so the emitter stubbed
+    /// the call rather than miscompile ownership. Fixed (#2262) via
+    /// `_mvl_array_slice_str`, which refcount-clones each element instead;
+    /// the call now lowers for real, not to a stub.
     /// `.slice()` is the builtin `take`/`skip` are written over, so it is what
-    /// the guard has to gate. Called directly here — this harness does not load
+    /// this test exercises directly — this harness does not load
     /// `std/lists.mvl`, so `take` itself is not in scope.
     #[test]
-    fn slice_on_string_list_stubs_instead_of_double_freeing() {
+    fn slice_on_string_list_lowers_via_slice_str() {
         let (wat, stubbed) = emit(
             "test fn t() -> Unit {\n\
                  let xs: List[String] = [\"a\", \"b\", \"c\"];\n\
@@ -12640,10 +12750,14 @@ mod validated_module_tests {
              }\n",
         );
         validate(&wat);
-        assert_eq!(stubbed, vec!["t".to_string()], "the caller must stub");
+        assert!(stubbed.is_empty(), "must not stub: {stubbed:?}");
         assert!(
-            !wat.contains("call $_mvl_array_slice"),
-            "a String-element slice must not be lowered: {wat}"
+            wat.contains("call $_mvl_array_slice_str"),
+            "a String-element slice must lower via the refcount-cloning variant: {wat}"
+        );
+        assert!(
+            !wat.contains("call $_mvl_array_slice\n"),
+            "a String-element slice must not alias via the plain byte-copying variant: {wat}"
         );
     }
 
