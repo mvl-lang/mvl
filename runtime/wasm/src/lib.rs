@@ -868,6 +868,39 @@ pub unsafe extern "C" fn _mvl_array_slice(a: i32, start: i64, end: i64) -> i32 {
     out
 }
 
+/// `_mvl_array_slice_str(a, start, end) -> *MvlArray` — like
+/// [`_mvl_array_slice`], but for `List[String]` (`elem_size` 4, each element
+/// a `*MvlString` handle) (#2262). Every element is refcount-cloned into the
+/// new array instead of byte-copied — `_mvl_array_slice`'s raw
+/// `copy_nonoverlapping` would leave the new array's strings double-owned
+/// by both the source array and the slice, a double-free the moment either
+/// side drops (same reasoning as [`_mvl_array_concat_str`], #2047). This is
+/// why `slice_is_supported` (`wasm_text.rs`) excludes String elements from
+/// the plain arm and routes them here instead. Backs `List[String]::take`/
+/// `::skip`, which are pure-MVL wrappers over the `slice` builtin.
+///
+/// # Safety
+/// `a` must be a valid `MvlArray` pointer with `elem_size == 4`, or null.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn _mvl_array_slice_str(a: i32, start: i64, end: i64) -> i32 {
+    if a == 0 {
+        return 0;
+    }
+    let arr = unsafe { &*(a as usize as *const MvlArray) };
+    let len = arr.len as i64;
+    let lo = start.clamp(0, len);
+    let hi = end.clamp(0, len);
+    let count = (hi - lo).max(0);
+    let out = _mvl_array_new(4, count as i32);
+    for i in lo..hi {
+        let elem =
+            unsafe { core::ptr::read((arr.ptr as usize + (i as usize) * 4) as *const i32) };
+        let cloned = unsafe { _mvl_string_clone(elem) };
+        unsafe { _mvl_array_push_i32(out, cloned) };
+    }
+    out
+}
+
 /// `_mvl_array_windows(a, n)` — new array of `List[T]`, one per contiguous
 /// window of `n` elements (#2119). Each window is itself an `_mvl_array_slice`
 /// result, so this inherits that function's exact aliasing caveat: correct

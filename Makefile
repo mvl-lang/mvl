@@ -456,12 +456,20 @@ test-runtime-llvm: ## Unit-test runtime/llvm/ crate natively (peer of test-runti
 # per-iteration or fn-exit heap sweep freed it out from under the new
 # owner. Back in the main corpus glob below — nothing left to exclude.
 #
-# `list_string_ops_test.mvl` (#2256, exclusion tracked as #2262):
-# `List[String]::skip`/`::take`/`::slice` compile to `unreachable` and the
-# emitted module fails validation (`type mismatch: expected i64, found
-# i32`) — a WASM-backend gap unrelated to the LLVM fixes #2256 made; needs
-# its own root-cause pass.
-WASM_CORPUS_EXCLUDE := tests/corpus/05_collections/list_string_ops_test.mvl
+# `list_string_ops_wasm_gaps_test.mvl` (#2262, split from
+# list_string_ops_test.mvl): `List[String]::contains` picks the wrong
+# native dispatch fn (no `String` case in `is_i32`'s scalar/pointer split,
+# so it falls to the i64 arm and gets passed an i32 handle — a module-
+# validation type mismatch, not a runtime bug); `.any(...)` with a string-
+# equality closure hits a related-looking but not-yet-diagnosed one;
+# `.min()`/`.max()` monomorphize `std/lists.mvl`'s documented fallback
+# stub (`self.first()`/`self.last()`, not a true min/max — see that file's
+# own doc comment) since WASM has no native min/max dispatch, unlike LLVM's
+# dedicated `_mvl_list_min_index_str`/`_mvl_list_max_index_str`.
+# list_string_ops_test.mvl's other List[String] operations (including
+# skip/take/slice, #2262's actual fix) are confirmed passing end-to-end and
+# no longer excluded.
+WASM_CORPUS_EXCLUDE := tests/corpus/05_collections/list_string_ops_wasm_gaps_test.mvl
 
 # Directories with nothing excluded pass through whole — mvlr prints a
 # per-test checkmark + pass/fail count for a directory arg, but runs a bare

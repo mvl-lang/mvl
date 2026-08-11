@@ -1,0 +1,66 @@
+// 05_collections/list_string_ops_wasm_gaps_test.mvl — split from
+// list_string_ops_test.mvl (#2262): four `List[String]` operations that
+// fail under `--backend=wasm` for reasons unrelated to that file's
+// `skip`/`take`/`slice` fix — found only while confirming the whole file
+// passes end-to-end (not just compiles) after it.
+//
+// `list_string_contains`: `List[T]::contains(x)`'s WASM dispatch
+// (`src/mvl/backends/wasm_text.rs`) picks `_mvl_array_contains_i32` or
+// `_mvl_array_contains_i64` based on `is_i32(&elem_ty, ctx)`, with no case
+// for `String` at all. `is_i32` says no (a `String` element is a boxed
+// `*MvlString` handle, not a bare i32 the way `Set[Int]`'s elements are),
+// so it falls to the i64 arm — called with the i32 handle `xs.contains("a")`
+// passes, a module-validation type mismatch, not a runtime bug. A real fix
+// needs a dedicated `_mvl_array_contains_str`: per element, unbox the
+// stored handle (`_mvl_string_ptr`/`_mvl_str_len`-equivalent) and compare
+// via `_mvl_string_eq`, since a `List[String]`'s elements are boxed
+// handles while a bare `String` *value* (e.g. this call's own argument) is
+// an unpacked `(ptr, len)` pair on the stack — two different
+// representations of the same type.
+//
+// `list_string_any`: `xs.any(|s: String| s == "a")` — string equality
+// inside an `any`/`all`/`filter`/... HOF closure. Also a module-validation
+// type mismatch ("expected i32 but nothing on stack"), not investigated
+// further; likely a related instance of the same boxed-vs-unpacked-String
+// representation mismatch, since `emit_binary`'s `_mvl_string_eq` case
+// expects each operand to already be an unpacked `(ptr, len)` pair, which
+// is what a closure parameter representing an array element receives only
+// if `emit_as_hof_closure`'s (or its WASM equivalent's) String-element
+// unboxing runs — worth checking first when this is picked up.
+//
+// `list_string_min`: compiles and runs, but `std/lists.mvl`'s own doc
+// comment on `List[T]::min` says why it's wrong here: "Transpiler-handled:
+// emits `into_iter().min_by(partial_cmp)`. MVL body is a fallback ... —
+// returns first, not min." The Rust backend gets the transpiler's correct
+// behavior; WASM has no such special case and monomorphizes the literal
+// declared body (`self.first()`), same as any other generic method — so
+// it returns `"bb"` (`xs`'s first element) instead of the true minimum
+// `"a"`. `list_string_max` has the identical `self.last()` stub but isn't
+// split here: for this input, `last()` and the true max coincide, so it
+// passes by accident, not because it's actually correct — a real fix
+// needs native WASM min/max dispatch, mirroring the LLVM backend's
+// dedicated `_mvl_list_min_index_str`/`_mvl_list_max_index_str` (which is
+// why LLVM's `list_sort_by_test.mvl`-adjacent min/max corpus tests pass:
+// LLVM never reaches this stub body at all).
+
+test fn list_string_contains() -> Unit {
+    let xs: List[String] = ["bb", "a", "ccc"];
+    assert_eq(xs.contains("a"), true);
+    assert_eq(xs.contains("zzz"), false)
+}
+
+test fn list_string_any() -> Unit {
+    let xs: List[String] = ["bb", "a", "ccc"];
+    assert_eq(xs.any(|s: String| s == "a"), true);
+    assert_eq(xs.any(|s: String| s == "zzz"), false)
+}
+
+test fn list_string_min() -> Unit {
+    let xs: List[String] = ["bb", "a", "ccc"];
+    assert_eq(xs.min().unwrap_or("?"), "a")
+}
+
+test fn list_string_max() -> Unit {
+    let xs: List[String] = ["bb", "a", "ccc"];
+    assert_eq(xs.max().unwrap_or("?"), "ccc")
+}

@@ -492,6 +492,10 @@ const RUNTIME_IMPORTS: &[(&str, &str)] = &[
     // `.slice(start, end)` — MVL `Int` bounds are i64 (#2014). Backs
     // `List[T]::take`/`::skip`, which are pure-MVL wrappers over `slice`.
     ("_mvl_array_slice", "(param i32 i64 i64) (result i32)"),
+    // `.slice(start, end)` on `List[String]` (#2262) — refcount-clones each
+    // element instead of the plain arm's byte copy, same relationship as
+    // `_mvl_array_concat`/`_mvl_array_concat_str` below.
+    ("_mvl_array_slice_str", "(param i32 i64 i64) (result i32)"),
     // `.windows(n)`/`.chunks(n)` (#2119) — each element of the result is
     // itself an `_mvl_array_slice`-built `List[T]`, same aliasing caveat.
     ("_mvl_array_windows", "(param i32 i64) (result i32)"),
@@ -5145,6 +5149,14 @@ fn emit_expr(out: &mut String, expr: &TirExpr, ctx: &Ctx) {
         // std/lists.mvl with no WASM runtime function until now, which is what
         // stubbed `take` (`self.slice(0, n)`) and `skip`
         // (`self.slice(n, self.len())`).
+        //
+        // #2262: String elements are handled by a dedicated arm below
+        // instead of widening `slice_is_supported` itself — that gate is
+        // shared with `windows`/`chunks`, whose runtime fns call the plain
+        // (byte-copying) `_mvl_array_slice` internally regardless, so
+        // making it pass for String there would silently reintroduce the
+        // same aliasing double-free windows/chunks-of-String never actually
+        // got a real fix for.
         TirExprKind::MethodCall {
             receiver,
             method,
@@ -5158,6 +5170,28 @@ fn emit_expr(out: &mut String, expr: &TirExpr, ctx: &Ctx) {
             emit_expr(out, &args[0], ctx);
             emit_expr(out, &args[1], ctx);
             out.push_str("    call $_mvl_array_slice\n");
+        }
+        // `.slice(start, end)` on `List[String]` (#2262) — `_mvl_array_slice`
+        // would byte-copy the `*MvlString` handles without bumping their
+        // refcount, aliasing the parent's strings; the parent's and the
+        // slice's independent drops would then double-free them (identical
+        // reasoning to `_mvl_array_concat_str`, #2047). Backs
+        // `List[String]::take`/`::skip`.
+        TirExprKind::MethodCall {
+            receiver,
+            method,
+            args,
+        } if method == "slice"
+            && args.len() == 2
+            && collection_elem_ty(&resolve_ty_param(&receiver.ty, ctx.type_subst))
+                .map(|e| resolve_ty_param(e, ctx.type_subst))
+                .is_some_and(|e| peels_to_string(&e)) =>
+        {
+            ctx.needs_runtime.set(true);
+            emit_expr(out, receiver, ctx);
+            emit_expr(out, &args[0], ctx);
+            emit_expr(out, &args[1], ctx);
+            out.push_str("    call $_mvl_array_slice_str\n");
         }
         // `.windows(n)` / `.chunks(n)` on List / Array (#2119) — `builtin
         // fn`s in std/lists.mvl with no WASM emitter arm at all until now.
