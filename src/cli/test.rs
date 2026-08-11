@@ -339,6 +339,16 @@ pub fn run(path: &str, quiet: bool, verbose: bool, coverage: bool, bdd: bool, us
         // next to the test files — they're loaded as siblings further down so their
         // pure-function dependencies must come along for the test crate to link
         // (#1489).
+        //
+        // Same for files carrying inline `test fn`s: the "(inline tests)" pass
+        // further down bundles them into the test crate on their own merit
+        // (independently of `*_test.mvl` discovery), so whatever they `use`
+        // must be loadable too. Before #2204 the `has_extern_or_type_decls`
+        // escape hatch covered this by accident — any type-declaring sibling
+        // came along unconditionally. With that hatch removed, an inline-test
+        // file's imports have to be honoured explicitly or its types resolve
+        // in `mvl check` and then fail in the backend
+        // (tests/corpus/05_collections/list_get_field_receiver.mvl).
         let mut imported_by_test_files: std::collections::HashSet<String> = all_test_progs
             .iter()
             .flat_map(loader::collect_imported_module_names)
@@ -372,7 +382,13 @@ pub fn run(path: &str, quiet: bool, verbose: bool, coverage: bool, bdd: bool, us
                             let (mut pp, _) = Parser::new(&src);
                             let parsed = pp.parse_program();
                             let imports = loader::collect_imported_module_names(&parsed);
-                            if transpiler::has_main_fn(&parsed) && !imports.is_empty() {
+                            let has_inline_tests = parsed
+                                .declarations
+                                .iter()
+                                .any(|d| matches!(d, Decl::Fn(fd) if fd.is_test));
+                            let joins_test_crate =
+                                transpiler::has_main_fn(&parsed) || has_inline_tests;
+                            if joins_test_crate && !imports.is_empty() {
                                 imported_by_test_files.extend(imports);
                             }
                         }
