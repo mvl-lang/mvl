@@ -393,15 +393,23 @@ test-rust-rust: build ## rust/rust — new corpus through Rust transpiler (batch
 # declaration-time type-param name instead of the call site's concrete
 # type) was fixed on that backend in the same change that added this file;
 # LLVM's `emit_exprs_tir.rs` needs its own fix.
+#
+# option_result_eq_test.mvl (#2249, split from option_result_test.mvl):
+# `Option[T]`/`Result[T, E]` are `{i8, ptr}` structs on this backend, and
+# `==` on them doesn't even compile ("icmp requires integer operands") —
+# a separate, pre-existing gap from the WASM equality fix that added this
+# file; needs its own LLVM emit_binary case.
 LLVM_CORPUS_EXCLUDE := \
+	tests/corpus/04_types/option_result_eq_test.mvl \
 	tests/corpus/05_collections/map_entries_value_field_test.mvl \
 	tests/corpus/13_stdlib/list_stubs_test.mvl
 
 # Directories containing an LLVM_CORPUS_EXCLUDE entry need per-file listing;
 # every other directory passes through whole (mvlr's directory-arg form).
-LLVM_CORPUS_WHOLE_DIRS := $(filter-out tests/corpus/05_collections tests/corpus/07_ownership tests/corpus/13_stdlib, \
+LLVM_CORPUS_WHOLE_DIRS := $(filter-out tests/corpus/04_types tests/corpus/05_collections tests/corpus/07_ownership tests/corpus/13_stdlib, \
 	$(patsubst %/,%,$(sort $(dir $(wildcard tests/corpus/*/*_test.mvl)))))
 LLVM_CORPUS := $(LLVM_CORPUS_WHOLE_DIRS) \
+	$(filter-out $(LLVM_CORPUS_EXCLUDE), $(wildcard tests/corpus/04_types/*_test.mvl)) \
 	$(filter-out $(LLVM_CORPUS_EXCLUDE), $(wildcard tests/corpus/05_collections/*_test.mvl)) \
 	$(filter-out $(LLVM_CORPUS_EXCLUDE), $(wildcard tests/corpus/07_ownership/*_test.mvl)) \
 	$(filter-out $(LLVM_CORPUS_EXCLUDE), $(wildcard tests/corpus/13_stdlib/*_test.mvl))

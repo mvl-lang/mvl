@@ -520,6 +520,9 @@ const RUNTIME_IMPORTS: &[(&str, &str)] = &[
     ("_mvl_option_value_i64", "(param i32) (result i64)"),
     ("_mvl_option_value_i32", "(param i32) (result i32)"),
     ("_mvl_option_drop", "(param i32)"),
+    // Structural `==`/`!=` for `Option[T]` (#2249) — `is_str` is a
+    // compile-time flag, not a runtime tag.
+    ("_mvl_option_eq", "(param i32 i32 i32) (result i32)"),
     // `xs.get(i)` on `List[T]` — dispatches to one of these based on T.
     // Returns *MvlOption (Some(value) in bounds, None otherwise).
     ("_mvl_array_get_option_i64", "(param i32 i64) (result i32)"),
@@ -580,6 +583,12 @@ const RUNTIME_IMPORTS: &[(&str, &str)] = &[
     ("_mvl_result_value_i64", "(param i32) (result i64)"),
     ("_mvl_result_value_i32", "(param i32) (result i32)"),
     ("_mvl_result_drop", "(param i32)"),
+    // Structural `==`/`!=` for `Result[T, E]` (#2249) — `ok_is_str`/
+    // `err_is_str` are compile-time flags, not runtime tags.
+    (
+        "_mvl_result_eq",
+        "(param i32 i32 i32 i32) (result i32)",
+    ),
     // Group H — String parse ops. Take raw (ptr, len) byte slice; return
     // heap-allocated MvlResult pointer.
     ("_mvl_string_parse_int", "(param i32 i32) (result i32)"),
@@ -7903,6 +7912,42 @@ fn emit_binary(out: &mut String, op: BinaryOp, left: &TirExpr, right: &TirExpr, 
             out.push_str("    i32.eqz\n"); // flip: 1 → 0, 0 → 1
         }
         return;
+    }
+
+    // `Option[T]` / `Result[T, E]` equality (#2249) — like the `String`
+    // case above, `==`/`!=` on these otherwise fell to the generic
+    // `i32.eq` on the boxed handle below: pointer identity, not content.
+    // `is_str`/`ok_is_str`/`err_is_str` are compile-time constants (the
+    // payload type is always statically known — MVL has no runtime type
+    // tags), so the runtime fn just branches on a plain `i32` flag rather
+    // than needing a dedicated symbol per payload type.
+    if matches!(op, BinaryOp::Eq | BinaryOp::Ne) {
+        if let Some(inner) = option_inner_ty(&left.ty) {
+            ctx.needs_runtime.set(true);
+            let is_str = is_string_ty(inner, ctx) as i32;
+            emit_expr(out, left, ctx);
+            emit_expr(out, right, ctx);
+            out.push_str(&format!("    i32.const {is_str}\n    call $_mvl_option_eq\n"));
+            if matches!(op, BinaryOp::Ne) {
+                out.push_str("    i32.eqz\n");
+            }
+            return;
+        }
+        if let Some(ok_ty) = result_ok_ty(&left.ty) {
+            let err_ty = result_err_ty(&left.ty).cloned().unwrap_or(Ty::String);
+            ctx.needs_runtime.set(true);
+            let ok_is_str = is_string_ty(ok_ty, ctx) as i32;
+            let err_is_str = is_string_ty(&err_ty, ctx) as i32;
+            emit_expr(out, left, ctx);
+            emit_expr(out, right, ctx);
+            out.push_str(&format!(
+                "    i32.const {ok_is_str}\n    i32.const {err_is_str}\n    call $_mvl_result_eq\n"
+            ));
+            if matches!(op, BinaryOp::Ne) {
+                out.push_str("    i32.eqz\n");
+            }
+            return;
+        }
     }
 
     // Short-circuit boolean ops — need laziness, can't emit both operands up
