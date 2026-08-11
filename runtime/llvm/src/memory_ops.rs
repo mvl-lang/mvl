@@ -1614,6 +1614,50 @@ pub unsafe extern "C" fn _mvl_list_skip_while(
     out
 }
 
+/// `List[T].reverse()` (#2256) — return a new list with elements in
+/// reverse order. Raw byte-level element copy, safe for any non-owning
+/// (scalar or pointer-free struct) element type of any `elem_size`.
+/// Pointer-owning elements (String, nested List/Map/Set, or structs
+/// containing them) need [`_mvl_list_reverse_str`]'s clone-based approach
+/// instead — same reason `sort`/`contains`/`join` needed dedicated
+/// String-aware C-ABI symbols. Also backs `rev()`, whose MVL fallback body
+/// just delegates to `reverse()`.
+///
+/// # Safety
+/// `list` must be a valid `MvlArray*` or null.
+#[no_mangle]
+pub unsafe extern "C" fn _mvl_array_reverse(list: *const MvlArray) -> *mut MvlArray {
+    let len = if list.is_null() { 0 } else { (*list).len as usize };
+    let es = if list.is_null() { 8 } else { (*list).elem_size as usize };
+    let out = _mvl_array_new(es, len.max(1));
+    for i in (0..len).rev() {
+        let elem_ptr = (*list).ptr.add(i * es);
+        _mvl_array_push(out, elem_ptr);
+    }
+    out
+}
+
+/// `List[String].reverse()` / `.rev()` (#2256) — return a new
+/// `List[String]` with elements in reverse order. Elements are cloned
+/// (refcount bumped) into the output array rather than moved, matching
+/// `_mvl_list_sort_str`'s ownership contract: `list` and the returned array
+/// are independent owners once `reverse()` returns.
+///
+/// # Safety
+/// `list` must be a valid `MvlArray*` (elem_size == 8, holding `*mut
+/// MvlString` elements) or null.
+#[no_mangle]
+pub unsafe extern "C" fn _mvl_list_reverse_str(list: *const MvlArray) -> *mut MvlArray {
+    let len = if list.is_null() { 0 } else { (*list).len as usize };
+    let out = _mvl_array_new(8, len.max(1));
+    for i in (0..len).rev() {
+        let src = (*list).ptr.add(i * 8) as *const *mut MvlString;
+        let cloned = _mvl_string_clone(*src);
+        _mvl_array_push(out, (&cloned as *const *mut MvlString).cast());
+    }
+    out
+}
+
 // ── Category-D builtins: sort / partition / group_by / windows / chunks ────────
 
 /// `_mvl_list_sort(list)` — return a new list with elements sorted ascending.
@@ -1661,6 +1705,93 @@ pub unsafe extern "C" fn _mvl_list_sort(list: *mut MvlArray) -> *mut MvlArray {
         std::ptr::copy_nonoverlapping(v.to_ne_bytes().as_ptr(), dst, es);
     }
     out
+}
+
+/// `List[T].min()` / `.max()` (#2256) — index of the numerically smallest
+/// (resp. largest) element, or `-1` for an empty list. Compares elements as
+/// signed i64 bit patterns — correct for `Int`/`Byte`; same bit-pattern
+/// caveat as `_mvl_list_sort` for `Float` (negative values / NaN order
+/// incorrectly).
+///
+/// Returns an index rather than a value or pointer so the emitter can reuse
+/// `_mvl_array_get` + its existing clone-on-extract handling (see the `get`/
+/// `first`/`last` dispatch arms) unchanged.
+///
+/// # Safety
+/// `list` must be a valid `MvlArray*` (elem_size <= 8) or null.
+#[no_mangle]
+pub unsafe extern "C" fn _mvl_list_min_index_i64(list: *const MvlArray) -> i64 {
+    list_extreme_index_i64(list, |a, b| a < b)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn _mvl_list_max_index_i64(list: *const MvlArray) -> i64 {
+    list_extreme_index_i64(list, |a, b| a > b)
+}
+
+unsafe fn list_extreme_index_i64(list: *const MvlArray, better: impl Fn(i64, i64) -> bool) -> i64 {
+    let len = if list.is_null() { 0 } else { (*list).len as usize };
+    if len == 0 {
+        return -1;
+    }
+    let es = (*list).elem_size as usize;
+    debug_assert!(es <= 8, "_mvl_list_min/max_index_i64: elem_size {es} > 8");
+    let read = |i: usize| -> i64 {
+        let mut buf = [0u8; 8];
+        let src = (*list).ptr.add(i * es);
+        std::ptr::copy_nonoverlapping(src, buf.as_mut_ptr(), es);
+        i64::from_ne_bytes(buf)
+    };
+    let mut best_idx = 0usize;
+    let mut best_val = read(0);
+    for i in 1..len {
+        let v = read(i);
+        if better(v, best_val) {
+            best_val = v;
+            best_idx = i;
+        }
+    }
+    best_idx as i64
+}
+
+/// `List[String].min()` / `.max()` (#2256) — index of the lexicographically
+/// smallest (resp. largest) string, or `-1` for an empty list. Same
+/// index-based contract as [`_mvl_list_min_index_i64`], comparing string
+/// *content* rather than element pointer identity — same reason `sort`/
+/// `contains`/`join` needed dedicated String-aware C-ABI symbols.
+///
+/// # Safety
+/// `list` must be a valid `MvlArray*` (elem_size == 8, holding `*mut
+/// MvlString` elements) or null.
+#[no_mangle]
+pub unsafe extern "C" fn _mvl_list_min_index_str(list: *const MvlArray) -> i64 {
+    list_extreme_index_str(list, |a, b| a < b)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn _mvl_list_max_index_str(list: *const MvlArray) -> i64 {
+    list_extreme_index_str(list, |a, b| a > b)
+}
+
+unsafe fn list_extreme_index_str(list: *const MvlArray, better: impl Fn(&str, &str) -> bool) -> i64 {
+    let len = if list.is_null() { 0 } else { (*list).len as usize };
+    if len == 0 {
+        return -1;
+    }
+    let read = |i: usize| -> &str {
+        let s = *((*list).ptr.add(i * 8) as *const *mut MvlString);
+        as_str(s)
+    };
+    let mut best_idx = 0usize;
+    let mut best_val = read(0);
+    for i in 1..len {
+        let v = read(i);
+        if better(v, best_val) {
+            best_val = v;
+            best_idx = i;
+        }
+    }
+    best_idx as i64
 }
 
 /// `_mvl_list_sort_str(list)` — return a new `List[String]` sorted ascending
@@ -2103,6 +2234,45 @@ mod tests {
             assert_eq!(_mvl_string_len(joined), 0);
             _mvl_string_drop(joined);
             _mvl_string_drop(sep);
+            _mvl_string_ptr_array_drop(a);
+        }
+    }
+
+    #[test]
+    fn list_min_max_index_i64() {
+        unsafe {
+            let a = _mvl_array_new(8, 0);
+            for v in [3i64, 1, 2] {
+                _mvl_array_push(a, (&v as *const i64).cast());
+            }
+            assert_eq!(_mvl_list_min_index_i64(a), 1);
+            assert_eq!(_mvl_list_max_index_i64(a), 0);
+            _mvl_array_drop(a);
+        }
+    }
+
+    #[test]
+    fn list_min_max_index_i64_empty() {
+        unsafe {
+            let a = _mvl_array_new(8, 0);
+            assert_eq!(_mvl_list_min_index_i64(a), -1);
+            assert_eq!(_mvl_list_max_index_i64(a), -1);
+            _mvl_array_drop(a);
+        }
+    }
+
+    #[test]
+    fn list_min_max_index_str() {
+        unsafe {
+            let a = _mvl_array_new(8, 0);
+            let bb = _mvl_string_new(b"bb".as_ptr(), 2);
+            let s = _mvl_string_new(b"a".as_ptr(), 1);
+            let ccc = _mvl_string_new(b"ccc".as_ptr(), 3);
+            _mvl_array_push(a, (&bb as *const *mut MvlString).cast());
+            _mvl_array_push(a, (&s as *const *mut MvlString).cast());
+            _mvl_array_push(a, (&ccc as *const *mut MvlString).cast());
+            assert_eq!(_mvl_list_min_index_str(a), 1); // "a"
+            assert_eq!(_mvl_list_max_index_str(a), 2); // "ccc"
             _mvl_string_ptr_array_drop(a);
         }
     }
