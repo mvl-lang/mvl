@@ -1,6 +1,6 @@
 # mastermind — console Mastermind game demonstrating the pure logic / I/O shell split.
 # Run from this directory or from the repo root.
-.PHONY: help guard-mvl check test-solver test test-wasm assurance smoke run clean
+.PHONY: help guard-mvl check test-solver test test-llvm test-wasm assurance smoke run clean
 
 .DEFAULT_GOAL := help
 
@@ -45,6 +45,18 @@ test-solver: guard-mvl ## Check each source file individually
 
 test: guard-mvl ## Run game logic tests
 	$(MVL) test $(DIR)code_test.mvl
+
+test-llvm: guard-mvl ## Run game logic tests via LLVM backend, plus a deterministic empty-stdin smoke test of main.mvl (#2256)
+	$(MVL) test $(DIR)code_test.mvl --backend=llvm
+	@tmp=$$(mktemp -d) || exit 1; \
+	trap 'rm -rf "$$tmp"' EXIT; \
+	GOT=$$(printf "" | $(MVL) run $(DIR)main.mvl --backend=llvm 2>&1) || exit 1; \
+	if echo "$$GOT" | grep -q "Goodbye! The code was:"; then \
+		printf "  \033[32m✓\033[0m  main.mvl (empty stdin -> EOF): reached Goodbye line\n"; \
+	else \
+		printf "  \033[31m✗\033[0m  main.mvl (empty stdin -> EOF): did not reach Goodbye line\n%s\n" "$$GOT"; \
+		exit 1; \
+	fi
 
 test-wasm: guard-mvl ## Run game logic tests via WASM backend, plus a deterministic empty-stdin smoke test of main.mvl (#2088)
 	MVL_RUNTIME_WASM=$(WASM_RUNTIME) $(MVLR) --mvl=$(MVL) --compiler=rust --backend=wasm $(DIR)code_test.mvl
