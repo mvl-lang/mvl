@@ -114,7 +114,32 @@ impl TextEmitter {
             self.emit_stmt_tir(s)?;
         }
         match &tail[0] {
-            TirStmt::Expr { expr, .. } => self.emit_expr_tir(expr),
+            // #2264: this block's tail value may become a *caller's* return
+            // value (a function body, an if/else branch, a match-arm block —
+            // every use of `emit_block_tir_typed`) — if it's a struct-field
+            // read (`owned.bytes`), it needs the same clone-not-exclude
+            // treatment as a `FieldAccess` used as a call argument or
+            // explicit `return` value (see `resolve_owned_call_arg` and the
+            // `TirStmt::Return` handling below): there's no single tracked
+            // local `exclude_returned_value_tir` can blank out for a field
+            // read, since the struct it came from keeps existing and will
+            // deep-drop all its own heap-typed fields regardless.
+            // `examples/bzip/bitstream.mvl::flush_writer`'s
+            // `if owned.bit_pos == 0 { owned.bytes } else { .. }` hits this
+            // exact shape — the FieldAccess is the `then`-branch's tail,
+            // not the function's own outermost tail statement.
+            TirStmt::Expr { expr, .. } => {
+                let val = self.emit_expr_tir(expr)?;
+                if let (Some(v), true) = (
+                    val.as_ref(),
+                    matches!(expr.kind, TirExprKind::FieldAccess { .. }),
+                ) {
+                    if let Some(cloned) = self.clone_heap_value_for_ty(v, &expr.ty) {
+                        return Ok(Some(cloned));
+                    }
+                }
+                Ok(val)
+            }
             TirStmt::If {
                 cond, then, else_, ..
             } => self.emit_if_stmt_chain_tir(cond, then, else_.as_ref(), expected_ty),

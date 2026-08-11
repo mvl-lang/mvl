@@ -3460,6 +3460,26 @@ impl TextEmitter {
                 Some((_, e)) => self.emit_expr_tir(e)?.unwrap_or_else(|| "undef".into()),
                 None => "undef".into(),
             };
+            // #2264: transfer ownership — mirrors `emit_list_literal_tir`'s
+            // identical call for each of its own elements (#1991). Without
+            // this, a field value built from a local (`BitWriter { bytes:
+            // new_bytes, .. }`) stayed independently tracked for its own
+            // scope-exit drop even after being moved into this struct,
+            // which then gets passed on (e.g. as a recursive call's
+            // argument, or as this function's own return value up through
+            // a base-case pass-through). The local's drop and the struct's
+            // later use of the same pointer raced: whichever local
+            // ultimately owns the pointer chain drops it right after
+            // "loaning" it forward, corrupting the struct value that's
+            // still in flight. `examples/bzip/bitstream.mvl::
+            // write_bits_loop`'s `let next_w: BitWriter = BitWriter {
+            // bytes: new_bytes, .. }; write_bits_loop(next_w, ..)` hit this
+            // exactly — `new_bytes` got dropped right after the recursive
+            // call returned, but the *returned* value (having passed
+            // through an unrelated base case) still pointed at it.
+            if let Some((_, e)) = fields.iter().find(|(n, _)| n == field_name) {
+                self.exclude_returned_value_tir(e);
+            }
             field_vals.push((llvm_t, val));
         }
 
