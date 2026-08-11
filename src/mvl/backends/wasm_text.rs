@@ -12731,14 +12731,17 @@ mod validated_module_tests {
         );
     }
 
-    /// `.slice()` on a `List[String]` byte-copies element *pointers* without a
-    /// refcount bump, so parent and slice both drop each string. Must stub
-    /// rather than miscompile ownership.
+    /// `.slice()` on a `List[String]` used to byte-copy element *pointers*
+    /// without a refcount bump, aliasing the parent's strings — both arrays'
+    /// independent drops would then double-free them, so the emitter stubbed
+    /// the call rather than miscompile ownership. Fixed (#2262) via
+    /// `_mvl_array_slice_str`, which refcount-clones each element instead;
+    /// the call now lowers for real, not to a stub.
     /// `.slice()` is the builtin `take`/`skip` are written over, so it is what
-    /// the guard has to gate. Called directly here — this harness does not load
+    /// this test exercises directly — this harness does not load
     /// `std/lists.mvl`, so `take` itself is not in scope.
     #[test]
-    fn slice_on_string_list_stubs_instead_of_double_freeing() {
+    fn slice_on_string_list_lowers_via_slice_str() {
         let (wat, stubbed) = emit(
             "test fn t() -> Unit {\n\
                  let xs: List[String] = [\"a\", \"b\", \"c\"];\n\
@@ -12747,10 +12750,14 @@ mod validated_module_tests {
              }\n",
         );
         validate(&wat);
-        assert_eq!(stubbed, vec!["t".to_string()], "the caller must stub");
+        assert!(stubbed.is_empty(), "must not stub: {stubbed:?}");
         assert!(
-            !wat.contains("call $_mvl_array_slice"),
-            "a String-element slice must not be lowered: {wat}"
+            wat.contains("call $_mvl_array_slice_str"),
+            "a String-element slice must lower via the refcount-cloning variant: {wat}"
+        );
+        assert!(
+            !wat.contains("call $_mvl_array_slice\n"),
+            "a String-element slice must not alias via the plain byte-copying variant: {wat}"
         );
     }
 
