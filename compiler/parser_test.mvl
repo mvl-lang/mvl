@@ -3,15 +3,15 @@
 //
 // compiler/parser_test.mvl — integration tests for compiler/parser.mvl
 //
-// mvl test inlines all dependent modules into one compilation unit, so
-// functions from ast.mvl, lexer.mvl, and parser.mvl are already in scope
-// — no 'use' imports needed here.
-//
 // Tests call lex() + parse() end-to-end on real MVL source snippets,
 // then assert on the resulting Program struct.
 //
 // Run with:  mvl test compiler/
 //            make test-mvl
+
+use tir::Program;
+use lexer::lex;
+use parser::parse;
 
 // ── Helper: lex + parse a source string ──────────────────────────────────────
 

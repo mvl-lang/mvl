@@ -24,6 +24,10 @@
 //   - No &mut Vec<CheckError>: errors returned as List[CheckError].
 //   - No TermCtx struct needed for the simplified check.
 
+use tir.{SourceLoc, TirBlock, TirExpr, TirExprKind, TirFn, TirProgram, TirStmt, Totality, Ty}
+use verify_errors::CheckError;
+use call_graph::CallGraph;
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 /// True if the function is subject to termination checks (i.e. not partial).

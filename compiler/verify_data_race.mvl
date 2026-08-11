@@ -24,6 +24,12 @@
 //   - &mut Vec<CheckError> accumulator → returned List[CheckError].
 //   - Actor spawn is TirExprKind::Spawn rather than parser-level ActorSpawn.
 
+use tir.{
+    Capability, LetKind, Pattern, SourceLoc, TirBlock, TirExpr, TirExprKind,
+    TirFieldExpr, TirFn, TirParam, TirProgram, TirStmt, Ty
+}
+use verify_errors::CheckError;
+
 // ── Data race metrics ─────────────────────────────────────────────────────────
 
 /// Per-function data race freedom metrics.

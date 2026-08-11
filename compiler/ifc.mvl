@@ -23,6 +23,9 @@
 //   - IfcFlowAnalyzer visitor → explicit IfcState struct threaded as values
 //   - in_branch/in_pc closures → passing state copy (changes discarded on return)
 
+use tir.{Expr, Pattern, Program, SourceLoc, Stmt, Ty, TypeExpr}
+use verify_errors::CheckError;
+
 // ── Local walk helpers (cannot use walk.mvl in isolated test harness) ────────
 // Minimal ports of walk_block/walk_expr for use within this file's test context.
 

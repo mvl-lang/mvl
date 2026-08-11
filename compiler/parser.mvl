@@ -323,7 +323,7 @@ total fn empty_expr() -> Expr {
 
 total fn box_expr(e: Expr) -> List[Expr] { [e] }
 
-total fn unbox_expr(cell: List[Expr]) -> Expr {
+pub total fn unbox_expr(cell: List[Expr]) -> Expr {
     match cell.get(0) { Some(e) => e, None => empty_expr() }
 }
 
