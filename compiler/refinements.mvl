@@ -69,12 +69,14 @@ pub type RefCounts = struct {
     sites:              List[ProofSite],
 }
 
-pub fn rc_zero(mode: SolverMode) -> RefCounts {
+/// A zeroed counter set, tagged with the active solver mode.
+pub total fn rc_zero(mode: SolverMode) -> RefCounts {
     RefCounts { mode: mode, proven: 0, runtime_checked: 0, failed: 0, by_layer: lc_empty(),
                 fn_total: 0, fully_verified_fns: 0, proof_log: [], sites: [] }
 }
 
-pub fn rc_merge(a: RefCounts, b: RefCounts) -> RefCounts {
+/// Field-wise sum of two counter sets; `a`'s solver mode wins.
+pub total fn rc_merge(a: RefCounts, b: RefCounts) -> RefCounts {
     RefCounts {
         mode:               a.mode,
         proven:             a.proven + b.proven,
@@ -88,15 +90,18 @@ pub fn rc_merge(a: RefCounts, b: RefCounts) -> RefCounts {
     }
 }
 
-pub fn rc_proven(mode: SolverMode) -> RefCounts {
+/// Counter set recording exactly one statically-proven refinement.
+pub total fn rc_proven(mode: SolverMode) -> RefCounts {
     RefCounts { mode: mode, proven: 1, runtime_checked: 0, failed: 0, by_layer: lc_empty(),
                 fn_total: 0, fully_verified_fns: 0, proof_log: [], sites: [] }
 }
-pub fn rc_rt(mode: SolverMode) -> RefCounts {
+/// Counter set recording exactly one runtime-checked refinement.
+pub total fn rc_rt(mode: SolverMode) -> RefCounts {
     RefCounts { mode: mode, proven: 0, runtime_checked: 1, failed: 0, by_layer: lc_empty(),
                 fn_total: 0, fully_verified_fns: 0, proof_log: [], sites: [] }
 }
-pub fn rc_failed(mode: SolverMode) -> RefCounts {
+/// Counter set recording exactly one failed refinement.
+pub total fn rc_failed(mode: SolverMode) -> RefCounts {
     RefCounts { mode: mode, proven: 0, runtime_checked: 0, failed: 1, by_layer: lc_empty(),
                 fn_total: 0, fully_verified_fns: 0, proof_log: [], sites: [] }
 }
