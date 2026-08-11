@@ -853,21 +853,41 @@ impl TextEmitter {
         let lhs_ty = self.ty_to_llvm_ctx(&left.ty);
         let is_float = lhs_ty == "double" || tir_expr_is_float(left);
 
-        // String equality/inequality: delegate to runtime via mvl_string_eq.
-        if lhs_ty == "ptr" && matches!(op, BinaryOp::Eq | BinaryOp::Ne) {
-            self.ensure_extern("declare i1 @_mvl_string_eq(ptr, ptr)");
-            let reg = self.next_reg();
-            self.push_instr(&format!(
-                "{reg} = call i1 @_mvl_string_eq(ptr {lv}, ptr {rv})"
-            ));
-            if matches!(op, BinaryOp::Ne) {
-                let neg = self.next_reg();
-                self.push_instr(&format!("{neg} = xor i1 {reg}, true"));
-                self.fn_ctx.reg_types.insert(neg.clone(), "i1".into());
-                return Ok(Some(neg));
+        // String / scalar-element-List/Set equality: delegate to runtime.
+        //
+        // Bug (#2264): this used to fire for *any* pointer-typed operand
+        // (every List/Set/Map lowers to LLVM `ptr` too, same as String) and
+        // always called `_mvl_string_eq` — reading an `MvlArray*`'s bytes
+        // through `MvlString`'s field layout (different struct: no
+        // `elem_size` field), silent memory corruption. `rot == original`
+        // on two `List[Byte]` in `examples/bzip/bwt.mvl` hit this exact
+        // path. Now gated on the actual MVL type, not just the LLVM lowering.
+        let eq_sym = match unwrap_labels(&left.ty) {
+            Ty::String => Some("_mvl_string_eq"),
+            Ty::List(e) | Ty::Array(e, _) | Ty::Set(e)
+                if matches!(
+                    unwrap_labels(e),
+                    Ty::Int | Ty::Float | Ty::Bool | Ty::Char | Ty::Byte | Ty::UByte | Ty::UInt
+                ) =>
+            {
+                Some("_mvl_array_eq")
             }
-            self.fn_ctx.reg_types.insert(reg.clone(), "i1".into());
-            return Ok(Some(reg));
+            _ => None,
+        };
+        if let Some(sym) = eq_sym {
+            if matches!(op, BinaryOp::Eq | BinaryOp::Ne) {
+                self.ensure_extern(&format!("declare i1 @{sym}(ptr, ptr)"));
+                let reg = self.next_reg();
+                self.push_instr(&format!("{reg} = call i1 @{sym}(ptr {lv}, ptr {rv})"));
+                if matches!(op, BinaryOp::Ne) {
+                    let neg = self.next_reg();
+                    self.push_instr(&format!("{neg} = xor i1 {reg}, true"));
+                    self.fn_ctx.reg_types.insert(neg.clone(), "i1".into());
+                    return Ok(Some(neg));
+                }
+                self.fn_ctx.reg_types.insert(reg.clone(), "i1".into());
+                return Ok(Some(reg));
+            }
         }
 
         let instr = Self::binary_instr(op, is_float, &lhs_ty, &lv, &rv);
@@ -4552,6 +4572,54 @@ impl TextEmitter {
                 self.exclude_returned_value_tir(&args[0]);
                 Ok(Some(val))
             }
+            // `List[T]::extend(other)` (#2264) is a non-generic extension
+            // method (no bracket of its own beyond the receiver's `T`), so
+            // it fell outside the generic-fallback dispatch and had no
+            // dedicated arm — the call silently emitted nothing, for every
+            // element type. Confirmed against the Rust backend: `other`
+            // must remain independently valid afterward (the checker allows
+            // reusing it), so each element must be *cloned* in, not moved —
+            // unlike `push` just above, which transfers ownership of its
+            // single argument. Scoped to element types with a known-safe
+            // clone strategy (scalar / String / List[U] with U scalar);
+            // other shapes (struct/enum elements, List[List[String]], …)
+            // need real per-element cloning support first (#2265) and are
+            // deliberately left unhandled here rather than mishandled.
+            ("extend", "ptr") if args.len() == 1 => {
+                let elem_ty = match unwrap_labels(&receiver.ty) {
+                    Ty::List(e) | Ty::Array(e, _) | Ty::Set(e) => unwrap_labels(e),
+                    _ => return Ok(None),
+                };
+                let sym = match elem_ty {
+                    Ty::String => Some("_mvl_array_extend_str"),
+                    Ty::List(inner) | Ty::Array(inner, _) | Ty::Set(inner)
+                        if matches!(
+                            unwrap_labels(inner),
+                            Ty::Int
+                                | Ty::Float
+                                | Ty::Bool
+                                | Ty::Char
+                                | Ty::Byte
+                                | Ty::UByte
+                                | Ty::UInt
+                        ) =>
+                    {
+                        Some("_mvl_array_extend_nested")
+                    }
+                    Ty::Int | Ty::Float | Ty::Bool | Ty::Char | Ty::Byte | Ty::UByte | Ty::UInt => {
+                        Some("_mvl_array_extend")
+                    }
+                    _ => None,
+                };
+                let Some(sym) = sym else { return Ok(None) };
+                let other = match self.emit_expr_tir(&args[0])? {
+                    Some(v) => v,
+                    None => return Ok(None),
+                };
+                self.ensure_extern(&format!("declare void @{sym}(ptr, ptr)"));
+                self.push_instr(&format!("call void @{sym}(ptr {val}, ptr {other})"));
+                Ok(None)
+            }
             ("get", "ptr")
                 if matches!(unwrap_labels(&receiver.ty), Ty::List(_) | Ty::Array(_, _))
                     && args.len() == 1 =>
@@ -4576,10 +4644,10 @@ impl TextEmitter {
                 // independently-owned reference, mirroring the identical
                 // fix for `Map::get` (#2047). Scalar elements (Int, Bool,
                 // …) have no ownership to share and are returned as before.
-                let elem_is_string = matches!(
-                    unwrap_labels(&receiver.ty),
-                    Ty::List(e) | Ty::Array(e, _) if matches!(unwrap_labels(e), Ty::String)
-                );
+                let elem_clone_sym = match unwrap_labels(&receiver.ty) {
+                    Ty::List(e) | Ty::Array(e, _) => elem_clone_sym(e),
+                    _ => None,
+                };
 
                 // Bounds check: 0 <= index < len. Mirror of AST emit_method_call's
                 // ("get", "ptr") arm — alloca + store + load shape (not the
@@ -4624,12 +4692,10 @@ impl TextEmitter {
                 ));
                 let elem_val = self.next_reg();
                 self.push_instr(&format!("{elem_val} = load {elem_llvm_ty}, ptr {elem_ptr}"));
-                let elem_val = if elem_is_string {
-                    self.ensure_extern("declare ptr @_mvl_string_clone(ptr)");
+                let elem_val = if let Some(sym) = elem_clone_sym {
+                    self.ensure_extern(&format!("declare ptr @{sym}(ptr)"));
                     let cloned = self.next_reg();
-                    self.push_instr(&format!(
-                        "{cloned} = call ptr @_mvl_string_clone(ptr {elem_val})"
-                    ));
+                    self.push_instr(&format!("{cloned} = call ptr @{sym}(ptr {elem_val})"));
                     cloned
                 } else {
                     elem_val
@@ -4731,6 +4797,25 @@ impl TextEmitter {
                     "{reg} = call i1 @_mvl_array_contains(ptr {val}, ptr {slot})"
                 ));
                 self.fn_ctx.reg_types.insert(reg.clone(), "i1".into());
+                Ok(Some(reg))
+            }
+            // `List[List[Byte]]::sort()` needs its own C-ABI symbol (#2264) —
+            // same reason `List[String]::sort` did (#2173): the generic arm
+            // below compares elements as raw i64 bit patterns, which for a
+            // `*MvlArray` element is the heap address, not the nested list's
+            // content. Scoped to `Byte` inner elements (bwt.mvl's
+            // cyclic-rotation sort) — other nested-list element types need
+            // real per-element cloning support first (#2265).
+            ("sort", "ptr")
+                if args.is_empty()
+                    && matches!(unwrap_labels(&receiver.ty), Ty::List(e) | Ty::Array(e, _) if matches!(unwrap_labels(e), Ty::List(inner) | Ty::Array(inner, _) if matches!(unwrap_labels(inner), Ty::Byte))) =>
+            {
+                self.ensure_extern("declare ptr @_mvl_list_sort_bytelist(ptr)");
+                let reg = self.next_reg();
+                self.push_instr(&format!(
+                    "{reg} = call ptr @_mvl_list_sort_bytelist(ptr {val})"
+                ));
+                self.fn_ctx.reg_types.insert(reg.clone(), "ptr".into());
                 Ok(Some(reg))
             }
             // `List[String]::sort()` needs its own C-ABI symbol (#2173) —
@@ -4848,10 +4933,10 @@ impl TextEmitter {
                 // See the identical clone-on-extract fix in the `("get",
                 // "ptr")` arm above (#2169) — `first()` aliases the same
                 // buffer slot and needs the same treatment.
-                let elem_is_string = matches!(
-                    unwrap_labels(&receiver.ty),
-                    Ty::List(e) | Ty::Array(e, _) if matches!(unwrap_labels(e), Ty::String)
-                );
+                let elem_clone_sym = match unwrap_labels(&receiver.ty) {
+                    Ty::List(e) | Ty::Array(e, _) => elem_clone_sym(e),
+                    _ => None,
+                };
 
                 self.ensure_extern("declare i64 @_mvl_array_len(ptr)");
                 let len = self.next_reg();
@@ -4891,12 +4976,10 @@ impl TextEmitter {
                 ));
                 let elem_val = self.next_reg();
                 self.push_instr(&format!("{elem_val} = load {elem_llvm_ty}, ptr {elem_ptr}"));
-                let elem_val = if elem_is_string {
-                    self.ensure_extern("declare ptr @_mvl_string_clone(ptr)");
+                let elem_val = if let Some(sym) = elem_clone_sym {
+                    self.ensure_extern(&format!("declare ptr @{sym}(ptr)"));
                     let cloned = self.next_reg();
-                    self.push_instr(&format!(
-                        "{cloned} = call ptr @_mvl_string_clone(ptr {elem_val})"
-                    ));
+                    self.push_instr(&format!("{cloned} = call ptr @{sym}(ptr {elem_val})"));
                     cloned
                 } else {
                     elem_val
@@ -4939,10 +5022,10 @@ impl TextEmitter {
                     Ty::List(e) | Ty::Array(e, _) => self.ty_to_llvm_ctx(e),
                     _ => "i64".to_string(),
                 };
-                let elem_is_string = matches!(
-                    unwrap_labels(&receiver.ty),
-                    Ty::List(e) | Ty::Array(e, _) if matches!(unwrap_labels(e), Ty::String)
-                );
+                let elem_clone_sym = match unwrap_labels(&receiver.ty) {
+                    Ty::List(e) | Ty::Array(e, _) => elem_clone_sym(e),
+                    _ => None,
+                };
 
                 self.ensure_extern("declare i64 @_mvl_array_len(ptr)");
                 let len = self.next_reg();
@@ -4984,12 +5067,10 @@ impl TextEmitter {
                 ));
                 let elem_val = self.next_reg();
                 self.push_instr(&format!("{elem_val} = load {elem_llvm_ty}, ptr {elem_ptr}"));
-                let elem_val = if elem_is_string {
-                    self.ensure_extern("declare ptr @_mvl_string_clone(ptr)");
+                let elem_val = if let Some(sym) = elem_clone_sym {
+                    self.ensure_extern(&format!("declare ptr @{sym}(ptr)"));
                     let cloned = self.next_reg();
-                    self.push_instr(&format!(
-                        "{cloned} = call ptr @_mvl_string_clone(ptr {elem_val})"
-                    ));
+                    self.push_instr(&format!("{cloned} = call ptr @{sym}(ptr {elem_val})"));
                     cloned
                 } else {
                     elem_val
@@ -5307,6 +5388,16 @@ impl TextEmitter {
             unwrap_labels(&receiver.ty),
             Ty::List(e) | Ty::Array(e, _) if matches!(unwrap_labels(e), Ty::String)
         );
+        // #2264: separate from `elem_is_string` above (which only picks the
+        // min/max *comparison* strategy) — this drives clone-on-extract for
+        // pointer-typed, non-String elements too (e.g. `List[List[T]]`),
+        // same fix as `get`/`first`/`last`. Comparing nested elements by
+        // content (rather than by pointer, via `_mvl_list_min_index_i64`)
+        // is a separate, still-open gap (#2265).
+        let elem_clone_sym = match unwrap_labels(&receiver.ty) {
+            Ty::List(e) | Ty::Array(e, _) => elem_clone_sym(e),
+            _ => None,
+        };
         let elem_llvm_ty = match unwrap_labels(&receiver.ty) {
             Ty::List(e) | Ty::Array(e, _) => self.ty_to_llvm_ctx(e),
             _ => "i64".to_string(),
@@ -5354,12 +5445,10 @@ impl TextEmitter {
         ));
         let elem_val = self.next_reg();
         self.push_instr(&format!("{elem_val} = load {elem_llvm_ty}, ptr {elem_ptr}"));
-        let elem_val = if elem_is_string {
-            self.ensure_extern("declare ptr @_mvl_string_clone(ptr)");
+        let elem_val = if let Some(sym) = elem_clone_sym {
+            self.ensure_extern(&format!("declare ptr @{sym}(ptr)"));
             let cloned = self.next_reg();
-            self.push_instr(&format!(
-                "{cloned} = call ptr @_mvl_string_clone(ptr {elem_val})"
-            ));
+            self.push_instr(&format!("{cloned} = call ptr @{sym}(ptr {elem_val})"));
             cloned
         } else {
             elem_val
@@ -5395,6 +5484,28 @@ fn unwrap_labels(ty: &Ty) -> &Ty {
         cur = inner;
     }
     cur
+}
+
+/// Clone symbol for an element extracted (by raw pointer load) out of a
+/// `List`/`Array`/`Set`'s backing buffer, or `None` for scalar elements that
+/// have no ownership to share. #2264: extracting via `.get()`/`.first()`/
+/// `.last()`/`.min()`/`.max()` hands out the pointer stored *in the array's
+/// own slot* — the array still owns that reference, so if the caller also
+/// drops the extracted element (its own scope exit), that's a double free.
+/// This used to only clone `String` elements (#2169/#2047); `List[List[T]]`
+/// (or any other pointer-typed, non-String element) needs the identical
+/// treatment — `bwt.mvl`'s `sorted.get(idx)` on a `List[List[Byte]]` hit
+/// this exact double-free. A cheap refcount-bump clone (not a deep copy)
+/// is correct here: the extracted value just needs its own independent
+/// owning handle to the same underlying buffer, same as any other List
+/// aliasing.
+fn elem_clone_sym(elem_ty: &Ty) -> Option<&'static str> {
+    match unwrap_labels(elem_ty) {
+        Ty::String => Some("_mvl_string_clone"),
+        Ty::List(_) | Ty::Array(_, _) | Ty::Set(_) => Some("_mvl_array_clone"),
+        Ty::Map(_, _) => Some("_mvl_map_clone"),
+        _ => None,
+    }
 }
 
 /// Receiver base-type name used to look up extension methods.

@@ -579,6 +579,75 @@ pub unsafe extern "C" fn _mvl_array_push(a: *mut MvlArray, elem: *const u8) {
     (*a).len += 1;
 }
 
+/// `List[T].extend(other)` (#2264) for scalar element types (Int/Byte/Bool/
+/// Float) — append every element of `other` onto `self` in place. A raw
+/// byte-level append is a correct, fully independent copy for scalar
+/// elements (no shared ownership to worry about), unlike pointer-typed
+/// elements (String, nested List) which need [`_mvl_array_extend_str`] /
+/// [`_mvl_array_extend_nested`] instead.
+///
+/// # Safety
+/// `self_arr` and `other` must be valid `MvlArray*` (same elem_size) or null.
+#[no_mangle]
+pub unsafe extern "C" fn _mvl_array_extend(self_arr: *mut MvlArray, other: *const MvlArray) {
+    if self_arr.is_null() || other.is_null() {
+        return;
+    }
+    let es = (*other).elem_size as usize;
+    let len = (*other).len as usize;
+    for i in 0..len {
+        let elem_ptr = (*other).ptr.add(i * es);
+        _mvl_array_push(self_arr, elem_ptr);
+    }
+}
+
+/// `List[String].extend(other)` (#2264) — append every element of `other`
+/// onto `self` in place, cloning each string (refcount bump) so `other`
+/// remains an independent, valid owner afterward — confirmed against the
+/// Rust backend: the checker allows reusing `other` after `.extend()`, and
+/// it must still show correct content.
+///
+/// # Safety
+/// `self_arr` and `other` must be valid `MvlArray*` (elem_size == 8, holding
+/// `*mut MvlString` elements) or null.
+#[no_mangle]
+pub unsafe extern "C" fn _mvl_array_extend_str(self_arr: *mut MvlArray, other: *const MvlArray) {
+    if self_arr.is_null() || other.is_null() {
+        return;
+    }
+    let len = (*other).len as usize;
+    for i in 0..len {
+        let src = (*other).ptr.add(i * 8) as *const *mut MvlString;
+        let cloned = _mvl_string_clone(*src);
+        _mvl_array_push(self_arr, (&cloned as *const *mut MvlString).cast());
+    }
+}
+
+/// `List[List[U]].extend(other)` (#2264), `U` scalar — append every element
+/// of `other` onto `self` in place, deep-cloning each nested array so
+/// `other` remains an independent, valid owner afterward. Byte-level
+/// [`_mvl_array_deep_clone`] is a correct independent copy here because the
+/// *nested* array's own elements are scalar (no further pointer chasing
+/// needed) — this is NOT safe for `List[List[String]]` or `List[<struct/
+/// enum with heap fields>]`, which need a real per-element clone (#2265,
+/// not implemented).
+///
+/// # Safety
+/// `self_arr` and `other` must be valid `MvlArray*` (elem_size == 8, holding
+/// `*mut MvlArray` elements) or null.
+#[no_mangle]
+pub unsafe extern "C" fn _mvl_array_extend_nested(self_arr: *mut MvlArray, other: *const MvlArray) {
+    if self_arr.is_null() || other.is_null() {
+        return;
+    }
+    let len = (*other).len as usize;
+    for i in 0..len {
+        let src = (*other).ptr.add(i * 8) as *const *mut MvlArray;
+        let cloned = crate::memory::_mvl_array_deep_clone(*src);
+        _mvl_array_push(self_arr, (&cloned as *const *mut MvlArray).cast());
+    }
+}
+
 /// Overwrite the element at index `idx` in place.  No-op if out of bounds.
 ///
 /// # Safety
@@ -1770,6 +1839,38 @@ unsafe fn list_extreme_index_i64(list: *const MvlArray, better: impl Fn(i64, i64
     best_idx as i64
 }
 
+/// `List[T] == List[T]` / `Set[T] == Set[T]` (#2264), `T` scalar — content
+/// equality: same length and identical raw bytes. Two arrays with different
+/// `elem_size` are never equal (ill-typed comparison, shouldn't happen for a
+/// well-typed caller, but avoids reading past a shorter buffer).
+///
+/// Not safe for pointer-containing element types (String, nested List/Set/
+/// Map, struct/enum with heap fields) — those need per-element equality
+/// (e.g. `_mvl_string_eq` per element for `List[String]`), not a raw byte
+/// compare of the pointers themselves. Not implemented here — see #2265 for
+/// the general per-element dispatch gap this and `extend`/`sort` share.
+///
+/// # Safety
+/// `a` and `b` must be valid `MvlArray*` or null.
+#[no_mangle]
+pub unsafe extern "C" fn _mvl_array_eq(a: *const MvlArray, b: *const MvlArray) -> bool {
+    if a == b {
+        return true;
+    }
+    if a.is_null() || b.is_null() {
+        return false;
+    }
+    if (*a).len != (*b).len || (*a).elem_size != (*b).elem_size {
+        return false;
+    }
+    let len = (*a).len as usize;
+    if len == 0 {
+        return true;
+    }
+    let bytes = len * (*a).elem_size as usize;
+    libc::memcmp((*a).ptr.cast(), (*b).ptr.cast(), bytes) == 0
+}
+
 /// `List[String].min()` / `.max()` (#2256) — index of the lexicographically
 /// smallest (resp. largest) string, or `-1` for an empty list. Same
 /// index-based contract as [`_mvl_list_min_index_i64`], comparing string
@@ -1815,6 +1916,45 @@ unsafe fn list_extreme_index_str(
         }
     }
     best_idx as i64
+}
+
+/// `List[List[Byte]].sort()` (#2264) — return a new list of byte-lists
+/// sorted ascending by lexicographic content.
+///
+/// `_mvl_list_sort` compares elements as raw i64 bit patterns, which for a
+/// `*mut MvlArray` element is the heap address, not the nested list's
+/// content — same shape as the #2173 `List[String]::sort` fix, scoped here
+/// to `List[Byte]`-element lists (`bwt.mvl`'s cyclic-rotation sort). Nested
+/// arrays are cloned via [`crate::memory::_mvl_array_deep_clone`] into the
+/// output — safe because the *inner* list's own elements are scalar bytes,
+/// same reasoning as `_mvl_array_extend_nested`.
+///
+/// # Safety
+/// `list` must be a valid `MvlArray*` (elem_size == 8, holding `*mut
+/// MvlArray` elements, each itself holding `Byte`/i8 elements) or null.
+#[no_mangle]
+pub unsafe extern "C" fn _mvl_list_sort_bytelist(list: *mut MvlArray) -> *mut MvlArray {
+    let len = if list.is_null() {
+        0
+    } else {
+        (*list).len as usize
+    };
+    let out = _mvl_array_new(8, len.max(1));
+    let mut ptrs: Vec<*mut MvlArray> = (0..len)
+        .map(|i| {
+            let src = (*list).ptr.add(i * 8) as *const *mut MvlArray;
+            crate::memory::_mvl_array_deep_clone(*src)
+        })
+        .collect();
+    ptrs.sort_unstable_by(|&a, &b| {
+        let sa = std::slice::from_raw_parts((*a).ptr, (*a).len as usize);
+        let sb = std::slice::from_raw_parts((*b).ptr, (*b).len as usize);
+        sa.cmp(sb)
+    });
+    for p in ptrs {
+        _mvl_array_push(out, (&p as *const *mut MvlArray).cast());
+    }
+    out
 }
 
 /// `_mvl_list_sort_str(list)` — return a new `List[String]` sorted ascending
@@ -2301,6 +2441,163 @@ mod tests {
             assert_eq!(_mvl_list_min_index_str(a), 1); // "a"
             assert_eq!(_mvl_list_max_index_str(a), 2); // "ccc"
             _mvl_string_ptr_array_drop(a);
+        }
+    }
+
+    #[test]
+    fn array_eq_compares_content_not_pointer() {
+        unsafe {
+            let a = _mvl_array_new(1, 0);
+            let b = _mvl_array_new(1, 0);
+            for arr in [a, b] {
+                for byte in [1u8, 2, 3] {
+                    _mvl_array_push(arr, &byte as *const u8);
+                }
+            }
+            assert_ne!(a, b); // different allocations
+            assert!(_mvl_array_eq(a, b));
+
+            let c = _mvl_array_new(1, 0);
+            for byte in [1u8, 2, 4] {
+                _mvl_array_push(c, &byte as *const u8);
+            }
+            assert!(!_mvl_array_eq(a, c));
+
+            let d = _mvl_array_new(1, 0);
+            _mvl_array_push(d, &1u8 as *const u8);
+            assert!(!_mvl_array_eq(a, d)); // different length
+
+            _mvl_array_drop(a);
+            _mvl_array_drop(b);
+            _mvl_array_drop(c);
+            _mvl_array_drop(d);
+        }
+    }
+
+    #[test]
+    fn list_sort_bytelist_by_content_not_pointer() {
+        unsafe {
+            let list = _mvl_array_new(8, 0);
+            for bytes in [&b"ccc"[..], &b"a"[..], &b"bb"[..]] {
+                let inner = _mvl_array_new(1, 0);
+                for &b in bytes {
+                    _mvl_array_push(inner, &b as *const u8);
+                }
+                _mvl_array_push(list, (&inner as *const *mut MvlArray).cast());
+            }
+            let sorted = _mvl_list_sort_bytelist(list);
+            assert_eq!(_mvl_array_len(sorted), 3);
+            let expect = |i: i64, want: &[u8]| {
+                let inner = *(_mvl_array_get(sorted, i) as *const *mut MvlArray);
+                let got = std::slice::from_raw_parts((*inner).ptr, (*inner).len as usize);
+                assert_eq!(got, want);
+            };
+            expect(0, b"a");
+            expect(1, b"bb");
+            expect(2, b"ccc");
+
+            // Drop the (now-unused) original list's shell + its nested
+            // arrays, and the sorted output's shell + its (cloned) nested
+            // arrays — independent allocations, no double-free.
+            for i in 0..3 {
+                let inner = *(_mvl_array_get(list, i) as *const *mut MvlArray);
+                _mvl_array_drop(inner);
+            }
+            _mvl_array_drop(list);
+            for i in 0..3 {
+                let inner = *(_mvl_array_get(sorted, i) as *const *mut MvlArray);
+                _mvl_array_drop(inner);
+            }
+            _mvl_array_drop(sorted);
+        }
+    }
+
+    #[test]
+    fn array_extend_scalar() {
+        unsafe {
+            let a = _mvl_array_new(8, 0);
+            for v in [1i64, 2, 3] {
+                _mvl_array_push(a, (&v as *const i64).cast());
+            }
+            let b = _mvl_array_new(8, 0);
+            for v in [4i64, 5] {
+                _mvl_array_push(b, (&v as *const i64).cast());
+            }
+            _mvl_array_extend(a, b);
+            assert_eq!(_mvl_array_len(a), 5);
+            for (i, expected) in [1i64, 2, 3, 4, 5].iter().enumerate() {
+                let p = _mvl_array_get(a, i as i64) as *const i64;
+                assert_eq!(*p, *expected);
+            }
+            // `other` (b) must remain valid and untouched.
+            assert_eq!(_mvl_array_len(b), 2);
+            _mvl_array_drop(a);
+            _mvl_array_drop(b);
+        }
+    }
+
+    #[test]
+    fn array_extend_str_clones_and_leaves_other_valid() {
+        unsafe {
+            let a = _mvl_array_new(8, 0);
+            let x = _mvl_string_new(b"x".as_ptr(), 1);
+            _mvl_array_push(a, (&x as *const *mut MvlString).cast());
+
+            let b = _mvl_array_new(8, 0);
+            let y = _mvl_string_new(b"y".as_ptr(), 1);
+            let z = _mvl_string_new(b"z".as_ptr(), 1);
+            _mvl_array_push(b, (&y as *const *mut MvlString).cast());
+            _mvl_array_push(b, (&z as *const *mut MvlString).cast());
+
+            _mvl_array_extend_str(a, b);
+            assert_eq!(_mvl_array_len(a), 3);
+            assert_eq!(
+                as_str(*(_mvl_array_get(a, 1) as *const *mut MvlString)),
+                "y"
+            );
+            assert_eq!(
+                as_str(*(_mvl_array_get(a, 2) as *const *mut MvlString)),
+                "z"
+            );
+
+            // `other` (b) must remain independently valid — its elements
+            // weren't moved, they were cloned.
+            assert_eq!(_mvl_array_len(b), 2);
+            assert_eq!(
+                as_str(*(_mvl_array_get(b, 0) as *const *mut MvlString)),
+                "y"
+            );
+
+            _mvl_string_ptr_array_drop(a);
+            _mvl_string_ptr_array_drop(b);
+        }
+    }
+
+    #[test]
+    fn array_extend_nested_clones_and_leaves_other_valid() {
+        unsafe {
+            let a = _mvl_array_new(8, 0);
+
+            let b = _mvl_array_new(8, 0);
+            let inner = _mvl_array_new(8, 0);
+            let v: i64 = 42;
+            _mvl_array_push(inner, (&v as *const i64).cast());
+            _mvl_array_push(b, (&inner as *const *mut MvlArray).cast());
+
+            _mvl_array_extend_nested(a, b);
+            assert_eq!(_mvl_array_len(a), 1);
+            let cloned_inner = *(_mvl_array_get(a, 0) as *const *mut MvlArray);
+            assert_ne!(cloned_inner, inner); // independent allocation
+            assert_eq!(_mvl_array_len(cloned_inner), 1);
+
+            // `other` (b) and its nested array remain independently valid.
+            assert_eq!(_mvl_array_len(b), 1);
+            assert_eq!(_mvl_array_len(inner), 1);
+
+            _mvl_array_drop(cloned_inner);
+            _mvl_array_drop(a);
+            _mvl_array_drop(inner);
+            _mvl_array_drop(b);
         }
     }
 
