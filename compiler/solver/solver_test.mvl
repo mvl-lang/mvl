@@ -12,6 +12,9 @@
 //
 // Run with: mvl test compiler/
 
+use tir.{BinaryOp, CmpOp}
+use solver.{SolverMode, RefResult, binary_op_to_cmp, dummy_loc}
+
 // ── SolverMode::as_str ────────────────────────────────────────────────────────
 
 test fn solver_mode_as_str_layered() -> Unit {
