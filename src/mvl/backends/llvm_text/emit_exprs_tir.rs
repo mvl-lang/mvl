@@ -5329,7 +5329,9 @@ impl TextEmitter {
 
         let result_slot = self.next_reg();
         self.push_instr(&format!("{result_slot} = alloca {{ i8, ptr }}"));
-        self.push_instr(&format!("br i1 {found}, label %{some_bb}, label %{none_bb}"));
+        self.push_instr(&format!(
+            "br i1 {found}, label %{some_bb}, label %{none_bb}"
+        ));
 
         self.start_bb(&none_bb);
         let none_r0 = self.next_reg();

@@ -1627,8 +1627,16 @@ pub unsafe extern "C" fn _mvl_list_skip_while(
 /// `list` must be a valid `MvlArray*` or null.
 #[no_mangle]
 pub unsafe extern "C" fn _mvl_array_reverse(list: *const MvlArray) -> *mut MvlArray {
-    let len = if list.is_null() { 0 } else { (*list).len as usize };
-    let es = if list.is_null() { 8 } else { (*list).elem_size as usize };
+    let len = if list.is_null() {
+        0
+    } else {
+        (*list).len as usize
+    };
+    let es = if list.is_null() {
+        8
+    } else {
+        (*list).elem_size as usize
+    };
     let out = _mvl_array_new(es, len.max(1));
     for i in (0..len).rev() {
         let elem_ptr = (*list).ptr.add(i * es);
@@ -1648,7 +1656,11 @@ pub unsafe extern "C" fn _mvl_array_reverse(list: *const MvlArray) -> *mut MvlAr
 /// MvlString` elements) or null.
 #[no_mangle]
 pub unsafe extern "C" fn _mvl_list_reverse_str(list: *const MvlArray) -> *mut MvlArray {
-    let len = if list.is_null() { 0 } else { (*list).len as usize };
+    let len = if list.is_null() {
+        0
+    } else {
+        (*list).len as usize
+    };
     let out = _mvl_array_new(8, len.max(1));
     for i in (0..len).rev() {
         let src = (*list).ptr.add(i * 8) as *const *mut MvlString;
@@ -1730,7 +1742,11 @@ pub unsafe extern "C" fn _mvl_list_max_index_i64(list: *const MvlArray) -> i64 {
 }
 
 unsafe fn list_extreme_index_i64(list: *const MvlArray, better: impl Fn(i64, i64) -> bool) -> i64 {
-    let len = if list.is_null() { 0 } else { (*list).len as usize };
+    let len = if list.is_null() {
+        0
+    } else {
+        (*list).len as usize
+    };
     if len == 0 {
         return -1;
     }
@@ -1773,8 +1789,15 @@ pub unsafe extern "C" fn _mvl_list_max_index_str(list: *const MvlArray) -> i64 {
     list_extreme_index_str(list, |a, b| a > b)
 }
 
-unsafe fn list_extreme_index_str(list: *const MvlArray, better: impl Fn(&str, &str) -> bool) -> i64 {
-    let len = if list.is_null() { 0 } else { (*list).len as usize };
+unsafe fn list_extreme_index_str(
+    list: *const MvlArray,
+    better: impl Fn(&str, &str) -> bool,
+) -> i64 {
+    let len = if list.is_null() {
+        0
+    } else {
+        (*list).len as usize
+    };
     if len == 0 {
         return -1;
     }
@@ -1850,7 +1873,11 @@ pub unsafe extern "C" fn _mvl_list_join_str(
     list: *const MvlArray,
     sep: *const MvlString,
 ) -> *mut MvlString {
-    let len = if list.is_null() { 0 } else { (*list).len as usize };
+    let len = if list.is_null() {
+        0
+    } else {
+        (*list).len as usize
+    };
     let sep_bytes: &[u8] = if sep.is_null() {
         &[]
     } else {
