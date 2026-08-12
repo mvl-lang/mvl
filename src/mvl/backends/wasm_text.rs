@@ -1973,6 +1973,26 @@ fn exclude_returned_locals_into(expr: &TirExpr, ctx: &Ctx, out: &mut Vec<String>
         TirExprKind::FnCall { name, args, .. } if name == "format" && args.len() == 2 => {
             out.push(mvl_string_temp_name(expr));
         }
+        // Any other fn call used as a tail/return expression may hand back
+        // one of its own by-value arguments unchanged — the textbook case
+        // being a recursive accumulator helper whose base case returns the
+        // threaded parameter verbatim (e.g. `if n >= limit { acc } else {
+        // ...; build_up(next, n + 1, limit) }`). `next` is moved into the
+        // call with no clone, so when the call ends up returning that exact
+        // buffer, this fn's own blanket end-of-scope drop sweep frees it
+        // while it's still the in-flight return value — a use-after-free
+        // that reads correctly until something else's allocation reuses the
+        // freed block (#2274). We can't know from the caller side whether
+        // the callee actually returns a given argument unchanged, so treat
+        // every bare-`Var` argument as potentially returned and exclude it;
+        // worst case a callee that doesn't alias it back leaks that buffer
+        // instead of double-freeing it, which this file already prefers
+        // elsewhere (see the "moved-into-container" exclusions above).
+        TirExprKind::FnCall { args, .. } => {
+            for arg in args {
+                exclude_returned_locals_into(arg, ctx, out);
+            }
+        }
         // A compound expression used as a fn's implicit return can itself be
         // an `if`/`match`/bare block — each arm's own tail expression is the
         // value actually flowing out, whichever arm runs, so every arm's
@@ -8044,8 +8064,23 @@ fn emit_unary(out: &mut String, op: UnaryOp, inner: &TirExpr, ctx: &Ctx) {
         }
         UnaryOp::Deref => {
             emit_expr(out, inner, ctx);
-            // No-op in this backend today — `ref` bindings and dereferences
-            // are handled via WASM locals directly.
+            // `ref` bindings need no unwrap — they're plain WASM locals, and
+            // a deref of one is a no-op. `Box[T]` (`HuffmanTree::Node`'s
+            // `Box::new(left)`/`Box::new(right)` payload fields, #2274) is a
+            // genuine second heap indirection: `_mvl_box_new` allocates a
+            // small slot holding the pointee's own pointer, and the payload
+            // field only stores *that slot's* address, not the pointee's.
+            // Loading the field gives you the box; `*box_expr` must load
+            // through it once more to reach the pointee. Without this, every
+            // `HuffmanTree::Node(_, left, right)` match arm that recurses via
+            // `decode_one_symbol(*left, ...)` passed the box address itself
+            // as `node`, and the callee's `match node { ... }` read the
+            // pointee's own pointer value (never 0 or 1) as the enum
+            // discriminant — an `unreachable` trap on any tree with more
+            // than one level, i.e. any decode with more than one symbol.
+            if matches!(&inner.ty, Ty::Named(name, _) if name == "Box") {
+                out.push_str("    i32.load offset=0\n");
+            }
         }
     }
 }

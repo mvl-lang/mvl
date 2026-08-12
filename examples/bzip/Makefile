@@ -3,7 +3,7 @@
 # recursive ADTs (HuffmanTree), pure core + effect boundary.
 #
 # Run from this directory: make check, make test, make run
-.PHONY: help guard-mvl build check prove lint test-solver test assurance mcdc mutate smoke run run-llvm all clean
+.PHONY: help guard-mvl build check prove lint test-solver test test-wasm assurance mcdc mutate smoke run run-llvm all clean
 
 .DEFAULT_GOAL := help
 
@@ -57,10 +57,8 @@ test-solver: guard-mvl ## Show per-file solver statistics for all source files
 test: guard-mvl ## Run all inline test fn and roundtrip_test.mvl (transpiler backend)
 	$(MVL) test $(DIR)
 
-# No test-wasm target (deliberately excluded): dozens of functions across
-# bwt/huffman/mtf/rle/roundtrip compile to `unreachable` on the WASM
-# backend — broad, pre-existing feature gaps, same story as the missing
-# test-llvm target above. Worth tracking via `make wasm-stub-report`.
+test-wasm: guard-mvl ## Run tests via --backend=wasm (all 71 pass; fixed in #2274)
+	MVL_RUNTIME_WASM=$(WASM_RUNTIME) $(MVL) test $(DIR) --backend=wasm
 
 
 assurance: guard-mvl ## Assurance report: spec coverage, MC/DC, mutation score (verbose)
