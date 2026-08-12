@@ -3449,7 +3449,7 @@ impl TextEmitter {
                         TirExprKind::List { elems } | TirExprKind::Set { elems } if elems.is_empty()
                     ) =>
                 {
-                    let hint = list_elem_type_expr(field_ty).map(|te| Self::llvm_ty(te));
+                    let hint = list_elem_type_expr(field_ty).map(Self::llvm_ty);
                     let elems: &[TirExpr] = match &e.kind {
                         TirExprKind::List { elems } | TirExprKind::Set { elems } => elems,
                         _ => unreachable!(),
