@@ -21,6 +21,18 @@ use std::collections::{HashMap, HashSet};
 use super::capabilities::block_return_flows_from_ref_param;
 use super::{ActorMethodSig, FnContext, TypeChecker};
 
+/// Types that are always valid extension-method receivers (#928).
+///
+/// These are builtins, so they never appear in `env.types` — every receiver
+/// check must exempt them explicitly rather than relying on `lookup_type`.
+/// Shared by `register_fn` and `collect_methods_only`: when the two carried
+/// separate copies of this rule, `collect_methods_only` was written without it
+/// and silently dropped every Go-model sibling method on a builtin receiver.
+pub(super) const BUILTIN_RECEIVER_TYPES: &[&str] = &[
+    "String", "Int", "Float", "Bool", "Byte", "UByte", "UInt", "List", "Map", "Set", "Option",
+    "Result",
+];
+
 impl TypeChecker {
     /// Register only type and actor declarations — used as a pre-pass in
     /// multi-file checking so cross-file extension methods can validate their
@@ -32,6 +44,38 @@ impl TypeChecker {
                 Decl::Actor(ad) => self.register_actor(ad),
                 _ => {}
             }
+        }
+    }
+
+    /// Register only extension methods (functions with a receiver type) —
+    /// Go-model same-directory method dispatch (#1706), layered on top of the
+    /// strict `use`-gated prelude (#2204). Free functions, types, consts,
+    /// externs, etc. in `decls` are intentionally skipped: only the receiver
+    /// type's method table gains entries, so a Go-model sibling cannot make
+    /// its non-method declarations visible without an explicit `use`.
+    ///
+    /// A method whose receiver type is not visible here is skipped silently
+    /// rather than registered: `decls` belongs to *another* file, so a
+    /// receiver type this file never imported is that file's business, not a
+    /// diagnostic for this one. Registering it would route `register_fn`'s
+    /// `UndefinedType` emit into the wrong file's error list.
+    ///
+    /// The visibility test must mirror `register_fn`'s exactly, including the
+    /// [`BUILTIN_RECEIVER_TYPES`] exemption — builtins are never in
+    /// `env.types`, so a bare `lookup_type` check would silently discard every
+    /// `String::`/`List::`/`Map::` extension method a sibling declares.
+    pub(super) fn collect_methods_only(&mut self, decls: &[Decl]) {
+        for decl in decls {
+            let Decl::Fn(fd) = decl else { continue };
+            let Some(recv_ty) = &fd.receiver_type else {
+                continue;
+            };
+            if !BUILTIN_RECEIVER_TYPES.contains(&recv_ty.as_str())
+                && self.env.lookup_type(recv_ty.as_str()).is_none()
+            {
+                continue;
+            }
+            self.register_fn(fd);
         }
     }
 
@@ -159,10 +203,6 @@ impl TypeChecker {
         if let Some(recv_ty) = &fd.receiver_type {
             // Validate receiver type is declared (#875 review).
             // #928: Builtin types are always valid receiver types for extension methods.
-            const BUILTIN_RECEIVER_TYPES: &[&str] = &[
-                "String", "Int", "Float", "Bool", "Byte", "UByte", "UInt", "List", "Map", "Set",
-                "Option", "Result",
-            ];
             let is_builtin = BUILTIN_RECEIVER_TYPES.contains(&recv_ty.as_str());
             if !is_builtin && self.env.lookup_type(recv_ty.as_str()).is_none() {
                 self.emit(CheckError::UndefinedType {

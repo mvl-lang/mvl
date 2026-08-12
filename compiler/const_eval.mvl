@@ -23,6 +23,8 @@
 //   - Block.tail_expr is List[Expr] (no block.stmts.last())
 //   - `return` in a match arm must be in { } block
 
+use tir.{AstLiteral, AstUnaryExpr, Expr, SourceLoc, UnaryOp}
+
 // ── Budget ────────────────────────────────────────────────────────────────────
 
 /// Maximum evaluation steps. Prevents non-termination in recursive functions.

@@ -10,9 +10,16 @@
 //   - try_interval()
 //
 // All RefExpr values are constructed directly using the enum variants from
-// tir.mvl (available via the compiler prelude under `mvl test compiler/`).
+// tir.mvl, imported explicitly below (#2204 — no directory-scoped implicit
+// visibility; every cross-file reference requires an explicit `use`).
 //
 // Run with: mvl test compiler/
+
+use tir.{AstLiteral, CmpOp, Expr, LogicOp, RefExpr, SourceLoc}
+use solver.layer2::Bound;
+use solver.layer2::Interval;
+use solver.layer2::interval_from_ref_expr;
+use solver.layer2::try_interval;
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 

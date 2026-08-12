@@ -16,8 +16,8 @@
 use std::ptr;
 
 use crate::memory::{
-    _mvl_alloc, _mvl_array_new, _mvl_free, _mvl_string_clone, _mvl_string_drop, _mvl_string_new,
-    MvlArray, MvlMap, MvlMapSlot, MvlString,
+    _mvl_alloc, _mvl_array_clone, _mvl_array_new, _mvl_free, _mvl_string_clone, _mvl_string_drop,
+    _mvl_string_new, MvlArray, MvlMap, MvlMapSlot, MvlString,
 };
 
 // ── format (#901) ───────────────────────────────────────────────────────────
@@ -246,6 +246,31 @@ pub unsafe extern "C" fn _mvl_string_eq(a: *const MvlString, b: *const MvlString
         1
     } else {
         0
+    }
+}
+
+/// `_mvl_string_cmp(a, b) -> i32` — lexicographic ordering: -1 if `a < b`,
+/// 0 if equal, 1 if `a > b` (#2260, found via `List[String]::sort_by`).
+///
+/// `emit_binary_tir` had a `String` case for `==`/`!=` (via
+/// `_mvl_string_eq` above) but none for `<`/`>`/`<=`/`>=` — those fell to
+/// the generic pointer-comparison path and compiled `a < b` to a raw
+/// `icmp slt ptr %a, %b`, comparing the two `*MvlString` *handle addresses*
+/// rather than content. Not merely wrong: since handle addresses depend on
+/// allocator/ASLR placement, the "sort order" it produced was
+/// non-deterministic across runs of the same compiled program.
+///
+/// # Safety
+/// `a`/`b` must each be a valid `MvlString` pointer or null (treated as
+/// empty).
+#[no_mangle]
+pub unsafe extern "C" fn _mvl_string_cmp(a: *const MvlString, b: *const MvlString) -> i32 {
+    let sa = as_str(a);
+    let sb = as_str(b);
+    match sa.cmp(sb) {
+        std::cmp::Ordering::Less => -1,
+        std::cmp::Ordering::Equal => 0,
+        std::cmp::Ordering::Greater => 1,
     }
 }
 
@@ -852,6 +877,12 @@ pub unsafe extern "C" fn _mvl_array_remove_value(a: *mut MvlArray, needle_ptr: *
 
 /// Return a new `MvlArray` containing elements `[start, end)` from `arr` (safe clamping).
 ///
+/// Correct only for scalar/pointer-identity-safe elements — copies each
+/// element's raw bytes without bumping any refcount, so a `List[String]`
+/// slice would alias the source array's strings (see
+/// [`_mvl_list_slice_str`] for the String-safe variant `emit_list_slice_call`
+/// (`emit_helpers.rs`) routes to instead).
+///
 /// # Safety
 /// `arr` must be a valid non-null `MvlArray` pointer or null.
 #[no_mangle]
@@ -873,6 +904,39 @@ pub unsafe extern "C" fn _mvl_list_slice(
     for i in lo..hi {
         let src = (*arr).ptr.add(i * es);
         _mvl_array_push(out, src);
+    }
+    out
+}
+
+/// `List[String]::slice(start, end)` (backing `take`/`skip` too) (#2260,
+/// found alongside the `sort_by` String-ordering fix in the same
+/// investigation). [`_mvl_list_slice`] byte-copies each element's raw
+/// bytes, correct for scalars but aliasing for a `*MvlString` handle — the
+/// source array and the slice would then both independently drop (and
+/// free) the same strings. Refcount-clones each element instead, same
+/// relationship [`_mvl_list_reverse_str`] has to [`_mvl_array_reverse`].
+///
+/// # Safety
+/// `arr` must be a valid `MvlArray` pointer (elem_size == 8, holding
+/// `*mut MvlString` elements) or null.
+#[no_mangle]
+pub unsafe extern "C" fn _mvl_list_slice_str(
+    arr: *const MvlArray,
+    start: i64,
+    end: i64,
+) -> *mut MvlArray {
+    if arr.is_null() {
+        return _mvl_array_new(8, 0);
+    }
+    let len = (*arr).len as i64;
+    let lo = start.max(0).min(len) as usize;
+    let hi = end.max(0).min(len) as usize;
+    let count = hi.saturating_sub(lo);
+    let out = _mvl_array_new(8, count.max(1));
+    for i in lo..hi {
+        let src = (*arr).ptr.add(i * 8) as *const *mut MvlString;
+        let cloned = _mvl_string_clone(*src);
+        _mvl_array_push(out, (&cloned as *const *mut MvlString).cast());
     }
     out
 }
@@ -1066,26 +1130,51 @@ pub(crate) unsafe fn mvl_map_keys(m: *const MvlMap) -> *mut MvlArray {
     arr
 }
 
-/// Return an `MvlArray*` of raw-byte values stored in the map.
-///
-/// Each value is wrapped in a freshly-allocated `MvlString` (reusing the
-/// string container as a typed byte-buffer), mirroring the layout returned
-/// by `mvl_map_keys`.  Callers should drop the result with
-/// `mvl_string_ptr_array_drop` when done.
+/// Return an `MvlArray*` of the map's values, in the same raw representation
+/// `V` already has in each slot (a scalar's bits, or a boxed value's
+/// pointer — always exactly `val_len` bytes, since every MVL value that fits
+/// a map slot is a single GPR-class register — see `mvl_map_insert`).
 ///
 /// # Safety
 /// `m` must be a valid non-null `MvlMap` pointer.
+///
+/// Previously wrapped each value in a freshly-allocated `MvlString` via
+/// `_mvl_string_new(slot.val_ptr, slot.val_len)`, mirroring `mvl_map_keys` —
+/// correct there because a key's stored bytes really are its UTF-8 content,
+/// but wrong here: a value's stored bytes are a fixed-size register value
+/// (e.g. an `Int`'s raw bits, or a `String`'s pointer), not variable-length
+/// text. Treating those bytes as string content built a garbage `MvlString`
+/// and returned *its* pointer in place of the real value, so every element
+/// silently became an unrelated heap address (#2251 — surfaced via
+/// `Map[K,V]::fold`/`any`/`all`/`filter`/`map_values`, which all forward
+/// through `self.values()` in `std/collections.mvl`).
+///
+/// Boxed value types (`String`, nested collections, structs holding boxed
+/// fields) are copied by raw pointer without bumping their refcount here —
+/// the returned array aliases the map's own owned reference rather than
+/// cloning it (contrast `Map::get`'s scalar-vs-String clone split at the
+/// call site). Fine for the scalar-`V` corpus this fixes; a boxed-`V`
+/// `.values()`/`.fold()` call that outlives the source map, or drops both
+/// independently, is a latent double-free/use-after-free this doesn't
+/// address — not attempted here.
 pub(crate) unsafe fn mvl_map_values(m: *const MvlMap) -> *mut MvlArray {
-    let arr = _mvl_array_new(std::mem::size_of::<*mut MvlString>(), 0);
     if m.is_null() || (*m).cap == 0 {
-        return arr;
+        return _mvl_array_new(std::mem::size_of::<i64>(), 0);
     }
     let cap = (*m).cap as usize;
+    let mut elem_size = std::mem::size_of::<i64>();
     for i in 0..cap {
         let slot = &*(*m).slots.add(i);
         if slot.occupied == 1 {
-            let val_s = _mvl_string_new(slot.val_ptr, slot.val_len as usize);
-            _mvl_array_push(arr, (&val_s as *const *mut MvlString).cast());
+            elem_size = slot.val_len as usize;
+            break;
+        }
+    }
+    let arr = _mvl_array_new(elem_size, 0);
+    for i in 0..cap {
+        let slot = &*(*m).slots.add(i);
+        if slot.occupied == 1 && !slot.val_ptr.is_null() {
+            _mvl_array_push(arr, slot.val_ptr);
         }
     }
     arr
@@ -1999,6 +2088,72 @@ pub unsafe extern "C" fn _mvl_list_sort_str(list: *mut MvlArray) -> *mut MvlArra
         _mvl_array_push(out, &p as *const *mut MvlString as *const u8);
     }
     out
+}
+
+/// `_mvl_list_sort_nested_bytelist(list)` — return a new
+/// `List[List[Byte]]`/`List[List[Bool]]` sorted ascending by the *content* of
+/// each inner array (#2264).
+///
+/// Same defect and same shape as `_mvl_list_sort_str` above, one nesting level
+/// out: `_mvl_list_sort` compares elements as raw i64 bit patterns, which for
+/// a `*mut MvlArray` element is the heap *address*, so the result depends on
+/// allocation order rather than being lexicographic.
+/// `examples/bzip/bwt.mvl::bwt_encode` sorts `List[List[Byte]]` rotations and
+/// needs genuine lexicographic order to find the correct primary index;
+/// pointer order gave a silently wrong result rather than a crash. The WASM
+/// backend got the equivalent `_mvl_array_sort_nested_bytelist` in #2267 —
+/// this is the LLVM half.
+///
+/// Comparing raw bytes lexicographically is only equivalent to element-wise
+/// ordering for `Byte`/`Bool` inner elements, whose LLVM element type is `i8`
+/// (`elem_size == 1`), so each byte *is* one non-negative element. It does not
+/// hold for `Int`/`Float` inner lists — those are 8-byte little-endian lanes,
+/// where the low-order byte sorts first (e.g. `256` vs `2`: `256`'s first byte
+/// is `0x00`, placing it before `2`) and sign bits break the order outright.
+/// `emit_exprs_tir.rs` only dispatches here for `Byte`/`Bool`; `Int`/`Float`
+/// inner lists stay on the pre-existing (wrong-by-pointer, not fixed here)
+/// `_mvl_list_sort` fallback.
+///
+/// Inner arrays are cloned (refcount bumped) into the output rather than
+/// moved, because `list` and the returned array become independent owners that
+/// each deep-drop their elements (`HeapKind::ArrayOfArray` →
+/// `_mvl_array_drop_mvlarray`) — sharing them un-bumped would double-free.
+/// Same reasoning as `_mvl_list_sort_str`'s `_mvl_string_clone`.
+///
+/// # Safety
+/// `list` must be a valid `MvlArray*` (elem_size == 8, holding `*mut MvlArray`
+/// elements, each itself a `Byte`/`Bool`-element array) or null.
+#[no_mangle]
+pub unsafe extern "C" fn _mvl_list_sort_nested_bytelist(list: *mut MvlArray) -> *mut MvlArray {
+    if list.is_null() {
+        return _mvl_array_new(8, 0);
+    }
+    let len = (*list).len as usize;
+    let out = _mvl_array_new(8, len.max(1));
+    let mut ptrs: Vec<*mut MvlArray> = (0..len)
+        .map(|i| {
+            let src = (*list).ptr.add(i * 8) as *const *mut MvlArray;
+            _mvl_array_clone(*src)
+        })
+        .collect();
+    ptrs.sort_unstable_by(|&a, &b| mvl_array_bytes(a).cmp(mvl_array_bytes(b)));
+    for p in ptrs {
+        _mvl_array_push(out, &p as *const *mut MvlArray as *const u8);
+    }
+    out
+}
+
+/// Byte view of a scalar-element `MvlArray`'s live elements, or `&[]` for a
+/// null pointer. Helper for [`_mvl_list_sort_nested_bytelist`].
+///
+/// # Safety
+/// `a` must be a valid `MvlArray*` or null.
+unsafe fn mvl_array_bytes<'a>(a: *const MvlArray) -> &'a [u8] {
+    if a.is_null() || (*a).ptr.is_null() {
+        return &[];
+    }
+    let nbytes = ((*a).len as usize).saturating_mul((*a).elem_size as usize);
+    std::slice::from_raw_parts((*a).ptr as *const u8, nbytes)
 }
 
 /// `List[String].join(sep)` (#2256) — concatenate every element into a

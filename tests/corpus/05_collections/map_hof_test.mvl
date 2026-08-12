@@ -17,6 +17,22 @@
 // monomorphize, so it stubbed to `unreachable`. Given a real body (the same
 // keys()/values() parallel-iteration shape as filter/map_values), WASM's
 // generic-method monomorphization runs it correctly like any other method.
+//
+// #2251: on `--backend=llvm`, `fold`/`any`/`all`/`filter`'s shape-only HOF
+// dispatch arms matched any pointer-shaped receiver (List/Set *and* Map,
+// indistinguishable at that layer) and called the List-only runtime fn on
+// a `HashMap` pointer — type confusion, not a crash. Fixed by guarding
+// those arms against `Map` and by making `std/collections.mvl`'s generic
+// Map bodies (previously stripped from the prelude and never emitted,
+// regardless of genericity) reachable through the existing generic-method
+// fallback dispatch.
+//
+// A `map_entries_sum_of_values` test (iterating `List[Entry[K, V]]` and
+// reading `.value`) originally lived here too — split to
+// `map_entries_value_field_test.mvl` and excluded from `LLVM_CORPUS_EXCLUDE`:
+// it hits the *same* generic-struct-field-layout gap as
+// `list_stubs_test.mvl` (#2119's LLVM remainder), unrelated to the Map HOF
+// dispatch bug this file covers.
 
 fn is_big(x: Int) -> Bool { x > 10 }
 
@@ -67,9 +83,23 @@ test fn map_entries_len_matches() -> Unit {
     assert_eq(es.len(), 2);
 }
 
-test fn map_entries_sum_of_values() -> Unit {
+// #2251: `Map[K, V]::fold`'s (etc.) `self` parameter is bare (no `ref`),
+// but the checker and Rust backend both treat calling it as a *borrow* —
+// `m.fold(...)` doesn't consume `m`. The LLVM backend's monomorphized
+// generic body dropped `self` at its own end regardless (only builtin
+// collection/String receivers were affected — `heap_kind` returns `None`
+// for structs, so a struct's `self` was never registered for that drop to
+// begin with), double-freeing `m` when the caller's own end-of-scope drop
+// ran too. Calling four different HOF methods on the same map, then
+// reading it again, pins that `self` is never consumed by any of them.
+test fn map_reused_after_multiple_hof_calls() -> Unit {
     let m: Map[String, Int] = {"a": 1, "b": 2, "c": 3};
-    let es: List[Entry[String, Int]] = m.entries();
-    let sum: Int = es.fold(0, |acc: Int, e: Entry[String, Int]| acc + e.value);
-    assert_eq(sum, 6);
+    assert_eq(m.fold(0, |acc: Int, v: Int| acc + v), 6);
+    assert_eq(m.any(is_big), false);
+    assert_eq(m.all(is_big), false);
+    let filtered: Map[String, Int] = m.filter(is_big);
+    assert_eq(filtered.len(), 0);
+    assert_eq(m.len(), 3);
+    assert_eq(m.get("a").unwrap_or(-1), 1);
 }
+

@@ -241,12 +241,6 @@ pub fn run(path: &str, req_filter: Option<u8>, opts: CheckOptions) {
         }
     }
 
-    // Snapshot all parsed user programs for cross-module prelude building.
-    // Intentionally includes resolver-only siblings (auto-loaded to satisfy imports,
-    // not explicitly requested): they may define types or functions that the
-    // explicitly-checked files call and must therefore be visible to the checker.
-    let all_user_progs: Vec<Program> = all_parsed_progs;
-
     // Collect errors across all files for JSON output (when --format=json).
     let mut json_error_items: Vec<String> = Vec::new();
     // Accumulate refinement stats across all checked files.
@@ -255,19 +249,77 @@ pub fn run(path: &str, req_filter: Option<u8>, opts: CheckOptions) {
     let mut total_failed: usize = 0;
     let mut total_by_layer = [0usize; 6];
 
+    // Go-model sibling parses, memoized per directory. Every file in a given
+    // directory draws its method prelude from the same set, so parse that set
+    // once instead of once per checked file: `mvl check compiler/` otherwise
+    // re-read and re-parsed ~50 siblings for each of its 56 files.
+    let mut method_prelude_cache: std::collections::HashMap<
+        std::path::PathBuf,
+        Vec<(String, Program)>,
+    > = std::collections::HashMap::new();
+
     // Only run the checker on explicitly requested files (not resolver-only siblings).
-    for (idx, (file_str, prog, src)) in parsed.iter().take(check_count).enumerate() {
-        // Build per-file prelude: stdlib + all OTHER user modules so that
-        // cross-file function and type references resolve (whole-program checking).
-        // Flanking slices of all_user_progs avoid cloning individual Programs;
-        // check_with_two_preludes chains prelude_a (&[Program]) and prelude_b
-        // (&[&Program]) without any additional allocation.
-        let (before, after_with_self) = all_user_progs.split_at(idx);
-        let after = &after_with_self[1..];
-        let user_prelude: Vec<&Program> = before.iter().chain(after.iter()).collect();
-        let result = checker::check_with_two_preludes_mode(
+    for (file_str, prog, src) in parsed.iter().take(check_count) {
+        // Build per-file prelude: stdlib + this file's own `use`-based transitive
+        // sibling closure — not every other file in the directory. Per
+        // .openspec/specs/005-modules/spec.md Req 2-3, cross-file visibility
+        // requires an explicit `use`; there is no directory-scoped exception.
+        // Mirrors the single-file sibling-loading above and `mvl build`.
+        //
+        // `base_dir` (not this file's own parent) is the root `use` paths are
+        // resolved against (Req 1): a bare name only matches a direct sibling
+        // of the dir passed to `find_module_file`, so a nested file's bare
+        // (undotted) reference to a base_dir-level module would silently fail
+        // to resolve if we anchored on the file's own directory instead.
+        let siblings = loader::load_sibling_modules_transitive(prog, &base_dir);
+        let sibling_paths: std::collections::HashSet<String> =
+            siblings.iter().map(|(_, path, _)| path.clone()).collect();
+        let sibling_progs: Vec<Program> = siblings.into_iter().map(|(_, _, p)| p).collect();
+        let user_prelude: Vec<&Program> = sibling_progs.iter().collect();
+
+        // Go-model method dispatch (#1706): extension methods on a shared
+        // receiver type may be split across same-directory sibling files
+        // that call each other in a cycle (spec 005-modules Req 2/3 bans
+        // circular `use` imports, so this can't be expressed as an explicit
+        // import graph). Register only the *methods* of files sharing this
+        // file's own directory that aren't already pulled in above via
+        // `use` — their types/free functions stay gated on explicit `use`.
+        let file_dir = Path::new(file_str.as_str())
+            .parent()
+            .unwrap_or_else(|| Path::new("."));
+        let dir_siblings = method_prelude_cache
+            .entry(file_dir.to_path_buf())
+            .or_insert_with(|| {
+                loader::sibling_module_files(file_dir)
+                    .into_iter()
+                    .filter_map(|p| {
+                        let p_str = p.display().to_string();
+                        match std::fs::read_to_string(&p) {
+                            Ok(src) => {
+                                let (mut parser, _) = Parser::new(&src);
+                                Some((p_str, parser.parse_program()))
+                            }
+                            // Don't drop this silently: an unreadable sibling
+                            // otherwise surfaces as a baffling "no method" error
+                            // at every call site that needed one of its methods.
+                            Err(e) => {
+                                eprintln!("warning: could not read sibling module `{p_str}`: {e}");
+                                None
+                            }
+                        }
+                    })
+                    .collect()
+            });
+        let method_prelude: Vec<&Program> = dir_siblings
+            .iter()
+            .filter(|(p_str, _)| p_str != file_str && !sibling_paths.contains(p_str))
+            .map(|(_, p)| p)
+            .collect();
+
+        let result = checker::check_with_two_preludes_and_methods_mode(
             &stdlib_prelude,
             &user_prelude,
+            &method_prelude,
             prog,
             solver_mode,
         );

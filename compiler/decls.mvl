@@ -23,6 +23,14 @@
 //   - IFC label FFI boundary check stubbed (#1738)
 //   - Effect hierarchy validation uses name equality (full hierarchy in #1738)
 
+use tir.{
+    Capability, ExternDecl, ExternFnDecl, FnDecl, Param, Program, SourceLoc,
+    Totality, Ty, TypeBodyKind, TypeDecl, TypeExpr
+}
+use verify_errors::CheckError;
+use context.{FieldInfo, FnInfo, RelabelInfo, TypeBodyInfo, TypeEnv, TypeInfo, VariantFieldsInfo, VariantInfo}
+use checker.{Checker, resolve_type_expr, ty_name}
+
 // ── Local string helpers (cannot call calls.mvl in isolated test harness) ─────
 
 // `partial`: the loop body's early-return branch is beyond what the

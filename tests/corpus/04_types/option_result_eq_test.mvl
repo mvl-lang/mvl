@@ -1,0 +1,77 @@
+// 04_types/option_result_eq_test.mvl — structural equality for
+// Option[T]/Result[T, E] (#2249).
+//
+// `==`/`!=` on these compared the boxed pointer, not the payload — two
+// independently-allocated `Some("hello")` values (or any other
+// Option/Result) with identical content compared unequal on WASM. Fixed
+// there via `_mvl_option_eq`/`_mvl_result_eq` (runtime/wasm), dispatched
+// by a compile-time `is_str` flag per payload type.
+//
+// Split from option_result_test.mvl. On `--backend=llvm`, `Option`/`Result`
+// are `{i8, ptr}` structs and `==` fell through to a generic `icmp eq`
+// on the aggregate, which doesn't compile ("icmp requires integer
+// operands") — fixed (#2270) via a dedicated `emit_binary_tir` case that
+// compares tag then payload, structurally for `String` via
+// `_mvl_string_eq`. Passes on `--backend=wasm` (#2249's fix) and
+// `--backend=rust` (derived `PartialEq`, unaffected by either backend's
+// bug).
+test fn option_string_eq_same_content_different_allocations() -> Unit {
+    let a: Option[String] = Some("hello");
+    let b: Option[String] = Some("hello");
+    assert_eq(a == b, true);
+}
+
+test fn option_string_eq_different_content() -> Unit {
+    let a: Option[String] = Some("hello");
+    let b: Option[String] = Some("world");
+    assert_eq(a == b, false);
+}
+
+test fn option_string_none_eq_none() -> Unit {
+    let a: Option[String] = None;
+    let b: Option[String] = None;
+    assert_eq(a == b, true);
+}
+
+test fn option_string_some_ne_none() -> Unit {
+    let a: Option[String] = Some("x");
+    let b: Option[String] = None;
+    assert_eq(a == b, false);
+    assert_eq(a != b, true);
+}
+
+test fn option_int_eq_same_value() -> Unit {
+    let a: Option[Int] = Some(5);
+    let b: Option[Int] = Some(5);
+    assert_eq(a == b, true);
+}
+
+test fn option_int_eq_different_value() -> Unit {
+    let a: Option[Int] = Some(5);
+    let b: Option[Int] = Some(6);
+    assert_eq(a == b, false);
+}
+
+test fn result_ok_eq_same_value() -> Unit {
+    let a: Result[Int, String] = Ok(5);
+    let b: Result[Int, String] = Ok(5);
+    assert_eq(a == b, true);
+}
+
+test fn result_err_eq_same_content_different_allocations() -> Unit {
+    let a: Result[Int, String] = Err("bad");
+    let b: Result[Int, String] = Err("bad");
+    assert_eq(a == b, true);
+}
+
+test fn result_err_ne_different_content() -> Unit {
+    let a: Result[Int, String] = Err("bad");
+    let b: Result[Int, String] = Err("worse");
+    assert_eq(a == b, false);
+}
+
+test fn result_ok_ne_err() -> Unit {
+    let a: Result[Int, String] = Ok(5);
+    let b: Result[Int, String] = Err("bad");
+    assert_eq(a == b, false);
+}

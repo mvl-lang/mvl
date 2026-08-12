@@ -74,3 +74,43 @@ test fn max_by_empty_is_none() -> Unit {
         None => assert(true),
     }
 }
+
+// #2260: `sort_by`'s body reassigns its own `ref` accumulator each
+// iteration (`result = out`) — a plain reassignment never excluded the
+// old value from the caller's `heap_locals` drop sweep, so `out`'s own
+// end-of-scope drop freed the buffer `result` had just taken ownership
+// of, corrupting `result` on the next iteration. The Int-only tests above
+// happen to catch this already (any multi-element sort reassigns
+// `result` at least once), but element type is otherwise unrelated to
+// that bug — this pins `String` elements specifically, since `sort_by`'s
+// `out.push(x.clone())` also depends on the receiver-element-type push
+// fix (#2260) rather than the pushed argument's own checker-inferred
+// type, which only matters for non-scalar `T`.
+test fn sort_by_string_elements() -> Unit {
+    let xs: List[String] = ["banana", "apple", "cherry"];
+    let sorted: List[String] = xs.sort_by(|a: String, b: String| a < b);
+    assert_eq(sorted.len(), 3);
+    assert_eq(sorted.get(0).unwrap_or("?"), "apple");
+    assert_eq(sorted.get(1).unwrap_or("?"), "banana");
+    assert_eq(sorted.get(2).unwrap_or("?"), "cherry");
+}
+
+// #2251's self-borrow fix (bare, non-`ref` `self` on a builtin-collection
+// receiver must not be dropped at the end of a monomorphized generic
+// body) applies to any such method, not just Map's — `sort_by`/`min_by`/
+// `max_by` share the exact same `List[T]::method(self, ...)` shape.
+test fn list_reused_after_sort_by_and_min_by_and_max_by() -> Unit {
+    let xs: List[Int] = [3, 1, 4, 1, 5];
+    let sorted: List[Int] = xs.sort_by(|a: Int, b: Int| a < b);
+    assert_eq(sorted.get(0).unwrap_or(0), 1);
+    match xs.min_by(|a: Int, b: Int| a < b) {
+        Some(m) => assert_eq(m, 1),
+        None => assert(false),
+    }
+    match xs.max_by(|a: Int, b: Int| a < b) {
+        Some(m) => assert_eq(m, 5),
+        None => assert(false),
+    }
+    assert_eq(xs.len(), 5);
+    assert_eq(xs.get(0).unwrap_or(0), 3);
+}

@@ -131,3 +131,73 @@ test partial fn list_literal_element_survives_loop_per_iteration_sweep() -> Unit
         Some(row) => assert_eq(row.get(1).unwrap_or("?"), "2"),
     }
 }
+
+// #2252: `List[T]::first()`/`::last()` share `get`'s clone-on-extract fix
+// (all three previously cloned only a `String` element, aliasing any
+// nested-collection one) — pins both, not just `get`, on a two-element
+// list so `first`/`last` extract genuinely different elements.
+fn build_two_rows() -> List[List[String]] {
+    let result: ref List[List[String]] = [];
+    let row1: ref List[String] = [];
+    row1.push("a");
+    row1.push("b");
+    let row2: ref List[String] = [];
+    row2.push("c");
+    row2.push("d");
+    result.push(row1);
+    result.push(row2);
+    result
+}
+
+test fn push_nested_list_first_and_last_survive() -> Unit {
+    let rows: List[List[String]] = build_two_rows();
+    assert_eq(rows.len(), 2);
+    match rows.first() {
+        None => assert(false),
+        Some(row) => assert_eq(row.get(0).unwrap_or("?"), "a"),
+    }
+    match rows.last() {
+        None => assert(false),
+        Some(row) => assert_eq(row.get(1).unwrap_or("?"), "d"),
+    }
+}
+
+// #2252's clone-on-extract generalization covers `Set`/`Map` elements too
+// (via `_mvl_array_clone`/`_mvl_map_clone`), not just nested `List`s —
+// pins both so the element-type dispatch in `get`/`first`/`last` doesn't
+// regress to String-and-List-only.
+fn build_list_of_sets() -> List[Set[String]] {
+    let result: ref List[Set[String]] = [];
+    let s: ref Set[String] = {"x", "y"};
+    result.push(s);
+    result
+}
+
+test fn push_nested_set_get_survives() -> Unit {
+    let sets: List[Set[String]] = build_list_of_sets();
+    assert_eq(sets.len(), 1);
+    match sets.get(0) {
+        None => assert(false),
+        // `Set[String]::contains` itself is covered directly in
+        // `set_test.mvl`/`set_contains_string_wasm_gap_test.mvl` (#2270/#2271)
+        // — not exercised here too, since this file's WASM run would hit
+        // #2271's still-open WASM dispatch gap.
+        Some(s) => assert_eq(s.len(), 2),
+    }
+}
+
+fn build_list_of_maps() -> List[Map[String, Int]] {
+    let result: ref List[Map[String, Int]] = [];
+    let m: ref Map[String, Int] = {"k": 1};
+    result.push(m);
+    result
+}
+
+test fn push_nested_map_get_survives() -> Unit {
+    let maps: List[Map[String, Int]] = build_list_of_maps();
+    assert_eq(maps.len(), 1);
+    match maps.get(0) {
+        None => assert(false),
+        Some(m) => assert_eq(m.get("k").unwrap_or(-1), 1),
+    }
+}

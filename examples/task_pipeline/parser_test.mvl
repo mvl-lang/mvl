@@ -115,10 +115,16 @@ test fn parse_record_invalid_amount_text_is_err() -> Unit {
 }
 
 // ── parse_csv tests ───────────────────────────────────────────────────────
-// parse_csv accepts plain String (already sanitized).
+// `parse_csv` takes `Tainted[String]` — it is the module's trust boundary for
+// untrusted file content (see parser.mvl). Each test therefore has to label
+// its literal the same way production does, via `relabel taint`; passing a
+// bare `String` is a Req 11 violation, not a shortcut. These calls previously
+// did pass bare literals, which `mvl check <file>` had always rejected while
+// `mvl check <dir>` silently accepted (#2204).
 
 test fn parse_csv_empty_content_is_err() -> Unit {
-    let result: Result[List[Record], ParseError] = parse_csv("   ");
+    let csv: Tainted[String] = relabel taint("   ", "TEST-CSV-INPUT");
+    let result: Result[List[Record], ParseError] = parse_csv(csv);
     let err: Int = match result {
         Err(ParseError::EmptyInput) => 1,
         _                           => 0,
@@ -127,7 +133,8 @@ test fn parse_csv_empty_content_is_err() -> Unit {
 }
 
 test fn parse_csv_header_only_is_empty_list() -> Unit {
-    let result: Result[List[Record], ParseError] = parse_csv("name,age,amount,category\n");
+    let csv: Tainted[String] = relabel taint("name,age,amount,category\n", "TEST-CSV-INPUT");
+    let result: Result[List[Record], ParseError] = parse_csv(csv);
     match result {
         Err(_)      => assert_eq(0, 1),
         Ok(records) => assert_eq(records.len(), 0),
@@ -135,7 +142,8 @@ test fn parse_csv_header_only_is_empty_list() -> Unit {
 }
 
 test fn parse_csv_skips_blank_lines() -> Unit {
-    let csv: String = "name,age,amount,category\n\nAlice,30,10.0,food\n\n";
+    let csv: Tainted[String] =
+        relabel taint("name,age,amount,category\n\nAlice,30,10.0,food\n\n", "TEST-CSV-INPUT");
     let result: Result[List[Record], ParseError] = parse_csv(csv);
     match result {
         Err(_)      => assert_eq(0, 1),
@@ -144,7 +152,8 @@ test fn parse_csv_skips_blank_lines() -> Unit {
 }
 
 test fn parse_csv_skips_comment_lines() -> Unit {
-    let csv: String = "name,age,amount,category\n# comment\nAlice,30,10.0,food\n";
+    let csv: Tainted[String] =
+        relabel taint("name,age,amount,category\n# comment\nAlice,30,10.0,food\n", "TEST-CSV-INPUT");
     let result: Result[List[Record], ParseError] = parse_csv(csv);
     match result {
         Err(_)      => assert_eq(0, 1),
@@ -153,7 +162,8 @@ test fn parse_csv_skips_comment_lines() -> Unit {
 }
 
 test fn parse_csv_two_valid_rows() -> Unit {
-    let csv: String = "name,age,amount,category\nAlice,30,10.0,food\nBob,25,5.0,\n";
+    let csv: Tainted[String] =
+        relabel taint("name,age,amount,category\nAlice,30,10.0,food\nBob,25,5.0,\n", "TEST-CSV-INPUT");
     let result: Result[List[Record], ParseError] = parse_csv(csv);
     match result {
         Err(_)      => assert_eq(0, 1),
@@ -162,7 +172,8 @@ test fn parse_csv_two_valid_rows() -> Unit {
 }
 
 test fn parse_csv_first_error_aborts() -> Unit {
-    let csv: String = "name,age,amount,category\nAlice,bad,10.0,food\nBob,25,5.0,\n";
+    let csv: Tainted[String] =
+        relabel taint("name,age,amount,category\nAlice,bad,10.0,food\nBob,25,5.0,\n", "TEST-CSV-INPUT");
     let result: Result[List[Record], ParseError] = parse_csv(csv);
     let is_err: Int = match result { Err(_) => 1, Ok(_) => 0 };
     assert_eq(is_err, 1);

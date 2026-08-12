@@ -275,7 +275,14 @@ fn strip_prelude_extension_methods_tir(prog: &TirProgram) -> TirProgram {
         if f.is_builtin {
             return true;
         }
-        if f.receiver_type.is_some() {
+        // #2251: only *non-generic* extension methods are stripped here —
+        // the doc comment above always described this, but the predicate
+        // dropped every receiver-typed fn regardless of `type_params`,
+        // so a generic extension method (e.g. `Map[K, V]::fold`) never
+        // reached `emit_program_tir`'s first pass and never made it into
+        // `tir_generic_fns` — the method-call fallback below always found
+        // it missing and silently emitted nothing for it.
+        if f.receiver_type.is_some() && f.type_params.is_empty() {
             return false;
         }
         if STDLIB_REPLACED_BY_DISPATCH.contains(&f.original_name.as_str()) {

@@ -492,6 +492,15 @@ impl TextEmitter {
                             if let Some(v) = val {
                                 let ty_str = self.llvm_ty_ctx(&loc.elem_ty);
                                 self.push_instr(&format!("store {ty_str} {v}, ptr {}", loc.ptr));
+                                // #2260: `result = out` moves `out`'s value
+                                // into `result` — exclude `out` from
+                                // `heap_locals` the same way `push`/`Some`/
+                                // `Ok`/`Err`/`return` already do (#1994),
+                                // otherwise `out`'s own end-of-scope drop
+                                // frees the allocation `result` now points
+                                // to too, and the next loop iteration reads
+                                // freed memory through `result`.
+                                self.exclude_returned_value_tir(value);
                             }
                         }
                     }

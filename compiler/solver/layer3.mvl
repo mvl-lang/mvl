@@ -16,6 +16,11 @@
 //   5. Check the substituted return expr against pred using L1 + L2.
 //   6. Proven iff all paths pass; Failed if any path fails; None if undecided.
 
+use tir.{AstBinaryExpr, AstCallExpr, AstMethodExpr, AstUnaryExpr, BinaryOp, Block, CmpOp, Expr, LogicOp, RefExpr, Stmt}
+use solver.{binary_op_to_cmp, dummy_loc, RefResult}
+use solver.layer1::try_trivial;
+use solver.layer2::try_interval;
+
 // rewrite_expr is defined in compiler/solver/rewrite.mvl.
 // In the isolated test harness, rewrite.mvl may not be in scope, so we
 // provide a minimal local stub: identity (no rewrite rules applied).

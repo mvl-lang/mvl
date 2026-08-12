@@ -230,10 +230,10 @@ pub fn List[T]::sort_by(self, cmp: fn(T, T) -> Bool) -> List[T] {
                 out.push(x.clone());
                 inserted = true
             };
-            out.push(y)
+            out.push(y.clone())
         };
         if !inserted {
-            out.push(x)
+            out.push(x.clone())
         };
         result = out
     };

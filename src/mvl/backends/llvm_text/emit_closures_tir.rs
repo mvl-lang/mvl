@@ -26,6 +26,7 @@
 
 use std::collections::HashSet;
 
+use crate::mvl::checker::types::Ty;
 use crate::mvl::ir::{
     TirBlock, TirElseBranch, TirExpr, TirExprKind, TirMatchBody, TirParam, TirStmt, TypeExpr,
 };
@@ -348,6 +349,125 @@ impl TextEmitter {
         (wrapped, box_ptr)
     }
 
+    /// Adapt an already-constructed closure value to the pointer-wrapped HOF
+    /// calling convention at `ptr_param_indices` (#2251).
+    ///
+    /// A closure stored in a plain local — most commonly a generic fn's
+    /// `f: fn(...) -> ...` parameter — was built by the general (non-HOF)
+    /// Lambda-to-closure path, which is plain by-value for every parameter.
+    /// Forwarding it unchanged into a runtime HOF call that expects one or
+    /// more parameters as raw element pointers (the convention
+    /// `emit_lambda_inner_tir`'s `ptr_param_indices` produces for a lambda
+    /// *literal* written directly at the HOF call site) makes the runtime
+    /// pass a pointer where the closure body expects an already-loaded
+    /// value — the pointer's bit pattern gets read as the value itself.
+    ///
+    /// Builds a trampoline whose signature matches what the runtime expects
+    /// (params at `ptr_param_indices` are `ptr`, others by-value), loads
+    /// each wrapped param before calling through to the original closure,
+    /// and returns a fresh `%__closure_type` whose `env` is the *original*
+    /// closure object — mirrors [`Self::emit_fold_acc_box_trampoline`]'s
+    /// wrap-the-original-as-env pattern, but adapts a parameter's
+    /// convention instead of the accumulator's.
+    fn emit_ptr_wrap_closure_trampoline_tir(
+        &mut self,
+        orig_closure: &str,
+        fn_ty: &Ty,
+        ptr_param_indices: &[usize],
+    ) -> Result<String, String> {
+        let (param_tys, ret_ty) = match fn_ty {
+            Ty::Fn(params, ret, _, _) => (params.clone(), (**ret).clone()),
+            _ => {
+                return Err(format!(
+                    "emit_ptr_wrap_closure_trampoline_tir: not a fn type: {fn_ty:?}"
+                ))
+            }
+        };
+        let param_tes: Vec<TypeExpr> = param_tys
+            .iter()
+            .map(|t| {
+                ty_to_type_expr(t).unwrap_or(TypeExpr::Base {
+                    name: "Unit".into(),
+                    args: vec![],
+                    span: Span::default(),
+                })
+            })
+            .collect();
+        let ret_te = ty_to_type_expr(&ret_ty).unwrap_or(TypeExpr::Base {
+            name: "Unit".into(),
+            args: vec![],
+            span: Span::default(),
+        });
+        let is_void = Self::is_void(&ret_te);
+        let ret_llvm = self.llvm_ty_ctx(&ret_te);
+
+        self.ensure_closure_type();
+        self.ensure_extern("declare ptr @_mvl_alloc(i64)");
+
+        let trampoline_name = format!("__hof_ptr_wrap_{}", self.module.lambda_counter);
+        self.module.lambda_counter += 1;
+
+        let mut param_decls = vec!["ptr %__tenv".to_string()];
+        let mut call_args: Vec<String> = vec!["ptr %orig_env".to_string()];
+        let mut loads: Vec<String> = Vec::new();
+        for (i, pt) in param_tes.iter().enumerate() {
+            let ty_str = self.llvm_ty_ctx(pt);
+            if ptr_param_indices.contains(&i) {
+                param_decls.push(format!("ptr %__raw_{i}"));
+                loads.push(format!("  %v{i} = load {ty_str}, ptr %__raw_{i}"));
+                call_args.push(format!("{ty_str} %v{i}"));
+            } else {
+                param_decls.push(format!("{ty_str} %p{i}"));
+                call_args.push(format!("{ty_str} %p{i}"));
+            }
+        }
+
+        let mut body: Vec<String> = Vec::new();
+        let define_ret = if is_void {
+            "void".to_string()
+        } else {
+            ret_llvm.clone()
+        };
+        body.push(format!(
+            "define {define_ret} @{trampoline_name}({}) {{",
+            param_decls.join(", ")
+        ));
+        body.push("entry:".into());
+        body.extend(loads);
+        body.push("  %fn_field = getelementptr %__closure_type, ptr %__tenv, i32 0, i32 0".into());
+        body.push("  %fn_ptr = load ptr, ptr %fn_field".into());
+        body.push("  %env_field = getelementptr %__closure_type, ptr %__tenv, i32 0, i32 1".into());
+        body.push("  %orig_env = load ptr, ptr %env_field".into());
+        if is_void {
+            body.push(format!("  call void %fn_ptr({})", call_args.join(", ")));
+            body.push("  ret void".into());
+        } else {
+            body.push(format!(
+                "  %result = call {ret_llvm} %fn_ptr({})",
+                call_args.join(", ")
+            ));
+            body.push(format!("  ret {ret_llvm} %result"));
+        }
+        body.push("}".into());
+        self.module.fn_bodies.push(body.join("\n"));
+
+        let wrapped = self.next_reg();
+        self.push_instr(&format!("{wrapped} = call ptr @_mvl_alloc(i64 16)"));
+        self.fn_ctx.reg_types.insert(wrapped.clone(), "ptr".into());
+        let fn_field = self.next_reg();
+        self.push_instr(&format!(
+            "{fn_field} = getelementptr %__closure_type, ptr {wrapped}, i32 0, i32 0"
+        ));
+        self.push_instr(&format!("store ptr @{trampoline_name}, ptr {fn_field}"));
+        let env_field = self.next_reg();
+        self.push_instr(&format!(
+            "{env_field} = getelementptr %__closure_type, ptr {wrapped}, i32 0, i32 1"
+        ));
+        self.push_instr(&format!("store ptr {orig_closure}, ptr {env_field}"));
+
+        Ok(wrapped)
+    }
+
     /// Emit a lambda for use by HOF runtime functions (filter/map/fold/any/all).
     ///
     /// `ptr_param_indices` lists parameter indices that the runtime passes as
@@ -374,7 +494,33 @@ impl TextEmitter {
                 {
                     self.make_named_fn_closure_hof(name, ptr_param_indices)
                 } else {
-                    self.emit_expr_tir(expr)
+                    // #2251: a closure flowing through a plain local (e.g. a
+                    // generic fn's `f: fn(...) -> ...` parameter, forwarded
+                    // into a *different* HOF call than the one it was
+                    // originally built for — `Map[K, V]::fold`'s body calls
+                    // `self.values().fold(init, f)`, forwarding its own `f`
+                    // param into `List::fold`) was always built by the
+                    // general (non-HOF) Lambda-to-closure path, which is
+                    // plain by-value for every param. If this call site
+                    // needs any param pointer-wrapped, the stored closure's
+                    // calling convention doesn't match what the runtime HOF
+                    // is about to call through — wrap it in a trampoline
+                    // that adapts the convention instead of forwarding the
+                    // raw closure pointer unchanged.
+                    let closure = match self.emit_expr_tir(expr)? {
+                        Some(c) => c,
+                        None => return Ok(None),
+                    };
+                    if ptr_param_indices.is_empty() {
+                        Ok(Some(closure))
+                    } else {
+                        self.emit_ptr_wrap_closure_trampoline_tir(
+                            &closure,
+                            &expr.ty,
+                            ptr_param_indices,
+                        )
+                        .map(Some)
+                    }
                 }
             }
             _ => self.emit_expr_tir(expr),
@@ -510,7 +656,7 @@ impl TextEmitter {
 
         let mut param_parts = vec!["ptr %__env".to_string()];
         for (i, (p, p_te)) in params.iter().zip(param_tes.iter()).enumerate() {
-            let ty_str = self.llvm_ty_ctx(p_te);
+            let ty_str = self.llvm_ty_ctx_for_param_tir(&p.ty, p_te);
             if ty_str != "void" {
                 if ptr_param_indices.contains(&i) {
                     param_parts.push(format!("ptr %__raw_{}", p.name));
@@ -536,7 +682,7 @@ impl TextEmitter {
 
             // Bind user parameters as locals.
             for (i, (p, p_te)) in params.iter().zip(param_tes.iter()).enumerate() {
-                let ty_str = this.llvm_ty_ctx(p_te);
+                let ty_str = this.llvm_ty_ctx_for_param_tir(&p.ty, p_te);
                 if ty_str != "void" {
                     if ptr_param_indices.contains(&i) {
                         let loaded = this.next_reg();
