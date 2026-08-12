@@ -59,8 +59,9 @@ test fn sort_string_single() -> Unit {
 }
 
 // `List[List[Byte]]::sort()` must order by inner-array *content*, not by
-// the inner arrays' pointer identity (#2267) — the WASM backend routes
-// `Byte`/`Bool` inner elements to `_mvl_array_sort_nested_bytelist`, a raw
+// the inner arrays' pointer identity (#2267 on WASM, #2264 on LLVM) — WASM
+// routes `Byte`/`Bool` inner elements to `_mvl_array_sort_nested_bytelist`
+// and LLVM to `_mvl_list_sort_nested_bytelist`, both raw
 // byte-lexicographic comparator. This only matches natural order for
 // single-significant-byte, non-negative inner elements (true for
 // `Byte`/`Bool`, NOT for `Int`/`Float`, which stay on the pre-existing
@@ -78,4 +79,24 @@ test fn sort_nested_byte_by_content() -> Unit {
     assert_eq(sorted.get(0).unwrap_or([]).get(0).unwrap_or(from_int(255)).to_int(), 1);
     assert_eq(sorted.get(1).unwrap_or([]).get(0).unwrap_or(from_int(255)).to_int(), 2);
     assert_eq(sorted.get(2).unwrap_or([]).get(0).unwrap_or(from_int(255)).to_int(), 3);
+}
+
+// Ordering has to be lexicographic past the first element, and a proper
+// prefix has to sort before the longer array it prefixes — the property
+// `examples/bzip/bwt.mvl::bwt_encode` actually depends on when it sorts
+// rotations. A comparator that only looked at element 0, or that compared
+// lengths first, would pass `sort_nested_byte_by_content` above and still
+// give bzip the wrong primary index.
+test fn sort_nested_byte_lexicographic_prefix() -> Unit {
+    let xs: List[List[Byte]] = [
+        [from_int(1), from_int(2), from_int(3)],
+        [from_int(1), from_int(2)],
+        [from_int(1), from_int(1), from_int(9)],
+    ];
+    let sorted: List[List[Byte]] = xs.sort();
+    assert_eq(sorted.len(), 3);
+    assert_eq(sorted.get(0).unwrap_or([]).get(1).unwrap_or(from_int(255)).to_int(), 1);
+    assert_eq(sorted.get(1).unwrap_or([]).len(), 2);
+    assert_eq(sorted.get(2).unwrap_or([]).len(), 3);
+    assert_eq(sorted.get(2).unwrap_or([]).get(2).unwrap_or(from_int(255)).to_int(), 3);
 }

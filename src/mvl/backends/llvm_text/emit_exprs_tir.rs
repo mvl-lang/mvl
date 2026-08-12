@@ -5227,6 +5227,33 @@ impl TextEmitter {
                 self.fn_ctx.reg_types.insert(reg.clone(), "ptr".into());
                 Ok(Some(reg))
             }
+            // `List[List[Byte]]::sort()` / `List[List[Bool]]::sort()` — same
+            // defect as the String arm above, one nesting level out (#2264):
+            // `_mvl_list_sort` compares elements as raw i64 bit patterns,
+            // which for a nested-list element is the inner array's heap
+            // address, so ordering follows allocation order instead of
+            // content. `examples/bzip/bwt.mvl` sorts rotations and needs real
+            // lexicographic order. Scoped to `Byte`/`Bool` inner elements,
+            // whose LLVM type is `i8` (`elem_size == 1`), so the runtime's
+            // raw-byte comparison is exactly element-wise ordering; `Int` and
+            // `Float` inner lists are 8-byte little-endian lanes that
+            // byte-lexicographic order gets wrong, and stay on the
+            // pre-existing (wrong-by-pointer) generic arm below. Mirrors the
+            // WASM backend's `_mvl_array_sort_nested_bytelist` (#2267).
+            ("sort", "ptr")
+                if args.is_empty()
+                    && matches!(unwrap_labels(&receiver.ty), Ty::List(e) | Ty::Array(e, _)
+                        if matches!(unwrap_labels(e), Ty::List(i) | Ty::Array(i, _)
+                            if matches!(unwrap_labels(i), Ty::Byte | Ty::Bool))) =>
+            {
+                self.ensure_extern("declare ptr @_mvl_list_sort_nested_bytelist(ptr)");
+                let reg = self.next_reg();
+                self.push_instr(&format!(
+                    "{reg} = call ptr @_mvl_list_sort_nested_bytelist(ptr {val})"
+                ));
+                self.fn_ctx.reg_types.insert(reg.clone(), "ptr".into());
+                Ok(Some(reg))
+            }
             ("sort", "ptr") if args.is_empty() => {
                 Ok(Some(self.emit_c_call_simple("sort", &val, &[])))
             }
