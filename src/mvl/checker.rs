@@ -1927,9 +1927,11 @@ fn main() -> Int {
     //
     // Go-model same-directory dispatch must expose a sibling's extension
     // *methods* without an explicit `use`, while its types and free
-    // functions stay gated on one. These three tests pin both halves —
+    // functions stay gated on one. These tests pin both halves —
     // without them, widening `collect_methods_only` to `collect_declarations`
-    // would silently restore the whole-directory visibility #2204 removed.
+    // would silently restore the whole-directory visibility #2204 removed,
+    // and narrowing its receiver check would silently drop builtin-receiver
+    // methods (the shape `BUILTIN_RECEIVER_TYPES` exists to protect).
 
     fn parse(src: &str) -> Program {
         let (mut p, _) = Parser::new(src);
@@ -2030,6 +2032,106 @@ fn use_method(c: Ctx) -> Int { c.method_helper() }
             result.is_ok(),
             "unresolvable sibling receiver type must not leak an error into this file, got: {:?}",
             result.errors
+        );
+    }
+
+    /// A sibling declaring an extension method on a *builtin* receiver, plus a
+    /// free function that must still not leak.
+    const GO_MODEL_BUILTIN_SIBLING: &str = r#"
+pub fn String::shout(self) -> Int { 42 }
+pub fn builtin_free_helper(n: Int) -> Int { n + 1 }
+"#;
+
+    #[test]
+    fn method_prelude_exposes_sibling_methods_on_builtin_receivers() {
+        // Builtins are never present in `env.types`, so a receiver-visibility
+        // check written as a bare `lookup_type(..).is_none()` silently discards
+        // every `String::`/`List::`/`Map::` extension method a sibling declares
+        // — the single most common extension-method shape in MVL. Guard both
+        // `collect_methods_only` and `register_fn` against losing the
+        // BUILTIN_RECEIVER_TYPES exemption again.
+        let sibling = parse(GO_MODEL_BUILTIN_SIBLING);
+        let prog = parse(r#"fn use_builtin_method(s: String) -> Int { s.shout() }"#);
+        let result = check_with_two_preludes_and_methods_mode(
+            &[],
+            &[],
+            &[&sibling],
+            &prog,
+            SolverMode::Layered,
+        );
+        assert!(
+            result.is_ok(),
+            "sibling method on a builtin receiver must resolve via method_prelude, got: {:?}",
+            result.errors
+        );
+    }
+
+    #[test]
+    fn method_prelude_builtin_receiver_file_still_hides_free_functions() {
+        // The builtin exemption must widen *method* visibility only — a
+        // builtin-receiver sibling's free functions stay gated on `use`.
+        let sibling = parse(GO_MODEL_BUILTIN_SIBLING);
+        let prog = parse("fn use_free() -> Int { builtin_free_helper(1) }");
+        let result = check_with_two_preludes_and_methods_mode(
+            &[],
+            &[],
+            &[&sibling],
+            &prog,
+            SolverMode::Layered,
+        );
+        assert!(
+            result
+                .errors
+                .iter()
+                .any(|e| matches!(e, CheckError::UndefinedFunction { .. })),
+            "free function beside a builtin-receiver method must stay gated on `use`, got: {:?}",
+            result.errors
+        );
+    }
+
+    #[test]
+    fn method_prelude_resolves_mutually_recursive_sibling_methods() {
+        // The motivating #1706 shape: two siblings' methods on a shared
+        // receiver call each other, so neither can `use` the other (spec
+        // 005-modules Req 2/3 bans circular imports). Each file must check
+        // clean with the *other* as its method_prelude. The receiver type
+        // lives in a third file both legitimately import.
+        let ctx = parse("pub type EmitCtx = struct { depth: Int }");
+        let emit_exprs = parse(
+            r#"
+pub fn EmitCtx::emit_expr(self) -> Int { self.emit_body() }
+"#,
+        );
+        let emit_stmts = parse(
+            r#"
+pub fn EmitCtx::emit_body(self) -> Int { self.emit_expr() }
+"#,
+        );
+        // Checking emit_exprs.mvl: emit_stmts.mvl is the ambient method sibling.
+        let a = check_with_two_preludes_and_methods_mode(
+            &[],
+            &[&ctx],
+            &[&emit_stmts],
+            &emit_exprs,
+            SolverMode::Layered,
+        );
+        assert!(
+            a.is_ok(),
+            "emit_exprs must resolve emit_body from its method sibling, got: {:?}",
+            a.errors
+        );
+        // And the mirror direction, which is the half an import graph can't express.
+        let b = check_with_two_preludes_and_methods_mode(
+            &[],
+            &[&ctx],
+            &[&emit_exprs],
+            &emit_stmts,
+            SolverMode::Layered,
+        );
+        assert!(
+            b.is_ok(),
+            "emit_stmts must resolve emit_expr from its method sibling, got: {:?}",
+            b.errors
         );
     }
 }
