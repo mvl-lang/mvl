@@ -656,7 +656,7 @@ impl TextEmitter {
 
         let mut param_parts = vec!["ptr %__env".to_string()];
         for (i, (p, p_te)) in params.iter().zip(param_tes.iter()).enumerate() {
-            let ty_str = self.llvm_ty_ctx(p_te);
+            let ty_str = self.llvm_ty_ctx_for_param_tir(&p.ty, p_te);
             if ty_str != "void" {
                 if ptr_param_indices.contains(&i) {
                     param_parts.push(format!("ptr %__raw_{}", p.name));
@@ -682,7 +682,7 @@ impl TextEmitter {
 
             // Bind user parameters as locals.
             for (i, (p, p_te)) in params.iter().zip(param_tes.iter()).enumerate() {
-                let ty_str = this.llvm_ty_ctx(p_te);
+                let ty_str = this.llvm_ty_ctx_for_param_tir(&p.ty, p_te);
                 if ty_str != "void" {
                     if ptr_param_indices.contains(&i) {
                         let loaded = this.next_reg();

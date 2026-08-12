@@ -1,0 +1,19 @@
+// 05_collections/set_contains_string_wasm_gap_test.mvl — split from
+// set_test.mvl (#2270): `Set[String]::contains` fails under `--backend=wasm`.
+//
+// `Set[T]::contains(x)`'s WASM dispatch always reaches for the i64-element
+// native fn regardless of element type, so `Set[String].contains("x")`
+// passes an i32 `*MvlString` handle where an i64 is expected — a
+// module-validation type mismatch, not a runtime bug. Same class of gap as
+// #2270's LLVM item 3 (fixed there), tracked separately for WASM as #2271.
+// Passes on `--backend=rust`/`llvm`.
+
+test fn set_contains_string_hit() -> Unit {
+    let s: Set[String] = {"x", "y"};
+    assert_eq(s.contains("x"), true);
+}
+
+test fn set_contains_string_miss() -> Unit {
+    let s: Set[String] = {"x", "y"};
+    assert_eq(s.contains("z"), false);
+}
