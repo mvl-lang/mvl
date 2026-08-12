@@ -13,6 +13,11 @@
 //
 // Omitted (dead code in Rust, superseded by scope-index check):
 //   - collect_free_var_refs / collect_refs_expr / collect_refs_block / check_lambda_captures
+
+use tir.{Capability, Expr, Pattern, SourceLoc, Stmt, Ty}
+use verify_errors::CheckError;
+use checker::Checker;
+use infer::infer_expr;
 //
 // MVL differences from Rust:
 //   - Capability::Ref    → Capability::RefCap  (avoids Ty::Ref collision)

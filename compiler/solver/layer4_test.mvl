@@ -9,10 +9,27 @@
 //   - is_unsat() via the divisibility and FM paths
 //   - try_cooper() end-to-end
 //
-// All types (LinTerm, LinConstraint, RefExpr, Expr, …) are available via the
-// compiler prelude when running `mvl test compiler/`.
+// LinTerm/LinConstraint are `pub` in layer4.mvl so this file can `use`-import
+// and exercise them directly (#2204 — no directory-scoped implicit
+// visibility; every cross-file reference requires an explicit `use`).
 //
 // Run with: mvl test compiler/
+
+use tir.{AstBinaryExpr, BinaryOp, CmpOp, Expr, AstLiteral, RefExpr, SourceLoc}
+use solver.layer4::constraint_is_trivially_false;
+use solver.layer4::constraint_is_trivially_true;
+use solver.layer4::linterm_add;
+use solver.layer4::linterm_coeff_of;
+use solver.layer4::linterm_const;
+use solver.layer4::linterm_free_vars;
+use solver.layer4::linterm_is_constant;
+use solver.layer4::linterm_negate;
+use solver.layer4::linterm_scale;
+use solver.layer4::linterm_sub;
+use solver.layer4::linterm_var;
+use solver.layer4::linterm_without_var;
+use solver.layer4::try_cooper;
+use solver.layer4::LinConstraint;
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 

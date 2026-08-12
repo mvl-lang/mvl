@@ -13,6 +13,10 @@
 //   - Contradiction pred.: `self > 0 && self < 0` → fails always
 //   - Constant folding:    `bar(abs(-3))` via pure-fn evaluation
 
+use tir.{Expr, RefExpr}
+use solver::RefResult;
+use const_eval::try_fold_call;
+
 // ── Entry point ───────────────────────────────────────────────────────────────
 
 /// Try to prove or refute `pred` for `arg` using trivial-pattern rules.

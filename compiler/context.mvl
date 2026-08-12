@@ -18,11 +18,15 @@
 //   env = env.define("x", var_info);
 //   env = env.push_scope();
 //
-// Types in scope from peer compiler files (no explicit import needed):
+// Types from peer compiler files, explicitly imported below (#2204 — no
+// directory-scoped implicit visibility; every cross-file reference requires
+// an explicit `use`):
 //   Ty, Effect, Totality, Capability, EffectDecl, SourceLoc (tir.mvl),
 //   CheckError (verify_errors.mvl).
 
 use std.collections.{Map}
+use tir.{Capability, Effect, EffectDecl, SourceLoc, Totality, Ty}
+use verify_errors::CheckError;
 
 // ── CapabilityState ────────────────────────────────────────────────────────────
 

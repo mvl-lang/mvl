@@ -378,30 +378,15 @@ test-rust-rust: build ## rust/rust — new corpus through Rust transpiler (batch
 # minimal on purpose — LLVM is otherwise full-corpus (#1823) — so new
 # entries should stay rare; each is a real gap, not a convenience.
 #
-# map_entries_value_field_test.mvl (#2251, split from map_hof_test.mvl):
-# `Entry[K, V]`'s LLVM struct type hardcodes `ptr` for a generic field
-# regardless of the concrete instantiation — the same generic-struct-
-# field-layout gap as list_stubs_test.mvl below (#2119's LLVM remainder),
-# hit here via `Entry[String, Int]`'s `value` field. map_hof_test.mvl's
-# other Map HOF tests (fold/any/all/filter/map_values/entries-without-
-# field-access) are fixed and no longer excluded.
-#
-# list_stubs_test.mvl (#2119): constructs `Indexed`/`Pair`/`Partitioned` —
-# generic structs never actually built under LLVM before `List[T]::
-# enumerate`/`zip`/`partition` got real bodies. The WASM analog (a generic
-# struct's field layout/store/load dispatch resolving the struct's own
-# declaration-time type-param name instead of the call site's concrete
-# type) was fixed on that backend in the same change that added this file;
-# LLVM's `emit_exprs_tir.rs` needs its own fix.
-#
-# option_result_eq_test.mvl (#2249, split from option_result_test.mvl):
-# `Option[T]`/`Result[T, E]` are `{i8, ptr}` structs on this backend, and
-# `==` on them doesn't even compile ("icmp requires integer operands") —
-# a separate, pre-existing gap from the WASM equality fix that added this
-# file; needs its own LLVM emit_binary case.
+# list_stubs_test.mvl (#2119): a much broader gap than generic-struct field
+# layout — even its plain `List[Int]::set` case (no generics involved at
+# all) fails, confirming most of `windows`/`chunks`/`extend`/`filled`/etc.
+# still have no LLVM dispatch arm at all. `Indexed`/`Pair`/`Partitioned`'s
+# generic-struct-layout gap specifically (same class as #2270's
+# `Entry[K, V]` fix below) is a real but small part of this file's
+# failures — confirmed by testing, not assumed — so this file stays
+# excluded as a whole; #2270 only fixes the Entry case it was scoped to.
 LLVM_CORPUS_EXCLUDE := \
-	tests/corpus/04_types/option_result_eq_test.mvl \
-	tests/corpus/05_collections/map_entries_value_field_test.mvl \
 	tests/corpus/13_stdlib/list_stubs_test.mvl
 
 # Directories containing an LLVM_CORPUS_EXCLUDE entry need per-file listing;
@@ -477,7 +462,9 @@ test-runtime-llvm: ## Unit-test runtime/llvm/ crate natively (peer of test-runti
 # list_string_ops_test.mvl's other List[String] operations (including
 # skip/take/slice, #2262's actual fix) are confirmed passing end-to-end and
 # no longer excluded.
-WASM_CORPUS_EXCLUDE := tests/corpus/05_collections/list_string_ops_wasm_gaps_test.mvl
+WASM_CORPUS_EXCLUDE := \
+	tests/corpus/05_collections/list_string_ops_wasm_gaps_test.mvl \
+	tests/corpus/05_collections/set_contains_string_wasm_gap_test.mvl
 
 # Directories with nothing excluded pass through whole — mvlr prints a
 # per-test checkmark + pass/fail count for a directory arg, but runs a bare

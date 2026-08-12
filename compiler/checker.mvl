@@ -21,6 +21,10 @@
 //   - TypeChecker.&mut self → Checker value type threaded explicitly
 //   - Errors accumulated via ref List[CheckError] parameter
 
+use tir.{Effect, SourceLoc, Ty}
+use verify_errors::CheckError;
+use context.{FnInfo, TypeEnv}
+
 // ── Local Ty predicates ───────────────────────────────────────────────────────
 // Duplicate-free helpers used by checker.mvl, infer.mvl and check_stmts.mvl.
 // These mirror the extension methods in verify_types.mvl but are defined

@@ -14,6 +14,14 @@
 //   - TypeDecl has no per-field refinements at parser stage.
 //   - Result type reuses RefCounts from refinements.mvl.
 
+use tir.{Expr, FnDecl, Program, RefExpr, SourceLoc, Stmt, TypeDecl}
+use verify_errors::CheckError;
+use refinements.{
+    build_pure_fn_decls, build_type_alias_refs, dispatch_layers, display_pred,
+    normalize_pred, params_to_var_refs, rc_failed, rc_merge, rc_proven, rc_rt,
+    rc_zero, LayerCounts, ParamRef, RefCounts
+}
+
 // ── Contract map ──────────────────────────────────────────────────────────────
 
 /// A `requires` clause attached to a function (parser-stage representation).

@@ -24,6 +24,10 @@ test fn set_contains_miss() -> Unit {
     assert_eq(s.contains(99), false);
 }
 
+// `Set[String]::contains` is covered in `set_contains_string_wasm_gap_test.mvl`
+// — the WASM backend has its own, separate dispatch gap for it (#2271), so
+// those cases are split out and excluded from the WASM corpus there.
+
 test fn set_insert_new_element() -> Unit {
     let s: ref Set[Int] = {1, 2, 3};
     s.insert(4);
@@ -69,10 +73,6 @@ test fn set_map_collapses_collisions() -> Unit {
     assert_eq(parity.contains(0), true);
     assert_eq(parity.contains(1), true);
 }
-
-// TODO: `Set[String].contains(literal)` fails in the Rust transpiler with an
-// ambiguous `.into()` target — pending a separate ticket. Set[Int] covers the
-// key-lookup path meanwhile.
 
 // #2131: `to_list`/`intersection`/`difference`/`union`/`filter`/`fold`/`any`/
 // `all` were blocked by `std/collections.mvl` not being loaded into the

@@ -22,6 +22,9 @@
 // is deferred to a follow-on issue; that requires linear/typestate tracking beyond
 // what this structural pass provides.
 
+use tir.{SessionTy, SessionTyBranch, SourceLoc, TirTypeBody, TirTypeDecl, Ty}
+use verify_errors::CheckError;
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 /// No-location sentinel for errors produced without a concrete source position.

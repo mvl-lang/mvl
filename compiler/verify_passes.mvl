@@ -27,8 +27,11 @@
 //   PassEntry       — (pass, verdict) pair in the assurance report
 //   AssuranceReport — collects per-requirement verdicts for display
 
-// Span / Program come from compiler/tir.mvl (peer file in same dir).
-// CheckError / methods come from compiler/verify_errors.mvl.
+use tir::Program;
+use verify_errors::CheckError;
+use refinements.{LayerCounts, RefCounts}
+use solver::SolverMode;
+use ifc.{count_flow_check_sites, count_labeled_params, count_relabels}
 
 // ── Verdict ───────────────────────────────────────────────────────────────────
 

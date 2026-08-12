@@ -34,6 +34,7 @@ tests/corpus/05_collections/map_entries_value_field_test.mvl	ok
 tests/corpus/05_collections/map_hof_test.mvl	ok
 tests/corpus/05_collections/map_test.mvl	ok
 tests/corpus/05_collections/nested_collections_drop_test.mvl	ok
+tests/corpus/05_collections/set_contains_string_wasm_gap_test.mvl	ok
 tests/corpus/05_collections/set_test.mvl	ok
 tests/corpus/06_effects/composite_test.mvl	ok
 tests/corpus/06_effects/console_test.mvl	ok
