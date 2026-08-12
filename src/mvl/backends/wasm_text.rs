@@ -552,7 +552,10 @@ const RUNTIME_IMPORTS: &[(&str, &str)] = &[
     ("_mvl_array_sort_i64", "(param i32) (result i32)"),
     ("_mvl_array_sort_i32", "(param i32) (result i32)"),
     ("_mvl_array_sort_f64", "(param i32) (result i32)"),
-    ("_mvl_array_sort_nested_bytelist", "(param i32) (result i32)"),
+    (
+        "_mvl_array_sort_nested_bytelist",
+        "(param i32) (result i32)",
+    ),
     ("_mvl_string_ptr_array_sort", "(param i32) (result i32)"),
     ("_mvl_array_contains_i64", "(param i32 i64) (result i32)"),
     ("_mvl_array_contains_i32", "(param i32 i32) (result i32)"),
@@ -773,7 +776,12 @@ impl Backend for WasmTextCompiler {
             .collect();
         let fn_param_tys: HashMap<String, Vec<Ty>> = all_fns
             .iter()
-            .map(|f| (f.name.clone(), f.params.iter().map(|p| p.ty.clone()).collect()))
+            .map(|f| {
+                (
+                    f.name.clone(),
+                    f.params.iter().map(|p| p.ty.clone()).collect(),
+                )
+            })
             .collect();
         let generic_methods: HashMap<(String, String), &TirFn> = generic_ext_methods
             .iter()
