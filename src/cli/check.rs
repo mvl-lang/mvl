@@ -249,6 +249,15 @@ pub fn run(path: &str, req_filter: Option<u8>, opts: CheckOptions) {
     let mut total_failed: usize = 0;
     let mut total_by_layer = [0usize; 6];
 
+    // Go-model sibling parses, memoized per directory. Every file in a given
+    // directory draws its method prelude from the same set, so parse that set
+    // once instead of once per checked file: `mvl check compiler/` otherwise
+    // re-read and re-parsed ~50 siblings for each of its 56 files.
+    let mut method_prelude_cache: std::collections::HashMap<
+        std::path::PathBuf,
+        Vec<(String, Program)>,
+    > = std::collections::HashMap::new();
+
     // Only run the checker on explicitly requested files (not resolver-only siblings).
     for (file_str, prog, src) in parsed.iter().take(check_count) {
         // Build per-file prelude: stdlib + this file's own `use`-based transitive
@@ -278,19 +287,34 @@ pub fn run(path: &str, req_filter: Option<u8>, opts: CheckOptions) {
         let file_dir = Path::new(file_str.as_str())
             .parent()
             .unwrap_or_else(|| Path::new("."));
-        let method_prelude_progs: Vec<Program> = loader::sibling_module_files(file_dir)
-            .into_iter()
-            .filter(|p| {
-                let p_str = p.display().to_string();
-                p_str != *file_str && !sibling_paths.contains(&p_str)
-            })
-            .filter_map(|p| std::fs::read_to_string(&p).ok().map(|src| (p, src)))
-            .map(|(_, src)| {
-                let (mut parser, _) = Parser::new(&src);
-                parser.parse_program()
-            })
+        let dir_siblings = method_prelude_cache
+            .entry(file_dir.to_path_buf())
+            .or_insert_with(|| {
+                loader::sibling_module_files(file_dir)
+                    .into_iter()
+                    .filter_map(|p| {
+                        let p_str = p.display().to_string();
+                        match std::fs::read_to_string(&p) {
+                            Ok(src) => {
+                                let (mut parser, _) = Parser::new(&src);
+                                Some((p_str, parser.parse_program()))
+                            }
+                            // Don't drop this silently: an unreadable sibling
+                            // otherwise surfaces as a baffling "no method" error
+                            // at every call site that needed one of its methods.
+                            Err(e) => {
+                                eprintln!("warning: could not read sibling module `{p_str}`: {e}");
+                                None
+                            }
+                        }
+                    })
+                    .collect()
+            });
+        let method_prelude: Vec<&Program> = dir_siblings
+            .iter()
+            .filter(|(p_str, _)| p_str != file_str && !sibling_paths.contains(p_str))
+            .map(|(_, p)| p)
             .collect();
-        let method_prelude: Vec<&Program> = method_prelude_progs.iter().collect();
 
         let result = checker::check_with_two_preludes_and_methods_mode(
             &stdlib_prelude,
