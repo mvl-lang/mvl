@@ -687,9 +687,10 @@ impl TextEmitter {
         let body_val = self.emit_block_tir_typed(&f.body, Some(&f.ret_ty))?;
 
         if !self.fn_ctx.terminated {
-            if let Some(crate::mvl::ir::TirStmt::Expr { expr, .. }) = f.body.stmts.last() {
-                self.exclude_returned_value_tir(expr);
-            }
+            // #2264: `emit_block_tir_typed`'s own tail-statement handling
+            // already excludes/clones the function body's tail value the
+            // same way it does for any nested if/else branch or match arm
+            // (see its `TirStmt::Expr` arm) — no need to redo that here.
             self.emit_heap_drops();
             if self.fn_ctx.current_fn_is_main {
                 let has_actors = !self.module.tir_actor_decls.is_empty();

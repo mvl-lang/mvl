@@ -158,6 +158,17 @@ impl TextEmitter {
         reg
     }
 
+    /// [`Self::emit_clone_for_heap_kind`], but resolving the `HeapKind` from
+    /// a checker `Ty` first — `None` for scalar types (nothing to clone).
+    /// #2264: used to clone a struct field read (`FieldAccess`) returned
+    /// directly as a function's own tail value — see the call site for why
+    /// `exclude_returned_value_tir` can't handle that shape the way it
+    /// handles a bare `Var`.
+    pub(super) fn clone_heap_value_for_ty(&mut self, val: &str, ty: &Ty) -> Option<String> {
+        let hk = ty_to_type_expr(ty).and_then(|te| Self::heap_kind(&te))?;
+        Some(self.emit_clone_for_heap_kind(val, hk))
+    }
+
     /// Declare (if needed) and call whatever runtime helper(s) `kind`
     /// dispatches to, dropping the heap object owned by `ssa`. For `is_ref`
     /// locals, `ssa` is a stack alloca — the heap pointer is loaded first.

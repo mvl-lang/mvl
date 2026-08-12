@@ -59,6 +59,24 @@ impl TextEmitter {
             TirExprKind::Consume(inner) | TirExprKind::Relabel { expr: inner, .. } => {
                 self.exclude_returned_value_tir(inner);
             }
+            // #2264: a struct/enum-payload literal returned as a function's
+            // tail expression (e.g. `BwtResult { data: last, primary: primary }`)
+            // moves each field's value into the constructed value — but this
+            // case wasn't handled at all, so none of those locals were
+            // excluded from the blanket `emit_heap_drops()` sweep that runs
+            // right after. `examples/bzip/bwt.mvl::bwt_encode` returns
+            // `BwtResult { data: last, .. }`: `last` got returned as the
+            // struct's `data` field *and* dropped by the same sweep — a
+            // use-after-free on the return value itself, corrupting it
+            // before the caller ever reads it. Same shape as the
+            // already-handled push/Some/Ok/Err/list-literal "moved into a
+            // container" sites — a struct/enum constructor is just another
+            // container.
+            TirExprKind::Construct { fields, .. } | TirExprKind::Spawn { fields, .. } => {
+                for (_, value) in fields {
+                    self.exclude_returned_value_tir(value);
+                }
+            }
             _ => {}
         }
     }
@@ -96,7 +114,47 @@ impl TextEmitter {
             self.emit_stmt_tir(s)?;
         }
         match &tail[0] {
-            TirStmt::Expr { expr, .. } => self.emit_expr_tir(expr),
+            // #2264: this block's tail value may become a *caller's* return
+            // value (a function body, an if/else branch, a match-arm block —
+            // every use of `emit_block_tir_typed`) — if it's a struct-field
+            // read (`owned.bytes`), it needs the same clone-not-exclude
+            // treatment as a `FieldAccess` used as a call argument or
+            // explicit `return` value (see `resolve_owned_call_arg` and the
+            // `TirStmt::Return` handling below): there's no single tracked
+            // local `exclude_returned_value_tir` can blank out for a field
+            // read, since the struct it came from keeps existing and will
+            // deep-drop all its own heap-typed fields regardless.
+            // `examples/bzip/bitstream.mvl::flush_writer`'s
+            // `if owned.bit_pos == 0 { owned.bytes } else { .. }` hits this
+            // exact shape — the FieldAccess is the `then`-branch's tail,
+            // not the function's own outermost tail statement.
+            TirStmt::Expr { expr, .. } => {
+                let val = self.emit_expr_tir(expr)?;
+                if let (Some(v), true) = (
+                    val.as_ref(),
+                    matches!(expr.kind, TirExprKind::FieldAccess { .. }),
+                ) {
+                    if let Some(cloned) = self.clone_heap_value_for_ty(v, &expr.ty) {
+                        return Ok(Some(cloned));
+                    }
+                }
+                // #2264: this block's tail value escapes into the caller's
+                // phi/return — exclude the owning local (`Var`/`Consume`/
+                // `Relabel`/`Construct`) from *this* block's own scope-exit
+                // drop sweep the same way a function body's tail statement
+                // and an explicit `return` already do (see those call
+                // sites). Without this, a `ref`-qualified local returned as
+                // an if/else branch's bare tail `Var` is dropped by
+                // `drop_scope_locals` right before its value is used as the
+                // branch's phi input — `drop_scope_locals`'s `escape`
+                // parameter only string-matches a *non-ref* local's own SSA
+                // value, never a `ref` local's alloca, so it can't catch
+                // this on its own. `examples/bzip/bitstream.mvl::
+                // flush_writer`'s `else` branch (`out.push(..); out`) hits
+                // this exact shape.
+                self.exclude_returned_value_tir(expr);
+                Ok(val)
+            }
             TirStmt::If {
                 cond, then, else_, ..
             } => self.emit_if_stmt_chain_tir(cond, then, else_.as_ref(), expected_ty),
@@ -288,7 +346,40 @@ impl TextEmitter {
                 if *kind == LetKind::Ghost {
                     return Ok(());
                 }
-                let val = self.emit_expr_tir(init)?;
+                // #2264: an *empty* list/set literal's own `.ty` is never
+                // resolved by the checker (`List[Unknown]`, not e.g.
+                // `List[Byte]`) — there's no element to infer it from. The
+                // generic `emit_expr_tir(init)` path then falls back to a
+                // hardcoded "ptr" (8-byte) element size regardless of the
+                // declared type, so `let result: ref List[Byte] = [];`
+                // built an array with `elem_size == 8` instead of `1`.
+                // Every later `.push()` copied 8 bytes from a 1-byte source
+                // per that wrong metadata (UB, though accidentally
+                // byte-correct at read time), and the array's `elem_size`
+                // silently disagreed with any same-typed `List[Byte]` built
+                // from a non-empty literal — breaking content equality
+                // (`_mvl_array_eq`'s `elem_size` check) despite identical
+                // bytes. This `let` statement's own declared `ty` (unlike
+                // the literal's) IS fully resolved, so use it directly for
+                // the empty case instead of going through `emit_expr_tir`.
+                let mut declared_ty = ty;
+                while let Ty::Ref(_, inner) = declared_ty {
+                    declared_ty = inner;
+                }
+                let empty_hint = match declared_ty {
+                    Ty::List(e) | Ty::Array(e, _) | Ty::Set(e) => Some(self.ty_to_llvm_ctx(e)),
+                    _ => None,
+                };
+                let val = match &init.kind {
+                    crate::mvl::ir::TirExprKind::List { elems } if elems.is_empty() => {
+                        self.emit_list_literal_tir(elems, empty_hint.as_deref())?
+                    }
+                    crate::mvl::ir::TirExprKind::Set { elems } if elems.is_empty() => {
+                        // Dedup is a no-op on zero elements — safe to skip.
+                        self.emit_list_literal_tir(elems, empty_hint.as_deref())?
+                    }
+                    _ => self.emit_expr_tir(init)?,
+                };
                 // Convert TIR `Ty` once at the boundary; the rest reuses the
                 // existing AST-shaped helpers (deref_ty, is_mutable_ref, …).
                 let ty_te = ty_to_type_expr(ty).unwrap_or_else(|| {
@@ -444,12 +535,24 @@ impl TextEmitter {
 
             TirStmt::Return { value, .. } => {
                 let ret_ty = self.fn_ctx.current_ret_ty.clone();
-                let ret_val = if let Some(expr) = value {
+                let mut ret_val = if let Some(expr) = value {
                     self.emit_expr_tir(expr)?
                 } else {
                     None
                 };
                 if let Some(expr) = value {
+                    // #2264: an early `return owned.bytes`-shaped FieldAccess
+                    // needs the same clone-not-exclude fix as the
+                    // tail-position case in emit_program_tir.rs — see that
+                    // call site's comment for why.
+                    if let (Some(v), true) = (
+                        ret_val.as_ref(),
+                        matches!(expr.kind, TirExprKind::FieldAccess { .. }),
+                    ) {
+                        if let Some(cloned) = self.clone_heap_value_for_ty(v, &expr.ty) {
+                            ret_val = Some(cloned);
+                        }
+                    }
                     self.exclude_returned_value_tir(expr);
                 }
                 self.emit_heap_drops();

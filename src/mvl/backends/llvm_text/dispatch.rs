@@ -361,11 +361,15 @@ pub const LLVM_DISPATCH: &[(&str, Dispatch)] = &[
             ret_ty: "ptr",
         },
     ),
+    // #2264: takes a 3rd `i64` (the closure's return-type size) so the
+    // output array is sized for what `.map()` actually produces, not
+    // whatever the *input* element happened to be — see the call sites in
+    // emit_exprs_tir.rs for why `(*list).elem_size` alone was wrong.
     (
         "map",
         Dispatch::CCall {
             sym: "_mvl_list_map",
-            signature: "ptr @_mvl_list_map(ptr, ptr)",
+            signature: "ptr @_mvl_list_map(ptr, ptr, i64)",
             ret_ty: "ptr",
         },
     ),
