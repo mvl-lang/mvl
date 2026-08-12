@@ -5371,19 +5371,27 @@ fn emit_expr(out: &mut String, expr: &TirExpr, ctx: &Ctx) {
             if let Some(elem_ty) = collection_elem_ty(&elem_ty).cloned() {
                 ctx.needs_runtime.set(true);
                 emit_expr(out, receiver, ctx);
-                // `List[List[T]]` with a scalar `T` — content, not pointer
-                // identity (#2267). Nested-of-nested / nested-of-String
-                // inner lists aren't covered; that's `_mvl_array_sort_i32`'s
-                // existing (wrong, pre-existing) fallback below, unchanged.
+                // `List[List[Byte]]`/`List[List[Bool]]` — content, not
+                // pointer identity (#2267). `_mvl_array_sort_nested_bytelist`
+                // compares raw bytes, which only matches numeric/natural
+                // order for a single-significant-byte, non-negative inner
+                // element (`Byte`/`Bool`): the high 3 (of 4, since both are
+                // `is_i32`) bytes are always zero, so byte-lexicographic
+                // order degenerates to element-wise order. It does NOT hold
+                // for `Int`/`Float` inner lists — multi-byte magnitudes and
+                // two's-complement/IEEE-754 sign bits break lexicographic
+                // byte order (e.g. `256` vs `2`: `256`'s low byte is `0x00`,
+                // sorting it *before* `2`). Those, plus nested-of-nested and
+                // nested-of-String inner lists, fall through to
+                // `_mvl_array_sort_i32`'s existing (wrong-by-pointer,
+                // pre-existing) fallback below, unchanged.
                 let inner_elem_ty = collection_elem_ty(&elem_ty)
                     .map(|inner| resolve_ty_param(inner, ctx.type_subst));
                 let sort_fn = if is_string_ty(&elem_ty, ctx) {
                     "_mvl_string_ptr_array_sort"
                 } else if is_float_ctx(&elem_ty, ctx) {
                     "_mvl_array_sort_f64"
-                } else if inner_elem_ty.is_some_and(|inner| {
-                    !is_string_ty(&inner, ctx) && collection_elem_ty(&inner).is_none()
-                }) {
+                } else if inner_elem_ty.is_some_and(|inner| matches!(inner, Ty::Byte | Ty::Bool)) {
                     "_mvl_array_sort_nested_bytelist"
                 } else if wasm_ty(&elem_ty, ctx) == "i32" {
                     "_mvl_array_sort_i32"

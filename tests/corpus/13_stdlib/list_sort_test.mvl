@@ -57,3 +57,25 @@ test fn sort_string_single() -> Unit {
     assert_eq(sorted.len(), 1);
     assert_eq(sorted.get(0).unwrap_or("?"), "only");
 }
+
+// `List[List[Byte]]::sort()` must order by inner-array *content*, not by
+// the inner arrays' pointer identity (#2267) — the WASM backend routes
+// `Byte`/`Bool` inner elements to `_mvl_array_sort_nested_bytelist`, a raw
+// byte-lexicographic comparator. This only matches natural order for
+// single-significant-byte, non-negative inner elements (true for
+// `Byte`/`Bool`, NOT for `Int`/`Float`, which stay on the pre-existing
+// pointer-order fallback — seen the hard way when `[[256], [2]]` sorted as
+// unchanged `[[256], [2]]` instead of `[[2], [256]]` before this scoping
+// was narrowed to `Byte`/`Bool` only).
+test fn sort_nested_byte_by_content() -> Unit {
+    let xs: List[List[Byte]] = [
+        [from_int(3), from_int(0)],
+        [from_int(1), from_int(0)],
+        [from_int(2), from_int(0)],
+    ];
+    let sorted: List[List[Byte]] = xs.sort();
+    assert_eq(sorted.len(), 3);
+    assert_eq(sorted.get(0).unwrap_or([]).get(0).unwrap_or(from_int(255)).to_int(), 1);
+    assert_eq(sorted.get(1).unwrap_or([]).get(0).unwrap_or(from_int(255)).to_int(), 2);
+    assert_eq(sorted.get(2).unwrap_or([]).get(0).unwrap_or(from_int(255)).to_int(), 3);
+}

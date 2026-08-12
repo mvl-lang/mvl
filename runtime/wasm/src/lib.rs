@@ -1971,9 +1971,10 @@ pub unsafe extern "C" fn _mvl_array_sort_i64(a: i32) -> i32 {
 }
 
 /// `_mvl_array_sort_nested_bytelist(a) -> *MvlArray` — sort a
-/// `List[List[Byte]]` (elements are `*MvlArray` pointers to inner
-/// scalar-element arrays) ascending by the *content* of each inner array,
-/// in-place, returning the same outer pointer with `rc` bumped (#2267).
+/// `List[List[Byte]]`/`List[List[Bool]]` (elements are `*MvlArray` pointers
+/// to inner scalar-element arrays) ascending by the *content* of each inner
+/// array, in-place, returning the same outer pointer with `rc` bumped
+/// (#2267).
 ///
 /// `_mvl_array_sort_i32` (below) compares elements as raw i32 bit
 /// patterns, which for a `*MvlArray` element is the heap *address* — order
@@ -1988,9 +1989,20 @@ pub unsafe extern "C" fn _mvl_array_sort_i64(a: i32) -> i32 {
 /// aliasing them across a reorder is exactly as safe (and exactly as
 /// leaky, a separate pre-existing gap) as leaving them untouched.
 ///
+/// Comparing raw bytes lexicographically only matches numeric order for a
+/// *single-significant-byte, non-negative* inner element — true for
+/// `Byte`/`Bool` (the high 3 of their 4 `is_i32` bytes are always zero, so
+/// byte order degenerates to element-wise order) but not for `Int`/`Float`:
+/// multi-byte magnitudes and two's-complement/IEEE-754 sign bits break
+/// lexicographic byte order (e.g. `256` vs `2` — `256`'s low byte is
+/// `0x00`, so it would sort *before* `2`). The WASM emitter (`wasm_text.rs`)
+/// only dispatches here for `Byte`/`Bool` inner elements; `Int`/`Float`
+/// inner lists stay on the pre-existing (wrong-by-pointer, not fixed here)
+/// `_mvl_array_sort_i32`/`_i64`/`_f64` fallback instead.
+///
 /// # Safety
 /// `a` must be a valid `MvlArray*` (`elem_size == 4`, holding `*MvlArray`
-/// element pointers, each itself a scalar-element array) or 0.
+/// element pointers, each itself a `Byte`/`Bool`-element array) or 0.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn _mvl_array_sort_nested_bytelist(a: i32) -> i32 {
     if a == 0 {
