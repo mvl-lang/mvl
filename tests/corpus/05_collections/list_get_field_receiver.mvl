@@ -8,9 +8,11 @@
 // bisection — remove either one and this compiles fine:
 //
 //   1. `Item`/`Wrapper` live in list_get_field_receiver_types.mvl, a
-//      sibling file, not this one. The identical `List[T]::get(i)`
-//      pattern on a direct `List[T]` parameter (not a field access) is
-//      unaffected regardless of where its type is declared.
+//      sibling file, not this one — `use`-imported below (#2204). What
+//      reproduces the bug is the separate *file*, not the absence of an
+//      import. The identical `List[T]::get(i)` pattern on a direct
+//      `List[T]` parameter (not a field access) is unaffected regardless
+//      of where its type is declared.
 //   2. This file declares an inline `test fn` (deliberately unrelated in
 //      content — moving it to its own file, or removing it, makes the
 //      bug disappear). This is the CLI's "inline tests" pattern (the same
@@ -21,6 +23,8 @@
 // `find_or_default` is intentionally never called by the test below;
 // calling it would change the shape of the regression this file exists
 // to catch.
+
+use list_get_field_receiver_types.{Item, Wrapper}
 
 /// Returns the first item in `w`, or a default `Item` if `w.items` is empty.
 pub total fn find_or_default(w: Wrapper) -> Item {

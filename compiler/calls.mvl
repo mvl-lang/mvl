@@ -13,6 +13,10 @@
 //   - Effect subsumption uses name equality (hierarchy deferred to #1738)
 //   - infer_fn_call / infer_method_call live in infer.mvl (they need infer_expr)
 
+use tir.{Effect, SourceLoc, Ty}
+use verify_errors::CheckError;
+use checker.{Checker, ty_strip}
+
 // ── String helpers ────────────────────────────────────────────────────────────
 
 /// Split string on first occurrence of sep, returning [before, after] or None.

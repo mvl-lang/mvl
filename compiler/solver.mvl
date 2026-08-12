@@ -16,6 +16,8 @@
 // | 4     | solver/layer4.mvl  | Presburger / Cooper's QE    | ~5%       |
 // | 5     | Z3 (Rust extern)   | SMT solver — out of scope   | remaining |
 
+use tir.{BinaryOp, CmpOp, SourceLoc}
+
 // ── Solver mode ───────────────────────────────────────────────────────────────
 
 /// Controls which layers the refinement solver activates.

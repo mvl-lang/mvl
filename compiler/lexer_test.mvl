@@ -3,14 +3,14 @@
 //
 // compiler/lexer_test.mvl — unit tests for compiler/lexer.mvl
 //
-// `mvl test compiler/` inlines all sibling modules (ast.mvl, lexer.mvl,
-// parser.mvl) as prelude, so all types and `lex()` are in scope.
-//
 // Strategy: call lex() on small MVL snippets, then assert on the
 // token kinds and lexemes at specific positions.
 //
 // Run with:  mvl test compiler/
 //            make test-mvl
+
+use tir.{SourceLoc, Token, TokenKind}
+use lexer::lex;
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 

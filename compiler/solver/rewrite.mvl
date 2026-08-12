@@ -22,6 +22,8 @@
 //   `Ok(x).is_err()`    → Bool(false)
 //   `Err(e).is_err()`   → Bool(true)
 
+use tir.{AstBinaryExpr, AstCallExpr, AstMethodExpr, AstUnaryExpr, AstLiteral, Expr, SourceLoc}
+
 /// Apply builtin rewrite rules to `expr`, reducing method calls on concrete
 /// receivers to literal values where possible.
 ///

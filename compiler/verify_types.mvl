@@ -23,6 +23,8 @@
 //   Ty::TyFn  = function type  (named-field form)
 //   Ty::Array = fixed-size array (named-field form)
 
+use tir.{SessionTy, Ty}
+
 // ── Sentinel ──────────────────────────────────────────────────────────────────
 
 /// Sentinel for an unresolved const-generic array size (e.g. `N` in Array[T,N]).

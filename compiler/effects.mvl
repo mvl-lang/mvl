@@ -20,10 +20,13 @@
 // HashSet<String> replaced by List[String] (Set::new() not available; hierarchies
 // are always small, so O(n) membership checks are acceptable).
 //
-// Types in scope from peer compiler files (loaded as part of the compiler/ module):
+// Types from peer compiler files, explicitly imported below (#2204 — no
+// directory-scoped implicit visibility):
 //   CheckError (verify_errors.mvl), EffectDecl / SourceLoc (tir.mvl).
 
 use std.collections.{Map}
+use tir.{EffectDecl, SourceLoc}
+use verify_errors::CheckError;
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 

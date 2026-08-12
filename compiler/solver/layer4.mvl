@@ -16,25 +16,31 @@
 //
 // Complexity guard: returns None for > 5 free variables.
 
+use tir.{CmpOp, LogicOp}
+use solver::RefResult;
+
 // ── Linear term ───────────────────────────────────────────────────────────────
 
 /// A linear integer expression: `constant + Σ (coeff_i · var_i)`.
-type LinTerm = struct {
+pub type LinTerm = struct {
     constant: Int,
     coeffs:   Map[String, Int],
 }
 
-fn linterm_const(n: Int) -> LinTerm {
+/// The constant linear term `n` (no variables).
+pub total fn linterm_const(n: Int) -> LinTerm {
     LinTerm { constant: n, coeffs: Map::new() }
 }
 
-fn linterm_var(name: String) -> LinTerm {
+/// The unit linear term `1 · name`.
+pub total fn linterm_var(name: String) -> LinTerm {
     let c: ref Map[String, Int] = Map::new();
     c.insert(name, 1);
     LinTerm { constant: 0, coeffs: c }
 }
 
-fn linterm_add(a: LinTerm, b: LinTerm) -> LinTerm {
+/// Sum of two linear terms; coefficients cancelling to 0 are dropped.
+pub total fn linterm_add(a: LinTerm, b: LinTerm) -> LinTerm {
     let vars: ref Map[String, Int] = Map::new();
     for k in a.coeffs.keys() {
         match a.coeffs.get(k) { Some(v) => { vars.insert(k, v) }, None => {} }
@@ -57,7 +63,8 @@ fn linterm_add(a: LinTerm, b: LinTerm) -> LinTerm {
     LinTerm { constant: a.constant + b.constant, coeffs: vars }
 }
 
-fn linterm_scale(a: LinTerm, c: Int) -> LinTerm {
+/// Multiply every coefficient and the constant by `c`.
+pub total fn linterm_scale(a: LinTerm, c: Int) -> LinTerm {
     if c == 0 { return linterm_const(0) }
     let vars: ref Map[String, Int] = Map::new();
     for k in a.coeffs.keys() {
@@ -66,17 +73,22 @@ fn linterm_scale(a: LinTerm, c: Int) -> LinTerm {
     LinTerm { constant: a.constant * c, coeffs: vars }
 }
 
-fn linterm_negate(a: LinTerm) -> LinTerm { linterm_scale(a, -1) }
+/// Negate every coefficient and the constant (`scale` by -1).
+pub total fn linterm_negate(a: LinTerm) -> LinTerm { linterm_scale(a, -1) }
 
-fn linterm_sub(a: LinTerm, b: LinTerm) -> LinTerm { linterm_add(a, linterm_negate(b)) }
+/// Difference of two linear terms: `a + (-b)`.
+pub total fn linterm_sub(a: LinTerm, b: LinTerm) -> LinTerm { linterm_add(a, linterm_negate(b)) }
 
-fn linterm_is_constant(a: LinTerm) -> Bool { a.coeffs.len() == 0 }
+/// True when the term has no variables — i.e. it is a bare constant.
+pub total fn linterm_is_constant(a: LinTerm) -> Bool { a.coeffs.len() == 0 }
 
-fn linterm_coeff_of(a: LinTerm, varname: String) -> Int {
+/// Coefficient of `varname`, or 0 when the variable does not occur.
+pub total fn linterm_coeff_of(a: LinTerm, varname: String) -> Int {
     match a.coeffs.get(varname) { Some(v) => v, None => 0 }
 }
 
-fn linterm_without_var(a: LinTerm, varname: String) -> LinTerm {
+/// `a` with `varname`'s coefficient removed (the constant is preserved).
+pub total fn linterm_without_var(a: LinTerm, varname: String) -> LinTerm {
     let vars: ref Map[String, Int] = Map::new();
     for k in a.coeffs.keys() {
         if k != varname {
@@ -86,7 +98,8 @@ fn linterm_without_var(a: LinTerm, varname: String) -> LinTerm {
     LinTerm { constant: a.constant, coeffs: vars }
 }
 
-fn linterm_free_vars(a: LinTerm) -> List[String] {
+/// Names of every variable occurring in `a`.
+pub total fn linterm_free_vars(a: LinTerm) -> List[String] {
     let result: ref List[String] = [];
     for k in a.coeffs.keys() { result.push(k) }
     result
@@ -94,13 +107,15 @@ fn linterm_free_vars(a: LinTerm) -> List[String] {
 
 // ── LinConstraint ────────────────────────────────────────────────────────────────
 
-type LinConstraint = enum {
+/// A normalised linear constraint, each read as `term ⋈ 0`.
+pub type LinConstraint = enum {
     Le(LinTerm),
     Eq(LinTerm),
     Ne(LinTerm),
 }
 
-fn constraint_is_trivially_false(c: LinConstraint) -> Bool {
+/// True when `c` is unsatisfiable by inspection (constant term only).
+pub total fn constraint_is_trivially_false(c: LinConstraint) -> Bool {
     match c {
         LinConstraint::Le(t) => linterm_is_constant(t) && t.constant > 0,
         LinConstraint::Eq(t) => linterm_is_constant(t) && t.constant != 0,
@@ -108,7 +123,8 @@ fn constraint_is_trivially_false(c: LinConstraint) -> Bool {
     }
 }
 
-fn constraint_is_trivially_true(c: LinConstraint) -> Bool {
+/// True when `c` holds for every assignment (constant term only).
+pub total fn constraint_is_trivially_true(c: LinConstraint) -> Bool {
     match c {
         LinConstraint::Le(t) => linterm_is_constant(t) && t.constant <= 0,
         LinConstraint::Eq(t) => linterm_is_constant(t) && t.constant == 0,

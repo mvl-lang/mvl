@@ -13,6 +13,8 @@
 //   - `x: self < 0` → refutes `require_positive(x)` (> 0)
 //   - `self > 0 && self <= 100` → intersects to [1, 100]
 
+use solver::RefResult;
+
 // ── Interval types ─────────────────────────────────────────────────────────────
 
 /// A bound on one end of an integer interval.

@@ -16,6 +16,17 @@
 //   - Module alias redirect omitted
 //   - Uses local ty_* helpers from checker.mvl (not verify_types.mvl methods)
 
+use tir.{AstCallExpr, AstLiteral, AstMethodExpr, BinaryOp, Expr, SourceLoc, Ty}
+use verify_errors::CheckError;
+use context.{FnInfo, TypeEnv}
+use checker.{
+    Checker, field_type_checked, InferResult, lookup_enum_for_variant,
+    resolve_alias, ty_compat, ty_is_bool, ty_is_integer, ty_is_numeric,
+    ty_is_propagatable, ty_is_unknown, ty_name, ty_propagate_inner, ty_strip,
+    types_compatible_resolved
+}
+use parser::unbox_expr;
+
 // ── Literal inference ─────────────────────────────────────────────────────────
 
 /// Map a parser-stage literal to its MVL type.

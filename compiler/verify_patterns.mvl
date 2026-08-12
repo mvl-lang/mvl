@@ -22,6 +22,9 @@
 //   - HashSet/Vec → List[String] with contains(); for-loops for termination.
 //   - rsplit_once("::"): replaced with split("::") + last element access.
 
+use tir.{Pattern, SourceLoc, TupleStructPattern}
+use verify_errors::CheckError;
+
 // ── Variant name extraction helper ───────────────────────────────────────────
 
 /// Extract the short name after the last "::" in a qualified name.

@@ -22,6 +22,10 @@
 //   - HashSet → List[String] with .contains()
 //   - HashMap → Map[String, String]
 
+use tir.{Expr, Pattern, Program, SourceLoc, Stmt, TypeExpr}
+use verify_errors::CheckError;
+use ifc.{bind_pattern_labels, join_opt, label_of, label_of_type_expr}
+
 // ── Local walk helper (cannot use walk.mvl in isolated test harness) ─────────
 
 partial fn walk_expr_prop(expr: Expr) -> List[Expr] {
