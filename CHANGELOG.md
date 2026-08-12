@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.8.1] - 2026-08-12
+
+### Fixed — #2270
+
+- **LLVM: three `String`-typed dispatch gaps found while root-causing #2251/#2252/#2260.** `Entry[K, V]`'s generic struct type hardcoded `ptr` for every field regardless of the concrete instantiation (`Entry[String, Int]`'s `value` field was declared `ptr` instead of `i64`) — fixed by mangling a distinct named type per concrete instantiation (`%Entry__String_Int`), emitted on first use, mirroring the existing per-call-site monomorphization for generic functions; wired into construction, field access, HOF closure parameter binding, and `Option`/`Result` match-arm payload binding. `Option[T]`/`Result[T, E]` `==`/`!=` didn't compile at all on this backend (`icmp` on an aggregate `{ i8, ptr }` operand) — added tag-then-payload comparison as inline IR, ported from #2249's WASM `_mvl_option_eq`/`_mvl_result_eq`. `Set[String]::contains` always dispatched to the i64-element runtime regardless of element type — added a `String`-element arm reusing `_mvl_array_contains_str`, mirroring the existing `List[String]::contains` fix; also fixed a related, previously-documented Rust-backend compile bug (`HashSet::contains<Q>`'s key type left unconstrained by an unnecessary `.into()`) found while restoring the test coverage this uncovered. `list_stubs_test.mvl` (#2119) stays excluded — confirmed by testing, not assumed, that its gap is unrelated (missing LLVM dispatch arms entirely, not struct layout).
+
 ## [1.8.0] - 2026-08-06
 
 ### Fixed — #2256
