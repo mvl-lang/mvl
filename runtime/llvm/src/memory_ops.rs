@@ -16,8 +16,8 @@
 use std::ptr;
 
 use crate::memory::{
-    _mvl_alloc, _mvl_array_new, _mvl_free, _mvl_string_clone, _mvl_string_drop, _mvl_string_new,
-    MvlArray, MvlMap, MvlMapSlot, MvlString,
+    _mvl_alloc, _mvl_array_clone, _mvl_array_new, _mvl_free, _mvl_string_clone, _mvl_string_drop,
+    _mvl_string_new, MvlArray, MvlMap, MvlMapSlot, MvlString,
 };
 
 // ── format (#901) ───────────────────────────────────────────────────────────
@@ -1938,6 +1938,72 @@ pub unsafe extern "C" fn _mvl_list_sort_str(list: *mut MvlArray) -> *mut MvlArra
         _mvl_array_push(out, &p as *const *mut MvlString as *const u8);
     }
     out
+}
+
+/// `_mvl_list_sort_nested_bytelist(list)` — return a new
+/// `List[List[Byte]]`/`List[List[Bool]]` sorted ascending by the *content* of
+/// each inner array (#2264).
+///
+/// Same defect and same shape as `_mvl_list_sort_str` above, one nesting level
+/// out: `_mvl_list_sort` compares elements as raw i64 bit patterns, which for
+/// a `*mut MvlArray` element is the heap *address*, so the result depends on
+/// allocation order rather than being lexicographic.
+/// `examples/bzip/bwt.mvl::bwt_encode` sorts `List[List[Byte]]` rotations and
+/// needs genuine lexicographic order to find the correct primary index;
+/// pointer order gave a silently wrong result rather than a crash. The WASM
+/// backend got the equivalent `_mvl_array_sort_nested_bytelist` in #2267 —
+/// this is the LLVM half.
+///
+/// Comparing raw bytes lexicographically is only equivalent to element-wise
+/// ordering for `Byte`/`Bool` inner elements, whose LLVM element type is `i8`
+/// (`elem_size == 1`), so each byte *is* one non-negative element. It does not
+/// hold for `Int`/`Float` inner lists — those are 8-byte little-endian lanes,
+/// where the low-order byte sorts first (e.g. `256` vs `2`: `256`'s first byte
+/// is `0x00`, placing it before `2`) and sign bits break the order outright.
+/// `emit_exprs_tir.rs` only dispatches here for `Byte`/`Bool`; `Int`/`Float`
+/// inner lists stay on the pre-existing (wrong-by-pointer, not fixed here)
+/// `_mvl_list_sort` fallback.
+///
+/// Inner arrays are cloned (refcount bumped) into the output rather than
+/// moved, because `list` and the returned array become independent owners that
+/// each deep-drop their elements (`HeapKind::ArrayOfArray` →
+/// `_mvl_array_drop_mvlarray`) — sharing them un-bumped would double-free.
+/// Same reasoning as `_mvl_list_sort_str`'s `_mvl_string_clone`.
+///
+/// # Safety
+/// `list` must be a valid `MvlArray*` (elem_size == 8, holding `*mut MvlArray`
+/// elements, each itself a `Byte`/`Bool`-element array) or null.
+#[no_mangle]
+pub unsafe extern "C" fn _mvl_list_sort_nested_bytelist(list: *mut MvlArray) -> *mut MvlArray {
+    if list.is_null() {
+        return _mvl_array_new(8, 0);
+    }
+    let len = (*list).len as usize;
+    let out = _mvl_array_new(8, len.max(1));
+    let mut ptrs: Vec<*mut MvlArray> = (0..len)
+        .map(|i| {
+            let src = (*list).ptr.add(i * 8) as *const *mut MvlArray;
+            _mvl_array_clone(*src)
+        })
+        .collect();
+    ptrs.sort_unstable_by(|&a, &b| mvl_array_bytes(a).cmp(mvl_array_bytes(b)));
+    for p in ptrs {
+        _mvl_array_push(out, &p as *const *mut MvlArray as *const u8);
+    }
+    out
+}
+
+/// Byte view of a scalar-element `MvlArray`'s live elements, or `&[]` for a
+/// null pointer. Helper for [`_mvl_list_sort_nested_bytelist`].
+///
+/// # Safety
+/// `a` must be a valid `MvlArray*` or null.
+unsafe fn mvl_array_bytes<'a>(a: *const MvlArray) -> &'a [u8] {
+    if a.is_null() || (*a).ptr.is_null() {
+        return &[];
+    }
+    let nbytes = ((*a).len as usize).saturating_mul((*a).elem_size as usize);
+    std::slice::from_raw_parts((*a).ptr as *const u8, nbytes)
 }
 
 /// `List[String].join(sep)` (#2256) — concatenate every element into a

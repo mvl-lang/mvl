@@ -3,13 +3,23 @@
 # recursive ADTs (HuffmanTree), pure core + effect boundary.
 #
 # Run from this directory: make check, make test, make run
-.PHONY: help guard-mvl build check prove lint test-solver test assurance mcdc mutate smoke run run-llvm all clean
+.PHONY: help guard-mvl build check prove lint test-solver test test-wasm assurance mcdc mutate smoke run run-llvm all clean
 
 .DEFAULT_GOAL := help
 
 MVL  := ../../target/debug/mvl
 DIR  := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
 WASM_RUNTIME := ../../target/wasm32-wasip1/debug/mvl_runtime_wasm.wasm
+
+# $(MVL) always points at the freshly-built local binary above, never an
+# installed toolchain — so the re-exec `mvl` does by default (jumping to a
+# project-pinned installed version per `requires-mvl`) is never what we
+# want here. Without this, `test-wasm` silently tests whatever version
+# happens to be installed under XDG_DATA_HOME instead of this checkout —
+# exactly how the #2274 fix looked "unfixed" under a plain `make test-wasm`
+# until the installed toolchain was rebuilt (see examples/log_analyzer's
+# identical guard).
+export MVL_NO_REEXEC := 1
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z0-9_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-12s\033[0m %s\n", $$1, $$2}'
@@ -57,10 +67,8 @@ test-solver: guard-mvl ## Show per-file solver statistics for all source files
 test: guard-mvl ## Run all inline test fn and roundtrip_test.mvl (transpiler backend)
 	$(MVL) test $(DIR)
 
-# No test-wasm target (deliberately excluded): dozens of functions across
-# bwt/huffman/mtf/rle/roundtrip compile to `unreachable` on the WASM
-# backend — broad, pre-existing feature gaps, same story as the missing
-# test-llvm target above. Worth tracking via `make wasm-stub-report`.
+test-wasm: guard-mvl ## Run tests via --backend=wasm (all 71 pass; fixed in #2274)
+	MVL_RUNTIME_WASM=$(WASM_RUNTIME) $(MVL) test $(DIR) --backend=wasm
 
 
 assurance: guard-mvl ## Assurance report: spec coverage, MC/DC, mutation score (verbose)
