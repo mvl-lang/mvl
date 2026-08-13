@@ -32,6 +32,7 @@ use verify_errors::CheckError;
 use refinements.{LayerCounts, RefCounts}
 use solver::SolverMode;
 use ifc.{count_flow_check_sites, count_labeled_params, count_relabels}
+use context::TypeEnv;
 
 // ── Verdict ───────────────────────────────────────────────────────────────────
 

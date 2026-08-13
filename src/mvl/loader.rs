@@ -1921,37 +1921,52 @@ pub fn load_stdlib_prelude<'a>(
 ) -> Vec<Program> {
     use std::collections::HashSet;
     let mut loaded: HashSet<String> = HashSet::new();
-    let mut prelude = Vec::new();
-    for prog in progs {
-        for decl in &prog.declarations {
-            if let Decl::Use(ud) = decl {
-                if ud.path.first().map(|s| s == "std").unwrap_or(false) && ud.path.len() >= 2 {
-                    let module = ud.path[1].as_str();
-                    if IMPLICIT_PRELUDE_MODULES.contains(&module) {
-                        continue;
-                    }
-                    // Full subpath after `std`, not just the top-level module name —
-                    // mirrors `load_mvl_native_stdlib_extras`. `std.kv.file` lives at
-                    // `std/kv/file.mvl`; taking only `ud.path[1]` ("kv") looked for a
-                    // nonexistent `kv.mvl` and silently loaded nothing, so every
-                    // `std.kv.file` symbol showed as undefined in this checker-only
-                    // prelude while the real transpile prelude resolved it fine.
-                    let subpath = &ud.path[1..];
-                    let cache_key = subpath.join(".");
-                    let filename = format!("{}.mvl", subpath.join("/"));
-                    if loaded.insert(cache_key) {
-                        let stdlib_file = stdlib_dir.join(&filename);
-                        let src_opt = fs::read_to_string(&stdlib_file)
-                            .ok()
-                            .or_else(|| crate::mvl::stdlib::stdlib_content(&filename));
-                        if let Some(src) = src_opt {
-                            let (mut p, _) = Parser::new(&src);
-                            prelude.push(p.parse_program());
+    let mut prelude: Vec<Program> = Vec::new();
+    // Transitive over stdlib-to-stdlib imports, not just the user programs'
+    // own `use std.X` (#2272 fallout): 10/29 std/*.mvl files themselves `use
+    // std.X` another stdlib module (e.g. `log.mvl` -> `use std.io.{Fd}`). A
+    // single non-transitive pass here only ever looked at `progs`' own
+    // declarations, so a user file that reached `log.mvl` via `use std.log`
+    // without *also* directly `use`ing `std.io` got a prelude containing
+    // `log.mvl` but never `io.mvl` — `Fd` silently unresolved. Mirrors
+    // `load_sibling_modules_transitive`'s frontier/clone BFS shape.
+    let mut frontier: Vec<Program> = progs.cloned().collect();
+    while !frontier.is_empty() {
+        let mut next: Vec<Program> = Vec::new();
+        for prog in &frontier {
+            for decl in &prog.declarations {
+                if let Decl::Use(ud) = decl {
+                    if ud.path.first().map(|s| s == "std").unwrap_or(false) && ud.path.len() >= 2 {
+                        let module = ud.path[1].as_str();
+                        if IMPLICIT_PRELUDE_MODULES.contains(&module) {
+                            continue;
+                        }
+                        // Full subpath after `std`, not just the top-level module name —
+                        // mirrors `load_mvl_native_stdlib_extras`. `std.kv.file` lives at
+                        // `std/kv/file.mvl`; taking only `ud.path[1]` ("kv") looked for a
+                        // nonexistent `kv.mvl` and silently loaded nothing, so every
+                        // `std.kv.file` symbol showed as undefined in this checker-only
+                        // prelude while the real transpile prelude resolved it fine.
+                        let subpath = &ud.path[1..];
+                        let cache_key = subpath.join(".");
+                        let filename = format!("{}.mvl", subpath.join("/"));
+                        if loaded.insert(cache_key) {
+                            let stdlib_file = stdlib_dir.join(&filename);
+                            let src_opt = fs::read_to_string(&stdlib_file)
+                                .ok()
+                                .or_else(|| crate::mvl::stdlib::stdlib_content(&filename));
+                            if let Some(src) = src_opt {
+                                let (mut p, _) = Parser::new(&src);
+                                let stdlib_prog = p.parse_program();
+                                next.push(stdlib_prog.clone());
+                                prelude.push(stdlib_prog);
+                            }
                         }
                     }
                 }
             }
         }
+        frontier = next;
     }
     prelude
 }

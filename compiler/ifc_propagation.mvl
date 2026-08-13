@@ -25,6 +25,7 @@
 use tir.{Expr, Pattern, Program, SourceLoc, Stmt, TypeExpr}
 use verify_errors::CheckError;
 use ifc.{bind_pattern_labels, join_opt, label_of, label_of_type_expr}
+use context::TypeEnv;
 
 // ── Local walk helper (cannot use walk.mvl in isolated test harness) ─────────
 
