@@ -9,6 +9,7 @@
 //! `dispatch.rs` for the table itself.
 
 use crate::mvl::backends::llvm_text::dispatch::{self, Dispatch};
+use crate::mvl::checker::types::Ty;
 
 use super::TextEmitter;
 
@@ -114,7 +115,13 @@ impl TextEmitter {
     ///
     /// Reads sym + signature + struct_name + slot_tys from the
     /// `LLVM_DISPATCH` row for `method` (must be
-    /// [`Dispatch::CCallStructFromSlots`]).
+    /// [`Dispatch::CCallStructFromSlots`]). `struct_name` names a generic
+    /// struct (e.g. `Partitioned[T]`), so the assembled value must use that
+    /// instantiation's mangled type (`%Partitioned__Int`, #2270) rather than
+    /// the bare `%Partitioned` — the bare name is never declared in the
+    /// module, and `insertvalue %Partitioned undef, ...` is invalid IR
+    /// (undef of an undeclared/unsized type). `elem_ty` is the receiver's
+    /// concrete element type, used to resolve that mangled name.
     ///
     /// Returns the register holding the assembled struct value.
     pub(super) fn emit_c_call_struct_from_slots(
@@ -122,6 +129,7 @@ impl TextEmitter {
         method: &str,
         recv_val: &str,
         extra_args: &[(&'static str, &str)],
+        elem_ty: &Ty,
     ) -> String {
         let Dispatch::CCallStructFromSlots {
             sym,
@@ -138,6 +146,10 @@ impl TextEmitter {
         assert!(
             !slot_tys.is_empty(),
             "LLVM_DISPATCH entry for '{method}' has empty slot_tys — CCallStructFromSlots requires at least one slot"
+        );
+        let struct_name = self.ensure_generic_struct_llvm_ty(
+            struct_name.trim_start_matches('%'),
+            std::slice::from_ref(elem_ty),
         );
         self.ensure_extern(&format!("declare {signature}"));
         let arg_list = build_arg_list(recv_val, extra_args);

@@ -4476,8 +4476,8 @@ impl TextEmitter {
                 Ok(Some(result))
             }
             ("get", "ptr") if matches!(unwrap_labels(&receiver.ty), Ty::Map(_, _)) => {
-                // Map[String, String]'s value slot stores the string's
-                // pointer by value (aliasing the same heap object — see the
+                // Map[K, V]'s value slot stores a pointer-shaped V's pointer
+                // by value (aliasing the same heap object — see the
                 // "Transfer ownership" comment in `emit_map_literal_tir`),
                 // not a deep clone. `_mvl_map_get` returns a pointer *into
                 // that slot*, so wrapping it directly as the Option's
@@ -4485,15 +4485,20 @@ impl TextEmitter {
                 // Every consumer of an Option (`unwrap_or`, `match`, …)
                 // treats its payload as freshly owned and drops it, which —
                 // for a value the map's own drop will also walk — is a
-                // double free the moment both run. Clone the string here so
+                // double free the moment both run. Clone the value here so
                 // the Option holds an independently-owned reference; scalar
                 // values (Int, Bool, enum discriminants, …) have no
                 // ownership to share and are returned as before (#2047,
-                // mirrors the equivalent WASM backend fix).
-                let value_is_string = matches!(
-                    unwrap_labels(&receiver.ty),
-                    Ty::Map(_, v) if matches!(unwrap_labels(v), Ty::String)
-                );
+                // mirrors the equivalent WASM backend fix). This was
+                // String-only until #2280 — `Map[Int, List[Int]]::get()`
+                // (as produced by `group_by`) handed back the same List
+                // pointer the map still owned, so `grouped.get(k).unwrap_or([])`
+                // plus the map's own scope-exit drop double-freed it. Shares
+                // `elem_clone_sym` with the identical `List::get` fix (#2264).
+                let value_clone_sym = match unwrap_labels(&receiver.ty) {
+                    Ty::Map(_, v) => elem_clone_sym(v),
+                    _ => None,
+                };
                 let key_expr = match args.first() {
                     Some(a) => a,
                     None => return Ok(None),
@@ -4532,14 +4537,12 @@ impl TextEmitter {
                 ));
                 self.start_bb(&some_bb);
                 let opt_some = self.next_reg();
-                if value_is_string {
-                    self.ensure_extern("declare ptr @_mvl_string_clone(ptr)");
+                if let Some(clone_sym) = value_clone_sym {
+                    self.ensure_extern(&format!("declare ptr @{clone_sym}(ptr)"));
                     let loaded = self.next_reg();
                     self.push_instr(&format!("{loaded} = load ptr, ptr {raw}"));
                     let cloned = self.next_reg();
-                    self.push_instr(&format!(
-                        "{cloned} = call ptr @_mvl_string_clone(ptr {loaded})"
-                    ));
+                    self.push_instr(&format!("{cloned} = call ptr @{clone_sym}(ptr {loaded})"));
                     let fresh_slot = self.next_reg();
                     self.push_instr(&format!("{fresh_slot} = alloca ptr"));
                     self.push_instr(&format!("store ptr {cloned}, ptr {fresh_slot}"));
@@ -5055,10 +5058,15 @@ impl TextEmitter {
                     Some(p) => p,
                     None => return Ok(None),
                 };
+                let elem_ty = match unwrap_labels(&receiver.ty) {
+                    Ty::List(e) | Ty::Array(e, _) | Ty::Set(e) => (**e).clone(),
+                    other => other.clone(),
+                };
                 Ok(Some(self.emit_c_call_struct_from_slots(
                     "partition",
                     &val,
                     &[("ptr", &closure)],
+                    &elem_ty,
                 )))
             }
             // Guarded against `Map` receivers — same reasoning as the
