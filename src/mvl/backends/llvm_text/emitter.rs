@@ -368,11 +368,6 @@ pub(super) struct RefLocal {
 }
 
 impl TextEmitter {
-    #[allow(dead_code)]
-    fn new(module_name: &str, target_triple: &str) -> Self {
-        Self::new_with_builtins(module_name, target_triple, &HashMap::new())
-    }
-
     /// Construct with pre-populated builtin dispatch table.
     ///
     /// `builtin_map` entries are pre-loaded into `fn_ret_types` / `fn_param_types`
