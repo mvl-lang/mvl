@@ -559,6 +559,10 @@ const RUNTIME_IMPORTS: &[(&str, &str)] = &[
     ("_mvl_string_ptr_array_sort", "(param i32) (result i32)"),
     ("_mvl_array_contains_i64", "(param i32 i64) (result i32)"),
     ("_mvl_array_contains_i32", "(param i32 i32) (result i32)"),
+    (
+        "_mvl_array_contains_str",
+        "(param i32 i32 i32) (result i32)",
+    ),
     ("_mvl_array_insert_i64", "(param i32 i64)"),
     ("_mvl_array_insert_i32", "(param i32 i32)"),
     // `Set[T].remove(val)` — linear-scan remove-by-value (#2124).
@@ -4987,14 +4991,26 @@ fn emit_expr(out: &mut String, expr: &TirExpr, ctx: &Ctx) {
         {
             ctx.needs_runtime.set(true);
             let elem_ty = collection_elem_ty(&receiver.ty).cloned().unwrap_or(Ty::Int);
-            let fn_name = if is_i32(&elem_ty, ctx) {
-                "_mvl_array_contains_i32"
+            // String elements are boxed `*MvlString` handles, not a bare i32
+            // the way a `Set[Int]`'s elements are — `is_i32` correctly says
+            // no for them, but that fell through to the i64 arm, which
+            // expects one i64 argument, not the two-i32 `(ptr, len)` a bare
+            // String argument actually pushes: a WASM module-validation
+            // type mismatch, not a runtime bug (#2271).
+            if is_string_ty(&elem_ty, ctx) {
+                emit_expr(out, receiver, ctx);
+                emit_expr(out, &args[0], ctx);
+                out.push_str("    call $_mvl_array_contains_str\n");
             } else {
-                "_mvl_array_contains_i64"
-            };
-            emit_expr(out, receiver, ctx);
-            emit_expr(out, &args[0], ctx);
-            out.push_str(&format!("    call ${fn_name}\n"));
+                let fn_name = if is_i32(&elem_ty, ctx) {
+                    "_mvl_array_contains_i32"
+                } else {
+                    "_mvl_array_contains_i64"
+                };
+                emit_expr(out, receiver, ctx);
+                emit_expr(out, &args[0], ctx);
+                out.push_str(&format!("    call ${fn_name}\n"));
+            }
         }
         TirExprKind::MethodCall {
             receiver,

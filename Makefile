@@ -450,21 +450,24 @@ test-runtime-llvm: ## Unit-test runtime/llvm/ crate natively (peer of test-runti
 # owner. Back in the main corpus glob below — nothing left to exclude.
 #
 # `list_string_ops_wasm_gaps_test.mvl` (#2262, split from
-# list_string_ops_test.mvl): `List[String]::contains` picks the wrong
-# native dispatch fn (no `String` case in `is_i32`'s scalar/pointer split,
-# so it falls to the i64 arm and gets passed an i32 handle — a module-
-# validation type mismatch, not a runtime bug); `.any(...)` with a string-
-# equality closure hits a related-looking but not-yet-diagnosed one;
-# `.min()`/`.max()` monomorphize `std/lists.mvl`'s documented fallback
-# stub (`self.first()`/`self.last()`, not a true min/max — see that file's
-# own doc comment) since WASM has no native min/max dispatch, unlike LLVM's
-# dedicated `_mvl_list_min_index_str`/`_mvl_list_max_index_str`.
-# list_string_ops_test.mvl's other List[String] operations (including
-# skip/take/slice, #2262's actual fix) are confirmed passing end-to-end and
-# no longer excluded.
+# list_string_ops_test.mvl): `.any(...)` with a string-equality closure
+# hits a not-yet-diagnosed module-validation mismatch; `.min()`/`.max()`
+# monomorphize `std/lists.mvl`'s documented fallback stub
+# (`self.first()`/`self.last()`, not a true min/max — see that file's own
+# doc comment) since WASM has no native min/max dispatch, unlike LLVM's
+# dedicated `_mvl_list_min_index_str`/`_mvl_list_max_index_str` (#2271).
+# `list_string_contains` (this file's fourth test) is fixed and passing —
+# not split out on its own only because the other three in this file still
+# need it excluded. list_string_ops_test.mvl's other List[String]
+# operations (including skip/take/slice, #2262's actual fix) are confirmed
+# passing end-to-end and no longer excluded.
+#
+# `set_contains_string_wasm_gap_test.mvl` (#2271, split from set_test.mvl):
+# fixed by the same `_mvl_array_contains_str` dispatch fix as
+# `list_string_contains` above (both `List`/`Set` share the WASM `contains`
+# arm) — no longer excluded.
 WASM_CORPUS_EXCLUDE := \
-	tests/corpus/05_collections/list_string_ops_wasm_gaps_test.mvl \
-	tests/corpus/05_collections/set_contains_string_wasm_gap_test.mvl
+	tests/corpus/05_collections/list_string_ops_wasm_gaps_test.mvl
 
 # Directories with nothing excluded pass through whole — mvlr prints a
 # per-test checkmark + pass/fail count for a directory arg, but runs a bare
