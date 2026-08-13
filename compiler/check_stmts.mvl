@@ -18,8 +18,8 @@
 use tir.{Expr, LValue, SourceLoc, Stmt, Ty}
 use verify_errors::CheckError;
 use context.{TypeEnv, VarInfo}
-use checker.{ty_compat, ty_is_bool, ty_is_unknown, ty_name, types_compatible_resolved, resolve_type_expr, field_type}
-use infer.{infer_expr, InferResult}
+use checker.{ty_compat, ty_is_bool, ty_is_unknown, ty_name, types_compatible_resolved, resolve_type_expr, field_type, InferResult}
+use infer::infer_expr;
 use parser::unbox_expr;
 
 pub partial fn infer_lvalue(env: TypeEnv, lv: LValue) -> Ty {
