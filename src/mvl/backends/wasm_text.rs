@@ -11444,6 +11444,14 @@ fn collect_expr(
         TirExprKind::FieldAccess { expr: inner, .. } => {
             collect_expr(inner, map, next, audit_relabels)
         }
+        // A lambda's body is emitted as its own top-level `$__lambda_…` fn by
+        // `emit_lambda_fns`, discovered lazily via `ctx.lambdas` during main
+        // emission — this static pre-pass never reaches it otherwise. A
+        // string literal referenced ONLY inside a closure (not elsewhere in
+        // an already-scanned fn) was never interned, so its use site emitted
+        // `;; missing literal` — a stack-underflow module that `wasm-tools
+        // parse` accepts and `validate` rejects (#2271 bug 2).
+        TirExprKind::Lambda { body, .. } => collect_expr(body, map, next, audit_relabels),
         _ => {}
     }
 }
@@ -12915,6 +12923,27 @@ mod validated_module_tests {
              test fn t() -> Unit {\n\
                  let xs: List[Int] = [1, 2, 3];\n\
                  assert_eq(xs.tag_me().len(), 8);\n\
+             }\n",
+        );
+        assert!(stubbed.is_empty(), "unexpected stubs: {stubbed:?}");
+    }
+
+    /// Same gap for a string literal referenced only inside a lambda body
+    /// (#2271 bug 2) — `collect_literals`'s pre-pass never recursed into
+    /// `TirExprKind::Lambda`, so a literal used only inside a closure (not
+    /// elsewhere in an already-scanned fn) was never interned; the closure
+    /// body then emitted `;; missing literal` for it, a stack-underflow
+    /// module `wasm-tools parse` accepts but `validate` rejects.
+    #[test]
+    fn literal_only_inside_lambda_body_is_interned() {
+        let stubbed = emit_and_validate(
+            "pub fn List[T]::has_it(self, f: fn(T) -> Bool) -> Bool {\n\
+                 for x in self { if f(x) { return true } };\n\
+                 false\n\
+             }\n\
+             test fn t() -> Unit {\n\
+                 let xs: List[String] = [\"bb\", \"a\", \"ccc\"];\n\
+                 assert_eq(xs.has_it(|s: String| s == \"UNIQUENEEDLE\"), false);\n\
              }\n",
         );
         assert!(stubbed.is_empty(), "unexpected stubs: {stubbed:?}");
