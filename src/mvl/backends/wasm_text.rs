@@ -563,6 +563,10 @@ const RUNTIME_IMPORTS: &[(&str, &str)] = &[
         "_mvl_array_contains_str",
         "(param i32 i32 i32) (result i32)",
     ),
+    ("_mvl_list_min_index_i64", "(param i32) (result i64)"),
+    ("_mvl_list_max_index_i64", "(param i32) (result i64)"),
+    ("_mvl_list_min_index_str", "(param i32) (result i64)"),
+    ("_mvl_list_max_index_str", "(param i32) (result i64)"),
     ("_mvl_array_insert_i64", "(param i32 i64)"),
     ("_mvl_array_insert_i32", "(param i32 i32)"),
     // `Set[T].remove(val)` — linear-scan remove-by-value (#2124).
@@ -2916,6 +2920,22 @@ fn collect_locals_ctx_expr(expr: &TirExpr, locals: &mut Vec<(String, Ty)>, ctx: 
                     locals.push((get_clone_temp_name(expr), Ty::Bool));
                 }
             }
+            // `.min()`/`.max()` on List/Array (#2271) — native index dispatch
+            // needs the receiver pointer and the computed index each held in
+            // a temp (see the emit-side arm), plus the same get-based
+            // clone-and-rewrap temp as `.get(i)` above for String/nested
+            // elements.
+            if collection_elem_ty(&recv_ty).is_some()
+                && (method == "min" || method == "max")
+                && args.is_empty()
+            {
+                locals.push((list_extreme_recv_temp_name(expr), Ty::Bool));
+                locals.push((list_extreme_idx_temp_name(expr), Ty::Int));
+                let elem_ty = collection_elem_ty(&recv_ty).cloned().unwrap_or(Ty::Int);
+                if peels_to_string(&elem_ty) || collection_elem_ty(&elem_ty).is_some() {
+                    locals.push((get_clone_temp_name(expr), Ty::Bool));
+                }
+            }
             collect_locals_ctx_expr(receiver, locals, ctx);
             for a in args {
                 collect_locals_ctx_expr(a, locals, ctx);
@@ -3200,6 +3220,22 @@ fn collect_locals_expr(expr: &TirExpr, locals: &mut Vec<(String, Ty)>) {
             // needs the returned Option's handle held across a
             // clone-and-rewrap sequence (#2203) — see the emit-side arm.
             if collection_elem_ty(&receiver.ty).is_some() && method == "get" && args.len() == 1 {
+                let elem_ty = collection_elem_ty(&receiver.ty).cloned().unwrap_or(Ty::Int);
+                if peels_to_string(&elem_ty) || collection_elem_ty(&elem_ty).is_some() {
+                    locals.push((get_clone_temp_name(expr), Ty::Bool));
+                }
+            }
+            // `.min()`/`.max()` on List/Array (#2271) — native index dispatch
+            // needs the receiver pointer and the computed index each held in
+            // a temp (see the emit-side arm), plus the same get-based
+            // clone-and-rewrap temp as `.get(i)` above for String/nested
+            // elements.
+            if collection_elem_ty(&receiver.ty).is_some()
+                && (method == "min" || method == "max")
+                && args.is_empty()
+            {
+                locals.push((list_extreme_recv_temp_name(expr), Ty::Bool));
+                locals.push((list_extreme_idx_temp_name(expr), Ty::Int));
                 let elem_ty = collection_elem_ty(&receiver.ty).cloned().unwrap_or(Ty::Int);
                 if peels_to_string(&elem_ty) || collection_elem_ty(&elem_ty).is_some() {
                     locals.push((get_clone_temp_name(expr), Ty::Bool));
@@ -5417,6 +5453,77 @@ fn emit_expr(out: &mut String, expr: &TirExpr, ctx: &Ctx) {
                 out.push_str(&format!("    call ${sort_fn}\n"));
             } else {
                 out.push_str("    ;; unsupported: List::sort() on non-collection receiver\n");
+            }
+        }
+        // `.min()`/`.max()` on List/Array (#2271) — WASM had no native
+        // dispatch at all, so calls monomorphized `std/lists.mvl`'s
+        // documented fallback body (`self.first()`/`self.last()`, not a true
+        // min/max) for every element type, not just String. Find the true
+        // extreme element's index via a dedicated C-ABI symbol, then reuse
+        // the exact same `_mvl_array_get_option_*` + clone-on-extract shape
+        // as `.get(i)` below — `_mvl_array_get`'s own bounds check already
+        // treats the empty-list sentinel index (`-1`) as out-of-range, so an
+        // empty list naturally yields `None` with no extra branch needed.
+        // Mirrors the LLVM backend's `emit_list_extreme_tir`.
+        //
+        // The receiver's array pointer is needed twice (once to find the
+        // index, once to fetch it) but `receiver` may be an arbitrary
+        // expression, not a bare local, so it's evaluated once into a temp.
+        TirExprKind::MethodCall {
+            receiver,
+            method,
+            args,
+        } if collection_elem_ty(&receiver.ty).is_some()
+            && (method == "min" || method == "max")
+            && args.is_empty() =>
+        {
+            ctx.needs_runtime.set(true);
+            let recv_ty = resolve_ty_param(&receiver.ty, ctx.type_subst);
+            let elem_ty = collection_elem_ty(&recv_ty).cloned().unwrap_or(Ty::Int);
+            let elem_is_string = peels_to_string(&elem_ty);
+            let elem_is_nested_collection = collection_elem_ty(&elem_ty).is_some();
+            let is_max = method == "max";
+            let index_fn = match (elem_is_string, is_max) {
+                (true, false) => "_mvl_list_min_index_str",
+                (true, true) => "_mvl_list_max_index_str",
+                (false, false) => "_mvl_list_min_index_i64",
+                (false, true) => "_mvl_list_max_index_i64",
+            };
+            let getter = if wasm_ty(&elem_ty, ctx) == "i32" || elem_is_string {
+                "_mvl_array_get_option_i32"
+            } else {
+                "_mvl_array_get_option_i64"
+            };
+            let recv_temp = list_extreme_recv_temp_name(expr);
+            let idx_temp = list_extreme_idx_temp_name(expr);
+            emit_expr(out, receiver, ctx);
+            out.push_str(&format!("    local.set ${recv_temp}\n"));
+            out.push_str(&format!("    local.get ${recv_temp}\n"));
+            out.push_str(&format!("    call ${index_fn}\n"));
+            out.push_str(&format!("    local.set ${idx_temp}\n"));
+            out.push_str(&format!("    local.get ${recv_temp}\n"));
+            out.push_str(&format!("    local.get ${idx_temp}\n"));
+            out.push_str(&format!("    call ${getter}\n"));
+            if elem_is_string || elem_is_nested_collection {
+                let temp = get_clone_temp_name(expr);
+                let clone_fn = if elem_is_string {
+                    "_mvl_string_clone"
+                } else {
+                    "_mvl_array_clone"
+                };
+                // Same "fresh Option box around a cloned payload, leak the
+                // original box" tradeoff as the `.get(i)` arm below (#2203).
+                out.push_str(&format!("    local.tee ${temp}\n"));
+                out.push_str("    call $_mvl_option_tag\n");
+                out.push_str("    i32.eqz\n");
+                out.push_str("    if (result i32)\n");
+                out.push_str(&format!("    local.get ${temp}\n"));
+                out.push_str("    call $_mvl_option_value_i32\n");
+                out.push_str(&format!("    call ${clone_fn}\n"));
+                out.push_str("    call $_mvl_option_some_i32\n");
+                out.push_str("    else\n");
+                out.push_str(&format!("    local.get ${temp}\n"));
+                out.push_str("    end\n");
             }
         }
         // `.get(i)` on List / Array — returns `Option[T]` (heap-allocated
@@ -7725,6 +7832,22 @@ fn filled_i_temp_name(expr: &TirExpr) -> String {
 /// String/nested-collection elements need (#2203).
 fn get_clone_temp_name(expr: &TirExpr) -> String {
     format!("__gc_{}_{}", expr.span.offset, expr.span.len)
+}
+
+/// `.min()`/`.max()` (#2271) need the receiver's array pointer twice — once
+/// to find the extreme element's index, once to fetch it — but `receiver`
+/// may be an arbitrary expression, not a bare local, so it can only be
+/// evaluated once. Held in this i32 temp between the two calls.
+fn list_extreme_recv_temp_name(expr: &TirExpr) -> String {
+    format!("__mmr_{}_{}", expr.span.offset, expr.span.len)
+}
+
+/// `.min()`/`.max()` (#2271) — the i64 index `_mvl_list_min/max_index_*`
+/// returns, held so it can be reordered ahead of the re-pushed receiver
+/// pointer for the `_mvl_array_get_option_*` call (which expects `(array,
+/// index)`, not `(index, array)`).
+fn list_extreme_idx_temp_name(expr: &TirExpr) -> String {
+    format!("__mmi_{}_{}", expr.span.offset, expr.span.len)
 }
 
 /// Temp local for `_mvl_string_find`'s raw i64 sentinel in
