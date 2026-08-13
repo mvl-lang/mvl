@@ -1,6 +1,10 @@
 // Corpus: Declassification as explicit chokepoints (Requirement 11, #27)
 // Only relabel release(, "AUTHORIZED") lowers Secret→bare T; only relabel trust(, "VALIDATED") lowers Tainted→bare T.
 
+// Placeholder type — irrelevant to what this corpus tests (declassification
+// of Secret[T]/Tainted[T]), just a structurally valid name to hang it on.
+type Token = struct {}
+
 // ── relabel trust(, "VALIDATED"): Tainted[T] → T ────────────────────────────────────
 
 fn sanitize_string(input: Tainted[String]) -> String {

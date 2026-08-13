@@ -22,6 +22,9 @@ use mvl::mvl::parser::Parser;
 /// Functions with effects are observable — the implicit flow checker uses
 /// effect declarations instead of the old `sink` keyword (#1007).
 const SINK_PRELUDE: &str = r#"
+pub type Path = struct {
+    inner: String,
+}
 pub fn println(msg: String) -> Unit ! Console { }
 pub fn print(msg: String) -> Unit ! Console { }
 pub fn eprintln(msg: String) -> Unit ! Console { }
@@ -1364,13 +1367,15 @@ fn dead_letter_corpus_parses_and_checks() {
     let collections = p.parse_program();
     let (mut p, _) = Parser::new(include_str!("../std/math.mvl"));
     let math = p.parse_program();
+    let (mut p, _) = Parser::new(include_str!("../std/io.mvl"));
+    let io = p.parse_program();
     let (mut p, _) = Parser::new(include_str!("../std/log.mvl"));
     let log = p.parse_program();
     let (mut p, _) = Parser::new(include_str!("../std/actors.mvl"));
     let actors = p.parse_program();
     let (mut p, _) = Parser::new(include_str!("fixtures/12_actors/dead_letter.mvl"));
     let prog = p.parse_program();
-    let result = check_with_prelude(&[effects, collections, math, log, actors], &prog);
+    let result = check_with_prelude(&[effects, collections, math, io, log, actors], &prog);
     assert!(
         result.is_ok(),
         "dead letter corpus should type-check cleanly, got: {:?}",
