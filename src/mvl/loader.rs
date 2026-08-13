@@ -483,6 +483,68 @@ pub fn sibling_module_files(dir: &Path) -> Vec<PathBuf> {
     files
 }
 
+/// Build a file's own `use`-based sibling prelude plus the Go-model
+/// methods-only prelude (#1706) for same-directory extension methods not
+/// already pulled in via `use`.
+///
+/// Shared by `check`, `assurance`, `prove`, and `harden` directory-mode
+/// traversal (#2272) so none of them fall back to whole-directory visibility:
+/// per .openspec/specs/005-modules/spec.md Req 2-3, cross-file visibility
+/// requires an explicit `use`, with the sole exception of same-directory
+/// extension methods (#1706), which is exactly the second prelude this
+/// returns. `base_dir` (not this file's own parent) is the root `use` paths
+/// are resolved against, matching `load_sibling_modules_transitive`'s own
+/// contract. `method_prelude_cache` should be reused across all files in one
+/// CLI run — every file in a given directory draws from the same
+/// same-directory parse, so parsing it once per directory (not once per file)
+/// avoids quadratic re-parsing on large directories.
+pub fn per_file_user_and_method_prelude(
+    prog: &Program,
+    file_str: &str,
+    base_dir: &Path,
+    method_prelude_cache: &mut HashMap<PathBuf, Vec<(String, Program)>>,
+) -> (Vec<Program>, Vec<Program>) {
+    use std::collections::HashSet;
+
+    let siblings = load_sibling_modules_transitive(prog, base_dir);
+    let sibling_paths: HashSet<String> = siblings.iter().map(|(_, path, _)| path.clone()).collect();
+    let sibling_progs: Vec<Program> = siblings.into_iter().map(|(_, _, p)| p).collect();
+
+    let file_dir = Path::new(file_str)
+        .parent()
+        .unwrap_or_else(|| Path::new("."));
+    let dir_siblings = method_prelude_cache
+        .entry(file_dir.to_path_buf())
+        .or_insert_with(|| {
+            sibling_module_files(file_dir)
+                .into_iter()
+                .filter_map(|p| {
+                    let p_str = p.display().to_string();
+                    match fs::read_to_string(&p) {
+                        Ok(src) => {
+                            let (mut parser, _) = Parser::new(&src);
+                            Some((p_str, parser.parse_program()))
+                        }
+                        // Don't drop this silently: an unreadable sibling
+                        // otherwise surfaces as a baffling "no method" error
+                        // at every call site that needed one of its methods.
+                        Err(e) => {
+                            eprintln!("warning: could not read sibling module `{p_str}`: {e}");
+                            None
+                        }
+                    }
+                })
+                .collect()
+        });
+    let method_prelude: Vec<Program> = dir_siblings
+        .iter()
+        .filter(|(p_str, _)| p_str != file_str && !sibling_paths.contains(p_str))
+        .map(|(_, p)| p.clone())
+        .collect();
+
+    (sibling_progs, method_prelude)
+}
+
 /// Locate the `.mvl` source file for a module named `mod_name` relative to `entry_dir`.
 ///
 /// `mod_name` may be a dot-qualified path (e.g. `"backends.llvm.context"`) or a

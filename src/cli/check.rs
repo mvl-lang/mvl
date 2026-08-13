@@ -261,60 +261,20 @@ pub fn run(path: &str, req_filter: Option<u8>, opts: CheckOptions) {
     // Only run the checker on explicitly requested files (not resolver-only siblings).
     for (file_str, prog, src) in parsed.iter().take(check_count) {
         // Build per-file prelude: stdlib + this file's own `use`-based transitive
-        // sibling closure — not every other file in the directory. Per
+        // sibling closure, plus the Go-model same-directory methods-only prelude
+        // (#1706) — not every other file in the directory. Per
         // .openspec/specs/005-modules/spec.md Req 2-3, cross-file visibility
-        // requires an explicit `use`; there is no directory-scoped exception.
-        // Mirrors the single-file sibling-loading above and `mvl build`.
-        //
-        // `base_dir` (not this file's own parent) is the root `use` paths are
-        // resolved against (Req 1): a bare name only matches a direct sibling
-        // of the dir passed to `find_module_file`, so a nested file's bare
-        // (undotted) reference to a base_dir-level module would silently fail
-        // to resolve if we anchored on the file's own directory instead.
-        let siblings = loader::load_sibling_modules_transitive(prog, &base_dir);
-        let sibling_paths: std::collections::HashSet<String> =
-            siblings.iter().map(|(_, path, _)| path.clone()).collect();
-        let sibling_progs: Vec<Program> = siblings.into_iter().map(|(_, _, p)| p).collect();
+        // requires an explicit `use`; there is no directory-scoped exception
+        // beyond the methods channel. Mirrors the single-file sibling-loading
+        // above and `mvl build`. Shared with assurance/prove/harden (#2272).
+        let (sibling_progs, method_prelude_progs) = loader::per_file_user_and_method_prelude(
+            prog,
+            file_str,
+            &base_dir,
+            &mut method_prelude_cache,
+        );
         let user_prelude: Vec<&Program> = sibling_progs.iter().collect();
-
-        // Go-model method dispatch (#1706): extension methods on a shared
-        // receiver type may be split across same-directory sibling files
-        // that call each other in a cycle (spec 005-modules Req 2/3 bans
-        // circular `use` imports, so this can't be expressed as an explicit
-        // import graph). Register only the *methods* of files sharing this
-        // file's own directory that aren't already pulled in above via
-        // `use` — their types/free functions stay gated on explicit `use`.
-        let file_dir = Path::new(file_str.as_str())
-            .parent()
-            .unwrap_or_else(|| Path::new("."));
-        let dir_siblings = method_prelude_cache
-            .entry(file_dir.to_path_buf())
-            .or_insert_with(|| {
-                loader::sibling_module_files(file_dir)
-                    .into_iter()
-                    .filter_map(|p| {
-                        let p_str = p.display().to_string();
-                        match std::fs::read_to_string(&p) {
-                            Ok(src) => {
-                                let (mut parser, _) = Parser::new(&src);
-                                Some((p_str, parser.parse_program()))
-                            }
-                            // Don't drop this silently: an unreadable sibling
-                            // otherwise surfaces as a baffling "no method" error
-                            // at every call site that needed one of its methods.
-                            Err(e) => {
-                                eprintln!("warning: could not read sibling module `{p_str}`: {e}");
-                                None
-                            }
-                        }
-                    })
-                    .collect()
-            });
-        let method_prelude: Vec<&Program> = dir_siblings
-            .iter()
-            .filter(|(p_str, _)| p_str != file_str && !sibling_paths.contains(p_str))
-            .map(|(_, p)| p)
-            .collect();
+        let method_prelude: Vec<&Program> = method_prelude_progs.iter().collect();
 
         let result = checker::check_with_two_preludes_and_methods_mode(
             &stdlib_prelude,
