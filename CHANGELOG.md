@@ -2,6 +2,10 @@
 
 ## [1.8.1] - 2026-08-12
 
+### Chore — #2282
+
+- **Removed confirmed dead code from the Rust/LLVM backend emitters.** `TextEmitter::new()` (`llvm_text/emitter.rs`) was fully superseded by `new_with_builtins` with zero remaining callers; `emit_cargo_toml()`/`emit_main_rs()` (`rust/cargo.rs`) were leftover names kept for "callers that haven't migrated yet" — the migration finished and no callers remained. Found via `cargo check --lib --tests` (clean beyond existing suppressions) plus manual call-site verification of every `#[allow(dead_code)]` site in the emitters.
+
 ### Fixed — #2280 (LLVM)
 
 - **`List[T]::partition()` emitted invalid LLVM IR — `insertvalue %Partitioned undef, ...` where `%Partitioned` was never declared.** `Dispatch::CCallStructFromSlots` hardcoded the *unmangled* generic struct name; `Partitioned[T]`'s actual LLVM type is emitted per concrete instantiation (`%Partitioned__Int`, the #2270 mangling mechanism). `emit_c_call_struct_from_slots` now resolves the mangled name via `ensure_generic_struct_llvm_ty` from the receiver's concrete element type, same as #2270's `Entry[K, V]` fix. This was silently breaking `examples/programs/list_stubs.mvl` (the #1290/ADR-0041 Phase 1 acceptance example) end-to-end on `--backend=llvm` — `lli` aborted before the program ran, surfacing as empty stdout.
