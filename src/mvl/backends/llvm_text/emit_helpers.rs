@@ -755,19 +755,64 @@ impl TextEmitter {
         }
     }
 
-    /// Emit `call ptr @_mvl_list_slice(ptr val, i64 start, i64 end)` (or the
-    /// `_str` variant for a `List[String]` receiver — #2260: the plain one
-    /// byte-copies each element, aliasing rather than cloning a `*MvlString`
-    /// handle) and return the result register. Shared by slice/take/skip
-    /// dispatch.
+    /// Emit `call ptr @_mvl_list_slice(ptr val, i64 start, i64 end)` — or a
+    /// per-element-cloning variant — and return the result register. Shared
+    /// by slice/take/skip dispatch.
+    ///
+    /// The plain runtime helper byte-copies each element, which is correct
+    /// only for scalars: for any pointer-shaped element it hands the slice
+    /// the same heap object the source array still owns, and both then drop
+    /// it independently. `String` got its `_str` variant in #2260; #2265
+    /// closes the rest of the family:
+    ///
+    /// - `String` → `_mvl_list_slice_str` (refcount-clones each handle)
+    /// - nested `List`/`Set`/`Array`/`Map` → `_mvl_list_slice_ptr` with the
+    ///   matching `_mvl_*_clone` as a callback (`examples/bzip/huffman.mvl::
+    ///   remove_at_ll` on a `List[List[Int]]` double-freed every inner list
+    ///   without this)
+    /// - payload enum → `_mvl_list_slice_enum` with that enum's own
+    ///   [`Self::ensure_enum_clone_fn`] trampoline
+    /// - anything else (scalars) → the plain byte-copying `_mvl_list_slice`
     pub(super) fn emit_list_slice_call(
         &mut self,
         val: &str,
         start: &str,
         end: &str,
-        elem_is_string: bool,
-    ) -> String {
-        let sym = if elem_is_string {
+        elem_ty: Option<&Ty>,
+    ) -> Result<String, String> {
+        let elem_ty = elem_ty.map(super::emit_exprs_tir::unwrap_labels);
+        // Pointer-shaped, non-String element: one shared helper, per-kind
+        // clone callback.
+        let ptr_clone_sym = match elem_ty {
+            Some(Ty::List(_)) | Some(Ty::Array(_, _)) | Some(Ty::Set(_)) => {
+                Some("_mvl_array_clone")
+            }
+            Some(Ty::Map(_, _)) => Some("_mvl_map_clone"),
+            _ => None,
+        };
+        if let Some(clone_sym) = ptr_clone_sym {
+            self.ensure_extern(&format!("declare ptr @{clone_sym}(ptr)"));
+            self.ensure_extern("declare ptr @_mvl_list_slice_ptr(ptr, i64, i64, ptr)");
+            let reg = self.next_reg();
+            self.push_instr(&format!(
+                "{reg} = call ptr @_mvl_list_slice_ptr(ptr {val}, i64 {start}, i64 {end}, ptr @{clone_sym})"
+            ));
+            self.fn_ctx.reg_types.insert(reg.clone(), "ptr".into());
+            return Ok(reg);
+        }
+        if let Some(Ty::Named(name, _)) = elem_ty {
+            if self.enum_has_payloads(name) {
+                let clone_fn = self.ensure_enum_clone_fn(name)?;
+                self.ensure_extern("declare ptr @_mvl_list_slice_enum(ptr, i64, i64, ptr)");
+                let reg = self.next_reg();
+                self.push_instr(&format!(
+                    "{reg} = call ptr @_mvl_list_slice_enum(ptr {val}, i64 {start}, i64 {end}, ptr @{clone_fn})"
+                ));
+                self.fn_ctx.reg_types.insert(reg.clone(), "ptr".into());
+                return Ok(reg);
+            }
+        }
+        let sym = if matches!(elem_ty, Some(Ty::String)) {
             "_mvl_list_slice_str"
         } else {
             "_mvl_list_slice"
@@ -778,7 +823,7 @@ impl TextEmitter {
             "{reg} = call ptr @{sym}(ptr {val}, i64 {start}, i64 {end})"
         ));
         self.fn_ctx.reg_types.insert(reg.clone(), "ptr".into());
-        reg
+        Ok(reg)
     }
 
     // ── Int/Bool → String helpers ─────────────────────────────────────────

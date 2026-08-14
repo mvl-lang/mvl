@@ -986,6 +986,93 @@ pub unsafe extern "C" fn _mvl_list_slice_str(
     out
 }
 
+/// `List[T]::slice(start, end)` for a *pointer-typed* element `T` that isn't
+/// `String` — a nested `List`/`Set`/`Array`/`Map` (#2265). Same relationship
+/// [`_mvl_list_slice_str`] has to [`_mvl_list_slice`], generalized via a
+/// caller-supplied clone callback so one helper covers every pointer-shaped
+/// element kind (`_mvl_array_clone` for a nested array, `_mvl_map_clone` for
+/// a nested map) instead of needing one runtime symbol per element type.
+///
+/// [`_mvl_list_slice`] byte-copies each element's raw bytes — correct for
+/// scalars, but for a pointer element it hands the slice the *same* heap
+/// object the source array still owns. Both then independently drop it:
+/// `examples/bzip/huffman.mvl::remove_at_ll`'s `list.slice(..)` on a
+/// `List[List[Int]]` aliased the inner `List[Int]`s, so dropping the source
+/// and the slice freed each inner array twice.
+///
+/// # Safety
+/// `arr` must be a valid `MvlArray*` (elem_size == 8, holding pointer
+/// elements) or null. `clone_fn` must be a valid C-ABI function matching the
+/// elements' actual type.
+#[no_mangle]
+pub unsafe extern "C" fn _mvl_list_slice_ptr(
+    arr: *const MvlArray,
+    start: i64,
+    end: i64,
+    clone_fn: unsafe extern "C" fn(*mut u8) -> *mut u8,
+) -> *mut MvlArray {
+    if arr.is_null() {
+        return _mvl_array_new(8, 0);
+    }
+    let len = (*arr).len as i64;
+    let lo = start.max(0).min(len) as usize;
+    let hi = end.max(0).min(len) as usize;
+    let count = hi.saturating_sub(lo);
+    let out = _mvl_array_new(8, count.max(1));
+    for i in lo..hi {
+        let src = (*arr).ptr.add(i * 8) as *const *mut u8;
+        let cloned = if (*src).is_null() {
+            *src
+        } else {
+            clone_fn(*src)
+        };
+        _mvl_array_push(out, (&cloned as *const *mut u8).cast());
+    }
+    out
+}
+
+/// `List[T]::slice(start, end)` for a payload-enum element `T` (#2265) — the
+/// slice counterpart of [`_mvl_array_extend_enum`]. Each 16-byte `{ i8, ptr }`
+/// element's payload is cloned through the emitter-generated per-type
+/// `clone_fn` trampoline, so the slice owns its payloads independently of the
+/// source array (which byte-copying via [`_mvl_list_slice`] would not).
+///
+/// # Safety
+/// `arr` must be a valid `MvlArray*` (elem_size == 16, holding `{ i8, ptr }`
+/// payload-enum elements) or null. `clone_fn` must be a valid C-ABI function
+/// matching `T`'s own `@_mvl_clone_enum_<T>` trampoline signature.
+#[no_mangle]
+pub unsafe extern "C" fn _mvl_list_slice_enum(
+    arr: *const MvlArray,
+    start: i64,
+    end: i64,
+    clone_fn: unsafe extern "C" fn(u8, *mut u8) -> *mut u8,
+) -> *mut MvlArray {
+    if arr.is_null() {
+        return _mvl_array_new(16, 0);
+    }
+    let len = (*arr).len as i64;
+    let lo = start.max(0).min(len) as usize;
+    let hi = end.max(0).min(len) as usize;
+    let count = hi.saturating_sub(lo);
+    let out = _mvl_array_new(16, count.max(1));
+    for i in lo..hi {
+        let slot = (*arr).ptr.add(i * 16);
+        let disc = *slot;
+        let payload = *(slot.add(8) as *mut *mut u8);
+        let new_payload = if payload.is_null() {
+            payload
+        } else {
+            clone_fn(disc, payload)
+        };
+        let mut new_slot = [0u8; 16];
+        new_slot[0] = disc;
+        new_slot[8..16].copy_from_slice(&(new_payload as usize).to_ne_bytes());
+        _mvl_array_push(out, new_slot.as_ptr());
+    }
+    out
+}
+
 /// Concatenate `a` and `b`, returning a new `MvlArray` with all elements of `a`
 /// followed by all elements of `b`.  `a` and `b` must have the same `elem_size`.
 ///

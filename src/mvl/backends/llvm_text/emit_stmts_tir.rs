@@ -441,12 +441,43 @@ impl TextEmitter {
                             self.push_instr(&format!("store {ty_str} {cloned}, ptr {ptr}"));
                         } else {
                             self.push_instr(&format!("store {ty_str} {v}, ptr {ptr}"));
+                            // #2265: no deep copy was made, so this binding
+                            // now *aliases* the initializer's heap object —
+                            // and the alloca below gets its own
+                            // `heap_locals` entry. Without releasing the
+                            // initializer's own entry, the same allocation
+                            // is tracked twice and the scope-exit sweep
+                            // drops it twice; worse, when the binding is
+                            // the function's return value, the source's
+                            // stale entry frees it *before* the caller ever
+                            // reads it. `examples/bzip/huffman.mvl::
+                            // remove_at_ll` is exactly this shape:
+                            //
+                            //   let before: List[List[Int]] = list.slice(..);
+                            //   let result: ref List[List[Int]] = before;
+                            //   result.extend(after);
+                            //   result            // returns freed memory
+                            //
+                            // Ownership moves into the new binding, same as
+                            // the `Assign` arm below already does for
+                            // `result = out` (#2260) and as push/Some/Ok/
+                            // Err/list-literal/struct-literal do for a
+                            // value moved into a container (#1991/#2264).
+                            // The `needs_deep_copy` branch above must NOT
+                            // do this: it built an independent copy, so the
+                            // source keeps its own drop.
+                            self.exclude_returned_value_tir(init);
                         }
                     }
                     if let Pattern::Ident(name, _) = pattern {
                         if let Some(hk) = Self::heap_kind(&elem_ty) {
                             self.fn_ctx.heap_locals.push((ptr.clone(), hk, true));
                         }
+                        // Shadow any same-named plain binding — see the
+                        // mirrored `ref_locals.remove` in the non-ref arm
+                        // below for why both maps have to be kept in sync
+                        // (#2265).
+                        self.fn_ctx.locals.remove(name);
                         self.fn_ctx.ref_locals.insert(
                             name.clone(),
                             RefLocal {
@@ -473,6 +504,29 @@ impl TextEmitter {
                             }
                         }
                     }
+                    // A same-named `ref` binding must stop resolving here
+                    // (#2265). `emit_expr_tir`'s `Var` arm consults
+                    // `ref_locals` *before* `locals`, and neither map is
+                    // scoped to the block that introduced its entry — so a
+                    // `ref` binding left over from an already-finished
+                    // sibling branch silently captured every later mention
+                    // of that name, including in branches that declared
+                    // their own plain local. `examples/bzip/huffman.mvl::
+                    // build_tree` has exactly this shape:
+                    //
+                    //   } else if init.queue.len() == 1 {
+                    //       let codes: ref List[List[Int]] = ...;   // alloca
+                    //   } else {
+                    //       let codes: List[List[Int]] = ...;       // %ssa
+                    //       BuildState { .., codes: codes }         // read the *alloca*
+                    //
+                    // The else branch's `codes` compiled to a load from the
+                    // then-branch's alloca — never stored to on this path —
+                    // so `BuildState.codes` got uninitialized stack memory,
+                    // and its own freshly-mapped list was dropped unused.
+                    // The garbage pointer then reached `_mvl_array_clone`/
+                    // `_mvl_array_len` as a misaligned dereference.
+                    self.fn_ctx.ref_locals.remove(name);
                     self.fn_ctx.locals.insert(name.clone(), v.clone());
                     if let Some(hk) = Self::heap_kind(&elem_ty) {
                         if !self.fn_ctx.heap_locals.iter().any(|(s, _, _)| s == &v) {

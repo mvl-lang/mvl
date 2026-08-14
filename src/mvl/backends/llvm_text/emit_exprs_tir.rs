@@ -5868,16 +5868,16 @@ impl TextEmitter {
                 // `slice` has no `LLVM_DISPATCH` row — emit `_mvl_list_slice`
                 // inline via the shared helper (matches the AST emit_method_call
                 // path used by `slice` / `take` / `skip`).
-                let elem_is_string = matches!(
-                    unwrap_labels(&receiver.ty),
-                    Ty::List(e) | Ty::Array(e, _) | Ty::Set(e) if matches!(unwrap_labels(e), Ty::String)
-                );
+                let slice_elem_ty = match unwrap_labels(&receiver.ty) {
+                    Ty::List(e) | Ty::Array(e, _) | Ty::Set(e) => Some((**e).clone()),
+                    _ => None,
+                };
                 Ok(Some(self.emit_list_slice_call(
                     &val,
                     &start,
                     &end,
-                    elem_is_string,
-                )))
+                    slice_elem_ty.as_ref(),
+                )?))
             }
             ("take", "ptr")
                 if args.len() == 1
@@ -5890,16 +5890,16 @@ impl TextEmitter {
                     Some(v) => v,
                     None => return Ok(None),
                 };
-                let elem_is_string = matches!(
-                    unwrap_labels(&receiver.ty),
-                    Ty::List(e) | Ty::Array(e, _) | Ty::Set(e) if matches!(unwrap_labels(e), Ty::String)
-                );
+                let slice_elem_ty = match unwrap_labels(&receiver.ty) {
+                    Ty::List(e) | Ty::Array(e, _) | Ty::Set(e) => Some((**e).clone()),
+                    _ => None,
+                };
                 Ok(Some(self.emit_list_slice_call(
                     &val,
                     "0",
                     &n,
-                    elem_is_string,
-                )))
+                    slice_elem_ty.as_ref(),
+                )?))
             }
             ("skip", "ptr")
                 if args.len() == 1
@@ -5915,16 +5915,16 @@ impl TextEmitter {
                 self.ensure_extern("declare i64 @_mvl_array_len(ptr)");
                 let len_reg = self.next_reg();
                 self.push_instr(&format!("{len_reg} = call i64 @_mvl_array_len(ptr {val})"));
-                let elem_is_string = matches!(
-                    unwrap_labels(&receiver.ty),
-                    Ty::List(e) | Ty::Array(e, _) | Ty::Set(e) if matches!(unwrap_labels(e), Ty::String)
-                );
+                let slice_elem_ty = match unwrap_labels(&receiver.ty) {
+                    Ty::List(e) | Ty::Array(e, _) | Ty::Set(e) => Some((**e).clone()),
+                    _ => None,
+                };
                 Ok(Some(self.emit_list_slice_call(
                     &val,
                     &n,
                     &len_reg,
-                    elem_is_string,
-                )))
+                    slice_elem_ty.as_ref(),
+                )?))
             }
             ("concat", "ptr") if args.len() == 1 => {
                 let other = match self.emit_expr_tir(&args[0])? {
