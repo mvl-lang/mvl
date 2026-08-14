@@ -320,11 +320,7 @@ impl Resolver {
                 // not its own dotted module key, so `use std.collections.{Map}`
                 // must keep resolving `item = "collections"` against `std`'s
                 // own export set, exactly as the single-item form already does.
-                let is_std = use_decl
-                    .path
-                    .first()
-                    .map(|s| s == "std")
-                    .unwrap_or(false);
+                let is_std = use_decl.path.first().map(|s| s == "std").unwrap_or(false);
                 let is_ambiguous_multi_segment_brace_group =
                     !use_decl.items.is_empty() && use_decl.path.len() >= 2 && !is_std;
                 let (member_names, source_module): (Vec<String>, Vec<String>) =
@@ -715,7 +711,11 @@ mod tests {
         let consumer = parse("use solver.layer2.{Bound, Interval}\npub fn use_them(b: Bound, i: Interval) -> Int { 0 }\n");
         let result = resolve_project(
             vec![
-                ("solver".to_string(), "compiler/solver.mvl".to_string(), solver),
+                (
+                    "solver".to_string(),
+                    "compiler/solver.mvl".to_string(),
+                    solver,
+                ),
                 (
                     "solver.layer2".to_string(),
                     "compiler/solver/layer2.mvl".to_string(),
@@ -736,9 +736,19 @@ mod tests {
         );
         let consumer_mod = &result.modules["consumer"];
         assert!(consumer_mod.imports.iter().any(|i| i.item == "Bound"
-            && i.source_path == vec!["solver".to_string(), "layer2".to_string(), "Bound".to_string()]));
+            && i.source_path
+                == vec![
+                    "solver".to_string(),
+                    "layer2".to_string(),
+                    "Bound".to_string()
+                ]));
         assert!(consumer_mod.imports.iter().any(|i| i.item == "Interval"
-            && i.source_path == vec!["solver".to_string(), "layer2".to_string(), "Interval".to_string()]));
+            && i.source_path
+                == vec![
+                    "solver".to_string(),
+                    "layer2".to_string(),
+                    "Interval".to_string()
+                ]));
     }
 
     // Req 1: file-module correspondence (module name from filename).

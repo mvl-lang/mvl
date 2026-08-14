@@ -293,11 +293,11 @@ fn concat_on_pointer_element_list_clones_per_element() {
         "fn join(a: List[List[Int]], b: List[List[Int]]) -> List[List[Int]] { a.concat(b) }",
     );
     assert!(
-        ir.contains("call ptr @_mvl_list_concat_ptr(ptr")
-            && ir.contains("ptr @_mvl_array_clone)"),
+        ir.contains("call ptr @_mvl_list_concat_ptr(ptr") && ir.contains("ptr @_mvl_array_clone)"),
         "concat on a nested-collection element must clone per element:\n{ir}"
     );
-    let ir_str = compile("fn join(a: List[String], b: List[String]) -> List[String] { a.concat(b) }");
+    let ir_str =
+        compile("fn join(a: List[String], b: List[String]) -> List[String] { a.concat(b) }");
     assert!(
         ir_str.contains("call ptr @_mvl_list_concat_ptr(ptr")
             && ir_str.contains("ptr @_mvl_string_clone)"),

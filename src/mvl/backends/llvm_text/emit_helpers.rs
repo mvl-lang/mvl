@@ -1213,9 +1213,7 @@ impl TextEmitter {
                 .reg_types
                 .insert(val.clone(), RESULT_LLVM_TY.to_string());
             let disc = self.next_reg();
-            self.push_instr(&format!(
-                "{disc} = extractvalue {RESULT_LLVM_TY} {val}, 0"
-            ));
+            self.push_instr(&format!("{disc} = extractvalue {RESULT_LLVM_TY} {val}, 0"));
             let payload = self.next_reg();
             self.push_instr(&format!(
                 "{payload} = extractvalue {RESULT_LLVM_TY} {val}, 1"

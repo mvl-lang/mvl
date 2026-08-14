@@ -3134,8 +3134,8 @@ impl TextEmitter {
                     Ty::Option(inner) => unwrap_labels(inner).clone(),
                     _ => unreachable!(),
                 };
-                let strategy = payload_eq_strategy(&inner_ty, self)
-                    .expect("guard above already checked this");
+                let strategy =
+                    payload_eq_strategy(&inner_ty, self).expect("guard above already checked this");
                 let payload_llvm = self.ty_to_llvm_ctx(&inner_ty);
 
                 let ldisc = self.next_reg();
@@ -5399,9 +5399,7 @@ impl TextEmitter {
                             Some(v) => v,
                             None => return Ok(None),
                         };
-                        self.ensure_extern(
-                            "declare void @_mvl_array_extend_enum(ptr, ptr, ptr)",
-                        );
+                        self.ensure_extern("declare void @_mvl_array_extend_enum(ptr, ptr, ptr)");
                         self.push_instr(&format!(
                             "call void @_mvl_array_extend_enum(ptr {val}, ptr {other}, ptr @{clone_fn})"
                         ));
@@ -6107,9 +6105,7 @@ impl TextEmitter {
                 // it — `.len()` looked right, `.get(0)` returned a dangling
                 // inner pointer.
                 let concat_elem_ty = match unwrap_labels(&receiver.ty) {
-                    Ty::List(e) | Ty::Array(e, _) | Ty::Set(e) => {
-                        Some(unwrap_labels(e).clone())
-                    }
+                    Ty::List(e) | Ty::Array(e, _) | Ty::Set(e) => Some(unwrap_labels(e).clone()),
                     _ => None,
                 };
                 if let Some(elem_ty) = &concat_elem_ty {
@@ -6132,9 +6128,7 @@ impl TextEmitter {
                     if let Ty::Named(name, _) = elem_ty {
                         if self.enum_has_payloads(name) {
                             let clone_fn = self.ensure_enum_clone_fn(name)?;
-                            self.ensure_extern(
-                                "declare ptr @_mvl_list_concat_enum(ptr, ptr, ptr)",
-                            );
+                            self.ensure_extern("declare ptr @_mvl_list_concat_enum(ptr, ptr, ptr)");
                             let reg = self.next_reg();
                             self.push_instr(&format!(
                                 "{reg} = call ptr @_mvl_list_concat_enum(ptr {val}, ptr {other}, ptr @{clone_fn})"

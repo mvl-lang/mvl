@@ -300,10 +300,7 @@ fn plain_let_shadows_ref_binding_from_sibling_branch() {
         .take_while(|l| !l.trim_start().starts_with("br label"))
         .collect::<Vec<_>>()
         .join("\n");
-    assert!(
-        !else_body.is_empty(),
-        "else branch must be emitted:\n{ir}"
-    );
+    assert!(!else_body.is_empty(), "else branch must be emitted:\n{ir}");
     // The else arm builds its own array and returns that; loading the
     // then-arm's `alloca ptr` here is the bug this pins.
     assert!(
