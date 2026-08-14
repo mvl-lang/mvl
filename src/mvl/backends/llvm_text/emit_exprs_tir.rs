@@ -3079,6 +3079,100 @@ impl TextEmitter {
                     "{eq_reg} = fcmp oeq double {left_val}, {right_val}"
                 ));
             }
+            // `Option[T]` (`{ i8, ptr }`) — compare discriminants first, then
+            // the payloads when both are `Some`. Previously a hard error, so
+            // `assert_eq(row.get(1), Some("x"))` — the natural way to assert
+            // on any `.get()`/`.first()`/`.last()` result — failed the whole
+            // file's codegen (`examples/csv_transactions/main_test.mvl`).
+            // `Result[T, E]` stays unsupported: its two arms carry different
+            // payload types, so one payload comparison can't cover both.
+            t if t == RESULT_LLVM_TY
+                && matches!(unwrap_labels(&args[0].ty), Ty::Option(_))
+                && payload_eq_strategy(
+                    match unwrap_labels(&args[0].ty) {
+                        Ty::Option(inner) => unwrap_labels(inner),
+                        _ => unreachable!(),
+                    },
+                    self,
+                )
+                .is_some() =>
+            {
+                let inner_ty = match unwrap_labels(&args[0].ty) {
+                    Ty::Option(inner) => unwrap_labels(inner).clone(),
+                    _ => unreachable!(),
+                };
+                let strategy = payload_eq_strategy(&inner_ty, self)
+                    .expect("guard above already checked this");
+                let payload_llvm = self.ty_to_llvm_ctx(&inner_ty);
+
+                let ldisc = self.next_reg();
+                self.push_instr(&format!(
+                    "{ldisc} = extractvalue {RESULT_LLVM_TY} {left_val}, 0"
+                ));
+                let rdisc = self.next_reg();
+                self.push_instr(&format!(
+                    "{rdisc} = extractvalue {RESULT_LLVM_TY} {right_val}, 0"
+                ));
+                let disc_eq = self.next_reg();
+                self.push_instr(&format!("{disc_eq} = icmp eq i8 {ldisc}, {rdisc}"));
+                // Both `None` (disc 1) — equal, with no payload to read.
+                let both_none = self.next_reg();
+                self.push_instr(&format!("{both_none} = icmp eq i8 {ldisc}, 1"));
+
+                let payload_bb = self.next_bb("opt_eq_payload");
+                let done_bb = self.next_bb("opt_eq_done");
+                let skip_bb = self.next_bb("opt_eq_skip");
+                let slot = self.next_reg();
+                self.push_instr(&format!("{slot} = alloca i1"));
+                // Only dereference payloads when the discriminants agree AND
+                // they are both `Some` — a `None`'s payload pointer is null.
+                let not_none = self.next_reg();
+                self.push_instr(&format!("{not_none} = xor i1 {both_none}, true"));
+                let cmp_payload = self.next_reg();
+                self.push_instr(&format!("{cmp_payload} = and i1 {disc_eq}, {not_none}"));
+                self.push_instr(&format!(
+                    "br i1 {cmp_payload}, label %{payload_bb}, label %{skip_bb}"
+                ));
+
+                self.start_bb(&skip_bb);
+                // Discriminants equal and both None → true; otherwise false.
+                self.push_instr(&format!("store i1 {disc_eq}, ptr {slot}"));
+                self.push_instr(&format!("br label %{done_bb}"));
+                self.fn_ctx.terminated = true;
+
+                self.start_bb(&payload_bb);
+                let lp = self.next_reg();
+                self.push_instr(&format!(
+                    "{lp} = extractvalue {RESULT_LLVM_TY} {left_val}, 1"
+                ));
+                let rp = self.next_reg();
+                self.push_instr(&format!(
+                    "{rp} = extractvalue {RESULT_LLVM_TY} {right_val}, 1"
+                ));
+                let lv = self.next_reg();
+                self.push_instr(&format!("{lv} = load {payload_llvm}, ptr {lp}"));
+                let rv = self.next_reg();
+                self.push_instr(&format!("{rv} = load {payload_llvm}, ptr {rp}"));
+                let peq = self.next_reg();
+                match strategy {
+                    PayloadEq::Icmp => {
+                        self.push_instr(&format!("{peq} = icmp eq {payload_llvm} {lv}, {rv}"));
+                    }
+                    PayloadEq::Fcmp => {
+                        self.push_instr(&format!("{peq} = fcmp oeq {payload_llvm} {lv}, {rv}"));
+                    }
+                    PayloadEq::Call(sym) => {
+                        self.ensure_extern(&format!("declare i1 @{sym}(ptr, ptr)"));
+                        self.push_instr(&format!("{peq} = call i1 @{sym}(ptr {lv}, ptr {rv})"));
+                    }
+                }
+                self.push_instr(&format!("store i1 {peq}, ptr {slot}"));
+                self.push_instr(&format!("br label %{done_bb}"));
+                self.fn_ctx.terminated = true;
+
+                self.start_bb(&done_bb);
+                self.push_instr(&format!("{eq_reg} = load i1, ptr {slot}"));
+            }
             other => {
                 return Err(format!(
                     "assert_{}: unsupported LLVM type `{other}` for compared values",
@@ -6240,6 +6334,47 @@ fn list_elem_type_expr(ty: &TypeExpr) -> Option<&TypeExpr> {
 /// is correct here: the extracted value just needs its own independent
 /// owning handle to the same underlying buffer, same as any other List
 /// aliasing.
+/// How to compare two already-loaded values of an `Option`'s payload type in
+/// `assert_eq`/`assert_ne` (#2265 follow-up — see the `RESULT_LLVM_TY` arm of
+/// `emit_assert_eq_builtin_tir`).
+enum PayloadEq {
+    /// Integer-shaped (`Int`/`UInt`/`Bool`/`Byte`/`UByte`/`Char`, or a unit
+    /// enum's bare discriminant).
+    Icmp,
+    Fcmp,
+    /// Pointer-shaped, compared by content through a runtime helper.
+    Call(&'static str),
+}
+
+/// Pick a [`PayloadEq`] for `ty`, or `None` when this backend has no
+/// content-equality story for it (nested collections of non-scalars, `Map`,
+/// structs, payload enums …) — the caller then leaves `assert_eq` on that
+/// shape unsupported rather than silently comparing by pointer identity.
+fn payload_eq_strategy(ty: &Ty, emitter: &TextEmitter) -> Option<PayloadEq> {
+    match unwrap_labels(ty) {
+        Ty::Int | Ty::UInt | Ty::Bool | Ty::Byte | Ty::UByte | Ty::Char => Some(PayloadEq::Icmp),
+        Ty::Float => Some(PayloadEq::Fcmp),
+        Ty::String => Some(PayloadEq::Call("_mvl_string_eq")),
+        Ty::List(e) | Ty::Array(e, _) | Ty::Set(e)
+            if matches!(
+                unwrap_labels(e),
+                Ty::Int | Ty::Float | Ty::Bool | Ty::Char | Ty::Byte | Ty::UByte | Ty::UInt
+            ) =>
+        {
+            Some(PayloadEq::Call("_mvl_array_eq"))
+        }
+        // A unit enum lowers to a bare `i64` discriminant — directly
+        // comparable. A *payload* enum does not (see `Result` in the caller).
+        Ty::Named(name, _)
+            if emitter.module.enum_variants.contains_key(name)
+                && !emitter.enum_has_payloads(name) =>
+        {
+            Some(PayloadEq::Icmp)
+        }
+        _ => None,
+    }
+}
+
 fn elem_clone_sym(elem_ty: &Ty) -> Option<&'static str> {
     match unwrap_labels(elem_ty) {
         Ty::String => Some("_mvl_string_clone"),

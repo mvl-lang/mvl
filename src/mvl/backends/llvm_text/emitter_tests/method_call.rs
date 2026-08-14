@@ -7,7 +7,7 @@
 //! `cross_backend_tir/method_call.rs` substring tests cover the same
 //! concern against the TIR walker.
 
-use super::common::compile;
+use super::common::{compile, compile_test_crate};
 
 #[test]
 fn map_len_emits_mvl_map_len() {
@@ -243,4 +243,40 @@ fn string_replace_emits_runtime_call() {
         "{ir}"
     );
     assert!(ir.contains("call ptr @_mvl_str_replace(ptr"), "{ir}");
+}
+
+/// `assert_eq` on two `Option[T]` values used to be a hard codegen error
+/// ("unsupported LLVM type `{ i8, ptr }`"), which failed the *whole file's*
+/// compilation — so `assert_eq(row.get(1), Some("x"))`, the natural way to
+/// assert on any `.get()`/`.first()`/`.last()` result, was unusable.
+/// Compares discriminants, then payloads only when both are `Some`.
+#[test]
+fn assert_eq_on_option_string_compares_disc_then_payload() {
+    let ir = compile_test_crate(
+        "test fn t() -> Unit {\n\
+         let row: List[String] = [\"a\", \"bb\"];\n\
+         assert_eq(row.get(1), Some(\"bb\"));\n\
+         }",
+    );
+    assert!(
+        ir.contains("extractvalue { i8, ptr }") && ir.contains("call i1 @_mvl_string_eq"),
+        "Option[String] equality must compare discriminants and then payloads \
+         via _mvl_string_eq:\n{ir}"
+    );
+}
+
+/// The payload comparison must be reached only when both sides are `Some` —
+/// a `None`'s payload pointer is null, so an unconditional load would fault.
+#[test]
+fn assert_eq_on_option_int_guards_payload_load() {
+    let ir = compile_test_crate(
+        "test fn t() -> Unit {\n\
+         let xs: List[Int] = [1, 2];\n\
+         assert_eq(xs.get(0), Some(1));\n\
+         }",
+    );
+    assert!(
+        ir.contains("opt_eq_payload") && ir.contains("opt_eq_skip"),
+        "payload load must sit behind a both-Some guard:\n{ir}"
+    );
 }
