@@ -24,7 +24,7 @@
 // Key types: Vec<String> → List[String], Option<String> → Option[String],
 //            usize → Int.
 
-// SourceLoc comes from compiler/tir.mvl (peer file in same dir).
+use tir::SourceLoc;
 
 /// A type-system or verification violation found during checking.
 pub type CheckError = enum {

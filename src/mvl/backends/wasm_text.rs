@@ -559,6 +559,14 @@ const RUNTIME_IMPORTS: &[(&str, &str)] = &[
     ("_mvl_string_ptr_array_sort", "(param i32) (result i32)"),
     ("_mvl_array_contains_i64", "(param i32 i64) (result i32)"),
     ("_mvl_array_contains_i32", "(param i32 i32) (result i32)"),
+    (
+        "_mvl_array_contains_str",
+        "(param i32 i32 i32) (result i32)",
+    ),
+    ("_mvl_list_min_index_i64", "(param i32) (result i64)"),
+    ("_mvl_list_max_index_i64", "(param i32) (result i64)"),
+    ("_mvl_list_min_index_str", "(param i32) (result i64)"),
+    ("_mvl_list_max_index_str", "(param i32) (result i64)"),
     ("_mvl_array_insert_i64", "(param i32 i64)"),
     ("_mvl_array_insert_i32", "(param i32 i32)"),
     // `Set[T].remove(val)` — linear-scan remove-by-value (#2124).
@@ -2912,6 +2920,22 @@ fn collect_locals_ctx_expr(expr: &TirExpr, locals: &mut Vec<(String, Ty)>, ctx: 
                     locals.push((get_clone_temp_name(expr), Ty::Bool));
                 }
             }
+            // `.min()`/`.max()` on List/Array (#2271) — native index dispatch
+            // needs the receiver pointer and the computed index each held in
+            // a temp (see the emit-side arm), plus the same get-based
+            // clone-and-rewrap temp as `.get(i)` above for String/nested
+            // elements.
+            if collection_elem_ty(&recv_ty).is_some()
+                && (method == "min" || method == "max")
+                && args.is_empty()
+            {
+                locals.push((list_extreme_recv_temp_name(expr), Ty::Bool));
+                locals.push((list_extreme_idx_temp_name(expr), Ty::Int));
+                let elem_ty = collection_elem_ty(&recv_ty).cloned().unwrap_or(Ty::Int);
+                if peels_to_string(&elem_ty) || collection_elem_ty(&elem_ty).is_some() {
+                    locals.push((get_clone_temp_name(expr), Ty::Bool));
+                }
+            }
             collect_locals_ctx_expr(receiver, locals, ctx);
             for a in args {
                 collect_locals_ctx_expr(a, locals, ctx);
@@ -3196,6 +3220,22 @@ fn collect_locals_expr(expr: &TirExpr, locals: &mut Vec<(String, Ty)>) {
             // needs the returned Option's handle held across a
             // clone-and-rewrap sequence (#2203) — see the emit-side arm.
             if collection_elem_ty(&receiver.ty).is_some() && method == "get" && args.len() == 1 {
+                let elem_ty = collection_elem_ty(&receiver.ty).cloned().unwrap_or(Ty::Int);
+                if peels_to_string(&elem_ty) || collection_elem_ty(&elem_ty).is_some() {
+                    locals.push((get_clone_temp_name(expr), Ty::Bool));
+                }
+            }
+            // `.min()`/`.max()` on List/Array (#2271) — native index dispatch
+            // needs the receiver pointer and the computed index each held in
+            // a temp (see the emit-side arm), plus the same get-based
+            // clone-and-rewrap temp as `.get(i)` above for String/nested
+            // elements.
+            if collection_elem_ty(&receiver.ty).is_some()
+                && (method == "min" || method == "max")
+                && args.is_empty()
+            {
+                locals.push((list_extreme_recv_temp_name(expr), Ty::Bool));
+                locals.push((list_extreme_idx_temp_name(expr), Ty::Int));
                 let elem_ty = collection_elem_ty(&receiver.ty).cloned().unwrap_or(Ty::Int);
                 if peels_to_string(&elem_ty) || collection_elem_ty(&elem_ty).is_some() {
                     locals.push((get_clone_temp_name(expr), Ty::Bool));
@@ -4987,14 +5027,26 @@ fn emit_expr(out: &mut String, expr: &TirExpr, ctx: &Ctx) {
         {
             ctx.needs_runtime.set(true);
             let elem_ty = collection_elem_ty(&receiver.ty).cloned().unwrap_or(Ty::Int);
-            let fn_name = if is_i32(&elem_ty, ctx) {
-                "_mvl_array_contains_i32"
+            // String elements are boxed `*MvlString` handles, not a bare i32
+            // the way a `Set[Int]`'s elements are — `is_i32` correctly says
+            // no for them, but that fell through to the i64 arm, which
+            // expects one i64 argument, not the two-i32 `(ptr, len)` a bare
+            // String argument actually pushes: a WASM module-validation
+            // type mismatch, not a runtime bug (#2271).
+            if is_string_ty(&elem_ty, ctx) {
+                emit_expr(out, receiver, ctx);
+                emit_expr(out, &args[0], ctx);
+                out.push_str("    call $_mvl_array_contains_str\n");
             } else {
-                "_mvl_array_contains_i64"
-            };
-            emit_expr(out, receiver, ctx);
-            emit_expr(out, &args[0], ctx);
-            out.push_str(&format!("    call ${fn_name}\n"));
+                let fn_name = if is_i32(&elem_ty, ctx) {
+                    "_mvl_array_contains_i32"
+                } else {
+                    "_mvl_array_contains_i64"
+                };
+                emit_expr(out, receiver, ctx);
+                emit_expr(out, &args[0], ctx);
+                out.push_str(&format!("    call ${fn_name}\n"));
+            }
         }
         TirExprKind::MethodCall {
             receiver,
@@ -5401,6 +5453,77 @@ fn emit_expr(out: &mut String, expr: &TirExpr, ctx: &Ctx) {
                 out.push_str(&format!("    call ${sort_fn}\n"));
             } else {
                 out.push_str("    ;; unsupported: List::sort() on non-collection receiver\n");
+            }
+        }
+        // `.min()`/`.max()` on List/Array (#2271) — WASM had no native
+        // dispatch at all, so calls monomorphized `std/lists.mvl`'s
+        // documented fallback body (`self.first()`/`self.last()`, not a true
+        // min/max) for every element type, not just String. Find the true
+        // extreme element's index via a dedicated C-ABI symbol, then reuse
+        // the exact same `_mvl_array_get_option_*` + clone-on-extract shape
+        // as `.get(i)` below — `_mvl_array_get`'s own bounds check already
+        // treats the empty-list sentinel index (`-1`) as out-of-range, so an
+        // empty list naturally yields `None` with no extra branch needed.
+        // Mirrors the LLVM backend's `emit_list_extreme_tir`.
+        //
+        // The receiver's array pointer is needed twice (once to find the
+        // index, once to fetch it) but `receiver` may be an arbitrary
+        // expression, not a bare local, so it's evaluated once into a temp.
+        TirExprKind::MethodCall {
+            receiver,
+            method,
+            args,
+        } if collection_elem_ty(&receiver.ty).is_some()
+            && (method == "min" || method == "max")
+            && args.is_empty() =>
+        {
+            ctx.needs_runtime.set(true);
+            let recv_ty = resolve_ty_param(&receiver.ty, ctx.type_subst);
+            let elem_ty = collection_elem_ty(&recv_ty).cloned().unwrap_or(Ty::Int);
+            let elem_is_string = peels_to_string(&elem_ty);
+            let elem_is_nested_collection = collection_elem_ty(&elem_ty).is_some();
+            let is_max = method == "max";
+            let index_fn = match (elem_is_string, is_max) {
+                (true, false) => "_mvl_list_min_index_str",
+                (true, true) => "_mvl_list_max_index_str",
+                (false, false) => "_mvl_list_min_index_i64",
+                (false, true) => "_mvl_list_max_index_i64",
+            };
+            let getter = if wasm_ty(&elem_ty, ctx) == "i32" || elem_is_string {
+                "_mvl_array_get_option_i32"
+            } else {
+                "_mvl_array_get_option_i64"
+            };
+            let recv_temp = list_extreme_recv_temp_name(expr);
+            let idx_temp = list_extreme_idx_temp_name(expr);
+            emit_expr(out, receiver, ctx);
+            out.push_str(&format!("    local.set ${recv_temp}\n"));
+            out.push_str(&format!("    local.get ${recv_temp}\n"));
+            out.push_str(&format!("    call ${index_fn}\n"));
+            out.push_str(&format!("    local.set ${idx_temp}\n"));
+            out.push_str(&format!("    local.get ${recv_temp}\n"));
+            out.push_str(&format!("    local.get ${idx_temp}\n"));
+            out.push_str(&format!("    call ${getter}\n"));
+            if elem_is_string || elem_is_nested_collection {
+                let temp = get_clone_temp_name(expr);
+                let clone_fn = if elem_is_string {
+                    "_mvl_string_clone"
+                } else {
+                    "_mvl_array_clone"
+                };
+                // Same "fresh Option box around a cloned payload, leak the
+                // original box" tradeoff as the `.get(i)` arm below (#2203).
+                out.push_str(&format!("    local.tee ${temp}\n"));
+                out.push_str("    call $_mvl_option_tag\n");
+                out.push_str("    i32.eqz\n");
+                out.push_str("    if (result i32)\n");
+                out.push_str(&format!("    local.get ${temp}\n"));
+                out.push_str("    call $_mvl_option_value_i32\n");
+                out.push_str(&format!("    call ${clone_fn}\n"));
+                out.push_str("    call $_mvl_option_some_i32\n");
+                out.push_str("    else\n");
+                out.push_str(&format!("    local.get ${temp}\n"));
+                out.push_str("    end\n");
             }
         }
         // `.get(i)` on List / Array — returns `Option[T]` (heap-allocated
@@ -7711,6 +7834,22 @@ fn get_clone_temp_name(expr: &TirExpr) -> String {
     format!("__gc_{}_{}", expr.span.offset, expr.span.len)
 }
 
+/// `.min()`/`.max()` (#2271) need the receiver's array pointer twice — once
+/// to find the extreme element's index, once to fetch it — but `receiver`
+/// may be an arbitrary expression, not a bare local, so it can only be
+/// evaluated once. Held in this i32 temp between the two calls.
+fn list_extreme_recv_temp_name(expr: &TirExpr) -> String {
+    format!("__mmr_{}_{}", expr.span.offset, expr.span.len)
+}
+
+/// `.min()`/`.max()` (#2271) — the i64 index `_mvl_list_min/max_index_*`
+/// returns, held so it can be reordered ahead of the re-pushed receiver
+/// pointer for the `_mvl_array_get_option_*` call (which expects `(array,
+/// index)`, not `(index, array)`).
+fn list_extreme_idx_temp_name(expr: &TirExpr) -> String {
+    format!("__mmi_{}_{}", expr.span.offset, expr.span.len)
+}
+
 /// Temp local for `_mvl_string_find`'s raw i64 sentinel in
 /// `String::find(sub)`, held across the `-1` check so it can be read
 /// again inside the `else` branch that wraps it in `Some` (#2191).
@@ -8030,6 +8169,48 @@ fn emit_assert_eq(out: &mut String, left: &TirExpr, right: &TirExpr, negate: boo
         emit_expr(out, left, ctx);
         emit_expr(out, right, ctx);
         out.push_str("    call $_mvl_array_eq\n");
+        if !negate {
+            out.push_str("    i32.eqz\n");
+        }
+        out.push_str("    if\n      unreachable\n    end\n");
+        return;
+    }
+
+    // `Option[T]` / `Result[T, E]` — #2249 gave the `==`/`!=` *operator*
+    // these arms in `emit_binary`, but `assert_eq`/`assert_ne` never got
+    // them, so they fell through to the generic `i32.eq` below and compared
+    // the boxed handles by pointer identity. Two structurally equal Options
+    // built independently (e.g. `row.get(1)` vs a fresh `Some("x")`) are
+    // never the same pointer, so every such assertion trapped —
+    // `examples/csv_transactions/main_test.mvl`'s
+    // `assert_eq(row.get(1), Some("Groceries, weekly"))` is exactly this
+    // shape, and it is the natural way to assert on any `.get()`/`.first()`/
+    // `.last()` result (#2285). Reuses the same runtime helpers and the same
+    // compile-time `is_str` payload flags as the operator arms.
+    if let Some(inner) = option_inner_ty(&left.ty) {
+        ctx.needs_runtime.set(true);
+        let is_str = is_string_ty(inner, ctx) as i32;
+        emit_expr(out, left, ctx);
+        emit_expr(out, right, ctx);
+        out.push_str(&format!(
+            "    i32.const {is_str}\n    call $_mvl_option_eq\n"
+        ));
+        if !negate {
+            out.push_str("    i32.eqz\n");
+        }
+        out.push_str("    if\n      unreachable\n    end\n");
+        return;
+    }
+    if let Some(ok_ty) = result_ok_ty(&left.ty) {
+        let err_ty = result_err_ty(&left.ty).cloned().unwrap_or(Ty::String);
+        ctx.needs_runtime.set(true);
+        let ok_is_str = is_string_ty(ok_ty, ctx) as i32;
+        let err_is_str = is_string_ty(&err_ty, ctx) as i32;
+        emit_expr(out, left, ctx);
+        emit_expr(out, right, ctx);
+        out.push_str(&format!(
+            "    i32.const {ok_is_str}\n    i32.const {err_is_str}\n    call $_mvl_result_eq\n"
+        ));
         if !negate {
             out.push_str("    i32.eqz\n");
         }
@@ -11305,6 +11486,14 @@ fn collect_expr(
         TirExprKind::FieldAccess { expr: inner, .. } => {
             collect_expr(inner, map, next, audit_relabels)
         }
+        // A lambda's body is emitted as its own top-level `$__lambda_…` fn by
+        // `emit_lambda_fns`, discovered lazily via `ctx.lambdas` during main
+        // emission — this static pre-pass never reaches it otherwise. A
+        // string literal referenced ONLY inside a closure (not elsewhere in
+        // an already-scanned fn) was never interned, so its use site emitted
+        // `;; missing literal` — a stack-underflow module that `wasm-tools
+        // parse` accepts and `validate` rejects (#2271 bug 2).
+        TirExprKind::Lambda { body, .. } => collect_expr(body, map, next, audit_relabels),
         _ => {}
     }
 }
@@ -12781,6 +12970,27 @@ mod validated_module_tests {
         assert!(stubbed.is_empty(), "unexpected stubs: {stubbed:?}");
     }
 
+    /// Same gap for a string literal referenced only inside a lambda body
+    /// (#2271 bug 2) — `collect_literals`'s pre-pass never recursed into
+    /// `TirExprKind::Lambda`, so a literal used only inside a closure (not
+    /// elsewhere in an already-scanned fn) was never interned; the closure
+    /// body then emitted `;; missing literal` for it, a stack-underflow
+    /// module `wasm-tools parse` accepts but `validate` rejects.
+    #[test]
+    fn literal_only_inside_lambda_body_is_interned() {
+        let stubbed = emit_and_validate(
+            "pub fn List[T]::has_it(self, f: fn(T) -> Bool) -> Bool {\n\
+                 for x in self { if f(x) { return true } };\n\
+                 false\n\
+             }\n\
+             test fn t() -> Unit {\n\
+                 let xs: List[String] = [\"bb\", \"a\", \"ccc\"];\n\
+                 assert_eq(xs.has_it(|s: String| s == \"UNIQUENEEDLE\"), false);\n\
+             }\n",
+        );
+        assert!(stubbed.is_empty(), "unexpected stubs: {stubbed:?}");
+    }
+
     /// Same gap for a generic *plain* fn — `fns` also requires no type params.
     #[test]
     fn literal_only_inside_generic_plain_fn_is_interned() {
@@ -13341,6 +13551,40 @@ mod validated_module_tests {
     /// of_double_freeing` documents for `.slice()`, which has no cloning
     /// variant yet). `_mvl_array_concat_str` refcount-clones each element
     /// instead, so no double-free risk and no stub needed.
+    /// #2285: `assert_eq`/`assert_ne` on `Option[T]`/`Result[T, E]` fell
+    /// through to the generic `i32.eq` on the boxed handle — pointer
+    /// identity, not content. Two structurally equal Options built
+    /// independently (`row.get(1)` vs a fresh `Some("x")`) are never the
+    /// same pointer, so every such assertion trapped. #2249 gave the
+    /// `==`/`!=` *operator* these arms; assert_eq never got them.
+    #[test]
+    fn assert_eq_on_option_uses_option_eq_not_pointer_identity() {
+        let (wat, _stubbed) = emit(
+            "test fn t() -> Unit {\n\
+                 let row: List[String] = [\"a\", \"bb\"];\n\
+                 assert_eq(row.get(1), Some(\"bb\"));\n\
+             }\n",
+        );
+        validate(&wat);
+        assert!(
+            wat.contains("call $_mvl_option_eq"),
+            "assert_eq on Option must compare by content:\n{wat}"
+        );
+    }
+
+    #[test]
+    fn assert_eq_on_result_uses_result_eq_not_pointer_identity() {
+        let (wat, _stubbed) = emit(
+            "fn mk(ok: Bool) -> Result[Int, String] { if ok { Ok(1) } else { Err(\"e\") } }\n\
+             test fn t() -> Unit { assert_eq(mk(true), Ok(1)); }\n",
+        );
+        validate(&wat);
+        assert!(
+            wat.contains("call $_mvl_result_eq"),
+            "assert_eq on Result must compare by content:\n{wat}"
+        );
+    }
+
     #[test]
     fn concat_on_string_list_uses_cloning_variant() {
         let (wat, stubbed) = emit(

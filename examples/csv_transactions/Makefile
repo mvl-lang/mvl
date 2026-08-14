@@ -2,7 +2,7 @@
 #
 # Demonstrates std.csv: pure parser, Tainted[String] cells, decode trust boundary.
 # Run from this directory or from the repo root.
-.PHONY: help guard-mvl check prove test-solver test assurance smoke run clean
+.PHONY: help guard-mvl check prove test-solver test test-llvm test-wasm assurance smoke run clean
 
 .DEFAULT_GOAL := help
 
@@ -44,6 +44,12 @@ test-solver: guard-mvl ## Show per-file solver statistics
 
 test: guard-mvl ## Run unit tests from main_test.mvl
 	cd $(REPO_ROOT) && $(abspath $(MVL)) test $(DIR)
+
+test-llvm: guard-mvl ## Run tests via --backend=llvm (all 5 pass; fixed in #2285)
+	cd $(REPO_ROOT) && $(abspath $(MVL)) test $(DIR) --backend=llvm
+
+test-wasm: guard-mvl ## Run tests via --backend=wasm (all 5 pass; fixed in #2285)
+	cd $(REPO_ROOT) && MVL_RUNTIME_WASM=$(REPO_ROOT)/target/wasm32-wasip1/debug/mvl_runtime_wasm.wasm $(abspath $(MVL)) test $(DIR) --backend=wasm
 
 # No test-wasm target (deliberately excluded): main_test.mvl fails —
 # functions compile to `unreachable` on the WASM backend, a pre-existing

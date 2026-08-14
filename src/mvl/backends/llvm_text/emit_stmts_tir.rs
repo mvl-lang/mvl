@@ -10,7 +10,8 @@
 //! re-infer types from initializers.
 
 use crate::mvl::ir::{
-    LValue, LetKind, Pattern, TirBlock, TirElseBranch, TirExpr, TirExprKind, TirStmt, Ty,
+    LValue, LetKind, Pattern, TirBlock, TirElseBranch, TirExpr, TirExprKind, TirMatchBody, TirStmt,
+    Ty,
 };
 
 use super::emit_helpers::ty_to_type_expr;
@@ -77,7 +78,51 @@ impl TextEmitter {
                     self.exclude_returned_value_tir(value);
                 }
             }
+            // #2286: a `match`/`if` used *as* the returned value yields one of
+            // its arms' values through a phi, so each arm's tail is an escape
+            // candidate — but neither shape was handled here, so an arm that
+            // returns an owned local had that local dropped by the very sweep
+            // this function exists to suppress:
+            //
+            //   fn opt_or(opt: Option[String], default: String) -> String {
+            //       let d: String = consume(default);
+            //       match opt { Some(s) => s, None => d }
+            //   }
+            //
+            // emitted `phi ptr [ %t2, some ], [ %default, none ]` followed by
+            // `_mvl_string_drop(ptr %default)` before the `ret` — on the None
+            // path the returned string was freed on the way out, and the
+            // caller's first use of it (`"x".concat(cat)`) read freed memory.
+            //
+            // Excluding *every* arm's value is deliberate: which arm runs is
+            // a runtime property. The arms not taken were never separately
+            // dropped anyway (their values are unreachable), so the cost of
+            // over-excluding is at worst a leak, never a double free — the
+            // same trade `Construct` above already makes for its fields.
+            TirExprKind::Match { arms, .. } => {
+                for arm in arms {
+                    match &arm.body {
+                        TirMatchBody::Expr(e) => self.exclude_returned_value_tir(e),
+                        TirMatchBody::Block(b) => self.exclude_block_tail_value_tir(b),
+                    }
+                }
+            }
+            TirExprKind::If { then, else_, .. } => {
+                self.exclude_block_tail_value_tir(then);
+                if let Some(e) = else_ {
+                    self.exclude_returned_value_tir(e);
+                }
+            }
             _ => {}
+        }
+    }
+
+    /// [`Self::exclude_returned_value_tir`] applied to a block's own trailing
+    /// expression — the value a match arm's or `if` branch's block yields
+    /// into the enclosing phi (#2286).
+    fn exclude_block_tail_value_tir(&mut self, block: &TirBlock) {
+        if let Some(TirStmt::Expr { expr, .. }) = block.stmts.last() {
+            self.exclude_returned_value_tir(expr);
         }
     }
 
@@ -155,12 +200,34 @@ impl TextEmitter {
                 self.exclude_returned_value_tir(expr);
                 Ok(val)
             }
+            // #2286: a tail-position `if`/`match` *statement* yields this
+            // block's value through a phi, exactly like the tail-expression
+            // arm above — so each branch's escaping value needs the same
+            // exclusion, or the scope-exit sweep frees whichever local the
+            // taken branch is about to return. `std/csv.mvl`-style
+            // `match opt { Some(s) => s, None => d }` as a whole function
+            // body is the common shape; before this, the `None` arm's `d`
+            // was dropped immediately before the `ret` that returned it.
             TirStmt::If {
                 cond, then, else_, ..
-            } => self.emit_if_stmt_chain_tir(cond, then, else_.as_ref(), expected_ty),
+            } => {
+                self.exclude_block_tail_value_tir(then);
+                if let Some(TirElseBranch::Block(b)) = else_.as_ref() {
+                    self.exclude_block_tail_value_tir(b);
+                }
+                self.emit_if_stmt_chain_tir(cond, then, else_.as_ref(), expected_ty)
+            }
             TirStmt::Match {
                 scrutinee, arms, ..
-            } => self.emit_match_expr_tir(scrutinee, arms),
+            } => {
+                for arm in arms {
+                    match &arm.body {
+                        TirMatchBody::Expr(e) => self.exclude_returned_value_tir(e),
+                        TirMatchBody::Block(b) => self.exclude_block_tail_value_tir(b),
+                    }
+                }
+                self.emit_match_expr_tir(scrutinee, arms)
+            }
             other => {
                 self.emit_stmt_tir(other)?;
                 Ok(None)
@@ -441,12 +508,43 @@ impl TextEmitter {
                             self.push_instr(&format!("store {ty_str} {cloned}, ptr {ptr}"));
                         } else {
                             self.push_instr(&format!("store {ty_str} {v}, ptr {ptr}"));
+                            // #2265: no deep copy was made, so this binding
+                            // now *aliases* the initializer's heap object —
+                            // and the alloca below gets its own
+                            // `heap_locals` entry. Without releasing the
+                            // initializer's own entry, the same allocation
+                            // is tracked twice and the scope-exit sweep
+                            // drops it twice; worse, when the binding is
+                            // the function's return value, the source's
+                            // stale entry frees it *before* the caller ever
+                            // reads it. `examples/bzip/huffman.mvl::
+                            // remove_at_ll` is exactly this shape:
+                            //
+                            //   let before: List[List[Int]] = list.slice(..);
+                            //   let result: ref List[List[Int]] = before;
+                            //   result.extend(after);
+                            //   result            // returns freed memory
+                            //
+                            // Ownership moves into the new binding, same as
+                            // the `Assign` arm below already does for
+                            // `result = out` (#2260) and as push/Some/Ok/
+                            // Err/list-literal/struct-literal do for a
+                            // value moved into a container (#1991/#2264).
+                            // The `needs_deep_copy` branch above must NOT
+                            // do this: it built an independent copy, so the
+                            // source keeps its own drop.
+                            self.exclude_returned_value_tir(init);
                         }
                     }
                     if let Pattern::Ident(name, _) = pattern {
                         if let Some(hk) = Self::heap_kind(&elem_ty) {
                             self.fn_ctx.heap_locals.push((ptr.clone(), hk, true));
                         }
+                        // Shadow any same-named plain binding — see the
+                        // mirrored `ref_locals.remove` in the non-ref arm
+                        // below for why both maps have to be kept in sync
+                        // (#2265).
+                        self.fn_ctx.locals.remove(name);
                         self.fn_ctx.ref_locals.insert(
                             name.clone(),
                             RefLocal {
@@ -473,6 +571,29 @@ impl TextEmitter {
                             }
                         }
                     }
+                    // A same-named `ref` binding must stop resolving here
+                    // (#2265). `emit_expr_tir`'s `Var` arm consults
+                    // `ref_locals` *before* `locals`, and neither map is
+                    // scoped to the block that introduced its entry — so a
+                    // `ref` binding left over from an already-finished
+                    // sibling branch silently captured every later mention
+                    // of that name, including in branches that declared
+                    // their own plain local. `examples/bzip/huffman.mvl::
+                    // build_tree` has exactly this shape:
+                    //
+                    //   } else if init.queue.len() == 1 {
+                    //       let codes: ref List[List[Int]] = ...;   // alloca
+                    //   } else {
+                    //       let codes: List[List[Int]] = ...;       // %ssa
+                    //       BuildState { .., codes: codes }         // read the *alloca*
+                    //
+                    // The else branch's `codes` compiled to a load from the
+                    // then-branch's alloca — never stored to on this path —
+                    // so `BuildState.codes` got uninitialized stack memory,
+                    // and its own freshly-mapped list was dropped unused.
+                    // The garbage pointer then reached `_mvl_array_clone`/
+                    // `_mvl_array_len` as a misaligned dereference.
+                    self.fn_ctx.ref_locals.remove(name);
                     self.fn_ctx.locals.insert(name.clone(), v.clone());
                     if let Some(hk) = Self::heap_kind(&elem_ty) {
                         if !self.fn_ctx.heap_locals.iter().any(|(s, _, _)| s == &v) {

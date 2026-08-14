@@ -7,7 +7,7 @@
 //! `cross_backend_tir/method_call.rs` substring tests cover the same
 //! concern against the TIR walker.
 
-use super::common::compile;
+use super::common::{compile, compile_test_crate};
 
 #[test]
 fn map_len_emits_mvl_map_len() {
@@ -243,4 +243,115 @@ fn string_replace_emits_runtime_call() {
         "{ir}"
     );
     assert!(ir.contains("call ptr @_mvl_str_replace(ptr"), "{ir}");
+}
+
+/// `assert_eq` on two `Option[T]` values used to be a hard codegen error
+/// ("unsupported LLVM type `{ i8, ptr }`"), which failed the *whole file's*
+/// compilation — so `assert_eq(row.get(1), Some("x"))`, the natural way to
+/// assert on any `.get()`/`.first()`/`.last()` result, was unusable.
+/// Compares discriminants, then payloads only when both are `Some`.
+#[test]
+fn assert_eq_on_option_string_compares_disc_then_payload() {
+    let ir = compile_test_crate(
+        "test fn t() -> Unit {\n\
+         let row: List[String] = [\"a\", \"bb\"];\n\
+         assert_eq(row.get(1), Some(\"bb\"));\n\
+         }",
+    );
+    assert!(
+        ir.contains("extractvalue { i8, ptr }") && ir.contains("call i1 @_mvl_string_eq"),
+        "Option[String] equality must compare discriminants and then payloads \
+         via _mvl_string_eq:\n{ir}"
+    );
+}
+
+/// The payload comparison must be reached only when both sides are `Some` —
+/// a `None`'s payload pointer is null, so an unconditional load would fault.
+#[test]
+fn assert_eq_on_option_int_guards_payload_load() {
+    let ir = compile_test_crate(
+        "test fn t() -> Unit {\n\
+         let xs: List[Int] = [1, 2];\n\
+         assert_eq(xs.get(0), Some(1));\n\
+         }",
+    );
+    assert!(
+        ir.contains("opt_eq_payload") && ir.contains("opt_eq_skip"),
+        "payload load must sit behind a both-Some guard:\n{ir}"
+    );
+}
+
+/// #2285: `List[T]::concat` byte-copied both inputs' elements, which for a
+/// pointer-shaped element hands the result the same heap objects its inputs
+/// still own — whichever input drops first frees them out from under it.
+/// `std/csv.mvl::parse_rows_with` accumulates `rows = rows.concat([row])` on
+/// a `List[List[String]]` and hit exactly this. Must route through the
+/// cloning variant instead.
+#[test]
+fn concat_on_pointer_element_list_clones_per_element() {
+    let ir = compile(
+        "fn join(a: List[List[Int]], b: List[List[Int]]) -> List[List[Int]] { a.concat(b) }",
+    );
+    assert!(
+        ir.contains("call ptr @_mvl_list_concat_ptr(ptr") && ir.contains("ptr @_mvl_array_clone)"),
+        "concat on a nested-collection element must clone per element:\n{ir}"
+    );
+    let ir_str =
+        compile("fn join(a: List[String], b: List[String]) -> List[String] { a.concat(b) }");
+    assert!(
+        ir_str.contains("call ptr @_mvl_list_concat_ptr(ptr")
+            && ir_str.contains("ptr @_mvl_string_clone)"),
+        "concat on a String element must clone per element:\n{ir_str}"
+    );
+}
+
+/// A scalar element has no ownership to share, so it must keep using the
+/// cheap byte-copying `_mvl_list_concat` — the cloning variant would be
+/// wrong (it assumes 8-byte pointer elements).
+#[test]
+fn concat_on_scalar_element_list_stays_byte_copy() {
+    let ir = compile("fn join(a: List[Int], b: List[Int]) -> List[Int] { a.concat(b) }");
+    assert!(
+        !ir.contains("_mvl_list_concat_ptr"),
+        "scalar-element concat must not use the per-element cloning variant:\n{ir}"
+    );
+}
+
+/// #2285: a name bound out of an enum variant's payload lives in
+/// `fn_ctx.locals` but deliberately *not* in `heap_locals` (the payload
+/// buffer stays the owner), so `resolve_owned_call_arg`'s heap lookup found
+/// nothing and passed it by move to a consuming parameter — which the callee
+/// then freed while the caller went on using it. `std/csv.mvl::
+/// parse_rows_with` hit this via `is_empty_row(row)` followed by
+/// `rows.push(row)`. A non-last use must clone.
+#[test]
+fn payload_bound_var_clones_on_non_last_use_as_call_arg() {
+    let ir = compile(
+        "type RowPos = enum { RP(List[String], Int) }\n\
+         fn takes(row: List[String]) -> Bool { row.len() == 0 }\n\
+         fn use_it(rp: RowPos, out: List[List[String]]) -> Bool {\n\
+         match rp {\n\
+         RowPos::RP(row, _) => {\n\
+         let skip: Bool = takes(row);\n\
+         out.push(row);\n\
+         skip\n\
+         },\n\
+         }\n\
+         }",
+    );
+    // Slice to a lone closing-brace *line* — `take_while(|c| c != '}')`
+    // would stop at the `}` inside a `{ i8, ptr }` type string.
+    let body: String = ir
+        .split("define i1 @use_it")
+        .nth(1)
+        .expect("@use_it must be emitted")
+        .lines()
+        .take_while(|l| *l != "}")
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        body.contains("call ptr @_mvl_array_clone"),
+        "a payload-bound heap local passed to a consuming param on a \
+         non-last use must be cloned:\n{body}"
+    );
 }

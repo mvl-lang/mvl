@@ -1,6 +1,16 @@
 // Corpus: reference capability checking (Req 9 / issue #22)
 // iso and val are sendable; ref is not.
 
+// Placeholder types — irrelevant to what this corpus tests (the iso/val/ref
+// capability modifiers), just structurally valid names to hang them on.
+type Channel = struct {}
+type Payload = struct {}
+type Message = struct {}
+type Buffer = struct {}
+type Item = struct {}
+type Config = struct {}
+type Report = struct {}
+
 // iso parameter: isolated ownership — sendable
 fn send_owned(channel: Channel, iso data: Payload) -> Unit {
     channel.send(data)

@@ -269,3 +269,107 @@ fn map_insert_string_value_excludes_from_heap_locals() {
         "expected 0 direct _mvl_string_drop calls on `v` (owned by the map now), got {string_drop_count}\n{ir}"
     );
 }
+
+/// #2265: `ref_locals` and `locals` are both function-scoped, and
+/// `emit_expr_tir`'s `Var` arm consults `ref_locals` first — so a `ref`
+/// binding introduced in one branch kept capturing that name in a *sibling*
+/// branch that declared its own plain local. The sibling's reads compiled to
+/// a load from the other branch's alloca (never stored to on that path), i.e.
+/// uninitialized stack memory. `examples/bzip/huffman.mvl::build_tree` hit
+/// this with a `codes` binding declared `ref` in one arm and plain in the
+/// other.
+#[test]
+fn plain_let_shadows_ref_binding_from_sibling_branch() {
+    let ir = compile(
+        "fn pick(flag: Bool) -> List[Int] {\n\
+         if flag {\n\
+         let xs: ref List[Int] = [1, 2];\n\
+         xs.push(3);\n\
+         xs\n\
+         } else {\n\
+         let xs: List[Int] = [9];\n\
+         xs\n\
+         }\n\
+         }",
+    );
+    // Isolate the `else_N:` basic block (label line through its terminator).
+    let else_body: String = ir
+        .lines()
+        .skip_while(|l| !l.starts_with("else_"))
+        .skip(1)
+        .take_while(|l| !l.trim_start().starts_with("br label"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(!else_body.is_empty(), "else branch must be emitted:\n{ir}");
+    // The else arm builds its own array and returns that; loading the
+    // then-arm's `alloca ptr` here is the bug this pins.
+    assert!(
+        !else_body.contains("load ptr, ptr"),
+        "else branch must not load the sibling ref binding's alloca:\n{else_body}\n--- full ---\n{ir}"
+    );
+    assert!(
+        else_body.contains("call ptr @_mvl_array_new"),
+        "else branch must build its own array:\n{else_body}"
+    );
+}
+
+/// #2265: `let result: ref T = <existing heap local>` aliases the
+/// initializer's allocation rather than copying it, so ownership moves into
+/// the new binding — the source must stop being independently drop-tracked.
+/// Without this the same allocation was dropped twice, and when the binding
+/// was the return value the stale entry freed it before the caller read it
+/// (`examples/bzip/huffman.mvl::remove_at_ll`).
+#[test]
+fn ref_let_from_heap_local_transfers_ownership() {
+    let ir = compile(
+        "fn take(a: List[List[Int]], b: List[List[Int]]) -> List[List[Int]] {\n\
+         let before: List[List[Int]] = a.slice(0, 1);\n\
+         let out: ref List[List[Int]] = before;\n\
+         out.extend(b);\n\
+         out\n\
+         }",
+    );
+    let body = ir
+        .split("define ptr @take")
+        .nth(1)
+        .expect("@take must be emitted");
+    let body: String = body.chars().take_while(|c| *c != '}').collect();
+    // `before`'s slice result is the returned allocation — it must not be
+    // dropped on the way out.
+    let slice_reg = body
+        .lines()
+        .find(|l| l.contains("_mvl_list_slice"))
+        .and_then(|l| l.split_whitespace().next())
+        .expect("slice call must be emitted")
+        .to_string();
+    assert!(
+        !body.contains(&format!("_mvl_array_drop_mvlarray(ptr {slice_reg},")),
+        "the aliased-and-returned slice result must not be dropped:\n{body}"
+    );
+}
+
+/// #2286: a tail-position `match` statement yields the function's value
+/// through a phi, but `exclude_returned_value_tir` was never applied to its
+/// arms — so an arm returning an owned local had that local dropped by the
+/// scope-exit sweep immediately before the `ret` that returned it.
+#[test]
+fn tail_match_arm_value_excluded_from_drop_sweep() {
+    let ir = compile(
+        "fn opt_or(opt: Option[String], default: String) -> String {\n\
+         let d: String = consume(default);\n\
+         match opt { Some(s) => s, None => d, }\n\
+         }",
+    );
+    let body: String = ir
+        .split("define ptr @opt_or")
+        .nth(1)
+        .expect("@opt_or must be emitted")
+        .lines()
+        .take_while(|l| *l != "}")
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        !body.contains("_mvl_string_drop(ptr %default)"),
+        "the arm value being returned must not be dropped on the way out:\n{body}"
+    );
+}

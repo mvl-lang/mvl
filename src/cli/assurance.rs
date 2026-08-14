@@ -7,6 +7,7 @@ use mvl::mvl::checker::passes::{
     aggregate_verdicts, count_handling_sites, count_memory_safety_sites, source_hash,
     HandlingCounts, PassRegistry, Verdict, VerdictCache,
 };
+use mvl::mvl::checker::SolverMode;
 use mvl::mvl::loader;
 use mvl::mvl::parser::ast::{Decl, Program, Totality, TypeBody};
 use mvl::mvl::pipeline::{load_full_prelude, PreludeMode};
@@ -158,13 +159,34 @@ pub fn run(path: &str, json: bool, verbose: bool) {
         })
         .count();
 
-    for (idx, (file_str, prog, src)) in parsed_assurance.iter().take(requested_count).enumerate() {
+    // Go-model sibling parses, memoized per directory (mirrors check.rs, #2272).
+    let mut method_prelude_cache: std::collections::HashMap<
+        std::path::PathBuf,
+        Vec<(String, Program)>,
+    > = std::collections::HashMap::new();
+
+    for (file_str, prog, src) in parsed_assurance.iter().take(requested_count) {
         let file_str = file_str.as_str();
         let stats = collect_assurance_stats(prog, verbose);
-        let (before, after_with_self) = all_assurance_progs.split_at(idx);
-        let after = &after_with_self[1..];
-        let user_prelude: Vec<&Program> = before.iter().chain(after.iter()).collect();
-        let result = checker::check_with_two_preludes(&assurance_prelude, &user_prelude, prog);
+        // Per-file prelude: this file's own `use`-based transitive sibling
+        // closure plus the Go-model same-directory methods-only prelude — not
+        // every other file in the directory (#2272; same bug #2204 fixed in
+        // check.rs/test.rs, unaddressed here until now).
+        let (sibling_progs, method_prelude_progs) = loader::per_file_user_and_method_prelude(
+            prog,
+            file_str,
+            &base_dir,
+            &mut method_prelude_cache,
+        );
+        let user_prelude: Vec<&Program> = sibling_progs.iter().collect();
+        let method_prelude: Vec<&Program> = method_prelude_progs.iter().collect();
+        let result = checker::check_with_two_preludes_and_methods_mode(
+            &assurance_prelude,
+            &user_prelude,
+            &method_prelude,
+            prog,
+            SolverMode::Layered,
+        );
 
         total_fns += stats.fn_count;
         total_verified += stats.total_fn_count;

@@ -188,11 +188,44 @@ impl TypeChecker {
             .map(|p| self.env.normalize_ty(resolve(&p.ty)))
             .collect();
         let ret = self.env.normalize_ty(resolve(&fd.return_type));
-        let type_params = fd
+        let type_params: Vec<String> = fd
             .type_params
             .iter()
             .map(|p| p.name().to_string())
             .collect();
+
+        // #2272 item 3 / #2279: a parameter's or return type's declared name
+        // was never checked against known types — only constructor position
+        // (`check_construction`, stmts.rs) and receiver-type position (below)
+        // were. Shallow check only, matching both of those: a bare `Ty::Named`
+        // component is validated, not names nested inside a generic argument
+        // (`List[UndefinedType]`'s element isn't caught here either — same
+        // scope both existing checks already have).
+        for (param, param_ty) in fd.params.iter().zip(params.iter()) {
+            if let Ty::Named(name, _) = param_ty {
+                if !type_params.iter().any(|tp| tp == name)
+                    && !BUILTIN_RECEIVER_TYPES.contains(&name.as_str())
+                    && self.env.lookup_type(name).is_none()
+                {
+                    self.emit(CheckError::UndefinedType {
+                        name: name.clone(),
+                        span: param.ty.span(),
+                    });
+                }
+            }
+        }
+        if let Ty::Named(name, _) = &ret {
+            if !type_params.iter().any(|tp| tp == name)
+                && !BUILTIN_RECEIVER_TYPES.contains(&name.as_str())
+                && self.env.lookup_type(name).is_none()
+            {
+                self.emit(CheckError::UndefinedType {
+                    name: name.clone(),
+                    span: fd.return_type.span(),
+                });
+            }
+        }
+
         let info = FnInfo {
             params,
             ret,

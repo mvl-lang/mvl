@@ -295,65 +295,108 @@ impl Resolver {
                     });
                     continue;
                 }
-                let item = use_decl.path.last().cloned().unwrap_or_default();
-                let source_module = use_decl.path[..use_decl.path.len() - 1].to_vec();
-                // Req 3: no name collisions
-                if seen_names.contains(&item) {
-                    errors.push(ResolveError::NameCollision {
-                        module: name.clone(),
-                        name: item.clone(),
-                    });
-                    continue;
-                }
-                seen_names.insert(item.clone());
-
-                // Req 3: module must exist
-                if !source_module.is_empty() {
-                    // pkg.* imports are external packages loaded at build time;
-                    // skip resolver validation and let the type checker handle them.
-                    if source_module.first().map(|s| s == "pkg").unwrap_or(false) {
-                        imports.push(ResolvedImport {
-                            item,
-                            source_path: use_decl.path.clone(),
-                            reexport: use_decl.reexport,
-                        });
-                        continue;
-                    }
-                    // Module keys use dot-separated paths: "backends.llvm.context"
-                    // matches `use backends.llvm.context::X` → source_module = ["backends","llvm","context"]
-                    let source_key = source_module.join(".");
-                    if !modules.contains_key(&source_key) {
-                        errors.push(ResolveError::MissingModule {
+                // Brace-group imports (`use a.b.{X, Y}`) carry their imported
+                // names in `items`, separately from `path` — unlike the
+                // single-item form (`use a.b::X`), where `path`'s last
+                // segment IS the item and everything before it is the module.
+                // Treating `path.last()` as "the item" unconditionally (as
+                // this loop used to) misparsed a ≥2-segment brace-group path
+                // whose prefix also happens to name a real module: `use
+                // solver.layer2.{Bound}` was read as "item `layer2` of module
+                // `solver`" instead of "items of module `solver.layer2`"
+                // (#2272 item 2).
+                //
+                // Scoped narrowly to that ambiguous-prefix case only — the
+                // issue this fixes explicitly notes single-segment brace
+                // groups (`use types.{Item, Wrapper}`) already work (no
+                // export validation ever ran for them; leaving that gap
+                // alone here, since real single-segment-brace-group code in
+                // this repo, e.g. `use pingpong.{Ping, Pong}` with
+                // module-private variants, relies on it not being
+                // validated). `std.*` is also excluded: unlike user-qualified
+                // modules, `"std"` is the ONLY key ever registered for the
+                // whole standard library (see `stdlib_module` below) — each
+                // stdlib file's stem is a flat *export name* of `std` itself,
+                // not its own dotted module key, so `use std.collections.{Map}`
+                // must keep resolving `item = "collections"` against `std`'s
+                // own export set, exactly as the single-item form already does.
+                let is_std = use_decl.path.first().map(|s| s == "std").unwrap_or(false);
+                let is_ambiguous_multi_segment_brace_group =
+                    !use_decl.items.is_empty() && use_decl.path.len() >= 2 && !is_std;
+                let (member_names, source_module): (Vec<String>, Vec<String>) =
+                    if is_ambiguous_multi_segment_brace_group {
+                        (use_decl.items.clone(), use_decl.path.clone())
+                    } else {
+                        (
+                            vec![use_decl.path.last().cloned().unwrap_or_default()],
+                            use_decl.path[..use_decl.path.len().saturating_sub(1)].to_vec(),
+                        )
+                    };
+                for item in member_names {
+                    // Req 3: no name collisions
+                    if seen_names.contains(&item) {
+                        errors.push(ResolveError::NameCollision {
                             module: name.clone(),
-                            missing_path: source_module.clone(),
+                            name: item.clone(),
                         });
                         continue;
                     }
+                    seen_names.insert(item.clone());
 
-                    // Req 2: item must be exported from source
-                    if let Some(src_mod) = modules.get(&source_key) {
-                        if !src_mod.exports.contains(&item) {
-                            errors.push(ResolveError::NotExported {
+                    let source_path: Vec<String> = source_module
+                        .iter()
+                        .cloned()
+                        .chain(std::iter::once(item.clone()))
+                        .collect();
+
+                    // Req 3: module must exist
+                    if !source_module.is_empty() {
+                        // pkg.* imports are external packages loaded at build time;
+                        // skip resolver validation and let the type checker handle them.
+                        if source_module.first().map(|s| s == "pkg").unwrap_or(false) {
+                            imports.push(ResolvedImport {
+                                item,
+                                source_path,
+                                reexport: use_decl.reexport,
+                            });
+                            continue;
+                        }
+                        // Module keys use dot-separated paths: "backends.llvm.context"
+                        // matches `use backends.llvm.context::X` → source_module = ["backends","llvm","context"]
+                        let source_key = source_module.join(".");
+                        if !modules.contains_key(&source_key) {
+                            errors.push(ResolveError::MissingModule {
                                 module: name.clone(),
-                                item: item.clone(),
-                                source: source_module.clone(),
-                                source_file: src_mod.source_file.clone(),
+                                missing_path: source_module.clone(),
                             });
                             continue;
                         }
 
-                        // Req 4: re-exporting a private item is rejected
-                        // (here we check if reexport flag is set but item is private)
-                        // Note: exports already only contains pub items, so if it's
-                        // in exports it's public. No extra check needed here.
-                    }
-                }
+                        // Req 2: item must be exported from source
+                        if let Some(src_mod) = modules.get(&source_key) {
+                            if !src_mod.exports.contains(&item) {
+                                errors.push(ResolveError::NotExported {
+                                    module: name.clone(),
+                                    item: item.clone(),
+                                    source: source_module.clone(),
+                                    source_file: src_mod.source_file.clone(),
+                                });
+                                continue;
+                            }
 
-                imports.push(ResolvedImport {
-                    item,
-                    source_path: use_decl.path.clone(),
-                    reexport: use_decl.reexport,
-                });
+                            // Req 4: re-exporting a private item is rejected
+                            // (here we check if reexport flag is set but item is private)
+                            // Note: exports already only contains pub items, so if it's
+                            // in exports it's public. No extra check needed here.
+                        }
+                    }
+
+                    imports.push(ResolvedImport {
+                        item,
+                        source_path,
+                        reexport: use_decl.reexport,
+                    });
+                }
             }
 
             if let Some(m) = modules.get_mut(name) {
@@ -654,6 +697,58 @@ mod tests {
         );
         assert!(result.modules.contains_key("context"));
         assert!(result.modules.contains_key("backends.llvm.context"));
+    }
+
+    // #2272 item 2: a brace-group `use a.b.{X, Y}` must resolve against
+    // module `a.b`, not misparse `b` as an item of module `a` — which only
+    // manifested when `a` also happened to name a real module (here:
+    // `solver` alongside `solver.layer2`, mirroring the actual repro in
+    // compiler/solver/layer2_test.mvl).
+    #[test]
+    fn brace_group_use_resolves_against_deeper_module_path() {
+        let solver = parse("pub fn solver_fn() -> Int { 0 }");
+        let layer2 = parse("pub type Bound = struct { lo: Int, hi: Int }\npub type Interval = struct { a: Int, b: Int }\n");
+        let consumer = parse("use solver.layer2.{Bound, Interval}\npub fn use_them(b: Bound, i: Interval) -> Int { 0 }\n");
+        let result = resolve_project(
+            vec![
+                (
+                    "solver".to_string(),
+                    "compiler/solver.mvl".to_string(),
+                    solver,
+                ),
+                (
+                    "solver.layer2".to_string(),
+                    "compiler/solver/layer2.mvl".to_string(),
+                    layer2,
+                ),
+                (
+                    "consumer".to_string(),
+                    "compiler/solver/consumer.mvl".to_string(),
+                    consumer,
+                ),
+            ],
+            None,
+        );
+        assert!(
+            result.is_ok(),
+            "brace-group use against a deeper module path must resolve: {:?}",
+            result.errors
+        );
+        let consumer_mod = &result.modules["consumer"];
+        assert!(consumer_mod.imports.iter().any(|i| i.item == "Bound"
+            && i.source_path
+                == vec![
+                    "solver".to_string(),
+                    "layer2".to_string(),
+                    "Bound".to_string()
+                ]));
+        assert!(consumer_mod.imports.iter().any(|i| i.item == "Interval"
+            && i.source_path
+                == vec![
+                    "solver".to_string(),
+                    "layer2".to_string(),
+                    "Interval".to_string()
+                ]));
     }
 
     // Req 1: file-module correspondence (module name from filename).

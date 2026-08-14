@@ -542,23 +542,6 @@ impl TextEmitter {
         Self::llvm_ty(ty) == "void"
     }
 
-    /// Return the byte size of an LLVM IR type string on a 64-bit target.
-    ///
-    /// Used to compute `elem_size` for `mvl_array_new`.
-    pub(super) fn llvm_type_size(ty: &str) -> usize {
-        match ty {
-            "i1" | "i8" => 1,
-            "i16" => 2,
-            "i32" => 4,
-            "i64" | "double" | "ptr" => 8,
-            // Tagged unions: { i8, ptr } → 16 bytes (8-byte aligned)
-            s if s.starts_with("{ i8, ptr }") => 16,
-            // Named struct types (%Foo) — conservatively use pointer size
-            s if s.starts_with('%') => 8,
-            _ => 8,
-        }
-    }
-
     /// Byte size + optional heap-drop symbol for a scalar or `String` leaf
     /// type, as used inside a `List`/`Option`/`Result`/`Map` element (#1991).
     /// Returns `None` for anything else (structs, nested collections, …) —
@@ -755,19 +738,64 @@ impl TextEmitter {
         }
     }
 
-    /// Emit `call ptr @_mvl_list_slice(ptr val, i64 start, i64 end)` (or the
-    /// `_str` variant for a `List[String]` receiver — #2260: the plain one
-    /// byte-copies each element, aliasing rather than cloning a `*MvlString`
-    /// handle) and return the result register. Shared by slice/take/skip
-    /// dispatch.
+    /// Emit `call ptr @_mvl_list_slice(ptr val, i64 start, i64 end)` — or a
+    /// per-element-cloning variant — and return the result register. Shared
+    /// by slice/take/skip dispatch.
+    ///
+    /// The plain runtime helper byte-copies each element, which is correct
+    /// only for scalars: for any pointer-shaped element it hands the slice
+    /// the same heap object the source array still owns, and both then drop
+    /// it independently. `String` got its `_str` variant in #2260; #2265
+    /// closes the rest of the family:
+    ///
+    /// - `String` → `_mvl_list_slice_str` (refcount-clones each handle)
+    /// - nested `List`/`Set`/`Array`/`Map` → `_mvl_list_slice_ptr` with the
+    ///   matching `_mvl_*_clone` as a callback (`examples/bzip/huffman.mvl::
+    ///   remove_at_ll` on a `List[List[Int]]` double-freed every inner list
+    ///   without this)
+    /// - payload enum → `_mvl_list_slice_enum` with that enum's own
+    ///   [`Self::ensure_enum_clone_fn`] trampoline
+    /// - anything else (scalars) → the plain byte-copying `_mvl_list_slice`
     pub(super) fn emit_list_slice_call(
         &mut self,
         val: &str,
         start: &str,
         end: &str,
-        elem_is_string: bool,
-    ) -> String {
-        let sym = if elem_is_string {
+        elem_ty: Option<&Ty>,
+    ) -> Result<String, String> {
+        let elem_ty = elem_ty.map(super::emit_exprs_tir::unwrap_labels);
+        // Pointer-shaped, non-String element: one shared helper, per-kind
+        // clone callback.
+        let ptr_clone_sym = match elem_ty {
+            Some(Ty::List(_)) | Some(Ty::Array(_, _)) | Some(Ty::Set(_)) => {
+                Some("_mvl_array_clone")
+            }
+            Some(Ty::Map(_, _)) => Some("_mvl_map_clone"),
+            _ => None,
+        };
+        if let Some(clone_sym) = ptr_clone_sym {
+            self.ensure_extern(&format!("declare ptr @{clone_sym}(ptr)"));
+            self.ensure_extern("declare ptr @_mvl_list_slice_ptr(ptr, i64, i64, ptr)");
+            let reg = self.next_reg();
+            self.push_instr(&format!(
+                "{reg} = call ptr @_mvl_list_slice_ptr(ptr {val}, i64 {start}, i64 {end}, ptr @{clone_sym})"
+            ));
+            self.fn_ctx.reg_types.insert(reg.clone(), "ptr".into());
+            return Ok(reg);
+        }
+        if let Some(Ty::Named(name, _)) = elem_ty {
+            if self.enum_has_payloads(name) {
+                let clone_fn = self.ensure_enum_clone_fn(name)?;
+                self.ensure_extern("declare ptr @_mvl_list_slice_enum(ptr, i64, i64, ptr)");
+                let reg = self.next_reg();
+                self.push_instr(&format!(
+                    "{reg} = call ptr @_mvl_list_slice_enum(ptr {val}, i64 {start}, i64 {end}, ptr @{clone_fn})"
+                ));
+                self.fn_ctx.reg_types.insert(reg.clone(), "ptr".into());
+                return Ok(reg);
+            }
+        }
+        let sym = if matches!(elem_ty, Some(Ty::String)) {
             "_mvl_list_slice_str"
         } else {
             "_mvl_list_slice"
@@ -778,7 +806,7 @@ impl TextEmitter {
             "{reg} = call ptr @{sym}(ptr {val}, i64 {start}, i64 {end})"
         ));
         self.fn_ctx.reg_types.insert(reg.clone(), "ptr".into());
-        reg
+        Ok(reg)
     }
 
     // ── Int/Bool → String helpers ─────────────────────────────────────────
@@ -820,11 +848,20 @@ impl TextEmitter {
 
     // ── Result/Option aggregate builders ──────────────────────────────────
 
-    /// Compute the heap-allocation size (in bytes) for an LLVM type string.
+    /// Compute the size in bytes of an LLVM type string on a 64-bit target.
     ///
-    /// Used by Result/Option constructors to replace stack `alloca` with
-    /// `_mvl_alloc`, so that payload pointers remain valid after the
-    /// constructor function returns.
+    /// The single source of truth for "how many bytes does one value of this
+    /// type occupy": heap-allocation sizes for Result/Option payloads, and
+    /// `elem_size`/value-size for every collection slot.
+    ///
+    /// #2286: a second, *static* `llvm_type_size` used to exist alongside
+    /// this one and returned a flat 8 for any named struct ("conservatively
+    /// use pointer size"). The collection call sites used that one, so a
+    /// `List[Rec]` of a 32-byte `%Rec = type { ptr, double, { i8, ptr } }`
+    /// was created with `elem_size 8` and every element was truncated to its
+    /// first 8 bytes — `r.name` (offset 0) read back fine while `r.amount`
+    /// (offset 8) returned garbage. Only this alignment-aware version
+    /// remains, so the two can no longer disagree.
     pub(super) fn alloc_size_for_llvm_ty(&self, ty: &str) -> u64 {
         match ty {
             "i1" | "i8" => 1,
@@ -1113,6 +1150,293 @@ impl TextEmitter {
         let idx = names.iter().position(|n| n == variant_name)?;
         let fields = self.module.enum_variant_fields.get(type_name)?;
         fields.get(idx).map(|v| v.as_slice())
+    }
+
+    // ── Generic struct/enum element clone (#2265) ─────────────────────────
+
+    /// Recursively clone the value of MVL type `field_ty` living at address
+    /// `src_ptr` into a fresh, independent copy at address `dst_ptr` (same
+    /// LLVM size, already allocated by the caller). The building block for
+    /// [`Self::ensure_enum_clone_fn`] (one call per variant field) and for
+    /// cloning a `Box[T]`'s own boxed value.
+    ///
+    /// - Scalar (`Int`/`UInt`/`Float`/`Bool`/`Byte`/`UByte`/`Char`), and a
+    ///   unit enum's bare `i64` discriminant: plain byte copy — no
+    ///   ownership to share.
+    /// - `String`/`List`/`Array`/`Set`/`Map`: shallow refcount-bump clone
+    ///   via the existing `_mvl_*_clone` runtime helpers — the same
+    ///   semantics `_mvl_array_extend_str`/`_mvl_array_extend_nested`
+    ///   already use for a sibling collection's own elements (#2264).
+    /// - `Box[T]`: allocate a fresh box (mirrors `Box::new`'s own size
+    ///   dispatch in `emit_exprs_tir.rs`) and recurse into `T`'s value.
+    /// - A nested payload enum (any `Named` type in `enum_variants` with a
+    ///   non-empty variant): extract disc + payload, recurse via
+    ///   [`Self::ensure_enum_clone_fn`] for that enum's own type. This is
+    ///   how a self-referential field (`Box[HuffmanTree]` inside
+    ///   `HuffmanTree` itself) terminates — recursion through the same
+    ///   memoized trampoline, not unbounded generator recursion.
+    /// - `Option[T]`/`Result[T, E]`: same one-level-of-nesting scope limit
+    ///   `HeapKind::ArrayOfOption`/`ArrayOfResult` already have elsewhere —
+    ///   the payload pointer is aliased (safe, not yet independently
+    ///   owned) rather than erroring, matching this backend's existing
+    ///   fallback philosophy for a gap that predates #2265.
+    /// - An opaque pointer-typed field this dispatch doesn't recognize
+    ///   (actor handle, fn pointer, unresolvable name): copied by pointer
+    ///   identity — no owned allocation to duplicate, so aliasing it is
+    ///   correct, not merely expedient.
+    /// - A plain struct-typed field: errors rather than silently
+    ///   miscompiling — `field_slot_layout`'s "plain structs are pointer-
+    ///   or word-sized" assumption is only true for actor-handle structs;
+    ///   an ordinary multi-field struct has no established slot-sizing
+    ///   story in this backend today (mirrors `Box::new`'s own identical
+    ///   restriction on aggregate payloads).
+    fn emit_clone_field_at(
+        &mut self,
+        src_ptr: &str,
+        dst_ptr: &str,
+        field_ty: &TypeExpr,
+    ) -> Result<(), String> {
+        let unwrapped = match field_ty {
+            TypeExpr::Ref { inner, .. }
+            | TypeExpr::Labeled { inner, .. }
+            | TypeExpr::Refined { inner, .. } => inner.as_ref(),
+            other => other,
+        };
+        let llvm_ty = self.llvm_ty_ctx(unwrapped);
+
+        // Option[T]/Result[T,E]/a user payload enum all share the
+        // `{ i8, ptr }` tagged-union shape.
+        if llvm_ty == RESULT_LLVM_TY {
+            let val = self.next_reg();
+            self.push_instr(&format!("{val} = load {RESULT_LLVM_TY}, ptr {src_ptr}"));
+            self.fn_ctx
+                .reg_types
+                .insert(val.clone(), RESULT_LLVM_TY.to_string());
+            let disc = self.next_reg();
+            self.push_instr(&format!("{disc} = extractvalue {RESULT_LLVM_TY} {val}, 0"));
+            let payload = self.next_reg();
+            self.push_instr(&format!(
+                "{payload} = extractvalue {RESULT_LLVM_TY} {val}, 1"
+            ));
+
+            let new_payload = if let TypeExpr::Base { name, .. } = unwrapped {
+                if self.module.enum_variants.contains_key(name) {
+                    let clone_fn = self.ensure_enum_clone_fn(name)?;
+                    let np = self.next_reg();
+                    self.push_instr(&format!(
+                        "{np} = call ptr @{clone_fn}(i8 {disc}, ptr {payload})"
+                    ));
+                    np
+                } else {
+                    payload.clone()
+                }
+            } else {
+                payload.clone()
+            };
+
+            let r0 = self.next_reg();
+            self.push_instr(&format!(
+                "{r0} = insertvalue {RESULT_LLVM_TY} zeroinitializer, i8 {disc}, 0"
+            ));
+            let r1 = self.next_reg();
+            self.push_instr(&format!(
+                "{r1} = insertvalue {RESULT_LLVM_TY} {r0}, ptr {new_payload}, 1"
+            ));
+            self.push_instr(&format!("store {RESULT_LLVM_TY} {r1}, ptr {dst_ptr}"));
+            return Ok(());
+        }
+
+        // Box[T] — allocate a fresh box (mirrors `Box::new`'s own size
+        // dispatch) and recurse into T's own value living in the box's
+        // buffer.
+        if let TypeExpr::Base { name, args, .. } = unwrapped {
+            if name == "Box" {
+                let inner = args
+                    .first()
+                    .ok_or_else(|| "clone: Box[..] with no type argument".to_string())?;
+                let old_box = self.next_reg();
+                self.push_instr(&format!("{old_box} = load ptr, ptr {src_ptr}"));
+                let inner_llvm = self.llvm_ty_ctx(inner);
+                let size: i64 = match inner_llvm.as_str() {
+                    "i64" | "ptr" | "double" => 8,
+                    "i32" => 4,
+                    "i8" | "i1" => 1,
+                    t if t == RESULT_LLVM_TY => 16,
+                    other => {
+                        return Err(format!(
+                            "clone: Box[{other}] has no known size for cloning — mirrors \
+                             Box::new's own restriction on aggregate payloads (#2265)"
+                        ));
+                    }
+                };
+                self.ensure_extern("declare ptr @_mvl_box_new(i64)");
+                let new_box = self.next_reg();
+                self.push_instr(&format!("{new_box} = call ptr @_mvl_box_new(i64 {size})"));
+                self.emit_clone_field_at(&old_box, &new_box, inner)?;
+                self.push_instr(&format!("store ptr {new_box}, ptr {dst_ptr}"));
+                return Ok(());
+            }
+        }
+
+        match llvm_ty.as_str() {
+            "i64" | "double" | "i1" | "i8" | "i32" => {
+                // Scalar, or a unit enum's bare discriminant — no ownership
+                // to share.
+                let v = self.next_reg();
+                self.push_instr(&format!("{v} = load {llvm_ty}, ptr {src_ptr}"));
+                self.push_instr(&format!("store {llvm_ty} {v}, ptr {dst_ptr}"));
+                Ok(())
+            }
+            "ptr" => {
+                let old = self.next_reg();
+                self.push_instr(&format!("{old} = load ptr, ptr {src_ptr}"));
+                let clone_sym = match unwrapped {
+                    TypeExpr::Base { name, .. } => match name.as_str() {
+                        "String" => Some("_mvl_string_clone"),
+                        "List" | "Array" | "Set" => Some("_mvl_array_clone"),
+                        "Map" => Some("_mvl_map_clone"),
+                        _ => None,
+                    },
+                    _ => None,
+                };
+                let new = if let Some(sym) = clone_sym {
+                    self.ensure_extern(&format!("declare ptr @{sym}(ptr)"));
+                    let r = self.next_reg();
+                    self.push_instr(&format!("{r} = call ptr @{sym}(ptr {old})"));
+                    r
+                } else {
+                    // Opaque pointer-typed field (actor handle, fn pointer,
+                    // unrecognized name) — no owned allocation to
+                    // duplicate. Safe, not incorrect: the same shallow-
+                    // alias fallback `elem_clone_sym`/`clone_heap_value_for_ty`
+                    // already use for a type they don't recognize.
+                    old.clone()
+                };
+                self.push_instr(&format!("store ptr {new}, ptr {dst_ptr}"));
+                Ok(())
+            }
+            other if other.starts_with('%') => Err(format!(
+                "clone: struct-typed field `{other}` inside an enum/Box payload is not yet \
+                 supported — plain structs aren't slot-sized for this backend's flat payload \
+                 layout today (#2265 follow-up)"
+            )),
+            other => Err(format!(
+                "clone: unsupported field type `{other}` for recursive clone (#2265)"
+            )),
+        }
+    }
+
+    /// Lazily generate (once per module) a recursive per-payload-enum clone
+    /// trampoline `ptr @_mvl_clone_enum_<Name>(i8 %disc, ptr %payload)`
+    /// (#2265) — mirrors the field-type dispatch
+    /// `bind_tuple_variant_fields_tir`/`emit_enum_variant_constructor_tir`
+    /// already use to walk a variant's flat payload-slot buffer, but
+    /// emitting an independent *clone* of each field
+    /// ([`Self::emit_clone_field_at`]) instead of a bind. One trampoline
+    /// covers every variant of `enum_name` via an internal `switch` on the
+    /// discriminant, so `List[T]::extend`/`.get()`/`.first()`/`.last()`
+    /// can clone an arbitrarily deep recursive struct/enum element (e.g.
+    /// `HuffmanTree::Node(Int, Box[HuffmanTree], Box[HuffmanTree])`)
+    /// without the caller needing to know its shape.
+    ///
+    /// Memoized *before* the body is built (not after) — see the
+    /// `emitted_enum_clone_fns` doc comment for why.
+    pub(super) fn ensure_enum_clone_fn(&mut self, enum_name: &str) -> Result<String, String> {
+        let fn_name = format!("_mvl_clone_enum_{enum_name}");
+        if !self
+            .module
+            .emitted_enum_clone_fns
+            .insert(enum_name.to_string())
+        {
+            return Ok(fn_name);
+        }
+
+        let variant_names = self
+            .module
+            .enum_variants
+            .get(enum_name)
+            .cloned()
+            .unwrap_or_default();
+
+        let placeholder_ret = TypeExpr::Base {
+            name: "Unit".into(),
+            args: vec![],
+            span: Span::default(),
+        };
+        self.with_fresh_fn_ctx(placeholder_ret, |this| -> Result<(), String> {
+            this.fn_ctx
+                .fn_buf
+                .push(format!("define ptr @{fn_name}(i8 %disc, ptr %payload) {{"));
+            this.fn_ctx.fn_buf.push("entry:".into());
+
+            let default_bb = "default".to_string();
+            let arm_bbs: Vec<String> = (0..variant_names.len())
+                .map(|i| format!("v{i}"))
+                .collect();
+
+            let mut switch_str = format!("switch i8 %disc, label %{default_bb} [\n");
+            for (i, bb) in arm_bbs.iter().enumerate() {
+                switch_str.push_str(&format!("    i8 {i}, label %{bb}\n"));
+            }
+            switch_str.push_str("  ]");
+            this.push_instr(&switch_str);
+
+            for (i, vname) in variant_names.iter().enumerate() {
+                this.fn_ctx.fn_buf.push(format!("{}:", arm_bbs[i]));
+                this.fn_ctx.current_bb = arm_bbs[i].clone();
+                this.fn_ctx.terminated = false;
+
+                let qualified = format!("{enum_name}::{vname}");
+                let field_tys: Vec<TypeExpr> = this
+                    .variant_payload_types(&qualified)
+                    .map(|s| s.to_vec())
+                    .unwrap_or_default();
+
+                if field_tys.is_empty() {
+                    this.push_instr("ret ptr null");
+                    this.fn_ctx.terminated = true;
+                    continue;
+                }
+
+                let (n_slots, offsets) = this.field_slot_layout(&field_tys);
+                this.ensure_extern("declare ptr @_mvl_alloc(i64)");
+                let new_base = this.next_reg();
+                this.push_instr(&format!(
+                    "{new_base} = call ptr @_mvl_alloc(i64 {})",
+                    n_slots * 8
+                ));
+
+                for (slot, fty) in field_tys.iter().enumerate() {
+                    let src_slot = this.next_reg();
+                    this.push_instr(&format!(
+                        "{src_slot} = getelementptr [{n_slots} x i64], ptr %payload, i32 0, i32 {}",
+                        offsets[slot]
+                    ));
+                    let dst_slot = this.next_reg();
+                    this.push_instr(&format!(
+                        "{dst_slot} = getelementptr [{n_slots} x i64], ptr {new_base}, i32 0, i32 {}",
+                        offsets[slot]
+                    ));
+                    this.emit_clone_field_at(&src_slot, &dst_slot, fty)?;
+                }
+
+                this.push_instr(&format!("ret ptr {new_base}"));
+                this.fn_ctx.terminated = true;
+            }
+
+            this.fn_ctx.fn_buf.push(format!("{default_bb}:"));
+            this.fn_ctx.current_bb = default_bb;
+            this.fn_ctx.terminated = false;
+            this.push_instr("ret ptr null");
+            this.fn_ctx.terminated = true;
+
+            this.fn_ctx.fn_buf.push("}".into());
+            let body = this.fn_ctx.fn_buf.join("\n");
+            this.module.fn_bodies.push(body);
+            Ok(())
+        })?;
+
+        Ok(fn_name)
     }
 
     /// Resolve a pattern name like "Shape::Circle" to its discriminant i64.

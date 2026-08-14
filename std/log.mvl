@@ -18,6 +18,7 @@
 //! See #54, ADR-0006.
 
 use std.time.{now, format_instant}
+use std.io.{Fd}
 
 // ── Output format ──────────────────────────────────────────────────────────
 

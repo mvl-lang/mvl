@@ -2134,6 +2134,138 @@ pub unsafe extern "C" fn _mvl_array_contains_i32(a: i32, val: i32) -> i32 {
     slice.iter().any(|&e| e == val) as i32
 }
 
+/// `_mvl_array_contains_str(a, needle_ptr, needle_len) -> i32` — 1 if a
+/// String equal to `needle` is in the array, 0 otherwise (#2271). Used for
+/// `List[String].contains(needle)` / `Set[String].contains(needle)`.
+///
+/// `List[String]`'s elements are boxed `*MvlString` handles (elem_size ==
+/// 4), while `needle` is the caller's bare String argument, passed unpacked
+/// as `(ptr, len)` like any other String value on the WASM stack — the two
+/// representations of the same type differ, so each element must be
+/// unboxed via its own `.ptr`/`.len` fields before comparing through
+/// `_mvl_string_eq`. Mirrors the LLVM backend's `_mvl_array_contains_str`
+/// (`runtime/llvm/src/memory_ops.rs`).
+///
+/// # Safety
+/// `a` must be `0` or a valid `*MvlArray` with `elem_size == 4` whose
+/// elements are all valid `*MvlString` handles.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn _mvl_array_contains_str(a: i32, needle_ptr: i32, needle_len: i32) -> i32 {
+    if a == 0 {
+        return 0;
+    }
+    let arr = unsafe { &*(a as usize as *const MvlArray) };
+    for i in 0..arr.len as usize {
+        let elem = unsafe { core::ptr::read((arr.ptr as usize + i * 4) as *const i32) };
+        if elem == 0 {
+            continue;
+        }
+        let s = unsafe { &*(elem as usize as *const MvlString) };
+        if _mvl_string_eq(s.ptr, s.len, needle_ptr, needle_len) != 0 {
+            return 1;
+        }
+    }
+    0
+}
+
+/// `List[T].min()` / `.max()` (#2271) — index of the numerically smallest
+/// (resp. largest) element, or `-1` for an empty list. Compares elements as
+/// signed i64 bit patterns — correct for `Int`/`Byte`; same bit-pattern
+/// caveat as `_mvl_list_sort` for `Float` (negative values / NaN order
+/// incorrectly). Mirrors the LLVM backend's `_mvl_list_min_index_i64`
+/// (`runtime/llvm/src/memory_ops.rs`) — WASM had no native dispatch at all,
+/// so `List[T]::min()`/`::max()` monomorphized `std/lists.mvl`'s documented
+/// fallback body (`self.first()`/`self.last()`, not a true min/max) for
+/// every element type, not just String.
+///
+/// Returns an index rather than a value so the emitter can reuse the
+/// existing `get`-based `Option[T]` construction unchanged.
+///
+/// # Safety
+/// `list` must be `0` or a valid `*MvlArray` with `elem_size <= 8`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn _mvl_list_min_index_i64(list: i32) -> i64 {
+    unsafe { list_extreme_index_i64(list, |a, b| a < b) }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn _mvl_list_max_index_i64(list: i32) -> i64 {
+    unsafe { list_extreme_index_i64(list, |a, b| a > b) }
+}
+
+unsafe fn list_extreme_index_i64(list: i32, better: impl Fn(i64, i64) -> bool) -> i64 {
+    if list == 0 {
+        return -1;
+    }
+    let arr = unsafe { &*(list as usize as *const MvlArray) };
+    let len = arr.len as usize;
+    if len == 0 {
+        return -1;
+    }
+    let es = arr.elem_size as usize;
+    let read = |i: usize| -> i64 {
+        let mut buf = [0u8; 8];
+        let src = (arr.ptr as usize + i * es) as *const u8;
+        unsafe { core::ptr::copy_nonoverlapping(src, buf.as_mut_ptr(), es) };
+        i64::from_ne_bytes(buf)
+    };
+    let mut best_idx = 0usize;
+    let mut best_val = read(0);
+    for i in 1..len {
+        let v = read(i);
+        if better(v, best_val) {
+            best_val = v;
+            best_idx = i;
+        }
+    }
+    best_idx as i64
+}
+
+/// `List[String].min()` / `.max()` (#2271) — index of the lexicographically
+/// smallest (resp. largest) string, or `-1` for an empty list. Same
+/// index-based contract as [`_mvl_list_min_index_i64`], comparing string
+/// content (byte-wise, equivalent to UTF-8 ordering) rather than element
+/// pointer identity. Mirrors the LLVM backend's `_mvl_list_min_index_str`.
+///
+/// # Safety
+/// `list` must be `0` or a valid `*MvlArray` with `elem_size == 4` holding
+/// `*MvlString` handles.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn _mvl_list_min_index_str(list: i32) -> i64 {
+    unsafe { list_extreme_index_str(list, |a, b| a < b) }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn _mvl_list_max_index_str(list: i32) -> i64 {
+    unsafe { list_extreme_index_str(list, |a, b| a > b) }
+}
+
+unsafe fn list_extreme_index_str(list: i32, better: impl Fn(&[u8], &[u8]) -> bool) -> i64 {
+    if list == 0 {
+        return -1;
+    }
+    let arr = unsafe { &*(list as usize as *const MvlArray) };
+    let len = arr.len as usize;
+    if len == 0 {
+        return -1;
+    }
+    let read = |i: usize| -> &[u8] {
+        let elem = unsafe { core::ptr::read((arr.ptr as usize + i * 4) as *const i32) };
+        let s = unsafe { &*(elem as usize as *const MvlString) };
+        unsafe { slice_or_empty(s.ptr, s.len) }
+    };
+    let mut best_idx = 0usize;
+    let mut best_val = read(0);
+    for i in 1..len {
+        let v = read(i);
+        if better(v, best_val) {
+            best_val = v;
+            best_idx = i;
+        }
+    }
+    best_idx as i64
+}
+
 /// `_mvl_array_insert_i64(a, val)` — push `val` only if not already present.
 /// Used for `Set[Int].insert(val)`.
 #[unsafe(no_mangle)]

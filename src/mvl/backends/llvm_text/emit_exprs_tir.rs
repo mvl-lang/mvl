@@ -271,13 +271,46 @@ impl TextEmitter {
                     .get(var_name)
                     .map(|rl| rl.ptr.clone())
                     .or_else(|| self.fn_ctx.locals.get(var_name).cloned());
-                let heap_kind = owning_key.as_ref().and_then(|key| {
-                    self.fn_ctx
-                        .heap_locals
-                        .iter()
-                        .find(|(s, _, _)| s == key)
-                        .map(|(_, hk, _)| *hk)
-                });
+                let heap_kind = owning_key
+                    .as_ref()
+                    .and_then(|key| {
+                        self.fn_ctx
+                            .heap_locals
+                            .iter()
+                            .find(|(s, _, _)| s == key)
+                            .map(|(_, hk, _)| *hk)
+                    })
+                    // #2285: not every heap-owning binding is in
+                    // `heap_locals`. A name bound out of an enum variant's
+                    // payload (`bind_tuple_variant_fields_tir` /
+                    // `bind_struct_variant_fields_tir`) is registered in
+                    // `locals` only — the payload buffer stays the owner, so
+                    // the binding is deliberately not scope-drop-tracked.
+                    // The lookup above therefore found nothing and this
+                    // non-last use was passed *by move* to a consuming
+                    // parameter, which the callee then freed while the caller
+                    // went on using it.
+                    //
+                    // `std/csv.mvl::parse_rows_with` is exactly this:
+                    //
+                    //   RowPos::RP(row, next_pos) => {
+                    //       let skip: Bool = is_empty_row(row) && ...;
+                    //       ...
+                    //       rows.push(row)     // row already freed by callee
+                    //
+                    // `is_empty_row` takes `List[String]` consuming and emits
+                    // `_mvl_string_ptr_array_drop(%row)` before returning, so
+                    // every parsed row was freed mid-loop and `rows` ended up
+                    // holding dangling inner pointers — `.len()` still read
+                    // correctly (the outer array was intact), `.get(0)`
+                    // faulted.
+                    //
+                    // Falling back to the argument's own *type* mirrors the
+                    // `FieldAccess` arm below: when the real owner is
+                    // something other than a tracked local, cloning is the
+                    // sound choice. Still gated on non-last-use, so a genuine
+                    // final use keeps moving.
+                    .or_else(|| ty_to_type_expr(&arg.ty).and_then(|te| Self::heap_kind(&te)));
                 if let Some(hk) = heap_kind {
                     // Non-last use of a caller-owned heap local: clone
                     // instead of moving, so the original stays tracked and
@@ -2766,7 +2799,7 @@ impl TextEmitter {
         self.ensure_extern("declare void @_mvl_array_push(ptr, ptr)");
 
         let arr = self.next_reg();
-        let elem_size = Self::llvm_type_size(&elem_ty);
+        let elem_size = self.alloc_size_for_llvm_ty(&elem_ty);
         self.push_instr(&format!(
             "{arr} = call ptr @_mvl_array_new(i64 {elem_size}, i64 {n})"
         ));
@@ -2831,7 +2864,7 @@ impl TextEmitter {
             // silently truncated wider values (e.g. the 16-byte `{ i8, ptr }`
             // Option/Result tagged-union representation), corrupting the
             // stored payload.
-            let val_size = Self::llvm_type_size(&val_ty);
+            let val_size = self.alloc_size_for_llvm_ty(&val_ty);
             self.push_instr(&format!(
                 "call void @_mvl_map_insert(ptr {map}, ptr {key_ptr}, i64 {key_len}, ptr {val_slot}, i64 {val_size})"
             ));
@@ -3078,6 +3111,100 @@ impl TextEmitter {
                 self.push_instr(&format!(
                     "{eq_reg} = fcmp oeq double {left_val}, {right_val}"
                 ));
+            }
+            // `Option[T]` (`{ i8, ptr }`) — compare discriminants first, then
+            // the payloads when both are `Some`. Previously a hard error, so
+            // `assert_eq(row.get(1), Some("x"))` — the natural way to assert
+            // on any `.get()`/`.first()`/`.last()` result — failed the whole
+            // file's codegen (`examples/csv_transactions/main_test.mvl`).
+            // `Result[T, E]` stays unsupported: its two arms carry different
+            // payload types, so one payload comparison can't cover both.
+            t if t == RESULT_LLVM_TY
+                && matches!(unwrap_labels(&args[0].ty), Ty::Option(_))
+                && payload_eq_strategy(
+                    match unwrap_labels(&args[0].ty) {
+                        Ty::Option(inner) => unwrap_labels(inner),
+                        _ => unreachable!(),
+                    },
+                    self,
+                )
+                .is_some() =>
+            {
+                let inner_ty = match unwrap_labels(&args[0].ty) {
+                    Ty::Option(inner) => unwrap_labels(inner).clone(),
+                    _ => unreachable!(),
+                };
+                let strategy =
+                    payload_eq_strategy(&inner_ty, self).expect("guard above already checked this");
+                let payload_llvm = self.ty_to_llvm_ctx(&inner_ty);
+
+                let ldisc = self.next_reg();
+                self.push_instr(&format!(
+                    "{ldisc} = extractvalue {RESULT_LLVM_TY} {left_val}, 0"
+                ));
+                let rdisc = self.next_reg();
+                self.push_instr(&format!(
+                    "{rdisc} = extractvalue {RESULT_LLVM_TY} {right_val}, 0"
+                ));
+                let disc_eq = self.next_reg();
+                self.push_instr(&format!("{disc_eq} = icmp eq i8 {ldisc}, {rdisc}"));
+                // Both `None` (disc 1) — equal, with no payload to read.
+                let both_none = self.next_reg();
+                self.push_instr(&format!("{both_none} = icmp eq i8 {ldisc}, 1"));
+
+                let payload_bb = self.next_bb("opt_eq_payload");
+                let done_bb = self.next_bb("opt_eq_done");
+                let skip_bb = self.next_bb("opt_eq_skip");
+                let slot = self.next_reg();
+                self.push_instr(&format!("{slot} = alloca i1"));
+                // Only dereference payloads when the discriminants agree AND
+                // they are both `Some` — a `None`'s payload pointer is null.
+                let not_none = self.next_reg();
+                self.push_instr(&format!("{not_none} = xor i1 {both_none}, true"));
+                let cmp_payload = self.next_reg();
+                self.push_instr(&format!("{cmp_payload} = and i1 {disc_eq}, {not_none}"));
+                self.push_instr(&format!(
+                    "br i1 {cmp_payload}, label %{payload_bb}, label %{skip_bb}"
+                ));
+
+                self.start_bb(&skip_bb);
+                // Discriminants equal and both None → true; otherwise false.
+                self.push_instr(&format!("store i1 {disc_eq}, ptr {slot}"));
+                self.push_instr(&format!("br label %{done_bb}"));
+                self.fn_ctx.terminated = true;
+
+                self.start_bb(&payload_bb);
+                let lp = self.next_reg();
+                self.push_instr(&format!(
+                    "{lp} = extractvalue {RESULT_LLVM_TY} {left_val}, 1"
+                ));
+                let rp = self.next_reg();
+                self.push_instr(&format!(
+                    "{rp} = extractvalue {RESULT_LLVM_TY} {right_val}, 1"
+                ));
+                let lv = self.next_reg();
+                self.push_instr(&format!("{lv} = load {payload_llvm}, ptr {lp}"));
+                let rv = self.next_reg();
+                self.push_instr(&format!("{rv} = load {payload_llvm}, ptr {rp}"));
+                let peq = self.next_reg();
+                match strategy {
+                    PayloadEq::Icmp => {
+                        self.push_instr(&format!("{peq} = icmp eq {payload_llvm} {lv}, {rv}"));
+                    }
+                    PayloadEq::Fcmp => {
+                        self.push_instr(&format!("{peq} = fcmp oeq {payload_llvm} {lv}, {rv}"));
+                    }
+                    PayloadEq::Call(sym) => {
+                        self.ensure_extern(&format!("declare i1 @{sym}(ptr, ptr)"));
+                        self.push_instr(&format!("{peq} = call i1 @{sym}(ptr {lv}, ptr {rv})"));
+                    }
+                }
+                self.push_instr(&format!("store i1 {peq}, ptr {slot}"));
+                self.push_instr(&format!("br label %{done_bb}"));
+                self.fn_ctx.terminated = true;
+
+                self.start_bb(&done_bb);
+                self.push_instr(&format!("{eq_reg} = load i1, ptr {slot}"));
             }
             other => {
                 return Err(format!(
@@ -3636,7 +3763,7 @@ impl TextEmitter {
         self.push_instr(&format!("{item_slot} = alloca {elem_ty}"));
         self.push_instr(&format!("store {elem_ty} {val}, ptr {item_slot}"));
         let arr = self.next_reg();
-        let elem_size = Self::llvm_type_size(&elem_ty);
+        let elem_size = self.alloc_size_for_llvm_ty(&elem_ty);
         self.ensure_extern("declare ptr @_mvl_array_filled(i64, i64, ptr)");
         self.push_instr(&format!(
             "{arr} = call ptr @_mvl_array_filled(i64 {elem_size}, i64 {n_val}, ptr {item_slot})"
@@ -3769,7 +3896,28 @@ impl TextEmitter {
                         TirExprKind::List { elems } | TirExprKind::Set { elems } if elems.is_empty()
                     ) =>
                 {
-                    let hint = list_elem_type_expr(field_ty).map(Self::llvm_ty);
+                    // #2265: was `Self::llvm_ty` (the static, context-free
+                    // mapper) — correct for a scalar element name but wrong
+                    // for a payload-enum or other module-registered element
+                    // type, which only the context-aware `llvm_ty_ctx`
+                    // resolves against `enum_variants`/`enum_has_payloads`.
+                    // `Self::llvm_ty` falls any unrecognized base name
+                    // (`HuffmanTree`, ...) straight to a bare 8-byte `ptr`
+                    // guess, so `queue: List[HuffmanTree] = []` in a struct
+                    // literal (e.g. `InitState { queue: [], .. }`)
+                    // allocated an elem_size-8 array for a 16-byte `{ i8,
+                    // ptr }` element — every later `.push()` then wrote only
+                    // the first 8 bytes (discriminant + padding), silently
+                    // dropping the payload pointer (left as whatever the
+                    // fresh allocation already held, typically zero) rather
+                    // than storing it. Latent before #2265 because nothing
+                    // read that payload pointer back — `.get()`'s old
+                    // "aliased, not cloned" fallback never dereferenced it;
+                    // #2265's clone-on-extract does, surfacing the
+                    // corruption as a null-pointer dereference the first
+                    // time a `List[HuffmanTree]` built from an empty struct
+                    // field literal is `.get()`-ed.
+                    let hint = list_elem_type_expr(field_ty).map(|te| self.llvm_ty_ctx(te));
                     let elems: &[TirExpr] = match &e.kind {
                         TirExprKind::List { elems } | TirExprKind::Set { elems } => elems,
                         _ => unreachable!(),
@@ -4428,7 +4576,7 @@ impl TextEmitter {
                 self.push_instr(&format!("store {val_ty} {val_arg}, ptr {vs}"));
                 // Value size must match val_ty's actual width — see
                 // emit_map_literal_tir for why a hardcoded 8 is wrong.
-                let val_size = Self::llvm_type_size(&val_ty);
+                let val_size = self.alloc_size_for_llvm_ty(&val_ty);
                 self.push_instr(&format!(
                     "call void @_mvl_map_insert(ptr {val}, ptr {kp}, i64 {kl}, ptr {vs}, i64 {val_size})"
                 ));
@@ -5075,9 +5223,46 @@ impl TextEmitter {
                 if args.len() == 2 && !matches!(unwrap_labels(&receiver.ty), Ty::Map(_, _)) =>
             {
                 let init_ty = self.ty_to_llvm_ctx(&args[0].ty);
-                let init_val = match self.emit_expr_tir(&args[0])? {
-                    Some(v) => v,
-                    None => return Ok(None),
+                // #2286: an *empty* accumulator literal (`records.fold([], ..)`)
+                // has no element to infer from, and unlike a `let` or a struct
+                // field there is no declared type at this position either — its
+                // own `.ty` stays `List[Unknown]`, so the generic path sized the
+                // array's elements at the 8-byte "ptr" default. For a struct
+                // element that is simply wrong (`%Rec` here is 40 bytes), and
+                // the mis-sized accumulator was then `concat`-ed with correctly
+                // sized 40-byte arrays inside the closure — mixing strides in
+                // one buffer. The closure's own first parameter (`|acc:
+                // List[Rec], ..|`) carries the exact accumulator type, so use
+                // that as the empty-case hint.
+                let init_is_empty_list = matches!(
+                    &args[0].kind,
+                    TirExprKind::List { elems } | TirExprKind::Set { elems } if elems.is_empty()
+                );
+                let acc_elem_hint = if init_is_empty_list {
+                    match unwrap_labels(&args[1].ty) {
+                        Ty::Fn(params, _, _, _) => params
+                            .first()
+                            .and_then(|acc_ty| self.empty_list_elem_hint_from_ty(acc_ty)),
+                        _ => None,
+                    }
+                } else {
+                    None
+                };
+                let init_val = match acc_elem_hint {
+                    Some(hint) => {
+                        let elems: &[TirExpr] = match &args[0].kind {
+                            TirExprKind::List { elems } | TirExprKind::Set { elems } => elems,
+                            _ => &[],
+                        };
+                        match self.emit_list_literal_tir(elems, Some(hint.as_str()))? {
+                            Some(v) => v,
+                            None => return Ok(None),
+                        }
+                    }
+                    None => match self.emit_expr_tir(&args[0])? {
+                        Some(v) => v,
+                        None => return Ok(None),
+                    },
                 };
                 // Fold closure: fn(env, acc_val, elem_ptr) -> acc_val
                 // param 0 (acc) by-value, param 1 (elem) by-pointer.
@@ -5163,10 +5348,12 @@ impl TextEmitter {
             // reusing it), so each element must be *cloned* in, not moved —
             // unlike `push` just above, which transfers ownership of its
             // single argument. Scoped to element types with a known-safe
-            // clone strategy (scalar / String / List[U] with U scalar);
-            // other shapes (struct/enum elements, List[List[String]], …)
-            // need real per-element cloning support first (#2265) and are
-            // deliberately left unhandled here rather than mishandled.
+            // clone strategy (scalar / String / List[U] with U scalar) plus,
+            // since #2265, a payload-enum element type (e.g.
+            // `HuffmanTree`) via the generic per-type clone trampoline;
+            // other shapes (`List[List[String]]`, plain structs, …) still
+            // need real per-element cloning support and are deliberately
+            // left unhandled here rather than mishandled.
             ("extend", "ptr") if args.len() == 1 => {
                 let elem_ty = match unwrap_labels(&receiver.ty) {
                     Ty::List(e) | Ty::Array(e, _) | Ty::Set(e) => unwrap_labels(e),
@@ -5193,13 +5380,32 @@ impl TextEmitter {
                     }
                     _ => None,
                 };
-                let Some(sym) = sym else { return Ok(None) };
-                let other = match self.emit_expr_tir(&args[0])? {
-                    Some(v) => v,
-                    None => return Ok(None),
-                };
-                self.ensure_extern(&format!("declare void @{sym}(ptr, ptr)"));
-                self.push_instr(&format!("call void @{sym}(ptr {val}, ptr {other})"));
+                if let Some(sym) = sym {
+                    let other = match self.emit_expr_tir(&args[0])? {
+                        Some(v) => v,
+                        None => return Ok(None),
+                    };
+                    self.ensure_extern(&format!("declare void @{sym}(ptr, ptr)"));
+                    self.push_instr(&format!("call void @{sym}(ptr {val}, ptr {other})"));
+                    return Ok(None);
+                }
+                // Payload-enum element (#2265) — e.g. `List[HuffmanTree]`.
+                // Needs a 3rd argument: the per-type clone trampoline the
+                // runtime has no static knowledge of.
+                if let Ty::Named(name, _) = elem_ty {
+                    if self.enum_has_payloads(name) {
+                        let clone_fn = self.ensure_enum_clone_fn(name)?;
+                        let other = match self.emit_expr_tir(&args[0])? {
+                            Some(v) => v,
+                            None => return Ok(None),
+                        };
+                        self.ensure_extern("declare void @_mvl_array_extend_enum(ptr, ptr, ptr)");
+                        self.push_instr(&format!(
+                            "call void @_mvl_array_extend_enum(ptr {val}, ptr {other}, ptr @{clone_fn})"
+                        ));
+                        return Ok(None);
+                    }
+                }
                 Ok(None)
             }
             ("get", "ptr")
@@ -5285,13 +5491,11 @@ impl TextEmitter {
                 ));
                 let elem_val = self.next_reg();
                 self.push_instr(&format!("{elem_val} = load {elem_llvm_ty}, ptr {elem_ptr}"));
-                let elem_val = if let Some(sym) = elem_clone_sym {
-                    self.ensure_extern(&format!("declare ptr @{sym}(ptr)"));
-                    let cloned = self.next_reg();
-                    self.push_instr(&format!("{cloned} = call ptr @{sym}(ptr {elem_val})"));
-                    cloned
-                } else {
-                    elem_val
+                let elem_val = match unwrap_labels(&receiver.ty) {
+                    Ty::List(e) | Ty::Array(e, _) => {
+                        self.clone_extracted_elem_tir(&elem_val, e, elem_clone_sym)?
+                    }
+                    _ => elem_val,
                 };
                 let elem_slot = self.next_reg();
                 self.push_instr(&format!("{elem_slot} = alloca {elem_llvm_ty}"));
@@ -5622,13 +5826,11 @@ impl TextEmitter {
                 ));
                 let elem_val = self.next_reg();
                 self.push_instr(&format!("{elem_val} = load {elem_llvm_ty}, ptr {elem_ptr}"));
-                let elem_val = if let Some(sym) = elem_clone_sym {
-                    self.ensure_extern(&format!("declare ptr @{sym}(ptr)"));
-                    let cloned = self.next_reg();
-                    self.push_instr(&format!("{cloned} = call ptr @{sym}(ptr {elem_val})"));
-                    cloned
-                } else {
-                    elem_val
+                let elem_val = match unwrap_labels(&receiver.ty) {
+                    Ty::List(e) | Ty::Array(e, _) => {
+                        self.clone_extracted_elem_tir(&elem_val, e, elem_clone_sym)?
+                    }
+                    _ => elem_val,
                 };
                 let elem_slot = self.next_reg();
                 self.push_instr(&format!("{elem_slot} = alloca {elem_llvm_ty}"));
@@ -5715,13 +5917,11 @@ impl TextEmitter {
                 ));
                 let elem_val = self.next_reg();
                 self.push_instr(&format!("{elem_val} = load {elem_llvm_ty}, ptr {elem_ptr}"));
-                let elem_val = if let Some(sym) = elem_clone_sym {
-                    self.ensure_extern(&format!("declare ptr @{sym}(ptr)"));
-                    let cloned = self.next_reg();
-                    self.push_instr(&format!("{cloned} = call ptr @{sym}(ptr {elem_val})"));
-                    cloned
-                } else {
-                    elem_val
+                let elem_val = match unwrap_labels(&receiver.ty) {
+                    Ty::List(e) | Ty::Array(e, _) => {
+                        self.clone_extracted_elem_tir(&elem_val, e, elem_clone_sym)?
+                    }
+                    _ => elem_val,
                 };
                 let elem_slot = self.next_reg();
                 self.push_instr(&format!("{elem_slot} = alloca {elem_llvm_ty}"));
@@ -5830,16 +6030,16 @@ impl TextEmitter {
                 // `slice` has no `LLVM_DISPATCH` row — emit `_mvl_list_slice`
                 // inline via the shared helper (matches the AST emit_method_call
                 // path used by `slice` / `take` / `skip`).
-                let elem_is_string = matches!(
-                    unwrap_labels(&receiver.ty),
-                    Ty::List(e) | Ty::Array(e, _) | Ty::Set(e) if matches!(unwrap_labels(e), Ty::String)
-                );
+                let slice_elem_ty = match unwrap_labels(&receiver.ty) {
+                    Ty::List(e) | Ty::Array(e, _) | Ty::Set(e) => Some((**e).clone()),
+                    _ => None,
+                };
                 Ok(Some(self.emit_list_slice_call(
                     &val,
                     &start,
                     &end,
-                    elem_is_string,
-                )))
+                    slice_elem_ty.as_ref(),
+                )?))
             }
             ("take", "ptr")
                 if args.len() == 1
@@ -5852,16 +6052,16 @@ impl TextEmitter {
                     Some(v) => v,
                     None => return Ok(None),
                 };
-                let elem_is_string = matches!(
-                    unwrap_labels(&receiver.ty),
-                    Ty::List(e) | Ty::Array(e, _) | Ty::Set(e) if matches!(unwrap_labels(e), Ty::String)
-                );
+                let slice_elem_ty = match unwrap_labels(&receiver.ty) {
+                    Ty::List(e) | Ty::Array(e, _) | Ty::Set(e) => Some((**e).clone()),
+                    _ => None,
+                };
                 Ok(Some(self.emit_list_slice_call(
                     &val,
                     "0",
                     &n,
-                    elem_is_string,
-                )))
+                    slice_elem_ty.as_ref(),
+                )?))
             }
             ("skip", "ptr")
                 if args.len() == 1
@@ -5877,22 +6077,67 @@ impl TextEmitter {
                 self.ensure_extern("declare i64 @_mvl_array_len(ptr)");
                 let len_reg = self.next_reg();
                 self.push_instr(&format!("{len_reg} = call i64 @_mvl_array_len(ptr {val})"));
-                let elem_is_string = matches!(
-                    unwrap_labels(&receiver.ty),
-                    Ty::List(e) | Ty::Array(e, _) | Ty::Set(e) if matches!(unwrap_labels(e), Ty::String)
-                );
+                let slice_elem_ty = match unwrap_labels(&receiver.ty) {
+                    Ty::List(e) | Ty::Array(e, _) | Ty::Set(e) => Some((**e).clone()),
+                    _ => None,
+                };
                 Ok(Some(self.emit_list_slice_call(
                     &val,
                     &n,
                     &len_reg,
-                    elem_is_string,
-                )))
+                    slice_elem_ty.as_ref(),
+                )?))
             }
             ("concat", "ptr") if args.len() == 1 => {
                 let other = match self.emit_expr_tir(&args[0])? {
                     Some(v) => v,
                     None => return Ok(None),
                 };
+                // #2285: for a pointer-shaped or payload-enum element type the
+                // plain byte-copying `_mvl_list_concat` aliases both inputs'
+                // elements into the result — whichever input is dropped first
+                // frees them out from under it. Same defect class (and same
+                // fix shape) as `_mvl_list_slice`'s: clone per element via a
+                // callback. `std/csv.mvl::parse_rows_with` accumulates
+                // `rows = rows.concat([row])` on a `List[List[String]]`, so
+                // every parsed row was freed by the temporary literal's own
+                // scope-exit drop while the accumulated list still referenced
+                // it — `.len()` looked right, `.get(0)` returned a dangling
+                // inner pointer.
+                let concat_elem_ty = match unwrap_labels(&receiver.ty) {
+                    Ty::List(e) | Ty::Array(e, _) | Ty::Set(e) => Some(unwrap_labels(e).clone()),
+                    _ => None,
+                };
+                if let Some(elem_ty) = &concat_elem_ty {
+                    let ptr_clone_sym = match elem_ty {
+                        Ty::String => Some("_mvl_string_clone"),
+                        Ty::List(_) | Ty::Array(_, _) | Ty::Set(_) => Some("_mvl_array_clone"),
+                        Ty::Map(_, _) => Some("_mvl_map_clone"),
+                        _ => None,
+                    };
+                    if let Some(clone_sym) = ptr_clone_sym {
+                        self.ensure_extern(&format!("declare ptr @{clone_sym}(ptr)"));
+                        self.ensure_extern("declare ptr @_mvl_list_concat_ptr(ptr, ptr, ptr)");
+                        let reg = self.next_reg();
+                        self.push_instr(&format!(
+                            "{reg} = call ptr @_mvl_list_concat_ptr(ptr {val}, ptr {other}, ptr @{clone_sym})"
+                        ));
+                        self.fn_ctx.reg_types.insert(reg.clone(), "ptr".into());
+                        return Ok(Some(reg));
+                    }
+                    if let Ty::Named(name, _) = elem_ty {
+                        if self.enum_has_payloads(name) {
+                            let clone_fn = self.ensure_enum_clone_fn(name)?;
+                            self.ensure_extern("declare ptr @_mvl_list_concat_enum(ptr, ptr, ptr)");
+                            let reg = self.next_reg();
+                            self.push_instr(&format!(
+                                "{reg} = call ptr @_mvl_list_concat_enum(ptr {val}, ptr {other}, ptr @{clone_fn})"
+                            ));
+                            self.fn_ctx.reg_types.insert(reg.clone(), "ptr".into());
+                            return Ok(Some(reg));
+                        }
+                    }
+                }
                 // List::concat → list_concat; String::concat → concat.
                 let dispatch_key =
                     if matches!(unwrap_labels(&receiver.ty), Ty::List(_) | Ty::Array(_, _)) {
@@ -6058,7 +6303,7 @@ impl TextEmitter {
     /// checker-accepted `.map()` call, but a safe default beats a panic.
     fn closure_ret_llvm_size(&self, closure_ty: &Ty) -> usize {
         match unwrap_labels(closure_ty) {
-            Ty::Fn(_, ret, _, _) => Self::llvm_type_size(&self.ty_to_llvm_ctx(ret)),
+            Ty::Fn(_, ret, _, _) => self.alloc_size_for_llvm_ty(&self.ty_to_llvm_ctx(ret)) as usize,
             _ => 8,
         }
     }
@@ -6202,12 +6447,109 @@ fn list_elem_type_expr(ty: &TypeExpr) -> Option<&TypeExpr> {
 /// is correct here: the extracted value just needs its own independent
 /// owning handle to the same underlying buffer, same as any other List
 /// aliasing.
+/// How to compare two already-loaded values of an `Option`'s payload type in
+/// `assert_eq`/`assert_ne` (#2265 follow-up — see the `RESULT_LLVM_TY` arm of
+/// `emit_assert_eq_builtin_tir`).
+enum PayloadEq {
+    /// Integer-shaped (`Int`/`UInt`/`Bool`/`Byte`/`UByte`/`Char`, or a unit
+    /// enum's bare discriminant).
+    Icmp,
+    Fcmp,
+    /// Pointer-shaped, compared by content through a runtime helper.
+    Call(&'static str),
+}
+
+/// Pick a [`PayloadEq`] for `ty`, or `None` when this backend has no
+/// content-equality story for it (nested collections of non-scalars, `Map`,
+/// structs, payload enums …) — the caller then leaves `assert_eq` on that
+/// shape unsupported rather than silently comparing by pointer identity.
+fn payload_eq_strategy(ty: &Ty, emitter: &TextEmitter) -> Option<PayloadEq> {
+    match unwrap_labels(ty) {
+        Ty::Int | Ty::UInt | Ty::Bool | Ty::Byte | Ty::UByte | Ty::Char => Some(PayloadEq::Icmp),
+        Ty::Float => Some(PayloadEq::Fcmp),
+        Ty::String => Some(PayloadEq::Call("_mvl_string_eq")),
+        Ty::List(e) | Ty::Array(e, _) | Ty::Set(e)
+            if matches!(
+                unwrap_labels(e),
+                Ty::Int | Ty::Float | Ty::Bool | Ty::Char | Ty::Byte | Ty::UByte | Ty::UInt
+            ) =>
+        {
+            Some(PayloadEq::Call("_mvl_array_eq"))
+        }
+        // A unit enum lowers to a bare `i64` discriminant — directly
+        // comparable. A *payload* enum does not (see `Result` in the caller).
+        Ty::Named(name, _)
+            if emitter.module.enum_variants.contains_key(name)
+                && !emitter.enum_has_payloads(name) =>
+        {
+            Some(PayloadEq::Icmp)
+        }
+        _ => None,
+    }
+}
+
 fn elem_clone_sym(elem_ty: &Ty) -> Option<&'static str> {
     match unwrap_labels(elem_ty) {
         Ty::String => Some("_mvl_string_clone"),
         Ty::List(_) | Ty::Array(_, _) | Ty::Set(_) => Some("_mvl_array_clone"),
         Ty::Map(_, _) => Some("_mvl_map_clone"),
         _ => None,
+    }
+}
+
+impl TextEmitter {
+    /// Extend [`elem_clone_sym`]'s scalar/String/collection clone dispatch
+    /// with payload-enum elements (#2265) — shared by `get`/`first`/`last`'s
+    /// identical "clone the extracted element so the `Option` holds an
+    /// independently-owned copy" shape. `elem_clone_sym` already covers
+    /// String/List/Set/Array/Map (bare-`ptr`-shaped values, cloned with a
+    /// single `ptr -> ptr` call); a payload-enum element's loaded value is
+    /// the *whole* `{i8,ptr}` struct, which needs an `extractvalue`/
+    /// `insertvalue` round-trip through the per-type
+    /// `@_mvl_clone_enum_<Name>` trampoline instead, so it can't share
+    /// `elem_clone_sym`'s dispatch table. Falls back to the identity (raw,
+    /// shallow-aliased) value for anything neither dispatch recognizes —
+    /// same "safe, not yet correct" fallback this call already had before
+    /// #2265.
+    fn clone_extracted_elem_tir(
+        &mut self,
+        elem_val: &str,
+        elem_ty: &Ty,
+        elem_clone_sym: Option<&'static str>,
+    ) -> Result<String, String> {
+        if let Some(sym) = elem_clone_sym {
+            self.ensure_extern(&format!("declare ptr @{sym}(ptr)"));
+            let cloned = self.next_reg();
+            self.push_instr(&format!("{cloned} = call ptr @{sym}(ptr {elem_val})"));
+            return Ok(cloned);
+        }
+        if let Ty::Named(name, _) = unwrap_labels(elem_ty) {
+            if self.enum_has_payloads(name) {
+                let clone_fn = self.ensure_enum_clone_fn(name)?;
+                let disc = self.next_reg();
+                self.push_instr(&format!(
+                    "{disc} = extractvalue {RESULT_LLVM_TY} {elem_val}, 0"
+                ));
+                let payload = self.next_reg();
+                self.push_instr(&format!(
+                    "{payload} = extractvalue {RESULT_LLVM_TY} {elem_val}, 1"
+                ));
+                let new_payload = self.next_reg();
+                self.push_instr(&format!(
+                    "{new_payload} = call ptr @{clone_fn}(i8 {disc}, ptr {payload})"
+                ));
+                let r0 = self.next_reg();
+                self.push_instr(&format!(
+                    "{r0} = insertvalue {RESULT_LLVM_TY} zeroinitializer, i8 {disc}, 0"
+                ));
+                let r1 = self.next_reg();
+                self.push_instr(&format!(
+                    "{r1} = insertvalue {RESULT_LLVM_TY} {r0}, ptr {new_payload}, 1"
+                ));
+                return Ok(r1);
+            }
+        }
+        Ok(elem_val.to_string())
     }
 }
 

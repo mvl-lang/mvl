@@ -24,6 +24,7 @@
 
 use tir.{Pattern, SourceLoc, TupleStructPattern}
 use verify_errors::CheckError;
+use context::TypeEnv;
 
 // ── Variant name extraction helper ───────────────────────────────────────────
 
