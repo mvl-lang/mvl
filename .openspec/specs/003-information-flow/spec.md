@@ -184,7 +184,7 @@ The compiler MUST detect implicit information flows via control flow (Program Co
 
 **Tests:** `tests/type_checker.rs::implicit_flow_secret_if_condition_rejected`, `tests/type_checker.rs::implicit_flow_tainted_if_condition_rejected`, `tests/type_checker.rs::implicit_flow_public_condition_accepted`, `tests/type_checker.rs::implicit_flow_print_sink_rejected`, `tests/type_checker.rs::implicit_flow_else_branch_rejected`, `tests/type_checker.rs::implicit_flow_label_propagated_through_let`, `tests/type_checker.rs::implicit_flow_while_secret_condition_rejected`, `tests/type_checker.rs::cross_function_implicit_corpus_has_violations`, `tests/type_checker.rs::interprocedural_taint_corpus_has_violations`, `tests/type_checker.rs::return_label_inference_corpus_has_no_req11_violations`, `tests/type_checker.rs::interprocedural_clean_corpus_has_no_req11_violations`, `tests/type_checker.rs::call_chain_error_names_callee_and_observable`, `src/mvl/checker/passes.rs::req11_proven_for_labeled_types_with_no_violations`
 
-**Corpus:** `tests/corpus/08_ifc/implicit_flow.mvl`, `tests/corpus/08_ifc/cross_function_implicit.mvl`, `tests/corpus/08_ifc/interprocedural_taint.mvl`, `tests/corpus/08_ifc/return_label_inference.mvl`, `tests/corpus/08_ifc/interprocedural_clean.mvl`, `tests/corpus/08_ifc/call_chain_error_message.mvl`
+**Corpus:** `tests/fixtures/08_ifc/implicit_flow.mvl`, `tests/fixtures/08_ifc/cross_function_implicit.mvl`, `tests/fixtures/08_ifc/interprocedural_taint.mvl`, `tests/fixtures/08_ifc/return_label_inference.mvl`, `tests/fixtures/08_ifc/interprocedural_clean.mvl`, `tests/fixtures/08_ifc/call_chain_error_message.mvl`
 
 #### Scenario: Secret condition controls println directly
 
@@ -248,7 +248,7 @@ Capability labels absorb the "Capability Security" requirement (originally propo
 
 **Tests:** `tests/type_checker.rs::capability_labels_corpus_parses_and_checks`, `tests/type_checker.rs::config_path_to_bare_string_return_rejected`, `tests/type_checker.rs::raw_string_to_config_path_rejected`, `tests/type_checker.rs::db_url_rejects_tainted_string`, `tests/type_checker.rs::api_endpoint_rejects_raw_string`, `tests/type_checker.rs::audit_target_rejects_raw_string`, `tests/type_checker.rs::config_path_relabel_roundtrip`, `tests/type_checker.rs::capability_labels_are_distinct`, `tests/type_checker.rs::config_path_call_site_rejects_raw_string`, `tests/type_checker.rs::db_url_call_site_rejects_raw_string`, `tests/type_checker.rs::api_endpoint_call_site_rejects_raw_string`, `tests/type_checker.rs::audit_target_call_site_rejects_raw_string`, `tests/type_checker.rs::db_url_relabel_roundtrip`, `tests/type_checker.rs::api_endpoint_relabel_roundtrip`, `tests/type_checker.rs::audit_target_relabel_roundtrip`, `tests/type_checker.rs::unconfig_path_on_bare_string_invalid`, `tests/type_checker.rs::undb_url_on_config_path_invalid`
 
-**Corpus:** `tests/corpus/08_ifc/capability_labels.mvl`
+**Corpus:** `tests/fixtures/08_ifc/capability_labels.mvl`
 
 #### Scenario: Raw string rejected at capability boundary
 

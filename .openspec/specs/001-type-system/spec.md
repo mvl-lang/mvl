@@ -162,7 +162,7 @@ See ADR-0025 for the full contract system design and phased implementation.
 
 This is Design Principle 10 ("Refinement types inline"). `x: Int where x > 0` is a first-class type — the predicate is part of the type, not merely a runtime assertion.
 
-**Implementation:** `src/mvl/checker.rs`, `src/mvl/checker/contracts.rs`, `src/mvl/checker/refinements.rs`
+**Implementation:** `src/mvl/checker.rs`, `src/mvl/checker/contracts/`, `src/mvl/checker/refinements.rs`
 
 **Tests:** `tests/type_checker.rs::refinements_corpus_parses`, `tests/compile_and_run.rs::safe_division_check_passes`, `tests/compile_and_run.rs::safe_division_runs_and_produces_expected_output` (#191); `tests/type_checker.rs::loop_verification_corpus_parses_and_checks` (#628)
 
@@ -409,9 +409,9 @@ let hex: String = format("{:08x}", value)
 Integer literals MUST support hex (`0xFF`), binary (`0b1010`), and octal (`0o77`) prefixes.
 Float literals MUST support scientific notation (`1.5e10`, `2.0e-3`).
 
-**Implementation:** `src/mvl/parser/lexer.rs::lex_number`, `src/mvl/parser/lexer.rs::lex_integer_base`
+**Implementation:** `src/mvl/parser/lexer/numbers.rs::lex_number`, `src/mvl/parser/lexer/numbers.rs::lex_integer_base`
 
-**Tests:** `src/mvl/parser/lexer.rs::tokenize_hex_literal`, `tokenize_binary_literal`, `tokenize_octal_literal`, `tokenize_scientific_notation`
+**Tests:** `src/mvl/parser/lexer/numbers.rs::lex_integer_base`, `tokenize_binary_literal`, `tokenize_octal_literal`, `tokenize_scientific_notation`
 
 #### Scenario: Display impl emits Rust fmt::Display
 
@@ -670,7 +670,7 @@ The transpiler MAY internally map specific stdlib functions (e.g., `println`, `f
 
 This is Design Principle 3 ("Vocabulary over syntax").
 
-**Implementation:** `src/mvl/backends/rust/emit_exprs.rs` (MACRO_HANDLED list), `src/mvl/stdlib/`
+**Implementation:** `src/mvl/backends/rust/emit_exprs.rs` (MACRO_HANDLED list), `src/mvl/stdlib.rs`
 
 **Tests:** `tests/transpiler.rs::format_call_emits_format_macro`, `tests/transpiler.rs::macro_handled_names_are_excluded_from_prelude`
 

@@ -406,7 +406,7 @@ pub fn run(path: &str, quiet: bool, verbose: bool, coverage: bool, bdd: bool, us
             std::collections::HashSet::new();
         for f in &test_files {
             let dir = f.parent().unwrap_or_else(|| std::path::Path::new("."));
-            // Scan src/ and src/internal/ (package convention per ADR-0012).
+            // Scan src/ and src/internal/ (package convention per ADR-0047, superseding ADR-0012).
             let dirs_to_scan: Vec<std::path::PathBuf> =
                 vec![dir.to_path_buf(), dir.join("internal")];
             for scan_dir in dirs_to_scan {

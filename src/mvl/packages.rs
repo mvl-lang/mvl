@@ -3,7 +3,7 @@
 
 //! Package management: manifest, lock file, fetch, version resolution.
 //!
-//! Implements Spec 008 (Extended Package Model) and ADR-0012.
+//! Implements Spec 008 (Extended Package Model) and ADR-0047 (which supersedes ADR-0012).
 //!
 //! # CLI commands
 //! - `mvl add <git-url>[@<tag>]`  — fetch a package, add to mvl.toml + mvl.lock

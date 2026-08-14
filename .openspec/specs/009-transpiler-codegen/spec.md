@@ -77,7 +77,7 @@ to one function and never used again.
 - Lambda bodies are not analysed (captures may be called multiple times).
 - `FieldAccess` expressions are always cloned (partial struct moves are complex).
 
-**Tests:** `tests/borrow.rs` — 12 targeted Phase A tests.
+**Tests:** `tests/parser/borrow.rs` — 12 targeted Phase A tests.
 
 #### Phase B: Borrow parameter inference (implemented, issue #660)
 

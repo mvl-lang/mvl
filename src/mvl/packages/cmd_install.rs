@@ -78,14 +78,14 @@ pub fn cmd_install(project_root: &Path, global_only: bool) -> Result<(), Package
 
         if local_dir.exists() {
             // If the hash matches, it's already a valid local install — skip.
-            // If it doesn't match, it's a manual override (ADR-0039) — leave it
+            // If it doesn't match, it's a manual override (ADR-0047, superseding ADR-0039) — leave it
             // alone, but warn loudly so a tampered cache isn't silently trusted.
             if verify_hash(&local_dir, &pkg.hash).is_ok() {
                 already_local += 1;
             } else {
                 eprintln!(
                     "warning: {} {}: local override hash differs from mvl.lock — \
-                     treating as manual override (ADR-0039); verify this is intentional",
+                     treating as manual override (ADR-0047); verify this is intentional",
                     pkg.name, pkg.version,
                 );
                 if newly_fetched {

@@ -48,7 +48,7 @@ Effects MUST be declared in MVL source, not hardcoded in the compiler. Base effe
 
 **Implementation:** `src/mvl/checker.rs`, `src/mvl/checker/effects.rs`
 
-**Tests:** `tests/type_checker.rs::effect_decl_corpus_parses_and_checks`, `tests/corpus/05_effects/effect_decl.mvl`
+**Tests:** `tests/type_checker.rs::effect_decl_corpus_parses_and_checks`, `tests/fixtures/07_effects/effect_decl.mvl`
 
 The compiler uses dual-pass compilation:
 1. **Parse pass:** Parse all files, collect `EffectDecl` nodes (no validation)
@@ -73,7 +73,7 @@ Effects MUST be fine-grained, not a single `IO` bucket. The base effects are:
 
 **Implementation:** `src/mvl/checker/effects.rs::EffectHierarchy`
 
-**Tests:** `tests/type_checker.rs::pure_vs_effectful_corpus_parses_and_checks`, `tests/corpus/05_effects/pure_vs_effectful.mvl`
+**Tests:** `tests/type_checker.rs::pure_vs_effectful_corpus_parses_and_checks`, `tests/fixtures/07_effects/pure_vs_effectful.mvl`
 
 | Effect | What it permits |
 |--------|----------------|
@@ -103,7 +103,7 @@ Effects MUST support subsumption. If effect `A` subsumes effect `B` (`A > B`), d
 
 **Implementation:** `src/mvl/checker.rs`
 
-**Tests:** `tests/type_checker.rs::subsumption_corpus_checks`, `tests/corpus/05_effects/subsumption.mvl`
+**Tests:** `tests/type_checker.rs::subsumption_corpus_checks`, `tests/fixtures/07_effects/subsumption.mvl`
 
 Syntax:
 ```
@@ -171,7 +171,7 @@ Spawning actors, sending messages, and receiving messages MUST be separate effec
 
 **Implementation:** `std/effects.mvl`
 
-**Tests:** `tests/type_checker.rs::concurrency_effects_corpus_checks`, `tests/corpus/05_effects/concurrency_effects.mvl`
+**Tests:** `tests/type_checker.rs::concurrency_effects_corpus_checks`, `tests/fixtures/07_effects/concurrency_effects.mvl`
 
 #### Scenario: Spawn without send
 

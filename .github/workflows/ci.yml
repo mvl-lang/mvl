@@ -222,6 +222,20 @@ jobs:
         # `loader::load_mvl_native_stdlib_extras` from `src/cli/` fail this check.
         run: python3 tools/audit_cli_prelude.py
 
+      - name: Audit panic budget (#1549)
+        if: needs.changes.outputs.rust == 'true'
+        # Budgets live in the Makefile so `make audit-panics` and CI agree.
+        # This drifted to 42/107 against a 30/100 budget precisely because it
+        # was never run here; the budget is now a ratchet, not a suggestion.
+        run: make audit-panics
+
+      - name: Audit spec evidence links
+        # Every **Implementation:**/**Tests:**/**Corpus:** path an OpenSpec
+        # requirement names must resolve. tools/assurance.py checks only the
+        # first implementation path and never resolves tests at all, so specs
+        # could name deleted evidence and still report 99% completeness.
+        run: make audit-spec-links
+
       - name: Audit test-file shadow declarations (pattern 006)
         # Test files under examples/ must exercise production code, not
         # parallel implementations. Any `type` declaration or any `fn` that
@@ -240,9 +254,22 @@ jobs:
         if: needs.changes.outputs.rust == 'true'
         run: make validate-keywords
 
+      - name: MVL linter on corpus + examples (spec 011 Req 5)
+        if: needs.changes.outputs.rust == 'true'
+        # Budgeted, not zero — see MVL_LINT_BUDGET in the Makefile. This target
+        # used to set `failed=1` and never exit nonzero, so 189 warnings
+        # accumulated behind something that reads like a gate.
+        run: make mvl-lint
+
+      - name: Assurance gate (completeness + scenario coverage)
+        # Floor lives in the Makefile (ASSURANCE_MIN) and ratchets up toward
+        # the stated 0.75 goal. The separate "ISPE Assurance" job reports the
+        # dashboard; this one actually fails the build.
+        run: make assurance-gate
+
       - name: Test (fast — unit + type_checker)
         if: needs.changes.outputs.rust == 'true'
-        run: cargo test --lib --test type_checker --test parser --test requirements
+        run: cargo test --lib --bin mvl --test type_checker --test parser --test requirements
 
       - name: Set up runtime for integration tests
         if: needs.changes.outputs.rust == 'true' && github.event_name == 'push'

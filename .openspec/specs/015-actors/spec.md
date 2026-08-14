@@ -460,7 +460,7 @@ that the process does not exit with pending messages or incomplete message handl
 at the end of main. ADR-0037 documents the design: `fn main()` is implicitly an actor with an
 implicit join. `src/mvl/backends/llvm_text/emitter.rs` uses equivalent `mvl_actor_join_all`.
 
-**Tests:** `tests/corpus/12_actors/actor_spawn.mvl`, `tests/corpus/12_actors/actor_send.mvl`,
+**Tests:** `examples/programs/actor_spawn.mvl`, `examples/programs/actor_send.mvl`,
 `tests/stdlib/net_basic.mvl`
 
 #### Scenario: Spawned actors are drained before main exits
@@ -471,7 +471,7 @@ implicit join. `src/mvl/backends/llvm_text/emitter.rs` uses equivalent `mvl_acto
   before the process exits
 - AND this drain is **guaranteed**, not best-effort
 
-**Tests:** `tests/corpus/12_actors/actor_spawn.mvl` (minimal spawn), `examples/programs/actor_spawn.mvl`
+**Tests:** `examples/programs/actor_spawn.mvl` (minimal spawn), `examples/programs/actor_spawn.mvl`
 
 **Note:** If an actor panics, the actor thread terminates and remaining messages are
 dropped. Supervision and restart are tracked for Phase 9 via `std.actors.Supervisor`.

@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 
 /// Ensure all dependencies in `mvl.toml` are fetched before build.
 ///
-/// Called by `mvl build` before transpilation (ADR-0012 Build Integration step 2).
+/// Called by `mvl build` before transpilation (ADR-0047 Build Integration step 2, superseding ADR-0012).
 /// Returns a map from package name → source directory.
 pub fn ensure_dependencies(
     project_root: &Path,

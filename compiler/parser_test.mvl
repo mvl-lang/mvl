@@ -179,20 +179,23 @@ test partial fn fn_with_multiple_effects() -> Unit {
     }
 }
 
-test partial fn fn_with_where_clause() -> Unit {
+// ADR-0053: `where T: Trait` on a fn signature is a parse error, not a
+// feature. This test previously asserted the opposite — that the clause
+// parsed into a `Constraint { param: "T", bound: "Eq" }` — which kept the
+// deleted grammar alive in the self-hosted compiler long after the Rust
+// parser started rejecting it. Since this parser is the eventual source of
+// truth (ADR-0044), that divergence would have re-imported rustc's trait
+// vocabulary into MVL as self-hosting advances.
+test partial fn fn_with_trait_bound_where_clause_is_rejected() -> Unit {
     let p: Program = lp("fn compare[T](a: T, b: T) -> Bool where T: Eq { a == b }");
+    assert_ne(p.errors.len(), 0);
+    // The clause is consumed rather than aborting the parse, so the fn is
+    // still recovered — with no constraints attached to it.
     match p.fns.get(0) {
         None    => assert_eq(true, false),
         Some(f) => {
             assert_eq(f.type_params.len(), 1);
-            assert_eq(f.constraints.len(), 1);
-            match f.constraints.get(0) {
-                None    => assert_eq(true, false),
-                Some(c) => {
-                    assert_eq(c.param, "T");
-                    assert_eq(c.bound, "Eq")
-                }
-            }
+            assert_eq(f.constraints.len(), 0)
         }
     }
 }
