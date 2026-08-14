@@ -5,7 +5,7 @@
 //!
 //! Implements Spec 008 Requirements 3 (cache) and 7 (build fetches deps).
 //!
-//! Cache layout (mirrors ADR-0012 "Package Directory Structure"):
+//! Cache layout (mirrors ADR-0047 "Package Directory Structure", superseding ADR-0047, superseding ADR-0012):
 //! ```text
 //! $XDG_DATA_HOME/mvl/pkg/
 //! ├── http/
@@ -168,7 +168,7 @@ pub fn pkg_cache_dir(name: &str, version: &str) -> PathBuf {
 /// Returns the local project override path for a package:
 /// `<project_root>/.mvl/pkg/<name>/`.
 ///
-/// Local overrides take precedence over the global cache (ADR-0012).
+/// Local overrides take precedence over the global cache (ADR-0047, superseding ADR-0012).
 pub fn local_override_dir(project_root: &Path, name: &str) -> PathBuf {
     project_root.join(".mvl").join("pkg").join(sanitize(name))
 }
@@ -279,7 +279,7 @@ pub fn fetch_package_opts(
 
 /// Verify that the source tree at `dir` matches `expected_hash`.
 ///
-/// Fails hard on mismatch (Spec 008 Req 4 / ADR-0012).
+/// Fails hard on mismatch (Spec 008 Req 4 / ADR-0047, superseding ADR-0012).
 pub fn verify_hash(dir: &Path, expected: &str) -> Result<(), FetchError> {
     let actual = hash_source_tree(dir)?;
     if actual != expected {

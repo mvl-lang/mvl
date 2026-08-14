@@ -266,7 +266,7 @@ backends   ─►  per-program:     AST → Rust source / LLVM IR    (transpiler
 Sibling concerns that are not pipeline stages:
 
 - `src/mvl/linter/` — Spec 011. Lint-flavored analysis over the typed AST. Produces diagnostics, does not transform. Distinct from passes.
-- `src/mvl/stdlib/`, `src/mvl/packages/`, `src/mvl/toolchain/` — supporting infrastructure, not pipeline stages.
+- `src/mvl/stdlib.rs`, `src/mvl/packages/`, `src/mvl/toolchain/` — supporting infrastructure, not pipeline stages.
 
 ### Requirement 9: Pipeline Stage Discipline [MUST]
 

@@ -1597,9 +1597,26 @@ partial fn parse_where_clause(ps: ParserState) -> ConstrR {
                         // Type bound: "T: Eq"  vs  refinement expression: "self > 0"
                         if ps_at_punct(curr, ":") {
                             curr = ps_advance(curr);
+                            // ADR-0053: the trailing `where T: Trait` bound on a
+                            // fn signature is NOT valid MVL. MVL has no trait
+                            // system; accepting these silently passed rustc
+                            // vocabulary (`Eq`, `Ord`, `Clone`) straight through
+                            // to the emitter. `where` in MVL means exactly one
+                            // thing — a solver-discharged predicate on a type.
+                            //
+                            // The Rust parser rejects this at
+                            // `src/mvl/parser/functions.rs::parse_where_constraints`;
+                            // this parser is the eventual source of truth
+                            // (ADR-0044), so it must reject it identically
+                            // rather than keep the deleted grammar alive.
+                            // Consume the clause so parsing can continue and
+                            // report further errors in the same file.
                             let bound_r: StringR = ps_expect_name(curr);
-                            curr = bound_r.ps;
-                            cs.push(Constraint { param: pname, bound: bound_r.value, span: sp });
+                            curr = ps_add_error(
+                                bound_r.ps,
+                                "trailing `where T: Trait` bound on fn signature is not valid MVL — see ADR-0053. `where` in MVL is a solver predicate on a param/return type (`n: Int where self > 0`), not a trait bound. Remove the clause; MVL has no trait system."
+                            );
+                            let _unused: SourceLoc = sp;
                             if ps_at_punct(curr, ",") {
                                 curr = ps_advance(curr)
                             } else {

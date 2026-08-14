@@ -15,7 +15,7 @@
 //!   `None` or an empty slice.
 //! - All types use MVL's Rust representations: `String`, `Vec<T>`, `i64`, `u8`.
 //!
-//! ADR-0012: explicit extern bridge pattern.
+//! ADR-0006: explicit extern bridge pattern.
 
 // ── String kernel ────────────────────────────────────────────────────────────
 

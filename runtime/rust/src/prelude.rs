@@ -23,7 +23,7 @@ pub use crate::mvl_refine;
 // These are the `extern "rust"` trust-boundary functions declared in
 // `std/primitives.mvl`. Pure MVL stdlib wrappers (`std/strings.mvl`,
 // `std/lists.mvl`) call these; they are available in every generated file via
-// `use mvl_runtime::prelude::*`. ADR-0012: explicit extern bridge pattern.
+// `use mvl_runtime::prelude::*`. ADR-0006: explicit extern bridge pattern.
 
 /// String kernel (17 primitives — trust boundary for string stdlib methods).
 pub use crate::stdlib::primitives::{
