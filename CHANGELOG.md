@@ -1,6 +1,17 @@
 # Changelog
 
-## [1.8.1] - 2026-08-12
+## [1.8.1] - 2026-08-14
+
+### Chore — validation remediation (tooling + CI)
+
+- **`make coverage` restored.** Its first line built `mvl_memory/Cargo.toml`, a crate deleted in the #646 restructure — cargo exited 101, make aborted before `cargo llvm-cov` ever ran, and `2>/dev/null` hid the reason. Dead since 2026-05-11, which silently removed the Evidence pillar of the assurance case (`make assurance` reported "Line coverage: not cached" throughout). Now reports 72.6%.
+- **Quality guards wired into CI.** `audit-panics`, `mvl-lint`, `assurance-gate`, the new `audit-spec-links`, and `cargo test --bin mvl` now run on every PR. The last is the target that exists precisely because a CLI test module silently stopped compiling for two days (#2123/#2188) — and was never run in CI.
+- **New `tools/audit_spec_links.py` + `make audit-spec-links`.** `tools/assurance.py` existence-checks only the *first* `**Implementation:**` backtick per requirement and never resolves `**Tests:**` at all, so a spec could name deleted evidence and still report 99% completeness. The new audit resolves every Implementation/Tests/Corpus path and checks `file::symbol` refs are declared. Repaired 188 → 150 broken refs (mostly a `tests/corpus/` → `tests/fixtures/` move the specs never followed); the remainder is budgeted and ratchets down.
+- **ADR-0053 divergence closed.** The Rust parser rejects trailing `where T: Trait`; the self-hosted compiler still parsed it into a `Constraint` and `parser_test.mvl` asserted that acceptance. Since `compiler/` is the eventual source of truth (ADR-0044), that would have re-imported rustc trait vocabulary into MVL as self-hosting advances.
+- **`mvl-lint` actually fails now** — it set `failed=1` and never used it, so 189 warnings accumulated behind something that reads as a gate (spec 011 Req 5 claims corpus and examples are warning-free). Budgeted at the measured count.
+- **Panic auditor was miscounting.** Of 42 reported production sites, 4 were never production panics: two comments *about* `panic!`, one `panic!` inside a string of generated host-glue source, and one `emitter_tests/` helper. `tools/audit_panics.py` now skips comments, string literals and test-support dirs — true count 38/108. Every bare `unreachable!()` in `emit_exprs_tir.rs` now names the guard that makes it unreachable.
+- **Superseded ADR citations repointed:** ADR-0012 → ADR-0047, ADR-0024 → ADR-0036, ADR-0039 → ADR-0047, and two runtime comments describing the extern bridge → ADR-0006 (its actual subject). One was baked into a user-facing warning string.
+
 
 ### Chore — #2282
 
