@@ -542,23 +542,6 @@ impl TextEmitter {
         Self::llvm_ty(ty) == "void"
     }
 
-    /// Return the byte size of an LLVM IR type string on a 64-bit target.
-    ///
-    /// Used to compute `elem_size` for `mvl_array_new`.
-    pub(super) fn llvm_type_size(ty: &str) -> usize {
-        match ty {
-            "i1" | "i8" => 1,
-            "i16" => 2,
-            "i32" => 4,
-            "i64" | "double" | "ptr" => 8,
-            // Tagged unions: { i8, ptr } → 16 bytes (8-byte aligned)
-            s if s.starts_with("{ i8, ptr }") => 16,
-            // Named struct types (%Foo) — conservatively use pointer size
-            s if s.starts_with('%') => 8,
-            _ => 8,
-        }
-    }
-
     /// Byte size + optional heap-drop symbol for a scalar or `String` leaf
     /// type, as used inside a `List`/`Option`/`Result`/`Map` element (#1991).
     /// Returns `None` for anything else (structs, nested collections, …) —
@@ -865,11 +848,20 @@ impl TextEmitter {
 
     // ── Result/Option aggregate builders ──────────────────────────────────
 
-    /// Compute the heap-allocation size (in bytes) for an LLVM type string.
+    /// Compute the size in bytes of an LLVM type string on a 64-bit target.
     ///
-    /// Used by Result/Option constructors to replace stack `alloca` with
-    /// `_mvl_alloc`, so that payload pointers remain valid after the
-    /// constructor function returns.
+    /// The single source of truth for "how many bytes does one value of this
+    /// type occupy": heap-allocation sizes for Result/Option payloads, and
+    /// `elem_size`/value-size for every collection slot.
+    ///
+    /// #2286: a second, *static* `llvm_type_size` used to exist alongside
+    /// this one and returned a flat 8 for any named struct ("conservatively
+    /// use pointer size"). The collection call sites used that one, so a
+    /// `List[Rec]` of a 32-byte `%Rec = type { ptr, double, { i8, ptr } }`
+    /// was created with `elem_size 8` and every element was truncated to its
+    /// first 8 bytes — `r.name` (offset 0) read back fine while `r.amount`
+    /// (offset 8) returned garbage. Only this alignment-aware version
+    /// remains, so the two can no longer disagree.
     pub(super) fn alloc_size_for_llvm_ty(&self, ty: &str) -> u64 {
         match ty {
             "i1" | "i8" => 1,

@@ -350,3 +350,29 @@ fn ref_let_from_heap_local_transfers_ownership() {
         "the aliased-and-returned slice result must not be dropped:\n{body}"
     );
 }
+
+/// #2286: a tail-position `match` statement yields the function's value
+/// through a phi, but `exclude_returned_value_tir` was never applied to its
+/// arms — so an arm returning an owned local had that local dropped by the
+/// scope-exit sweep immediately before the `ret` that returned it.
+#[test]
+fn tail_match_arm_value_excluded_from_drop_sweep() {
+    let ir = compile(
+        "fn opt_or(opt: Option[String], default: String) -> String {\n\
+         let d: String = consume(default);\n\
+         match opt { Some(s) => s, None => d, }\n\
+         }",
+    );
+    let body: String = ir
+        .split("define ptr @opt_or")
+        .nth(1)
+        .expect("@opt_or must be emitted")
+        .lines()
+        .take_while(|l| *l != "}")
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        !body.contains("_mvl_string_drop(ptr %default)"),
+        "the arm value being returned must not be dropped on the way out:\n{body}"
+    );
+}

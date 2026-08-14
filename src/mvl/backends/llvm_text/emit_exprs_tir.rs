@@ -2799,7 +2799,7 @@ impl TextEmitter {
         self.ensure_extern("declare void @_mvl_array_push(ptr, ptr)");
 
         let arr = self.next_reg();
-        let elem_size = Self::llvm_type_size(&elem_ty);
+        let elem_size = self.alloc_size_for_llvm_ty(&elem_ty);
         self.push_instr(&format!(
             "{arr} = call ptr @_mvl_array_new(i64 {elem_size}, i64 {n})"
         ));
@@ -2864,7 +2864,7 @@ impl TextEmitter {
             // silently truncated wider values (e.g. the 16-byte `{ i8, ptr }`
             // Option/Result tagged-union representation), corrupting the
             // stored payload.
-            let val_size = Self::llvm_type_size(&val_ty);
+            let val_size = self.alloc_size_for_llvm_ty(&val_ty);
             self.push_instr(&format!(
                 "call void @_mvl_map_insert(ptr {map}, ptr {key_ptr}, i64 {key_len}, ptr {val_slot}, i64 {val_size})"
             ));
@@ -3763,7 +3763,7 @@ impl TextEmitter {
         self.push_instr(&format!("{item_slot} = alloca {elem_ty}"));
         self.push_instr(&format!("store {elem_ty} {val}, ptr {item_slot}"));
         let arr = self.next_reg();
-        let elem_size = Self::llvm_type_size(&elem_ty);
+        let elem_size = self.alloc_size_for_llvm_ty(&elem_ty);
         self.ensure_extern("declare ptr @_mvl_array_filled(i64, i64, ptr)");
         self.push_instr(&format!(
             "{arr} = call ptr @_mvl_array_filled(i64 {elem_size}, i64 {n_val}, ptr {item_slot})"
@@ -4576,7 +4576,7 @@ impl TextEmitter {
                 self.push_instr(&format!("store {val_ty} {val_arg}, ptr {vs}"));
                 // Value size must match val_ty's actual width — see
                 // emit_map_literal_tir for why a hardcoded 8 is wrong.
-                let val_size = Self::llvm_type_size(&val_ty);
+                let val_size = self.alloc_size_for_llvm_ty(&val_ty);
                 self.push_instr(&format!(
                     "call void @_mvl_map_insert(ptr {val}, ptr {kp}, i64 {kl}, ptr {vs}, i64 {val_size})"
                 ));
@@ -5223,9 +5223,46 @@ impl TextEmitter {
                 if args.len() == 2 && !matches!(unwrap_labels(&receiver.ty), Ty::Map(_, _)) =>
             {
                 let init_ty = self.ty_to_llvm_ctx(&args[0].ty);
-                let init_val = match self.emit_expr_tir(&args[0])? {
-                    Some(v) => v,
-                    None => return Ok(None),
+                // #2286: an *empty* accumulator literal (`records.fold([], ..)`)
+                // has no element to infer from, and unlike a `let` or a struct
+                // field there is no declared type at this position either — its
+                // own `.ty` stays `List[Unknown]`, so the generic path sized the
+                // array's elements at the 8-byte "ptr" default. For a struct
+                // element that is simply wrong (`%Rec` here is 40 bytes), and
+                // the mis-sized accumulator was then `concat`-ed with correctly
+                // sized 40-byte arrays inside the closure — mixing strides in
+                // one buffer. The closure's own first parameter (`|acc:
+                // List[Rec], ..|`) carries the exact accumulator type, so use
+                // that as the empty-case hint.
+                let init_is_empty_list = matches!(
+                    &args[0].kind,
+                    TirExprKind::List { elems } | TirExprKind::Set { elems } if elems.is_empty()
+                );
+                let acc_elem_hint = if init_is_empty_list {
+                    match unwrap_labels(&args[1].ty) {
+                        Ty::Fn(params, _, _, _) => params
+                            .first()
+                            .and_then(|acc_ty| self.empty_list_elem_hint_from_ty(acc_ty)),
+                        _ => None,
+                    }
+                } else {
+                    None
+                };
+                let init_val = match acc_elem_hint {
+                    Some(hint) => {
+                        let elems: &[TirExpr] = match &args[0].kind {
+                            TirExprKind::List { elems } | TirExprKind::Set { elems } => elems,
+                            _ => &[],
+                        };
+                        match self.emit_list_literal_tir(elems, Some(hint.as_str()))? {
+                            Some(v) => v,
+                            None => return Ok(None),
+                        }
+                    }
+                    None => match self.emit_expr_tir(&args[0])? {
+                        Some(v) => v,
+                        None => return Ok(None),
+                    },
                 };
                 // Fold closure: fn(env, acc_val, elem_ptr) -> acc_val
                 // param 0 (acc) by-value, param 1 (elem) by-pointer.
@@ -6272,7 +6309,7 @@ impl TextEmitter {
     /// checker-accepted `.map()` call, but a safe default beats a panic.
     fn closure_ret_llvm_size(&self, closure_ty: &Ty) -> usize {
         match unwrap_labels(closure_ty) {
-            Ty::Fn(_, ret, _, _) => Self::llvm_type_size(&self.ty_to_llvm_ctx(ret)),
+            Ty::Fn(_, ret, _, _) => self.alloc_size_for_llvm_ty(&self.ty_to_llvm_ctx(ret)) as usize,
             _ => 8,
         }
     }

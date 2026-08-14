@@ -162,3 +162,47 @@ fn enum_clone_trampoline_recurses_through_box_fields() {
         "trampoline must be emitted exactly once (memoized):\n{ir}"
     );
 }
+
+/// #2286: a second, *static* `llvm_type_size` returned a flat 8 for any named
+/// struct, and the collection call sites used it — so a `List[Rec]` of a
+/// 40-byte `%Rec` was created with `elem_size 8` and every element was
+/// truncated to its first 8 bytes. Reading field 0 worked; every later field
+/// returned garbage.
+#[test]
+fn struct_element_list_uses_real_struct_size() {
+    let ir = compile(
+        "type Rec = struct { name: String, age: Int, amount: Float, category: Option[String] }\n\
+         fn mk() -> List[Rec] {\n\
+         [Rec { name: \"a\", age: 1, amount: 2.0, category: None }]\n\
+         }",
+    );
+    // ptr 8 + i64 8 + double 8 + { i8, ptr } 16 = 40.
+    assert!(
+        ir.contains("call ptr @_mvl_array_new(i64 40,"),
+        "a List[Rec] must size its elements at sizeof(%Rec) = 40, not 8:\n{ir}"
+    );
+}
+
+/// #2286: `fold`'s empty accumulator literal has no element to infer from and
+/// no declared type at that position, so it fell back to the 8-byte "ptr"
+/// default — then got `concat`-ed with correctly sized arrays built inside the
+/// closure, mixing strides in one buffer. The closure's own first parameter
+/// carries the exact accumulator type.
+#[test]
+fn fold_empty_accumulator_sizes_from_closure_param() {
+    let ir = compile(
+        "type Rec = struct { name: String, age: Int, amount: Float, category: Option[String] }\n\
+         fn ids(rs: List[Rec]) -> List[Rec] {\n\
+         rs.fold([], |acc: List[Rec], r: Rec| acc.concat([r]))\n\
+         }",
+    );
+    assert!(
+        !ir.contains("call ptr @_mvl_array_new(i64 8,"),
+        "fold's empty List[Rec] accumulator must not be sized at 8 bytes:\n{ir}"
+    );
+    assert!(
+        ir.contains("call ptr @_mvl_array_new(i64 40,"),
+        "fold's empty accumulator must take its element size from the \
+         closure's `acc` parameter:\n{ir}"
+    );
+}

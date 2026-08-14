@@ -5,7 +5,7 @@
 # All transform functions in transform.mvl are provably pure.
 #
 # Run from this directory or from the repo root.
-.PHONY: help guard-mvl check prove lint test-solver test assurance mcdc mutate fuzz smoke run run-threshold all clean
+.PHONY: help guard-mvl check prove lint test-solver test test-llvm assurance mcdc mutate fuzz smoke run run-threshold all clean
 
 .DEFAULT_GOAL := help
 
@@ -60,6 +60,11 @@ test-solver: guard-mvl ## Show per-file solver statistics for all source files
 
 test: guard-mvl ## Run all unit tests (parser + transform + main)
 	$(MVL) test $(DIR)
+
+# No `test-wasm` target yet: 36/51 pass under --backend=wasm (tracked
+# separately from the llvm side, which #2286 brought to 51/51).
+test-llvm: guard-mvl ## Run tests via --backend=llvm (all 51 pass; fixed in #2286)
+	$(MVL) test $(DIR) --backend=llvm
 
 # No test-wasm target (deliberately excluded): several `Tainted[String]`
 # type mismatches plus functions in parser_test/transform/transform_test

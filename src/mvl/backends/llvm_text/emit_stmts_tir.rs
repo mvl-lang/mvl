@@ -10,7 +10,8 @@
 //! re-infer types from initializers.
 
 use crate::mvl::ir::{
-    LValue, LetKind, Pattern, TirBlock, TirElseBranch, TirExpr, TirExprKind, TirStmt, Ty,
+    LValue, LetKind, Pattern, TirBlock, TirElseBranch, TirExpr, TirExprKind, TirMatchBody, TirStmt,
+    Ty,
 };
 
 use super::emit_helpers::ty_to_type_expr;
@@ -77,7 +78,51 @@ impl TextEmitter {
                     self.exclude_returned_value_tir(value);
                 }
             }
+            // #2286: a `match`/`if` used *as* the returned value yields one of
+            // its arms' values through a phi, so each arm's tail is an escape
+            // candidate — but neither shape was handled here, so an arm that
+            // returns an owned local had that local dropped by the very sweep
+            // this function exists to suppress:
+            //
+            //   fn opt_or(opt: Option[String], default: String) -> String {
+            //       let d: String = consume(default);
+            //       match opt { Some(s) => s, None => d }
+            //   }
+            //
+            // emitted `phi ptr [ %t2, some ], [ %default, none ]` followed by
+            // `_mvl_string_drop(ptr %default)` before the `ret` — on the None
+            // path the returned string was freed on the way out, and the
+            // caller's first use of it (`"x".concat(cat)`) read freed memory.
+            //
+            // Excluding *every* arm's value is deliberate: which arm runs is
+            // a runtime property. The arms not taken were never separately
+            // dropped anyway (their values are unreachable), so the cost of
+            // over-excluding is at worst a leak, never a double free — the
+            // same trade `Construct` above already makes for its fields.
+            TirExprKind::Match { arms, .. } => {
+                for arm in arms {
+                    match &arm.body {
+                        TirMatchBody::Expr(e) => self.exclude_returned_value_tir(e),
+                        TirMatchBody::Block(b) => self.exclude_block_tail_value_tir(b),
+                    }
+                }
+            }
+            TirExprKind::If { then, else_, .. } => {
+                self.exclude_block_tail_value_tir(then);
+                if let Some(e) = else_ {
+                    self.exclude_returned_value_tir(e);
+                }
+            }
             _ => {}
+        }
+    }
+
+    /// [`Self::exclude_returned_value_tir`] applied to a block's own trailing
+    /// expression — the value a match arm's or `if` branch's block yields
+    /// into the enclosing phi (#2286).
+    fn exclude_block_tail_value_tir(&mut self, block: &TirBlock) {
+        if let Some(TirStmt::Expr { expr, .. }) = block.stmts.last() {
+            self.exclude_returned_value_tir(expr);
         }
     }
 
@@ -155,12 +200,34 @@ impl TextEmitter {
                 self.exclude_returned_value_tir(expr);
                 Ok(val)
             }
+            // #2286: a tail-position `if`/`match` *statement* yields this
+            // block's value through a phi, exactly like the tail-expression
+            // arm above — so each branch's escaping value needs the same
+            // exclusion, or the scope-exit sweep frees whichever local the
+            // taken branch is about to return. `std/csv.mvl`-style
+            // `match opt { Some(s) => s, None => d }` as a whole function
+            // body is the common shape; before this, the `None` arm's `d`
+            // was dropped immediately before the `ret` that returned it.
             TirStmt::If {
                 cond, then, else_, ..
-            } => self.emit_if_stmt_chain_tir(cond, then, else_.as_ref(), expected_ty),
+            } => {
+                self.exclude_block_tail_value_tir(then);
+                if let Some(TirElseBranch::Block(b)) = else_.as_ref() {
+                    self.exclude_block_tail_value_tir(b);
+                }
+                self.emit_if_stmt_chain_tir(cond, then, else_.as_ref(), expected_ty)
+            }
             TirStmt::Match {
                 scrutinee, arms, ..
-            } => self.emit_match_expr_tir(scrutinee, arms),
+            } => {
+                for arm in arms {
+                    match &arm.body {
+                        TirMatchBody::Expr(e) => self.exclude_returned_value_tir(e),
+                        TirMatchBody::Block(b) => self.exclude_block_tail_value_tir(b),
+                    }
+                }
+                self.emit_match_expr_tir(scrutinee, arms)
+            }
             other => {
                 self.emit_stmt_tir(other)?;
                 Ok(None)
