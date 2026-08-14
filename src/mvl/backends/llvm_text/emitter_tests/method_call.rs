@@ -280,3 +280,39 @@ fn assert_eq_on_option_int_guards_payload_load() {
         "payload load must sit behind a both-Some guard:\n{ir}"
     );
 }
+
+/// #2285: `List[T]::concat` byte-copied both inputs' elements, which for a
+/// pointer-shaped element hands the result the same heap objects its inputs
+/// still own — whichever input drops first frees them out from under it.
+/// `std/csv.mvl::parse_rows_with` accumulates `rows = rows.concat([row])` on
+/// a `List[List[String]]` and hit exactly this. Must route through the
+/// cloning variant instead.
+#[test]
+fn concat_on_pointer_element_list_clones_per_element() {
+    let ir = compile(
+        "fn join(a: List[List[Int]], b: List[List[Int]]) -> List[List[Int]] { a.concat(b) }",
+    );
+    assert!(
+        ir.contains("call ptr @_mvl_list_concat_ptr(ptr")
+            && ir.contains("ptr @_mvl_array_clone)"),
+        "concat on a nested-collection element must clone per element:\n{ir}"
+    );
+    let ir_str = compile("fn join(a: List[String], b: List[String]) -> List[String] { a.concat(b) }");
+    assert!(
+        ir_str.contains("call ptr @_mvl_list_concat_ptr(ptr")
+            && ir_str.contains("ptr @_mvl_string_clone)"),
+        "concat on a String element must clone per element:\n{ir_str}"
+    );
+}
+
+/// A scalar element has no ownership to share, so it must keep using the
+/// cheap byte-copying `_mvl_list_concat` — the cloning variant would be
+/// wrong (it assumes 8-byte pointer elements).
+#[test]
+fn concat_on_scalar_element_list_stays_byte_copy() {
+    let ir = compile("fn join(a: List[Int], b: List[Int]) -> List[Int] { a.concat(b) }");
+    assert!(
+        !ir.contains("_mvl_list_concat_ptr"),
+        "scalar-element concat must not use the per-element cloning variant:\n{ir}"
+    );
+}

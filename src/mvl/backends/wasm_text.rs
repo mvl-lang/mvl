@@ -8176,6 +8176,48 @@ fn emit_assert_eq(out: &mut String, left: &TirExpr, right: &TirExpr, negate: boo
         return;
     }
 
+    // `Option[T]` / `Result[T, E]` — #2249 gave the `==`/`!=` *operator*
+    // these arms in `emit_binary`, but `assert_eq`/`assert_ne` never got
+    // them, so they fell through to the generic `i32.eq` below and compared
+    // the boxed handles by pointer identity. Two structurally equal Options
+    // built independently (e.g. `row.get(1)` vs a fresh `Some("x")`) are
+    // never the same pointer, so every such assertion trapped —
+    // `examples/csv_transactions/main_test.mvl`'s
+    // `assert_eq(row.get(1), Some("Groceries, weekly"))` is exactly this
+    // shape, and it is the natural way to assert on any `.get()`/`.first()`/
+    // `.last()` result (#2285). Reuses the same runtime helpers and the same
+    // compile-time `is_str` payload flags as the operator arms.
+    if let Some(inner) = option_inner_ty(&left.ty) {
+        ctx.needs_runtime.set(true);
+        let is_str = is_string_ty(inner, ctx) as i32;
+        emit_expr(out, left, ctx);
+        emit_expr(out, right, ctx);
+        out.push_str(&format!(
+            "    i32.const {is_str}\n    call $_mvl_option_eq\n"
+        ));
+        if !negate {
+            out.push_str("    i32.eqz\n");
+        }
+        out.push_str("    if\n      unreachable\n    end\n");
+        return;
+    }
+    if let Some(ok_ty) = result_ok_ty(&left.ty) {
+        let err_ty = result_err_ty(&left.ty).cloned().unwrap_or(Ty::String);
+        ctx.needs_runtime.set(true);
+        let ok_is_str = is_string_ty(ok_ty, ctx) as i32;
+        let err_is_str = is_string_ty(&err_ty, ctx) as i32;
+        emit_expr(out, left, ctx);
+        emit_expr(out, right, ctx);
+        out.push_str(&format!(
+            "    i32.const {ok_is_str}\n    i32.const {err_is_str}\n    call $_mvl_result_eq\n"
+        ));
+        if !negate {
+            out.push_str("    i32.eqz\n");
+        }
+        out.push_str("    if\n      unreachable\n    end\n");
+        return;
+    }
+
     emit_expr(out, left, ctx);
     emit_expr(out, right, ctx);
     let eq_op = if is_float_ctx(&left.ty, ctx) {
@@ -13509,6 +13551,40 @@ mod validated_module_tests {
     /// of_double_freeing` documents for `.slice()`, which has no cloning
     /// variant yet). `_mvl_array_concat_str` refcount-clones each element
     /// instead, so no double-free risk and no stub needed.
+    /// #2285: `assert_eq`/`assert_ne` on `Option[T]`/`Result[T, E]` fell
+    /// through to the generic `i32.eq` on the boxed handle — pointer
+    /// identity, not content. Two structurally equal Options built
+    /// independently (`row.get(1)` vs a fresh `Some("x")`) are never the
+    /// same pointer, so every such assertion trapped. #2249 gave the
+    /// `==`/`!=` *operator* these arms; assert_eq never got them.
+    #[test]
+    fn assert_eq_on_option_uses_option_eq_not_pointer_identity() {
+        let (wat, _stubbed) = emit(
+            "test fn t() -> Unit {\n\
+                 let row: List[String] = [\"a\", \"bb\"];\n\
+                 assert_eq(row.get(1), Some(\"bb\"));\n\
+             }\n",
+        );
+        validate(&wat);
+        assert!(
+            wat.contains("call $_mvl_option_eq"),
+            "assert_eq on Option must compare by content:\n{wat}"
+        );
+    }
+
+    #[test]
+    fn assert_eq_on_result_uses_result_eq_not_pointer_identity() {
+        let (wat, _stubbed) = emit(
+            "fn mk(ok: Bool) -> Result[Int, String] { if ok { Ok(1) } else { Err(\"e\") } }\n\
+             test fn t() -> Unit { assert_eq(mk(true), Ok(1)); }\n",
+        );
+        validate(&wat);
+        assert!(
+            wat.contains("call $_mvl_result_eq"),
+            "assert_eq on Result must compare by content:\n{wat}"
+        );
+    }
+
     #[test]
     fn concat_on_string_list_uses_cloning_variant() {
         let (wat, stubbed) = emit(

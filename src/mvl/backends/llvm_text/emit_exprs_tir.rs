@@ -6025,6 +6025,55 @@ impl TextEmitter {
                     Some(v) => v,
                     None => return Ok(None),
                 };
+                // #2285: for a pointer-shaped or payload-enum element type the
+                // plain byte-copying `_mvl_list_concat` aliases both inputs'
+                // elements into the result — whichever input is dropped first
+                // frees them out from under it. Same defect class (and same
+                // fix shape) as `_mvl_list_slice`'s: clone per element via a
+                // callback. `std/csv.mvl::parse_rows_with` accumulates
+                // `rows = rows.concat([row])` on a `List[List[String]]`, so
+                // every parsed row was freed by the temporary literal's own
+                // scope-exit drop while the accumulated list still referenced
+                // it — `.len()` looked right, `.get(0)` returned a dangling
+                // inner pointer.
+                let concat_elem_ty = match unwrap_labels(&receiver.ty) {
+                    Ty::List(e) | Ty::Array(e, _) | Ty::Set(e) => {
+                        Some(unwrap_labels(e).clone())
+                    }
+                    _ => None,
+                };
+                if let Some(elem_ty) = &concat_elem_ty {
+                    let ptr_clone_sym = match elem_ty {
+                        Ty::String => Some("_mvl_string_clone"),
+                        Ty::List(_) | Ty::Array(_, _) | Ty::Set(_) => Some("_mvl_array_clone"),
+                        Ty::Map(_, _) => Some("_mvl_map_clone"),
+                        _ => None,
+                    };
+                    if let Some(clone_sym) = ptr_clone_sym {
+                        self.ensure_extern(&format!("declare ptr @{clone_sym}(ptr)"));
+                        self.ensure_extern("declare ptr @_mvl_list_concat_ptr(ptr, ptr, ptr)");
+                        let reg = self.next_reg();
+                        self.push_instr(&format!(
+                            "{reg} = call ptr @_mvl_list_concat_ptr(ptr {val}, ptr {other}, ptr @{clone_sym})"
+                        ));
+                        self.fn_ctx.reg_types.insert(reg.clone(), "ptr".into());
+                        return Ok(Some(reg));
+                    }
+                    if let Ty::Named(name, _) = elem_ty {
+                        if self.enum_has_payloads(name) {
+                            let clone_fn = self.ensure_enum_clone_fn(name)?;
+                            self.ensure_extern(
+                                "declare ptr @_mvl_list_concat_enum(ptr, ptr, ptr)",
+                            );
+                            let reg = self.next_reg();
+                            self.push_instr(&format!(
+                                "{reg} = call ptr @_mvl_list_concat_enum(ptr {val}, ptr {other}, ptr @{clone_fn})"
+                            ));
+                            self.fn_ctx.reg_types.insert(reg.clone(), "ptr".into());
+                            return Ok(Some(reg));
+                        }
+                    }
+                }
                 // List::concat → list_concat; String::concat → concat.
                 let dispatch_key =
                     if matches!(unwrap_labels(&receiver.ty), Ty::List(_) | Ty::Array(_, _)) {

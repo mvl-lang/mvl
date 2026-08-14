@@ -1110,6 +1110,93 @@ pub unsafe extern "C" fn _mvl_list_concat(a: *const MvlArray, b: *const MvlArray
     out
 }
 
+/// `List[T]::concat(other)` for a *pointer-typed* element `T` that isn't a
+/// scalar — `String`, or a nested `List`/`Set`/`Array`/`Map` (#2285).
+///
+/// [`_mvl_list_concat`] byte-copies both inputs' element bytes, which for a
+/// pointer element hands the result the *same* heap objects its inputs still
+/// own. Whichever side is dropped first frees them out from under the
+/// concatenated list. `std/csv.mvl::parse_rows_with` accumulates its rows as
+/// `rows = rows.concat([row])` on a `List[List[String]]`, so every parsed row
+/// was freed by the temporary one-element literal's own scope-exit drop while
+/// the accumulated list still pointed at it — `.len()` on the result stayed
+/// correct (the outer array is fine) but `.get(0)` returned a dangling inner
+/// pointer.
+///
+/// Same shape as [`_mvl_list_slice_ptr`]: one helper for every pointer-shaped
+/// element kind, with the per-kind `_mvl_*_clone` supplied as a callback.
+///
+/// # Safety
+/// `a`/`b` must be valid `MvlArray*` (elem_size == 8, holding pointer
+/// elements) or null. `clone_fn` must be a valid C-ABI function matching the
+/// elements' actual type.
+#[no_mangle]
+pub unsafe extern "C" fn _mvl_list_concat_ptr(
+    a: *const MvlArray,
+    b: *const MvlArray,
+    clone_fn: unsafe extern "C" fn(*mut u8) -> *mut u8,
+) -> *mut MvlArray {
+    let la = if a.is_null() { 0 } else { (*a).len as usize };
+    let lb = if b.is_null() { 0 } else { (*b).len as usize };
+    let out = _mvl_array_new(8, (la + lb).max(1));
+    for (src_arr, len) in [(a, la), (b, lb)] {
+        if src_arr.is_null() {
+            continue;
+        }
+        for i in 0..len {
+            let src = (*src_arr).ptr.add(i * 8) as *const *mut u8;
+            let cloned = if (*src).is_null() {
+                *src
+            } else {
+                clone_fn(*src)
+            };
+            _mvl_array_push(out, (&cloned as *const *mut u8).cast());
+        }
+    }
+    out
+}
+
+/// `List[T]::concat(other)` for a payload-enum element `T` (#2285) — the
+/// concat counterpart of [`_mvl_list_slice_enum`]/[`_mvl_array_extend_enum`].
+/// Each 16-byte `{ i8, ptr }` element's payload is cloned through the
+/// emitter-generated per-type `clone_fn` trampoline so the result owns its
+/// payloads independently of both inputs.
+///
+/// # Safety
+/// `a`/`b` must be valid `MvlArray*` (elem_size == 16, holding `{ i8, ptr }`
+/// payload-enum elements) or null. `clone_fn` must match `T`'s own
+/// `@_mvl_clone_enum_<T>` trampoline signature.
+#[no_mangle]
+pub unsafe extern "C" fn _mvl_list_concat_enum(
+    a: *const MvlArray,
+    b: *const MvlArray,
+    clone_fn: unsafe extern "C" fn(u8, *mut u8) -> *mut u8,
+) -> *mut MvlArray {
+    let la = if a.is_null() { 0 } else { (*a).len as usize };
+    let lb = if b.is_null() { 0 } else { (*b).len as usize };
+    let out = _mvl_array_new(16, (la + lb).max(1));
+    for (src_arr, len) in [(a, la), (b, lb)] {
+        if src_arr.is_null() {
+            continue;
+        }
+        for i in 0..len {
+            let slot = (*src_arr).ptr.add(i * 16);
+            let disc = *slot;
+            let payload = *(slot.add(8) as *mut *mut u8);
+            let new_payload = if payload.is_null() {
+                payload
+            } else {
+                clone_fn(disc, payload)
+            };
+            let mut new_slot = [0u8; 16];
+            new_slot[0] = disc;
+            new_slot[8..16].copy_from_slice(&(new_payload as usize).to_ne_bytes());
+            _mvl_array_push(out, new_slot.as_ptr());
+        }
+    }
+    out
+}
+
 // ── MvlMap operations ──────────────────────────────────────────────────────────
 
 /// Insert `(key[0..key_len], val[0..val_len])` into the map.
