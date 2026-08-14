@@ -69,6 +69,12 @@ pub(super) struct ModuleCtx {
     /// duplicate defs the same way `emitted_type_def_names` does for
     /// non-generic structs (#2270).
     pub emitted_generic_struct_instantiations: HashSet<String>,
+    /// Enum names whose recursive `@_mvl_clone_enum_<Name>` clone trampoline
+    /// has already been emitted (#2265) — memoized *before* the body is
+    /// built so a self-recursive field (e.g. `Box[HuffmanTree]` inside
+    /// `HuffmanTree` itself) can reference its own symbol without
+    /// infinite-looping the generator. See `ensure_enum_clone_fn`.
+    pub emitted_enum_clone_fns: HashSet<String>,
     /// enum name → ordered list of variant names (index = discriminant)
     pub enum_variants: HashMap<String, Vec<String>>,
     /// enum name → ordered list of variant payload field type lists (#1200).
@@ -162,6 +168,7 @@ impl ModuleCtx {
             struct_generic_params: HashMap::new(),
             struct_field_raw_tys: HashMap::new(),
             emitted_generic_struct_instantiations: HashSet::new(),
+            emitted_enum_clone_fns: HashSet::new(),
             enum_variants: HashMap::new(),
             enum_variant_fields: HashMap::new(),
             enum_struct_variant_field_names: HashMap::new(),

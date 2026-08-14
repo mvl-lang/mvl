@@ -3769,7 +3769,28 @@ impl TextEmitter {
                         TirExprKind::List { elems } | TirExprKind::Set { elems } if elems.is_empty()
                     ) =>
                 {
-                    let hint = list_elem_type_expr(field_ty).map(Self::llvm_ty);
+                    // #2265: was `Self::llvm_ty` (the static, context-free
+                    // mapper) — correct for a scalar element name but wrong
+                    // for a payload-enum or other module-registered element
+                    // type, which only the context-aware `llvm_ty_ctx`
+                    // resolves against `enum_variants`/`enum_has_payloads`.
+                    // `Self::llvm_ty` falls any unrecognized base name
+                    // (`HuffmanTree`, ...) straight to a bare 8-byte `ptr`
+                    // guess, so `queue: List[HuffmanTree] = []` in a struct
+                    // literal (e.g. `InitState { queue: [], .. }`)
+                    // allocated an elem_size-8 array for a 16-byte `{ i8,
+                    // ptr }` element — every later `.push()` then wrote only
+                    // the first 8 bytes (discriminant + padding), silently
+                    // dropping the payload pointer (left as whatever the
+                    // fresh allocation already held, typically zero) rather
+                    // than storing it. Latent before #2265 because nothing
+                    // read that payload pointer back — `.get()`'s old
+                    // "aliased, not cloned" fallback never dereferenced it;
+                    // #2265's clone-on-extract does, surfacing the
+                    // corruption as a null-pointer dereference the first
+                    // time a `List[HuffmanTree]` built from an empty struct
+                    // field literal is `.get()`-ed.
+                    let hint = list_elem_type_expr(field_ty).map(|te| self.llvm_ty_ctx(te));
                     let elems: &[TirExpr] = match &e.kind {
                         TirExprKind::List { elems } | TirExprKind::Set { elems } => elems,
                         _ => unreachable!(),
@@ -5163,10 +5184,12 @@ impl TextEmitter {
             // reusing it), so each element must be *cloned* in, not moved —
             // unlike `push` just above, which transfers ownership of its
             // single argument. Scoped to element types with a known-safe
-            // clone strategy (scalar / String / List[U] with U scalar);
-            // other shapes (struct/enum elements, List[List[String]], …)
-            // need real per-element cloning support first (#2265) and are
-            // deliberately left unhandled here rather than mishandled.
+            // clone strategy (scalar / String / List[U] with U scalar) plus,
+            // since #2265, a payload-enum element type (e.g.
+            // `HuffmanTree`) via the generic per-type clone trampoline;
+            // other shapes (`List[List[String]]`, plain structs, …) still
+            // need real per-element cloning support and are deliberately
+            // left unhandled here rather than mishandled.
             ("extend", "ptr") if args.len() == 1 => {
                 let elem_ty = match unwrap_labels(&receiver.ty) {
                     Ty::List(e) | Ty::Array(e, _) | Ty::Set(e) => unwrap_labels(e),
@@ -5193,13 +5216,34 @@ impl TextEmitter {
                     }
                     _ => None,
                 };
-                let Some(sym) = sym else { return Ok(None) };
-                let other = match self.emit_expr_tir(&args[0])? {
-                    Some(v) => v,
-                    None => return Ok(None),
-                };
-                self.ensure_extern(&format!("declare void @{sym}(ptr, ptr)"));
-                self.push_instr(&format!("call void @{sym}(ptr {val}, ptr {other})"));
+                if let Some(sym) = sym {
+                    let other = match self.emit_expr_tir(&args[0])? {
+                        Some(v) => v,
+                        None => return Ok(None),
+                    };
+                    self.ensure_extern(&format!("declare void @{sym}(ptr, ptr)"));
+                    self.push_instr(&format!("call void @{sym}(ptr {val}, ptr {other})"));
+                    return Ok(None);
+                }
+                // Payload-enum element (#2265) — e.g. `List[HuffmanTree]`.
+                // Needs a 3rd argument: the per-type clone trampoline the
+                // runtime has no static knowledge of.
+                if let Ty::Named(name, _) = elem_ty {
+                    if self.enum_has_payloads(name) {
+                        let clone_fn = self.ensure_enum_clone_fn(name)?;
+                        let other = match self.emit_expr_tir(&args[0])? {
+                            Some(v) => v,
+                            None => return Ok(None),
+                        };
+                        self.ensure_extern(
+                            "declare void @_mvl_array_extend_enum(ptr, ptr, ptr)",
+                        );
+                        self.push_instr(&format!(
+                            "call void @_mvl_array_extend_enum(ptr {val}, ptr {other}, ptr @{clone_fn})"
+                        ));
+                        return Ok(None);
+                    }
+                }
                 Ok(None)
             }
             ("get", "ptr")
@@ -5285,13 +5329,11 @@ impl TextEmitter {
                 ));
                 let elem_val = self.next_reg();
                 self.push_instr(&format!("{elem_val} = load {elem_llvm_ty}, ptr {elem_ptr}"));
-                let elem_val = if let Some(sym) = elem_clone_sym {
-                    self.ensure_extern(&format!("declare ptr @{sym}(ptr)"));
-                    let cloned = self.next_reg();
-                    self.push_instr(&format!("{cloned} = call ptr @{sym}(ptr {elem_val})"));
-                    cloned
-                } else {
-                    elem_val
+                let elem_val = match unwrap_labels(&receiver.ty) {
+                    Ty::List(e) | Ty::Array(e, _) => {
+                        self.clone_extracted_elem_tir(&elem_val, e, elem_clone_sym)?
+                    }
+                    _ => elem_val,
                 };
                 let elem_slot = self.next_reg();
                 self.push_instr(&format!("{elem_slot} = alloca {elem_llvm_ty}"));
@@ -5622,13 +5664,11 @@ impl TextEmitter {
                 ));
                 let elem_val = self.next_reg();
                 self.push_instr(&format!("{elem_val} = load {elem_llvm_ty}, ptr {elem_ptr}"));
-                let elem_val = if let Some(sym) = elem_clone_sym {
-                    self.ensure_extern(&format!("declare ptr @{sym}(ptr)"));
-                    let cloned = self.next_reg();
-                    self.push_instr(&format!("{cloned} = call ptr @{sym}(ptr {elem_val})"));
-                    cloned
-                } else {
-                    elem_val
+                let elem_val = match unwrap_labels(&receiver.ty) {
+                    Ty::List(e) | Ty::Array(e, _) => {
+                        self.clone_extracted_elem_tir(&elem_val, e, elem_clone_sym)?
+                    }
+                    _ => elem_val,
                 };
                 let elem_slot = self.next_reg();
                 self.push_instr(&format!("{elem_slot} = alloca {elem_llvm_ty}"));
@@ -5715,13 +5755,11 @@ impl TextEmitter {
                 ));
                 let elem_val = self.next_reg();
                 self.push_instr(&format!("{elem_val} = load {elem_llvm_ty}, ptr {elem_ptr}"));
-                let elem_val = if let Some(sym) = elem_clone_sym {
-                    self.ensure_extern(&format!("declare ptr @{sym}(ptr)"));
-                    let cloned = self.next_reg();
-                    self.push_instr(&format!("{cloned} = call ptr @{sym}(ptr {elem_val})"));
-                    cloned
-                } else {
-                    elem_val
+                let elem_val = match unwrap_labels(&receiver.ty) {
+                    Ty::List(e) | Ty::Array(e, _) => {
+                        self.clone_extracted_elem_tir(&elem_val, e, elem_clone_sym)?
+                    }
+                    _ => elem_val,
                 };
                 let elem_slot = self.next_reg();
                 self.push_instr(&format!("{elem_slot} = alloca {elem_llvm_ty}"));
@@ -6208,6 +6246,62 @@ fn elem_clone_sym(elem_ty: &Ty) -> Option<&'static str> {
         Ty::List(_) | Ty::Array(_, _) | Ty::Set(_) => Some("_mvl_array_clone"),
         Ty::Map(_, _) => Some("_mvl_map_clone"),
         _ => None,
+    }
+}
+
+impl TextEmitter {
+    /// Extend [`elem_clone_sym`]'s scalar/String/collection clone dispatch
+    /// with payload-enum elements (#2265) — shared by `get`/`first`/`last`'s
+    /// identical "clone the extracted element so the `Option` holds an
+    /// independently-owned copy" shape. `elem_clone_sym` already covers
+    /// String/List/Set/Array/Map (bare-`ptr`-shaped values, cloned with a
+    /// single `ptr -> ptr` call); a payload-enum element's loaded value is
+    /// the *whole* `{i8,ptr}` struct, which needs an `extractvalue`/
+    /// `insertvalue` round-trip through the per-type
+    /// `@_mvl_clone_enum_<Name>` trampoline instead, so it can't share
+    /// `elem_clone_sym`'s dispatch table. Falls back to the identity (raw,
+    /// shallow-aliased) value for anything neither dispatch recognizes —
+    /// same "safe, not yet correct" fallback this call already had before
+    /// #2265.
+    fn clone_extracted_elem_tir(
+        &mut self,
+        elem_val: &str,
+        elem_ty: &Ty,
+        elem_clone_sym: Option<&'static str>,
+    ) -> Result<String, String> {
+        if let Some(sym) = elem_clone_sym {
+            self.ensure_extern(&format!("declare ptr @{sym}(ptr)"));
+            let cloned = self.next_reg();
+            self.push_instr(&format!("{cloned} = call ptr @{sym}(ptr {elem_val})"));
+            return Ok(cloned);
+        }
+        if let Ty::Named(name, _) = unwrap_labels(elem_ty) {
+            if self.enum_has_payloads(name) {
+                let clone_fn = self.ensure_enum_clone_fn(name)?;
+                let disc = self.next_reg();
+                self.push_instr(&format!(
+                    "{disc} = extractvalue {RESULT_LLVM_TY} {elem_val}, 0"
+                ));
+                let payload = self.next_reg();
+                self.push_instr(&format!(
+                    "{payload} = extractvalue {RESULT_LLVM_TY} {elem_val}, 1"
+                ));
+                let new_payload = self.next_reg();
+                self.push_instr(&format!(
+                    "{new_payload} = call ptr @{clone_fn}(i8 {disc}, ptr {payload})"
+                ));
+                let r0 = self.next_reg();
+                self.push_instr(&format!(
+                    "{r0} = insertvalue {RESULT_LLVM_TY} zeroinitializer, i8 {disc}, 0"
+                ));
+                let r1 = self.next_reg();
+                self.push_instr(&format!(
+                    "{r1} = insertvalue {RESULT_LLVM_TY} {r0}, ptr {new_payload}, 1"
+                ));
+                return Ok(r1);
+            }
+        }
+        Ok(elem_val.to_string())
     }
 }
 

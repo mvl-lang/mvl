@@ -673,6 +673,51 @@ pub unsafe extern "C" fn _mvl_array_extend_nested(self_arr: *mut MvlArray, other
     }
 }
 
+/// `List[T].extend(other)` (#2265) for a payload-enum element type `T`
+/// (e.g. `HuffmanTree`) — append every element of `other` onto `self` in
+/// place, calling the emitter-generated per-type `clone_fn` (`T`'s own
+/// `@_mvl_clone_enum_<T>` trampoline, see `emit_helpers.rs::
+/// ensure_enum_clone_fn`) on each element's payload so `other` remains an
+/// independent, valid owner afterward — same contract as
+/// [`_mvl_array_extend_str`]/[`_mvl_array_extend_nested`], generalized to
+/// an arbitrary recursive struct/enum shape the runtime itself has no
+/// static knowledge of. Each element is 16 bytes: a 1-byte discriminant at
+/// offset 0 and an 8-byte payload pointer at offset 8 (the `{ i8, ptr }`
+/// tagged-union layout the LLVM emitter uses for every payload enum) —
+/// same slot shape [`_mvl_array_drop_option`]/[`_mvl_array_drop_result`]
+/// already read.
+///
+/// # Safety
+/// `self_arr` and `other` must be valid `MvlArray*` (elem_size == 16,
+/// holding `{ i8, ptr }` payload-enum elements) or null. `clone_fn` must be
+/// a valid, non-null C-ABI function matching `T`'s own
+/// `@_mvl_clone_enum_<T>` trampoline signature.
+#[no_mangle]
+pub unsafe extern "C" fn _mvl_array_extend_enum(
+    self_arr: *mut MvlArray,
+    other: *const MvlArray,
+    clone_fn: unsafe extern "C" fn(u8, *mut u8) -> *mut u8,
+) {
+    if self_arr.is_null() || other.is_null() {
+        return;
+    }
+    let len = (*other).len as usize;
+    for i in 0..len {
+        let slot = (*other).ptr.add(i * 16);
+        let disc = *slot;
+        let payload = *(slot.add(8) as *mut *mut u8);
+        let new_payload = if payload.is_null() {
+            payload
+        } else {
+            clone_fn(disc, payload)
+        };
+        let mut new_slot = [0u8; 16];
+        new_slot[0] = disc;
+        new_slot[8..16].copy_from_slice(&(new_payload as usize).to_ne_bytes());
+        _mvl_array_push(self_arr, new_slot.as_ptr());
+    }
+}
+
 /// Overwrite the element at index `idx` in place.  No-op if out of bounds.
 ///
 /// # Safety
