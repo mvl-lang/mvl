@@ -271,13 +271,46 @@ impl TextEmitter {
                     .get(var_name)
                     .map(|rl| rl.ptr.clone())
                     .or_else(|| self.fn_ctx.locals.get(var_name).cloned());
-                let heap_kind = owning_key.as_ref().and_then(|key| {
-                    self.fn_ctx
-                        .heap_locals
-                        .iter()
-                        .find(|(s, _, _)| s == key)
-                        .map(|(_, hk, _)| *hk)
-                });
+                let heap_kind = owning_key
+                    .as_ref()
+                    .and_then(|key| {
+                        self.fn_ctx
+                            .heap_locals
+                            .iter()
+                            .find(|(s, _, _)| s == key)
+                            .map(|(_, hk, _)| *hk)
+                    })
+                    // #2285: not every heap-owning binding is in
+                    // `heap_locals`. A name bound out of an enum variant's
+                    // payload (`bind_tuple_variant_fields_tir` /
+                    // `bind_struct_variant_fields_tir`) is registered in
+                    // `locals` only — the payload buffer stays the owner, so
+                    // the binding is deliberately not scope-drop-tracked.
+                    // The lookup above therefore found nothing and this
+                    // non-last use was passed *by move* to a consuming
+                    // parameter, which the callee then freed while the caller
+                    // went on using it.
+                    //
+                    // `std/csv.mvl::parse_rows_with` is exactly this:
+                    //
+                    //   RowPos::RP(row, next_pos) => {
+                    //       let skip: Bool = is_empty_row(row) && ...;
+                    //       ...
+                    //       rows.push(row)     // row already freed by callee
+                    //
+                    // `is_empty_row` takes `List[String]` consuming and emits
+                    // `_mvl_string_ptr_array_drop(%row)` before returning, so
+                    // every parsed row was freed mid-loop and `rows` ended up
+                    // holding dangling inner pointers — `.len()` still read
+                    // correctly (the outer array was intact), `.get(0)`
+                    // faulted.
+                    //
+                    // Falling back to the argument's own *type* mirrors the
+                    // `FieldAccess` arm below: when the real owner is
+                    // something other than a tracked local, cloning is the
+                    // sound choice. Still gated on non-last-use, so a genuine
+                    // final use keeps moving.
+                    .or_else(|| ty_to_type_expr(&arg.ty).and_then(|te| Self::heap_kind(&te)));
                 if let Some(hk) = heap_kind {
                     // Non-last use of a caller-owned heap local: clone
                     // instead of moving, so the original stays tracked and

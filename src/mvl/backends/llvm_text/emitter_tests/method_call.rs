@@ -316,3 +316,42 @@ fn concat_on_scalar_element_list_stays_byte_copy() {
         "scalar-element concat must not use the per-element cloning variant:\n{ir}"
     );
 }
+
+/// #2285: a name bound out of an enum variant's payload lives in
+/// `fn_ctx.locals` but deliberately *not* in `heap_locals` (the payload
+/// buffer stays the owner), so `resolve_owned_call_arg`'s heap lookup found
+/// nothing and passed it by move to a consuming parameter — which the callee
+/// then freed while the caller went on using it. `std/csv.mvl::
+/// parse_rows_with` hit this via `is_empty_row(row)` followed by
+/// `rows.push(row)`. A non-last use must clone.
+#[test]
+fn payload_bound_var_clones_on_non_last_use_as_call_arg() {
+    let ir = compile(
+        "type RowPos = enum { RP(List[String], Int) }\n\
+         fn takes(row: List[String]) -> Bool { row.len() == 0 }\n\
+         fn use_it(rp: RowPos, out: List[List[String]]) -> Bool {\n\
+         match rp {\n\
+         RowPos::RP(row, _) => {\n\
+         let skip: Bool = takes(row);\n\
+         out.push(row);\n\
+         skip\n\
+         },\n\
+         }\n\
+         }",
+    );
+    // Slice to a lone closing-brace *line* — `take_while(|c| c != '}')`
+    // would stop at the `}` inside a `{ i8, ptr }` type string.
+    let body: String = ir
+        .split("define i1 @use_it")
+        .nth(1)
+        .expect("@use_it must be emitted")
+        .lines()
+        .take_while(|l| *l != "}")
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        body.contains("call ptr @_mvl_array_clone"),
+        "a payload-bound heap local passed to a consuming param on a \
+         non-last use must be cloned:\n{body}"
+    );
+}
