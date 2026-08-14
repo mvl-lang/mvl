@@ -1004,7 +1004,7 @@ impl TextEmitter {
                 BinaryOp::Gt => "sgt",
                 BinaryOp::Le => "sle",
                 BinaryOp::Ge => "sge",
-                _ => unreachable!(),
+                _ => unreachable!("comparison predicate: guarded by is_comparison above"),
             };
             let reg = self.next_reg();
             self.push_instr(&format!("{reg} = icmp {pred} i32 {cmp}, 0"));
@@ -3124,7 +3124,9 @@ impl TextEmitter {
                 && payload_eq_strategy(
                     match unwrap_labels(&args[0].ty) {
                         Ty::Option(inner) => unwrap_labels(inner),
-                        _ => unreachable!(),
+                        _ => unreachable!(
+                            "Option payload: guarded by the matches! on args[0].ty above"
+                        ),
                     },
                     self,
                 )
@@ -3132,7 +3134,9 @@ impl TextEmitter {
             {
                 let inner_ty = match unwrap_labels(&args[0].ty) {
                     Ty::Option(inner) => unwrap_labels(inner).clone(),
-                    _ => unreachable!(),
+                    _ => {
+                        unreachable!("Option payload: guarded by the matches! on args[0].ty above")
+                    }
                 };
                 let strategy =
                     payload_eq_strategy(&inner_ty, self).expect("guard above already checked this");
@@ -3920,7 +3924,9 @@ impl TextEmitter {
                     let hint = list_elem_type_expr(field_ty).map(|te| self.llvm_ty_ctx(te));
                     let elems: &[TirExpr] = match &e.kind {
                         TirExprKind::List { elems } | TirExprKind::Set { elems } => elems,
-                        _ => unreachable!(),
+                        _ => unreachable!(
+                            "empty List/Set literal: guarded by the matches! in this arm's pattern"
+                        ),
                     };
                     self.emit_list_literal_tir(elems, hint.as_deref())?
                         .unwrap_or_else(|| "undef".into())
@@ -4873,7 +4879,9 @@ impl TextEmitter {
                     "wrapping_add" => "add",
                     "wrapping_sub" => "sub",
                     "wrapping_mul" => "mul",
-                    _ => unreachable!(),
+                    _ => {
+                        unreachable!("bitwise/wrapping op: guarded by the method-name match above")
+                    }
                 };
                 let reg = self.next_reg();
                 self.push_instr(&format!("{reg} = {op} i8 {val}, {other}"));

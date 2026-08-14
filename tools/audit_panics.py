@@ -27,6 +27,38 @@ PANIC_RE = re.compile(r"\b(unreachable|panic)!")
 # Skip string-literal mentions like "panic!" inside a diagnostic message.
 SKIP_RE = re.compile(r'"panic"|"panic!')
 
+# A line whose panic!/unreachable! sits inside a comment is prose about the
+# guard, not a guard. Two real examples this used to miscount:
+#   `// panic! is a Rust macro: first arg must be a bare string literal.`
+#   `///   (the caller should keep its existing \`unreachable!\` for defence ...)`
+COMMENT_RE = re.compile(r"^\s*(//|/\*|\*)")
+
+# Test-support code that lives outside a `#[cfg(test)]` block — the emitter
+# test harness is compiled into `mod tests` trees via `#[path]`/`mod` from a
+# `#[cfg(test)]` parent, so the marker is not visible in the file itself.
+TEST_SUPPORT_DIRS = ("emitter_tests",)
+
+
+def _in_string_literal(line: str, col: int) -> bool:
+    """Is offset `col` inside a double-quoted string on this line?
+
+    Counts unescaped quotes before `col`. Catches `panic!` emitted as part of
+    *generated* source text (`wasm_host_glue.rs` builds host glue containing
+    `_ => panic!(\"unknown discriminant\")`), which is code this compiler
+    writes, not code it runs.
+    """
+    in_str = False
+    i = 0
+    while i < col and i < len(line):
+        ch = line[i]
+        if ch == "\\":
+            i += 2
+            continue
+        if ch == '"':
+            in_str = not in_str
+        i += 1
+    return in_str
+
 CFG_TEST_RE = re.compile(r"#\[cfg\(test\)\]|#\[test\]")
 
 
@@ -64,8 +96,16 @@ def classify_sites(path: Path) -> list[tuple[int, str, str]]:
                 if stack and stack[-1][1] == brace_depth:
                     stack.pop()
 
-        if PANIC_RE.search(line) and not SKIP_RE.search(line):
-            kind = "test" if any(s[0] == "test" for s in stack) else "prod"
+        m = PANIC_RE.search(line)
+        if (
+            m
+            and not SKIP_RE.search(line)
+            and not COMMENT_RE.match(line)
+            and not _in_string_literal(line, m.start())
+        ):
+            in_test_scope = any(s[0] == "test" for s in stack)
+            in_test_support = any(d in path.parts for d in TEST_SUPPORT_DIRS)
+            kind = "test" if (in_test_scope or in_test_support) else "prod"
             sites.append((i, kind, stripped))
 
     return sites
