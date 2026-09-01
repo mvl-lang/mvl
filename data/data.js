@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1788162811985,
+  "lastUpdate": 1788246013691,
   "repoUrl": "https://github.com/mvl-lang/mvl",
   "entries": {
     "Benchmark": [
@@ -1903,6 +1903,142 @@ window.BENCHMARK_DATA = {
             "name": "corpus/contracts_requires",
             "value": 101626,
             "range": "± 463",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "name": "Ilja Heitlager",
+            "username": "iheitlager",
+            "email": "iheitlager@schubergphilis.com"
+          },
+          "committer": {
+            "name": "Ilja Heitlager",
+            "username": "iheitlager",
+            "email": "iheitlager@schubergphilis.com"
+          },
+          "id": "2351ca0f5b9626657d96681bb97199fe9f9b8fa2",
+          "message": "docs(changelog): record the validation remediation under 1.8.1\n\nThe v1.8.1 tag is being moved forward to include PR #2288, so the release\nnow contains that work — its own changelog section should say so.\n\nAlso corrects the section date 2026-08-12 -> 2026-08-14, the date the\nrelease was actually cut.",
+          "timestamp": "2026-08-14T15:06:20Z",
+          "url": "https://github.com/mvl-lang/mvl/commit/2351ca0f5b9626657d96681bb97199fe9f9b8fa2"
+        },
+        "date": 1788246013054,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "layer/l1_literal",
+            "value": 39324,
+            "range": "± 152",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "layer/l1_subsume",
+            "value": 42910,
+            "range": "± 316",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "layer/l2_interval",
+            "value": 46921,
+            "range": "± 856",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "layer/l2_range",
+            "value": 43414,
+            "range": "± 270",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "layer/l3_symbolic",
+            "value": 12980952,
+            "range": "± 209072",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "layer/l4_cooper",
+            "value": 39720,
+            "range": "± 226",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "layer/l5_z3",
+            "value": 49330,
+            "range": "± 423",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "mode/type_alias/layered",
+            "value": 16406780,
+            "range": "± 594662",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "mode/type_alias/fast-only",
+            "value": 8143900,
+            "range": "± 267755",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "mode/type_alias/z3-only",
+            "value": 71470373,
+            "range": "± 3463960",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "mode/struct_invariant/layered",
+            "value": 148477,
+            "range": "± 1054",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "mode/struct_invariant/fast-only",
+            "value": 149112,
+            "range": "± 1671",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "mode/struct_invariant/z3-only",
+            "value": 19364369,
+            "range": "± 497732",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "mode/contracts_requires/layered",
+            "value": 143609,
+            "range": "± 638",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "mode/contracts_requires/fast-only",
+            "value": 143660,
+            "range": "± 923",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "mode/contracts_requires/z3-only",
+            "value": 76940391,
+            "range": "± 2304452",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "corpus/type_alias",
+            "value": 15899591,
+            "range": "± 572235",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "corpus/struct_invariant",
+            "value": 148281,
+            "range": "± 6111",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "corpus/contracts_requires",
+            "value": 143153,
+            "range": "± 1159",
             "unit": "ns/iter"
           }
         ]
